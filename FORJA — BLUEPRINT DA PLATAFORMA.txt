@@ -1,0 +1,138 @@
+LÁZARO — ESTRATÉGIA E TECNOLOGIA
+
+FORJA — BLUEPRINT DA PLATAFORMA
+
+O QG Pessoal de quem constrói sistemas com IA
+
+12 de junho de 2026
+
+---
+
+### 1. Visão Geral e Conceito
+
+A FORJA é uma central de comando e governança projetada para o desenvolvedor que opera na intersecção entre o vibe code e a entrega profissional de software. O conceito central é a Bancada de Forjaria: um espaço onde cada sistema é tratado como uma peça única, possuindo história, técnica e custos rastreáveis. O objetivo não é apenas gerenciar tarefas, mas preservar o contexto como o ativo mais valioso para a escala com Inteligência Artificial.
+
+O ciclo de vida de cada produto na Forja segue quatro estágios fundamentais:
+
+1. **Faísca:** A captura bruta de ideias, oportunidades e demandas de clientes.
+2. **Forja:** O estágio de construção ativa, onde o dossiê técnico e as decisões são moldados.
+3. **Têmpera:** O sistema em produção, sob monitoramento de saúde, custos e performance.
+4. **Prateleira:** Sistemas pausados ou aposentados, mantendo a memória técnica intacta para futuras consultas.
+
+### 2. Identidade Visual e UX (User Experience)
+
+A interface deve transmitir a sensação de uma ferramenta de precisão, evitando o aspecto de "template administrativo" genérico. O design é dark-first, minimalista e focado em densidade de dados com calma visual.
+
+- **Paleta de Cores:** Fundo em Grafite Profundo (`#101113`), superfícies em `#17181B`. O acento único é o Latão/Âmbar (`#C9A45C`), utilizado exclusivamente para estados ativos, indicadores de importância e o "fogo" da forja.
+- **Tipografia:** Títulos em fonte serifada de alta qualidade (ex: Fraunces ou Newsreader) para um toque artesanal premium. Dados técnicos, IDs e códigos em fonte mono (ex: JetBrains Mono).
+- **Conceito da Brasa:** Um indicador visual orgânico no header que pulsa suavemente. A intensidade e a cor da pulsação refletem a saúde geral do portfólio (verde para estável, âmbar para atenção, vermelho para incidentes).
+- **Regras de Design:** Ausência de bordas pesadas; uso de sombras sutis e espaçamento generoso (whitespace). Nenhuma tela deve conter mais de um elemento de cor vibrante simultaneamente.
+
+### 3. Arquitetura e Stack Técnica
+
+A plataforma é construída sobre uma arquitetura Zero Infra, aproveitando a robustez do ecossistema Google para garantir custo zero de manutenção e alta disponibilidade.
+
+- **Runtime:** Google Apps Script (V8 Engine).
+- **Frontend:** HtmlService utilizando HTML5, CSS3 e JavaScript Vanilla. Proibido o uso de frameworks pesados (React/Vue) para manter a agilidade de carregamento e simplicidade de manutenção.
+- **Banco de Dados:** Google Sheets, atuando como um banco de dados relacional simplificado (uma aba por entidade).
+- **Segurança (The Vault):** Módulo de visualização de credenciais restrito ao proprietário. O sistema armazena referências e locais de chaves de API, mas nunca os valores sensíveis diretamente no código ou em células de fácil acesso.
+- **Integrações:** Uso de `UrlFetchApp` para monitoramento de pulso (uptime) e integração com APIs de terceiros.
+
+### 4. Modelo de Dados Detalhado
+
+
+
+
+Entidade (Aba)
+Campos Principais
+Propósito Estratégico
+
+
+
+
+Sistemas
+id, nome, codinome, estagio, proposito, stack, url_prod, score_saude
+Inventário central de todos os produtos do portfólio.
+
+
+Recursos
+id, sistema_id, tipo (endpoint/db/env), chave, descricao, link
+Dossiê técnico para alimentar o contexto da IA.
+
+
+Decisões
+id, sistema_id, data, titulo, decisao, justificativa, status
+Memória histórica para evitar reversão de escolhas técnicas.
+
+
+Riscos
+id, sistema_id, area, descricao, gravidade, historico_incidentes
+Mapa de quebra: onde o sistema é frágil e exige cuidado.
+
+
+Ideias
+id, titulo, descricao, nota_impacto, nota_esforco, estado
+Backlog de inovação e novos produtos potenciais.
+
+
+Oportunidades
+id, titulo, pessoa_id, valor_estimado, estado, proximo_passo
+Pipeline comercial para novos contratos e expansão.
+
+
+Pessoas
+id, nome, contato, papel (cliente/parceiro), notas
+Mini-CRM focado em quem traz as oportunidades.
+
+
+Custos
+id, sistema_id, fornecedor, valor, recorrencia, proxima_cobranca
+Controle financeiro rigoroso de custos fixos e variáveis.
+
+
+Pulsos
+id, sistema_id, url_check, ultimo_status, latencia_ms
+Monitoramento de uptime em tempo real via triggers.
+
+
+Timeline
+id, sistema_id, data, tipo (ship/incidente), texto
+Log cronológico de evolução de cada peça na forja.
+
+
+
+
+### 5. Funcionalidades Estratégicas (O Diferencial)
+
+#### 5.1 ⚡ Passaporte do Sistema
+A funcionalidade mestre para o vibe coder. Com um clique, o sistema compila os dados das abas Recursos, Decisões, Riscos e Timeline em um documento Markdown estruturado. Este arquivo é o contexto perfeito para ser colado no Claude ou Cursor, eliminando a necessidade de reexplicar a arquitetura a cada nova sessão de desenvolvimento.
+
+#### 5.2 Memória de Decisões e Mapa de Quebra
+O sistema atua como um "segundo cérebro". Ao registrar por que uma tecnologia foi descartada ou por que um endpoint foi estruturado de certa forma, a Forja impede o retrabalho. O Mapa de Quebra sinaliza áreas do código que são sensíveis, gerando avisos automáticos no Passaporte para que a IA tenha cautela ao sugerir alterações nessas zonas.
+
+#### 5.3 Gênese e Handoff
+O fluxo Gênese é um assistente que transforma uma "Faísca" em um projeto real através de perguntas de validação, resultando em um prompt de kickoff pronto. O Handoff permite registrar o estado atual ao fim de uma sessão, garantindo que a próxima retomada comece exatamente de onde parou, sem perda de tração.
+
+### 6. Regras de Negócio Específicas
+
+- **Gestão Financeira:** O controle de custos é baseado em valores fixos acordados. O sistema deve alertar sobre renovações iminentes e calcular a lucratividade por sistema (Assinatura - Custos Fixos).
+- **Privacidade de Ativos:** A visualização de chaves de API e segredos é manual e restrita à interface da Forja. Não há injeção automática de segredos em ambientes externos para manter a simplicidade e segurança.
+- **Agnosticismo de Dados:** A Forja não gerencia esquemas de banco de dados (tabelas/colunas). Ela apenas armazena a referência de onde os dados residem e qual a tecnologia utilizada.
+
+### 7. Roadmap de Construção
+
+1. **Fase 1 — Fundação (MVP):** Implementação da estrutura de planilhas, motor de conexão SheetDB e tela principal (Bancada) com listagem de sistemas e custos básicos.
+2. **Fase 2 — O Coração:** Desenvolvimento do módulo de Recursos e a funcionalidade de exportação do **Passaporte do Sistema** (Markdown). Implementação da Memória de Decisões.
+3. **Fase 3 — O Fluxo:** Criação dos módulos de Ideias (Faísca), Oportunidades e o wizard de Gênese para novos projetos.
+4. **Fase 4 — O Pulso:** Configuração de triggers automáticos para monitoramento de uptime (Pulsos) e alertas de renovação financeira por e-mail.
+5. **Fase 5 — Polimento Premium:** Refinamento da interface, implementação de busca global (⌘K) e otimização de performance de carregamento.
+
+---
+
+### 8. Prompt de Kickoff Final
+
+
+Prompt para Claude.ai: "Você atuará como o desenvolvedor principal da FORJA, uma plataforma de governança SaaS construída em Google Apps Script. O objetivo é criar um sistema de 'Bancada de Forjaria' para gerenciar meus apps construídos com IA. Siga rigorosamente o blueprint anexo. Tarefa Inicial: Configure a estrutura de backend (Google Sheets) criando automaticamente as 10 abas definidas no Modelo de Dados. Em seguida, desenvolva a interface 'Bancada' (Home) usando HTML/CSS/JS Vanilla, com o esquema de cores Grafite (#101113) e Latão (#C9A45C), exibindo uma lista de sistemas de exemplo com seus respectivos estágios e custos. Utilize o padrão de funções camelCase e retornos estruturados {ok: true, data: ...}. Não utilize bibliotecas externas."
+
+
+Documento elaborado em 12 de junho de 2026. As informações contidas são de responsabilidade do estrategista.

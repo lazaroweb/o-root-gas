@@ -1,0 +1,64 @@
+{
+  "name": "gas-app-kit",
+  "version": "1.0.0",
+  "description": "Build and deploy React + TypeScript web apps to Google Apps Script — works on Windows, Mac, and Linux. No coding experience required.",
+  "skills": [
+    {
+      "name": "gas-using-ai-superpowers",
+      "path": "skills/gas-using-ai-superpowers",
+      "description": "Meta-skill: enforces using skills before taking action."
+    },
+    {
+      "name": "gas-start",
+      "path": "skills/gas-start",
+      "description": "Advisor at the start of the flow. Understand project needs, create constitution, initialize state."
+    },
+    {
+      "name": "gas-setup-environment",
+      "path": "skills/gas-setup-environment",
+      "description": "Set up Node.js, clasp, and Google authentication. Run before first deploy."
+    },
+    {
+      "name": "gas-init-project",
+      "path": "skills/gas-init-project",
+      "description": "Initialize the React + TypeScript project and link it to Google Apps Script."
+    },
+    {
+      "name": "gas-push",
+      "path": "skills/gas-push",
+      "description": "Build and deploy the app to Google Apps Script."
+    },
+    {
+      "name": "gas-pull",
+      "path": "skills/gas-pull",
+      "description": "Download the latest version from Google Apps Script for maintenance."
+    },
+    {
+      "name": "gas-run-project",
+      "path": "skills/gas-run-project",
+      "description": "Start the local development server."
+    },
+    {
+      "name": "gas-frontend-patterns",
+      "path": "skills/gas-frontend-patterns",
+      "description": "React patterns for state management, forms, API calls, and error handling."
+    },
+    {
+      "name": "gas-ant-design",
+      "path": "skills/gas-ant-design",
+      "description": "UI components with Ant Design: layout, forms, tables, modals, theming."
+    },
+    {
+      "name": "gas-typescript-pro",
+      "path": "skills/gas-typescript-pro",
+      "description": "TypeScript strict mode patterns for Google Apps Script webapps."
+    }
+  ],
+  "commands": [
+    {
+      "name": "gas-app-kit",
+      "path": "commands/gas-app-kit.md",
+      "description": "Main entry point for the GAS App Kit."
+    }
+  ]
+}

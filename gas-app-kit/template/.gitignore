@@ -1,0 +1,4 @@
+node_modules/
+dist/
+.gas-app/
+*.local
