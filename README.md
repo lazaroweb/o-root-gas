@@ -83,7 +83,7 @@ A Forja é esse QG. Premium, minimalista, opinionado, e do tamanho exato do prob
 
 ```
 Frontend:  React 18 + TypeScript + Ant Design + Lucide icons + Mermaid
-Build:     esbuild-wasm (chunking de 8 fatias <=200KB pro GAS engolir)
+Build:     esbuild (chunking em ~12 fatias <=195KB pro GAS engolir)
 Backend:   Google Apps Script (V8 runtime) + UrlFetchApp + PropertiesService
 DB:        Google Sheets (engine SheetDB custom)
 LLM:       Anthropic / OpenAI / proxy compatível
@@ -127,7 +127,7 @@ Veja [forja/DEPLOY.md](forja/DEPLOY.md) pra setup completo, propriedades do Scri
 - **Por que Sheets como DB?** Você já tem. Editável manualmente. Backup nativo (Google Drive). Performance suficiente pra <50k linhas.
 - **Por que client-side crypto no Cofre?** Servidor (GAS) nunca vê o plaintext. Mesmo se o JSON do snapshot vazar, sem a senha-mestra é ruído.
 - **Por que Anthropic + OpenAI + proxies?** Um proxy compatível dá liberdade de trocar modelos. A Forja descobre modelos via `/v1/models`.
-- **Por que React + esbuild ao invés de Vue/Svelte?** Familiaridade. Bundle deu pra caber em 1.6MB com chunking. Não foi limitante.
+- **Por que React + esbuild ao invés de Vue/Svelte?** Familiaridade. Bundle fica em ~2.3MB (HTML inline, fatiado pra driblar o limite do GAS). Não foi limitante.
 
 ---
 
