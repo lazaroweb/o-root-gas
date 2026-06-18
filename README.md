@@ -4,7 +4,7 @@
 
 ![status](https://img.shields.io/badge/status-ativo-3CB371)
 ![stack](https://img.shields.io/badge/stack-React%2018%20%2B%20GAS-444)
-![version](https://img.shields.io/badge/version-1.63.1-blue)
+![version](https://img.shields.io/badge/version-1.63.2-blue)
 
 Forja é uma plataforma pessoal para quem desenvolve produtos com IA (Cursor, Claude, ChatGPT) e precisa orquestrar tudo: clientes, ideias, sistemas, custos, receitas, status operacional, auditorias e o próprio "atelier" de trabalho (skills, snippets, templates, bookmarks, Driver/nuvens, hospedagem, cofre criptografado).
 

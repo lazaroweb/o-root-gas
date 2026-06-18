@@ -6,7 +6,7 @@ import {
 import {
   HardDrive, Folder, FileText, FileSpreadsheet, FileImage, Presentation,
   ChevronRight, RefreshCw, Search, ExternalLink, Plus, Trash2, Cloud,
-  Home, ShieldCheck, Info, Link2, KeyRound, Copy, Unplug,
+  Home, ShieldCheck, Info, Link2, KeyRound, Copy, Unplug, Pencil,
 } from 'lucide-react';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -268,17 +268,44 @@ export default function DriverPanel(): React.ReactElement {
 
   // ─── Modal: adicionar conta ────────────────────────────────────────────────
   const [modalAberto, setModalAberto] = useState(false);
+  const [editandoConta, setEditandoConta] = useState<Connector | null>(null);
   const [salvando, setSalvando] = useState(false);
   const [form] = Form.useForm();
+
+  const abrirNovaConta = () => {
+    setEditandoConta(null);
+    form.resetFields();
+    setModalAberto(true);
+  };
+
+  const abrirEditarConta = (c: Connector) => {
+    setEditandoConta(c);
+    form.setFieldsValue({ provedor: c.provedor, email: c.email, rotulo: c.rotulo, notas: c.notas });
+    setModalAberto(true);
+  };
+
+  // Auto-preenche o rótulo com a parte do e-mail antes do @, enquanto o usuário
+  // não digitou um rótulo próprio.
+  const onValoresConta = (changed: Record<string, unknown>) => {
+    if ('email' in changed) {
+      const email = String(changed.email || '');
+      const at = email.indexOf('@');
+      const rotuloAtual = String(form.getFieldValue('rotulo') || '');
+      if (at > 0 && !rotuloAtual) {
+        form.setFieldsValue({ rotulo: email.slice(0, at) });
+      }
+    }
+  };
 
   const salvarConta = async () => {
     try {
       const vals = await form.validateFields();
       setSalvando(true);
-      const r = await callServer<ServerResult>('driveConnectorSave', vals);
+      const r = await callServer<ServerResult>('driveConnectorSave', { ...vals, id: editandoConta?.id });
       if (r.ok) {
-        message.success('Conta registrada. Configure as credenciais e clique em Conectar.');
+        message.success(editandoConta ? 'Conta atualizada.' : 'Conta registrada. Configure as credenciais e clique em Conectar.');
         setModalAberto(false);
+        setEditandoConta(null);
         form.resetFields();
         carregarContas();
       } else message.error(r.error || 'Erro ao salvar');
@@ -500,7 +527,7 @@ export default function DriverPanel(): React.ReactElement {
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '18px 0 10px' }}>
         <span style={{ fontFamily: FONTS.ui, fontSize: 13, fontWeight: 600, color: t.text }}>Outras contas & nuvens</span>
-        <Button type="primary" size="small" icon={<Plus size={13} />} onClick={() => { form.resetFields(); setModalAberto(true); }}>
+        <Button type="primary" size="small" icon={<Plus size={13} />} onClick={abrirNovaConta}>
           Adicionar
         </Button>
       </div>
@@ -531,6 +558,9 @@ export default function DriverPanel(): React.ReactElement {
                   </div>
                 </div>
                 <Tag color={conectada ? 'green' : 'default'} style={{ marginInlineEnd: 0 }}>{c.status}</Tag>
+                <Tooltip title="Editar">
+                  <Button size="small" icon={<Pencil size={13} />} onClick={() => abrirEditarConta(c)} />
+                </Tooltip>
                 {conectada ? (
                   <>
                     <Tooltip title="Ver arquivos">
@@ -567,22 +597,22 @@ export default function DriverPanel(): React.ReactElement {
       {/* Modal: adicionar conta */}
       <Modal
         open={modalAberto}
-        onCancel={() => setModalAberto(false)}
+        onCancel={() => { setModalAberto(false); setEditandoConta(null); }}
         onOk={salvarConta}
-        okText="Registrar conta"
+        okText={editandoConta ? 'Salvar alterações' : 'Registrar conta'}
         cancelText="Cancelar"
         confirmLoading={salvando}
-        title="Adicionar conta / nuvem"
+        title={editandoConta ? 'Editar conta / nuvem' : 'Adicionar conta / nuvem'}
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
+        <Form form={form} layout="vertical" style={{ marginTop: 12 }} onValuesChange={onValoresConta}>
           <Form.Item name="provedor" label="Provedor" rules={[{ required: true, message: 'Escolha o provedor' }]}>
             <Select options={PROVEDORES} placeholder="Google Drive, OneDrive…" />
           </Form.Item>
           <Form.Item name="email" label="E-mail da conta">
             <Input placeholder="voce@example.com" />
           </Form.Item>
-          <Form.Item name="rotulo" label="Rótulo (apelido)">
-            <Input placeholder="ex.: Pessoal, Trabalho, Cliente X" />
+          <Form.Item name="rotulo" label="Rótulo (apelido)" extra="Vazio = usamos a parte antes do @ do e-mail.">
+            <Input placeholder="ex.: lazaroweb, trabalho, cliente-x" />
           </Form.Item>
           <Form.Item name="notas" label="Notas (opcional)">
             <Input.TextArea rows={2} placeholder="Pra que serve essa conta no seu QG" />

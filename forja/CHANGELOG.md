@@ -36,6 +36,15 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.63.2] — 2026-06-18
+
+### Adicionado
+
+- **Driver: editar conta + rótulo automático.** Botão de editar em cada conta
+  (provedor, e-mail, rótulo, notas). Ao registrar/editar, o rótulo vazio assume
+  a parte do e-mail antes do @ (ex.: `lazaroweb`) — fim dos vários "Pessoal"
+  iguais. No formulário, o rótulo é sugerido automaticamente ao digitar o e-mail.
+
 ## [1.63.1] — 2026-06-18
 
 ### Alterado

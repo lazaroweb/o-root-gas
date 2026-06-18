@@ -12331,10 +12331,15 @@ function driveConnectorSave(payload: {
     const provedor = String(payload.provedor || '').trim();
     if (!provedor) throw new Error('Escolha o provedor (Google Drive, OneDrive…).');
     const agora = new Date().toISOString();
+    const email = String(payload.email || '').trim();
+    // Default do rótulo = parte do e-mail antes do @ (ex.: "lazaroweb"). Evita
+    // vários "Pessoal" iguais quando há várias contas.
+    let rotulo = String(payload.rotulo || '').trim();
+    if (!rotulo && email.indexOf('@') > 0) rotulo = email.split('@')[0];
     const base = {
       provedor,
-      email: String(payload.email || '').trim(),
-      rotulo: String(payload.rotulo || '').trim(),
+      email,
+      rotulo,
       pastaRaizId: String(payload.pastaRaizId || '').trim(),
       notas: String(payload.notas || '').trim(),
       atualizadoEm: agora,
