@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   App as AntApp, Button, Input, Tabs, Tag, Empty, Skeleton, Tooltip,
-  Select, Form, Popconfirm, Modal,
+  Select, Form, Popconfirm, Modal, Collapse,
 } from 'antd';
 import {
   HardDrive, Folder, FileText, FileSpreadsheet, FileImage, Presentation,
   ChevronRight, RefreshCw, Search, ExternalLink, Plus, Trash2, Cloud,
-  Home, ShieldCheck, Info, Link2, KeyRound, Copy, Unplug, Pencil,
+  Home, ShieldCheck, Info, Link2, KeyRound, Copy, Unplug, Pencil, BookOpen,
 } from 'lucide-react';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -79,7 +79,7 @@ function IconePorMime({ item, size = 18 }: { item: DriveItem; size?: number }): 
 export default function DriverPanel(): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
-  const [tab, setTab] = useState<'arquivos' | 'contas'>('arquivos');
+  const [tab, setTab] = useState<'arquivos' | 'contas' | 'manual'>('arquivos');
 
   // ─── Contas (carregadas no mount: alimentam o seletor de fonte e a aba) ───
   const [conectores, setConectores] = useState<Connector[]>([]);
@@ -695,10 +695,108 @@ export default function DriverPanel(): React.ReactElement {
     </div>
   );
 
+  // ─── Render: aba Como conectar (manual passo a passo) ───────────────────
+  const Passos = ({ itens: passos }: { itens: React.ReactNode[] }): React.ReactElement => (
+    <ol style={{ margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 9 }}>
+      {passos.map((p, i) => (
+        <li key={i} style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary, lineHeight: 1.65 }}>{p}</li>
+      ))}
+    </ol>
+  );
+
+  const B = ({ children }: { children: React.ReactNode }): React.ReactElement => (
+    <strong style={{ color: t.text, fontWeight: 600 }}>{children}</strong>
+  );
+
+  const renderManual = () => (
+    <div style={{ padding: '16px 18px 22px' }}>
+      {/* Redirect URI — usada nos dois manuais */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        background: `${t.accents.blue}10`, border: `1px solid ${t.accents.blue}33`,
+        borderRadius: 12, padding: 12, marginBottom: 16, flexWrap: 'wrap',
+      }}>
+        <Link2 size={15} color={t.accents.blue} style={{ flexShrink: 0 }} />
+        <span style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary }}>
+          A <B>Redirect URI</B> (você cola ela no provedor):
+        </span>
+        <code style={{
+          fontFamily: FONTS.mono, fontSize: 11, background: t.surface, color: t.text,
+          border: `1px solid ${t.border}`, borderRadius: 6, padding: '4px 8px',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 160,
+        }}>
+          {redirectUri || '—'}
+        </code>
+        <Button size="small" icon={<Copy size={12} />} onClick={() => copiar(redirectUri)} disabled={!redirectUri}>Copiar</Button>
+      </div>
+
+      <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textTertiary, lineHeight: 1.6, marginBottom: 14 }}>
+        Você faz o registro do app <B>uma vez por provedor</B>. Depois, cada conta nova é só
+        <B> Adicionar</B> + <B>Conectar</B> aqui no Forja. Nunca pedimos sua senha — a conexão é por consentimento (OAuth).
+      </div>
+
+      <Collapse
+        defaultActiveKey={['google']}
+        items={[
+          {
+            key: 'google',
+            label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: FONTS.ui, fontWeight: 600, color: t.text }}><HardDrive size={15} color={t.accents.sage} /> Conta Google (Google Drive)</span>,
+            children: (
+              <Passos itens={[
+                <>Abra <B>console.cloud.google.com</B> e faça login (pode ser qualquer conta sua).</>,
+                <>No topo, clique no <B>seletor de projeto</B> → <B>Novo projeto</B> → nome <B>Forja Driver</B> → <B>Criar</B>. Depois selecione esse projeto.</>,
+                <>Menu <B>☰</B> → <B>APIs e serviços</B> → <B>Biblioteca</B> → busque <B>Google Drive API</B> (atenção: "Drive", não "Driver") → abra → <B>Ativar</B>.</>,
+                <>Menu <B>☰</B> → <B>APIs e serviços</B> → <B>Tela de permissão OAuth</B> → tipo <B>Externo</B> → preencha nome do app e seus e-mails → salve.</>,
+                <>Em <B>Público-alvo</B> → <B>Publicar app</B> → <B>Confirmar</B> (status vira "Em produção"). Assim qualquer conta sua conecta sem cadastrar e-mail de teste.</>,
+                <>Menu <B>☰</B> → <B>APIs e serviços</B> → <B>Credenciais</B> → <B>+ Criar credenciais</B> → <B>ID do cliente OAuth</B> → tipo <B>Aplicativo da Web</B>.</>,
+                <>No campo <B>URIs de redirecionamento autorizados</B> → <B>+ Adicionar URI</B> → cole a <B>Redirect URI</B> (botão Copiar acima) → <B>Criar</B>.</>,
+                <>Copie o <B>ID do cliente</B> e a <B>Chave secreta do cliente</B> que aparecem.</>,
+                <>Aqui no Forja: aba <B>Contas & nuvens</B> → <B>Credenciais OAuth</B> → provedor <B>Google Drive (outra conta)</B> → cole os dois → <B>Salvar</B>.</>,
+                <>Ainda em Contas & nuvens, clique <B>Adicionar</B> (provedor Google, e-mail) → depois <B>Conectar</B> → escolha a conta → na tela "app não verificado" clique <B>Avançado</B> → <B>Acessar</B> → <B>Permitir</B>. Status fica verde. ✅</>,
+                <><B>Para outra conta Google depois:</B> só <B>Adicionar</B> + <B>Conectar</B> aqui — as credenciais já ficam salvas.</>,
+              ]} />
+            ),
+          },
+          {
+            key: 'microsoft',
+            label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: FONTS.ui, fontWeight: 600, color: t.text }}><Cloud size={15} color={t.accents.lavender} /> Conta Microsoft (OneDrive)</span>,
+            children: (
+              <Passos itens={[
+                <>Abra <B>portal.azure.com</B> e faça login na sua conta Microsoft.</>,
+                <>Na busca do topo, digite <B>App registrations</B> (Registros de aplicativo) → abra → <B>+ New registration</B>.</>,
+                <><B>Name:</B> <B>Forja Driver</B>.</>,
+                <><B>Supported account types:</B> escolha a opção que inclui <B>personal Microsoft accounts</B> (multitenant + contas pessoais — geralmente a 3ª).</>,
+                <><B>Redirect URI:</B> selecione a plataforma <B>Web</B> e cole a <B>Redirect URI</B> (botão Copiar acima) → <B>Register</B>.</>,
+                <>Na tela <B>Overview</B>, copie o <B>Application (client) ID</B> → é o seu <B>Client ID</B>.</>,
+                <>Menu da esquerda → <B>Certificates & secrets</B> → aba <B>Client secrets</B> → <B>+ New client secret</B> → descrição qualquer → <B>Add</B>.</>,
+                <>⚠️ Copie <B>imediatamente</B> o valor da coluna <B>Value</B> (não o "Secret ID") — ele só aparece uma vez. É o seu <B>Client Secret</B>.</>,
+                <>Menu da esquerda → <B>API permissions</B> → <B>+ Add a permission</B> → <B>Microsoft Graph</B> → <B>Delegated permissions</B> → marque <B>Files.Read</B>, <B>User.Read</B> e <B>offline_access</B> → <B>Add permissions</B>.</>,
+                <>Aqui no Forja: <B>Contas & nuvens</B> → <B>Credenciais OAuth</B> → provedor <B>OneDrive / Microsoft 365</B> → cole <B>Client ID</B> e <B>Client Secret</B> → <B>Salvar</B>.</>,
+                <>Clique <B>Adicionar</B> (provedor OneDrive, e-mail) → <B>Conectar</B> → faça login Microsoft → <B>Aceitar</B>. Status fica verde. ✅</>,
+                <><B>Para outra conta Microsoft depois:</B> só <B>Adicionar</B> + <B>Conectar</B> aqui.</>,
+              ]} />
+            ),
+          },
+        ]}
+      />
+
+      <div style={{
+        display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 16,
+        background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 10, padding: 12,
+      }}>
+        <Info size={14} color={t.textTertiary} style={{ marginTop: 1, flexShrink: 0 }} />
+        <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, lineHeight: 1.6 }}>
+          Deu erro <B>redirect_uri_mismatch</B>? A URI no provedor precisa ser <B>idêntica</B> à de cima (copie pelo botão).
+          No OneDrive, confirme as 3 permissões e que colou o <B>Value</B> (não o ID) do secret.
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <Tabs
       activeKey={tab}
-      onChange={(k) => setTab(k as 'arquivos' | 'contas')}
+      onChange={(k) => setTab(k as 'arquivos' | 'contas' | 'manual')}
       tabBarStyle={{ paddingLeft: 18, paddingRight: 18, marginBottom: 0 }}
       items={[
         {
@@ -710,6 +808,11 @@ export default function DriverPanel(): React.ReactElement {
           key: 'contas',
           label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Cloud size={14} /> Contas & nuvens {conectores.length > 0 && <Tag style={{ marginInlineEnd: 0 }}>{conectores.length}</Tag>}</span>,
           children: renderContas(),
+        },
+        {
+          key: 'manual',
+          label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><BookOpen size={14} /> Como conectar</span>,
+          children: renderManual(),
         },
       ]}
     />

@@ -36,6 +36,15 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.64.0] — 2026-06-18
+
+### Adicionado
+
+- **Driver → aba "Como conectar".** Manual passo a passo dentro do app, pra leigo,
+  com instruções detalhadas pra conectar contas **Google** e **Microsoft (OneDrive)**:
+  Redirect URI com botão de copiar, seções recolhíveis por provedor e dicas de erro
+  comuns. Sempre à mão, sem depender de doc externo.
+
 ## [1.63.4] — 2026-06-18
 
 ### Alterado
