@@ -36,6 +36,18 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.68.1] — 2026-06-18
+
+### Corrigido
+
+- **F5 voltava pra home.** A tela atual vivia só na memória; ao recarregar (ou
+  reabrir o app) caía sempre no Dashboard. Agora a navegação (view + sistema/ideia
+  selecionados) é persistida no `localStorage` e restaurada no carregamento — o F5
+  mantém você onde estava. Telas que dependem de um id (detalhe/edição de sistema)
+  caem na lista correspondente se o id não existir mais, evitando tela quebrada.
+
+---
+
 ## [1.68.0] — 2026-06-18
 
 ### Alterado

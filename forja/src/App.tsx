@@ -47,13 +47,42 @@ function readEntered(): boolean {
   try { return window.sessionStorage.getItem(ENTERED_KEY) === '1'; } catch { return false; }
 }
 
+// Persistência da navegação: em GAS a URL roda em iframe e não dá pra usar
+// rotas reais, então guardamos a tela atual no localStorage. Assim um F5
+// (ou reabrir o app) volta pra onde o usuário estava, não pra home.
+const NAV_STATE_KEY = 'forja_nav_state';
+interface NavState { view: ViewName; sistemaId: string | null; ideiaId: string | null }
+
+function readNavState(): NavState | null {
+  try {
+    const raw = window.localStorage.getItem(NAV_STATE_KEY);
+    if (!raw) return null;
+    const o = JSON.parse(raw) as Partial<NavState>;
+    if (!o || !o.view) return null;
+    return { view: o.view as ViewName, sistemaId: o.sistemaId ?? null, ideiaId: o.ideiaId ?? null };
+  } catch { return null; }
+}
+
+// Sanitiza: telas que dependem de um id (detalhe/edição de sistema) caem na
+// lista se o id não veio, evitando uma tela quebrada após o reload.
+function sanitizeNav(n: NavState | null): NavState {
+  if (!n) return { view: 'dashboard', sistemaId: null, ideiaId: null };
+  if ((n.view === 'sistema-detail' || n.view === 'sistema-form') && !n.sistemaId) {
+    return { view: 'sistemas', sistemaId: null, ideiaId: null };
+  }
+  if (n.view === 'genese' && !n.sistemaId && !n.ideiaId) {
+    return { view: 'ideias', sistemaId: null, ideiaId: null };
+  }
+  return n;
+}
+
 export default function App(): React.ReactElement {
   const { message } = AntApp.useApp();
   const t = useTokens();
   const [showLanding, setShowLanding] = useState<boolean>(() => !readEntered());
-  const [currentView, setCurrentView] = useState<ViewName>('dashboard');
-  const [selectedSistemaId, setSelectedSistemaId] = useState<string | null>(null);
-  const [selectedIdeiaId, setSelectedIdeiaId] = useState<string | null>(null);
+  const [currentView, setCurrentView] = useState<ViewName>(() => sanitizeNav(readNavState()).view);
+  const [selectedSistemaId, setSelectedSistemaId] = useState<string | null>(() => sanitizeNav(readNavState()).sistemaId);
+  const [selectedIdeiaId, setSelectedIdeiaId] = useState<string | null>(() => sanitizeNav(readNavState()).ideiaId);
   const [searchOpen, setSearchOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -133,6 +162,15 @@ export default function App(): React.ReactElement {
     try { visto = window.localStorage.getItem('forja_onboarding_done') || ''; } catch { /* sandbox */ }
     if (!visto) setOnboardingOpen(true);
   }, []);
+
+  // Salva a navegação a cada mudança pra sobreviver ao F5 / reabertura.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(NAV_STATE_KEY, JSON.stringify({
+        view: currentView, sistemaId: selectedSistemaId, ideiaId: selectedIdeiaId,
+      }));
+    } catch { /* sandbox/quota — segue sem persistir */ }
+  }, [currentView, selectedSistemaId, selectedIdeiaId]);
 
   const loadSaude = useCallback(() => {
     callServer<ServerResponse<DashboardData>>('getDashboardData')
