@@ -36,6 +36,29 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.60.2] — 2026-06-18
+
+### Corrigido
+
+- **Tipagem zerada (riscos médios da auditoria).** Eliminados todos os 31 erros de
+  `tsc --noEmit` (strict) que o build via esbuild ignorava — agora o type-check
+  passa limpo (35 → 0 desde o início da auditoria). Principais:
+  - `FinPessoal.tsx`: colisão do identificador `Tag` (antd × lucide) resolvida com
+    alias `TagIcon`; `highlight` agora é boolean.
+  - `cofreCrypto.ts`: `b64ToBuf` tipado como `Uint8Array<ArrayBuffer>` (compatível
+    com `BufferSource` da Web Crypto no TS 5.7).
+  - `server.ts`: tipos do Drive, série do DRE (`despesa`), guarda de `hora`,
+    índice `ordem`, config do WhatsApp e headers do proxy de LLM.
+  - `ObsidianMindmap.tsx`: `dominantBaseline` inválido (`baseline` → `alphabetic`).
+  - `Dashboard.tsx`: retorno `null` trocado por fragmento.
+
+### Segurança
+
+- **XSS hardening no Receituário.** `renderMarkdown` passou a escapar todo o input
+  antes de aplicar o markdown (antes só o miolo de code blocks era escapado).
+  Fecha o sink de `dangerouslySetInnerHTML` para conteúdo de receitas que possa
+  vir de import/compartilhamento. (A versão do Norte já escapava tudo.)
+
 ## [1.60.1] — 2026-06-18
 
 ### Corrigido

@@ -741,15 +741,15 @@ function MindmapCanvas({
 
             // Anchor inteligente baseado em qual lado o texto fica
             let anchor: 'start' | 'middle' | 'end' = 'middle';
-            let baseline: 'middle' | 'hanging' | 'baseline' = 'middle';
+            let baseline: 'middle' | 'hanging' | 'alphabetic' = 'middle';
             if (isRoot) {
-              anchor = 'middle'; baseline = 'baseline';
+              anchor = 'middle'; baseline = 'alphabetic';
             } else if (Math.abs(cosA) > 0.4) {
               anchor = cosA > 0 ? 'start' : 'end';
               baseline = 'middle';
             } else {
               anchor = 'middle';
-              baseline = sinA > 0 ? 'hanging' : 'baseline';
+              baseline = sinA > 0 ? 'hanging' : 'alphabetic';
             }
 
             const corTexto = isRoot ? corTextRoot : (n.depth <= 1 ? corText : corTextMute);

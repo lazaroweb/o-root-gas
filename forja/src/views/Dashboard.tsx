@@ -110,7 +110,7 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
     );
   }
   if (error) return <Alert type="error" message={error} showIcon style={{ margin: 24 }} />;
-  if (!data) return null;
+  if (!data) return <></>;
 
   const { kpis, apps } = data;
 

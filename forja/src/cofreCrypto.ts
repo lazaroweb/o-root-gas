@@ -37,7 +37,7 @@ function bufToB64(buf: ArrayBuffer | Uint8Array): string {
   return btoa(s);
 }
 
-function b64ToBuf(b64: string): Uint8Array {
+function b64ToBuf(b64: string): Uint8Array<ArrayBuffer> {
   const s = atob(b64);
   const bytes = new Uint8Array(s.length);
   for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);

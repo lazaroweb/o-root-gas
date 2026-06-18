@@ -26,7 +26,7 @@ import {
   Upload, FileUp, LayoutDashboard, Compass, Users, CalendarRange, FileDown,
   // Ícones de categoria — outline lucide, mesmo padrão da sidebar
   ShoppingCart, Car, Utensils, Gamepad2, Pill, Home, Lightbulb, Tv, BookOpen, Shirt,
-  PawPrint, Plane, Briefcase, Laptop, Package, Tag,
+  PawPrint, Plane, Briefcase, Laptop, Package, Tag as TagIcon,
   Film, Dumbbell, Beer, Coffee, Bus, Fuel, Palette, Music, Hospital, Smile,
   Baby, GraduationCap, Gift, Flower, Pizza, Wine, Bath, Sofa, Wrench, Phone, Heart,
   Camera, Headphones, Trees, Mountain, Bike, Bookmark, Coins, DollarSign, Globe,
@@ -92,7 +92,7 @@ const ICONE_REGISTRY: Record<string, LucideIcon> = {
   'shopping-cart': ShoppingCart, 'car': Car, 'utensils': Utensils, 'gamepad-2': Gamepad2,
   'pill': Pill, 'home': Home, 'lightbulb': Lightbulb, 'tv': Tv, 'book-open': BookOpen,
   'shirt': Shirt, 'paw-print': PawPrint, 'plane': Plane, 'trending-up': TrendingUp,
-  'briefcase': Briefcase, 'laptop': Laptop, 'package': Package, 'tag': Tag,
+  'briefcase': Briefcase, 'laptop': Laptop, 'package': Package, 'tag': TagIcon,
   'film': Film, 'dumbbell': Dumbbell, 'beer': Beer, 'coffee': Coffee,
   'bus': Bus, 'fuel': Fuel, 'palette': Palette, 'music': Music, 'hospital': Hospital,
   'smile': Smile, 'baby': Baby, 'graduation-cap': GraduationCap,
@@ -120,8 +120,8 @@ const ICONES_DISPONIVEIS: string[] = [
 
 // Resolve componente do ícone pelo nome. Fallback: Tag (gen\xE9rico).
 function getIconeComponente(nome?: string): LucideIcon {
-  if (!nome) return Tag;
-  return ICONE_REGISTRY[nome] || Tag;
+  if (!nome) return TagIcon;
+  return ICONE_REGISTRY[nome] || TagIcon;
 }
 
 // Renderiza ícone de categoria no estilo "badge" — mini-box arredondada com
@@ -589,7 +589,7 @@ export default function FinPessoal(): React.ReactElement {
           valor={resumo?.aPagarMes || 0}
           cor={t.accents.peach}
           subtitle={resumo ? `${resumo.qtdAPagarMes} item(s) · ${resumo.qtdProximos7d} em 7d` : ''}
-          highlight={resumo && resumo.qtdProximos7d > 0}
+          highlight={!!resumo && resumo.qtdProximos7d > 0}
         />
         <CardResumo
           icon={<CheckCircle2 size={20} />}

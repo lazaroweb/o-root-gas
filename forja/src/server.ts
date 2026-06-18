@@ -646,9 +646,9 @@ function listGASProjects(): ServerResult {
   try {
     const meuScriptId = ScriptApp.getScriptId();
     // Tenta primeiro com Shared Drives habilitados (Workspace)
-    let response: GoogleAppsScript.Drive_v3.Schema.FileList;
+    let response: { files?: unknown[] };
     try {
-      response = (Drive as unknown as { Files: { list: (opts: Record<string, unknown>) => GoogleAppsScript.Drive_v3.Schema.FileList } }).Files.list({
+      response = (Drive as unknown as { Files: { list: (opts: Record<string, unknown>) => { files?: unknown[] } } }).Files.list({
         q: "mimeType='application/vnd.google-apps.script' and trashed=false",
         fields: 'files(id,name,modifiedTime,description,ownedByMe,driveId)',
         pageSize: 200,
@@ -659,7 +659,7 @@ function listGASProjects(): ServerResult {
       });
     } catch {
       // Fallback: organizações que bloqueiam corpora=allDrives
-      response = (Drive as unknown as { Files: { list: (opts: Record<string, unknown>) => GoogleAppsScript.Drive_v3.Schema.FileList } }).Files.list({
+      response = (Drive as unknown as { Files: { list: (opts: Record<string, unknown>) => { files?: unknown[] } } }).Files.list({
         q: "mimeType='application/vnd.google-apps.script' and trashed=false",
         fields: 'files(id,name,modifiedTime,description,ownedByMe)',
         pageSize: 200,
@@ -2252,7 +2252,7 @@ function getFinanceiro(): ServerResult {
     // Série de 6 meses (MRR x Custo recorrente acumulado por início)
     const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
     const agora = new Date();
-    const serie: Array<{ label: string; mrr: number; custo: number }> = [];
+    const serie: Array<{ label: string; mrr: number; custo: number; despesa: number }> = [];
     for (let i = 5; i >= 0; i--) {
       const ref = new Date(agora.getFullYear(), agora.getMonth() - i, 1);
       const fimMes = new Date(ref.getFullYear(), ref.getMonth() + 1, 0);
@@ -3306,7 +3306,7 @@ function enviarResumoFinanceiroDiario(): void {
 
 function ativarResumoFinanceiroDiario(hora?: number, email?: string): ServerResult {
   try {
-    const h = Math.max(0, Math.min(23, Number(hora >= 0 ? hora : 8)));
+    const h = Math.max(0, Math.min(23, Number(hora != null && hora >= 0 ? hora : 8)));
     ScriptApp.getProjectTriggers().forEach((tr) => { if (tr.getHandlerFunction() === 'enviarResumoFinanceiroDiario') ScriptApp.deleteTrigger(tr); });
     ScriptApp.newTrigger('enviarResumoFinanceiroDiario').timeBased().atHour(h).everyDays(1).create();
     const atual = _emailResumoConfig();
@@ -6792,7 +6792,7 @@ function getCategoriasPessoais(mes?: string): ServerResult {
     });
 
     // Ordena por ordem manual ASC
-    enriquecidas.sort((a, b) => Number(a['ordem'] || 99) - Number(b['ordem'] || 99));
+    enriquecidas.sort((a, b) => Number((a as Record<string, unknown>)['ordem'] || 99) - Number((b as Record<string, unknown>)['ordem'] || 99));
     return { ok: true, data: enriquecidas };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar categorias' };
@@ -9672,7 +9672,7 @@ function saveAutomationsSettings(cfg: Partial<AutomationConfigInternal>): Server
     // WhatsApp: campos de segredo (tokens) só são sobrescritos quando vierem
     // preenchidos — string vazia mantém o que já está salvo (padrão "preencha
     // só pra substituir"). O resto sobrescreve normalmente.
-    const waIn = cfg.whatsapp || {};
+    const waIn = (cfg.whatsapp || {}) as Partial<WhatsappConfigInternal>;
     const whatsapp: WhatsappConfigInternal = {
       ...atual.whatsapp,
       ...waIn,
@@ -10306,7 +10306,7 @@ function gerarRelatorioMensal(mes?: number, ano?: number, incluirIA?: boolean): 
     const sistemas = dbGetAll('Sistemas');
     const clientes = (dbGetAll('Pessoas') as Array<Record<string, unknown>>).filter((p) => String(p.papel) === 'cliente');
     const ideias = dbGetAll('Ideias');
-    const custos = dbGetAll('Custos');
+    const custos = dbGetAll('Custos') as Array<Record<string, unknown>>;
     const alertas = (dbGetAll('Alertas') as Array<Record<string, unknown>>).filter((a) => {
       const t = new Date(String(a.criadoEm || '')).getTime();
       return !Number.isNaN(t) && t >= inicio.getTime() && t <= fim.getTime();
@@ -10366,12 +10366,15 @@ function gerarRelatorioMensal(mes?: number, ano?: number, incluirIA?: boolean): 
       .filter((c) => !!c.proximaCobranca)
       .map((c) => ({ ...c, _data: new Date(String(c.proximaCobranca)) }))
       .filter((c) => !Number.isNaN(c._data.getTime()) && c._data >= new Date() && c._data <= limite30)
-      .map((c) => ({
-        fornecedor: c.fornecedor,
-        valor: Number(c.valor || 0),
-        proximaCobranca: c.proximaCobranca,
-        sistemaId: c.sistemaId || '',
-      }));
+      .map((c) => {
+        const r = c as Record<string, unknown>;
+        return {
+          fornecedor: r.fornecedor,
+          valor: Number(r.valor || 0),
+          proximaCobranca: r.proximaCobranca,
+          sistemaId: r.sistemaId || '',
+        };
+      });
 
     // Resumo IA (opcional — caro, só se pedirem)
     let resumoIA = '';
@@ -12144,7 +12147,7 @@ function listModelosDisponiveis(): ServerResult {
     if (!cfg.apiKey) throw new Error('Configure a chave da API em Configurações de IA.');
 
     const urls = llmUrlCandidates(cfg.baseUrl, '/models');
-    const headers = cfg.provider === 'anthropic'
+    const headers: Record<string, string> = cfg.provider === 'anthropic'
       ? { 'x-api-key': cfg.apiKey, 'anthropic-version': '2023-06-01' }
       : { Authorization: `Bearer ${cfg.apiKey}` };
 

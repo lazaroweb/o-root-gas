@@ -84,12 +84,15 @@ function getCategoriaLabel(cat: string): string {
 // Não inclui dep nova (marked, react-markdown) pra economizar bundle. Faz só
 // o essencial: headers, bold, code blocks, listas. Suficiente pra receituário.
 function renderMarkdown(md: string): string {
-  let html = md
-    // Code blocks (precisa vir antes de inline code pra não conflitar)
-    .replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) =>
-      `<pre style="background:#1B1D21;color:#EAE7E1;padding:12px 14px;border-radius:8px;overflow-x:auto;font-size:12px;font-family:'JetBrains Mono',monospace;margin:8px 0"><code>${
-        escapeHtml(code)
-      }</code></pre>`
+  // Escapa TODO o input primeiro: o conteúdo das receitas pode vir de import/
+  // compartilhamento, então qualquer HTML embutido (ex.: <script>, onerror=)
+  // tem que virar texto, não markup. Os marcadores de markdown (```, `, *, #, -)
+  // não são afetados pelo escape, então as transformações abaixo seguem normais.
+  let html = escapeHtml(md)
+    // Code blocks (precisa vir antes de inline code pra não conflitar).
+    // `code` já vem escapado pelo escapeHtml(md) acima.
+    .replace(/```(\w+)?\n([\s\S]*?)```/g, (_, _lang, code) =>
+      `<pre style="background:#1B1D21;color:#EAE7E1;padding:12px 14px;border-radius:8px;overflow-x:auto;font-size:12px;font-family:'JetBrains Mono',monospace;margin:8px 0"><code>${code}</code></pre>`
     )
     // Inline code
     .replace(/`([^`]+)`/g, '<code style="background:rgba(126,157,196,0.12);padding:1px 6px;border-radius:4px;font-family:\'JetBrains Mono\',monospace;font-size:0.92em">$1</code>')
