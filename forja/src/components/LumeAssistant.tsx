@@ -4,6 +4,7 @@ import { Flame, Send, User, Eraser, RefreshCw, X, Lightbulb } from 'lucide-react
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
+import ModeloBadge from './ModeloBadge';
 import type { ServerResult } from '../types';
 
 interface LumeMsg {
@@ -230,12 +231,8 @@ export default function LumeAssistant({ viewLabel }: { viewLabel: string }): Rea
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                 <span style={{ fontFamily: FONTS.display, fontSize: 17.5, fontWeight: 600, color: t.text, letterSpacing: '-0.01em' }}>Lume</span>
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 3, fontFamily: FONTS.ui, fontSize: 10, fontWeight: 600,
-                  color: t.accents.sage, background: `${t.accents.sage}1c`, padding: '1px 7px', borderRadius: 20,
-                }}>
-                  <span style={{ width: 5, height: 5, borderRadius: '50%', background: t.accents.sage }} /> online
-                </span>
+                {/* Status real do modelo do chat (modelo + farol verde/vermelho). */}
+                <ModeloBadge uso="chat" size="small" />
               </div>
               <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary }}>sua copiloto na forja</div>
             </div>

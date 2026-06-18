@@ -36,6 +36,18 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.68.0] — 2026-06-18
+
+### Alterado
+
+- **Lume: status real do modelo no cabeçalho.** O selinho "● online" era fixo
+  (decorativo) e não dizia qual modelo o chat usava. Trocado pelo `ModeloBadge`
+  real: mostra o modelo do chat + farol verde/vermelho de online, com latência e
+  "Testar conexão" no tooltip. Agora dá pra saber, de forma discreta, qual cérebro
+  responde a Lume e se está up.
+
+---
+
 ## [1.67.1] — 2026-06-18
 
 ### Corrigido
