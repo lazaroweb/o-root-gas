@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   Modal, Button, Input, Tag, App as AntApp, Empty, Spin, Tooltip, Drawer, Upload,
-  Popconfirm, Tabs, Form, Skeleton,
+  Popconfirm, Tabs, Form, Skeleton, Segmented,
 } from 'antd';
 import {
   BookMarked, Plus, Upload as UploadIcon, Copy, Trash2, Download, Search, Tag as TagIcon,
-  ExternalLink, Sparkles, Eye, FileText, Save, X, FolderOpen, CheckCircle2, Info,
+  ExternalLink, Sparkles, Eye, FileText, Save, X, FolderOpen, CheckCircle2, Info, Languages,
 } from 'lucide-react';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -79,6 +79,10 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
   // Drawer de detalhe
   const [aberta, setAberta] = useState<SkillFull | null>(null);
   const [carregandoAberta, setCarregandoAberta] = useState(false);
+  // Tradução sob demanda (não persiste; original fica intacto)
+  const [traduzido, setTraduzido] = useState<{ conteudo: string; descricao: string } | null>(null);
+  const [traduzindo, setTraduzindo] = useState(false);
+  const [verOriginal, setVerOriginal] = useState(false);
 
   // Form de adicionar/editar
   const [editandoId, setEditandoId] = useState<string | null>(null);
@@ -211,11 +215,32 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
 
   const abrirSkill = async (id: string) => {
     setCarregandoAberta(true);
+    setTraduzido(null);
+    setVerOriginal(false);
     try {
       const r = await callServer<ServerResult>('skillsGetContent', id);
       if (r.ok && r.data) setAberta(r.data as SkillFull);
       else message.error(r.error || 'Erro ao carregar');
     } finally { setCarregandoAberta(false); }
+  };
+
+  const traduzirSkill = async () => {
+    if (!aberta) return;
+    setTraduzindo(true);
+    try {
+      const r = await callServer<ServerResult>('skillsTraduzir', aberta.id);
+      if (r.ok && r.data) {
+        setTraduzido(r.data as { conteudo: string; descricao: string });
+        setVerOriginal(false);
+        message.success('Tradução pronta');
+      } else {
+        message.error(r.error || 'Não consegui traduzir');
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro ao traduzir');
+    } finally {
+      setTraduzindo(false);
+    }
   };
 
   const editarSkill = (s: SkillFull) => {
@@ -481,6 +506,27 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
               <Tooltip title="Baixar como .md">
                 <Button icon={<Download size={14} />} onClick={() => baixarMd(aberta)} />
               </Tooltip>
+              {traduzido ? (
+                <Segmented
+                  size="small"
+                  value={verOriginal ? 'orig' : 'pt'}
+                  onChange={(v) => setVerOriginal(v === 'orig')}
+                  options={[
+                    { label: 'Traduzido', value: 'pt' },
+                    { label: 'Original', value: 'orig' },
+                  ]}
+                />
+              ) : (
+                <Tooltip title="Traduzir descrição e conteúdo para português (não altera o original)">
+                  <Button
+                    icon={<Languages size={14} />}
+                    loading={traduzindo}
+                    onClick={traduzirSkill}
+                  >
+                    Traduzir
+                  </Button>
+                </Tooltip>
+              )}
               <Button icon={<Sparkles size={14} />} onClick={() => editarSkill(aberta)}>Editar</Button>
               <Popconfirm
                 title="Remover essa skill?"
@@ -499,9 +545,20 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
         {carregandoAberta && <Skeleton active paragraph={{ rows: 6 }} />}
         {aberta && (
           <>
-            {aberta.descricao && (
+            {traduzido && (
+              <div style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 10,
+                background: `${t.accents.sage}1a`, border: `1px solid ${t.accents.sage}40`,
+                borderRadius: 999, padding: '3px 10px',
+                fontFamily: FONTS.ui, fontSize: 11, color: t.textSecondary,
+              }}>
+                <Languages size={11} color={t.accents.sage} />
+                {verOriginal ? 'Mostrando original' : 'Traduzido por IA · use "Original" para o texto-fonte'}
+              </div>
+            )}
+            {(traduzido && !verOriginal ? traduzido.descricao : aberta.descricao) && (
               <p style={{ fontFamily: FONTS.ui, fontSize: 14, color: t.textSecondary, lineHeight: 1.65, marginTop: 0 }}>
-                {aberta.descricao}
+                {traduzido && !verOriginal ? traduzido.descricao : aberta.descricao}
               </p>
             )}
 
@@ -541,7 +598,9 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
             )}
 
             {/* Conteúdo bruto */}
-            <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, marginBottom: 6 }}>Conteúdo Markdown</div>
+            <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, marginBottom: 6 }}>
+              {traduzido && !verOriginal ? 'Conteúdo Markdown (traduzido)' : 'Conteúdo Markdown'}
+            </div>
             <pre
               style={{
                 background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
@@ -551,7 +610,7 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                 maxHeight: 'calc(100vh - 360px)', overflow: 'auto',
               }}
             >
-              {aberta.conteudo}
+              {traduzido && !verOriginal ? traduzido.conteudo : aberta.conteudo}
             </pre>
           </>
         )}

@@ -36,6 +36,21 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.65.0] — 2026-06-18
+
+### Adicionado
+
+- **Skills Hub → tradução sob demanda.** No drawer de uma skill (Atelier → Skills),
+  novo botão **Traduzir** que traduz a descrição e o conteúdo Markdown para
+  português do Brasil via LLM, **preservando o original** (código, comandos,
+  caminhos, URLs e a chave `name` do frontmatter não são tocados). Depois de
+  traduzir, um seletor **Traduzido / Original** alterna entre as duas versões a um
+  clique. A tradução é efêmera (não altera a planilha) e some ao trocar de skill.
+  - Server: `skillsTraduzir(id, idioma?)` reusando `forjaCallLLM`.
+  - Cliente: estados de tradução + `Segmented` no `SkillsHubModal`.
+
+---
+
 ## [1.64.0] — 2026-06-18
 
 ### Adicionado

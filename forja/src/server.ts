@@ -12763,6 +12763,41 @@ function skillsSave(payload: {
   }
 }
 
+// Traduz a descrição + o conteúdo de uma skill via LLM, preservando a formatação
+// Markdown, código, comandos e o frontmatter YAML. Sob demanda (não persiste) —
+// o original continua intacto na planilha.
+function skillsTraduzir(id: string, idioma?: string): ServerResult {
+  try {
+    const linhas = dbGetAll('Skills') as Array<Record<string, unknown>>;
+    const s = linhas.find((l) => String(l.id || '') === id);
+    if (!s) throw new Error('Skill não encontrada.');
+    const alvo = (idioma && idioma.trim()) || 'português do Brasil';
+    const conteudo = String(s.conteudo || '');
+    const descricao = String(s.descricao || '');
+    if (!conteudo.trim() && !descricao.trim()) {
+      return { ok: true, data: { conteudo, descricao } };
+    }
+    const sys = 'Você é um tradutor técnico. Traduza o texto a seguir para ' + alvo + '. '
+      + 'Mantenha EXATAMENTE a estrutura Markdown (títulos, listas, tabelas), o frontmatter YAML '
+      + '(traduza apenas o VALOR de "description"; NÃO altere a chave "name" nem seu valor), e NÃO '
+      + 'traduza conteúdo dentro de crases `assim`, blocos de código, comandos de terminal, nomes de '
+      + 'arquivos, caminhos ou URLs. Responda somente com o texto traduzido, sem comentários.';
+    const conteudoTraduzido = conteudo.trim()
+      ? forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: conteudo }], 4000)
+      : conteudo;
+    let descricaoTraduzida = descricao;
+    if (descricao.trim()) {
+      descricaoTraduzida = forjaCallLLM([
+        { role: 'system', content: 'Traduza para ' + alvo + ' em uma única frase, sem aspas, mantendo termos técnicos:' },
+        { role: 'user', content: descricao },
+      ], 400);
+    }
+    return { ok: true, data: { conteudo: String(conteudoTraduzido || '').trim(), descricao: String(descricaoTraduzida || '').trim(), idioma: alvo } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao traduzir skill' };
+  }
+}
+
 // Lista todas as skills com metadados (sem o conteúdo completo, pra ser leve).
 function skillsList(): ServerResult {
   try {
