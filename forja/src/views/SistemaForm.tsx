@@ -168,7 +168,9 @@ export default function SistemaForm({ sistemaId, onBack, onSaved }: SistemaFormP
 // Clica e preenche o campo. Mostra também links pra checar disponibilidade.
 function DomainHints({ form }: { form: ReturnType<typeof Form.useForm<FormValues>>[0] }): React.ReactElement {
   const t = useTokens();
+  // Todos os hooks ANTES de qualquer return condicional (regras dos Hooks).
   const codinome = (Form.useWatch('codinome', form) || '').toString().toLowerCase().replace(/[^a-z0-9-]/g, '');
+  const valor = Form.useWatch('dominioCustomizado', form) as string | undefined;
   if (!codinome) return <span style={{ color: t.textTertiary, fontSize: 12 }}>Preencha o codinome pra ver sugestões.</span>;
 
   const sugestoes = [
@@ -179,7 +181,6 @@ function DomainHints({ form }: { form: ReturnType<typeof Form.useForm<FormValues
   ];
 
   const aplicar = (s: string) => form.setFieldValue('dominioCustomizado', s);
-  const valor = Form.useWatch('dominioCustomizado', form) as string | undefined;
   const buscaUrl = valor
     ? `https://registro.br/painel/dominios/${encodeURIComponent(valor)}`
     : `https://registro.br/painel/dominios/${encodeURIComponent(codinome)}.com.br`;

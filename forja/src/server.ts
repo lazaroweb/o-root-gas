@@ -80,7 +80,9 @@ const SCHEMA: SheetSchema[] = [
   { name: 'Processos', columns: ['id', 'pessoaId', 'sistemaId', 'nome', 'tipo', 'mermaid', 'notas'] },
   { name: 'Conselho', columns: ['id', 'contexto', 'persona', 'parecer', 'sintese', 'data'] },
   { name: 'Auditorias', columns: ['id', 'sistemaId', 'criadoEm', 'modeloUsado', 'duracaoMs', 'scoreNoMomento', 'numFindings', 'payloadJson', 'fontesJson', 'registrosJson'] },
-  { name: 'Skills', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm'] },
+  // `traducaoPt`: cache JSON da tradução pt-BR ({conteudo, descricao, idioma, em}).
+  // Persistido pra não re-gastar tokens. Limpo quando o `conteudo` muda (reimport/edit).
+  { name: 'Skills', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt'] },
   { name: 'Provedores', columns: ['id', 'nome', 'categoria', 'urlSite', 'freeTier', 'precoBase', 'beneficios', 'limitacoes', 'idealPara', 'notas', 'status', 'tags', 'criadoEm', 'atualizadoEm'] },
   { name: 'Cofre', columns: ['id', 'label', 'categoria', 'urlRef', 'usuario', 'iv', 'cipher', 'notas', 'criadoEm', 'atualizadoEm'] },
   { name: 'Snippets', columns: ['id', 'titulo', 'descricao', 'linguagem', 'codigo', 'tags', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm'] },
@@ -239,7 +241,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.43-regras-categoria';
+const SCHEMA_VERSION = 'v1.44-skills-traducao';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -12736,12 +12738,15 @@ function skillsSave(payload: {
       const linhas = dbGetAll('Skills') as Array<Record<string, unknown>>;
       const existe = linhas.find((l) => String(l.id || '') === payload.id);
       if (!existe) throw new Error('Skill não encontrada pra atualizar.');
+      // Se o conteúdo mudou, invalida a tradução em cache (ficou obsoleta).
+      const conteudoMudou = String(existe.conteudo || '') !== payload.conteudo;
       dbUpdate('Skills', payload.id, {
         nome, descricao, categoria, tags,
         conteudo: payload.conteudo,
         fonte: payload.fonte || String(existe.fonte || ''),
         tamanhoBytes: tamanho,
         atualizadoEm: agora,
+        ...(conteudoMudou ? { traducaoPt: '' } : {}),
       });
       return { ok: true, data: { id: payload.id, nome, descricao, categoria, tags } };
     }
@@ -12763,19 +12768,27 @@ function skillsSave(payload: {
   }
 }
 
-// Traduz a descrição + o conteúdo de uma skill via LLM, preservando a formatação
-// Markdown, código, comandos e o frontmatter YAML. Sob demanda (não persiste) —
-// o original continua intacto na planilha.
-function skillsTraduzir(id: string, idioma?: string): ServerResult {
+// Traduz a descrição + o conteúdo de uma skill via LLM para pt-BR, preservando
+// formatação Markdown, código, comandos e o frontmatter YAML. O resultado é
+// PERSISTIDO em `traducaoPt` (cache) pra não re-gastar tokens nas próximas vezes.
+// Se já houver cache válido e `forcar` for falso, devolve o cache sem chamar a LLM.
+function skillsTraduzir(id: string, idioma?: string, forcar?: boolean): ServerResult {
   try {
     const linhas = dbGetAll('Skills') as Array<Record<string, unknown>>;
     const s = linhas.find((l) => String(l.id || '') === id);
     if (!s) throw new Error('Skill não encontrada.');
     const alvo = (idioma && idioma.trim()) || 'português do Brasil';
+
+    // Cache hit: devolve sem chamar a LLM.
+    if (!forcar) {
+      const cache = _parseTraducaoPt(s.traducaoPt);
+      if (cache) return { ok: true, data: { ...cache, doCache: true } };
+    }
+
     const conteudo = String(s.conteudo || '');
     const descricao = String(s.descricao || '');
     if (!conteudo.trim() && !descricao.trim()) {
-      return { ok: true, data: { conteudo, descricao } };
+      return { ok: true, data: { conteudo, descricao, idioma: alvo } };
     }
     const sys = 'Você é um tradutor técnico. Traduza o texto a seguir para ' + alvo + '. '
       + 'Mantenha EXATAMENTE a estrutura Markdown (títulos, listas, tabelas), o frontmatter YAML '
@@ -12792,10 +12805,34 @@ function skillsTraduzir(id: string, idioma?: string): ServerResult {
         { role: 'user', content: descricao },
       ], 400);
     }
-    return { ok: true, data: { conteudo: String(conteudoTraduzido || '').trim(), descricao: String(descricaoTraduzida || '').trim(), idioma: alvo } };
+    const resultado = {
+      conteudo: String(conteudoTraduzido || '').trim(),
+      descricao: String(descricaoTraduzida || '').trim(),
+      idioma: alvo,
+      em: new Date().toISOString(),
+    };
+    // Persiste o cache (best-effort — se falhar, ainda devolve a tradução).
+    try { dbUpdate('Skills', id, { traducaoPt: JSON.stringify(resultado) }); } catch { /* segue baile */ }
+    return { ok: true, data: { ...resultado, doCache: false } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao traduzir skill' };
   }
+}
+
+// Parse defensivo do cache de tradução; devolve null se vazio/inválido.
+function _parseTraducaoPt(raw: unknown): { conteudo: string; descricao: string; idioma: string; em: string } | null {
+  const txt = String(raw || '').trim();
+  if (!txt) return null;
+  try {
+    const o = JSON.parse(txt) as Record<string, unknown>;
+    if (!o || (!o.conteudo && !o.descricao)) return null;
+    return {
+      conteudo: String(o.conteudo || ''),
+      descricao: String(o.descricao || ''),
+      idioma: String(o.idioma || 'português do Brasil'),
+      em: String(o.em || ''),
+    };
+  } catch { return null; }
 }
 
 // Lista todas as skills com metadados (sem o conteúdo completo, pra ser leve).
@@ -12840,6 +12877,7 @@ function skillsGetContent(id: string): ServerResult {
         criadoEm: String(s.criadoEm || ''),
         atualizadoEm: String(s.atualizadoEm || ''),
         parsed: _parseSkillMd(String(s.conteudo || '')),
+        traducao: _parseTraducaoPt(s.traducaoPt),
       },
     };
   } catch (e: unknown) {

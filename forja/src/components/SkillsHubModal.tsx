@@ -25,9 +25,12 @@ interface SkillSummary {
   atualizadoEm: string;
 }
 
+interface Traducao { conteudo: string; descricao: string; idioma?: string; em?: string }
+
 interface SkillFull extends SkillSummary {
   conteudo: string;
   parsed: { nome: string; descricao: string; categoria: string; tags: string[]; secoes: string[] };
+  traducao?: Traducao | null;
 }
 
 interface Props {
@@ -79,8 +82,9 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
   // Drawer de detalhe
   const [aberta, setAberta] = useState<SkillFull | null>(null);
   const [carregandoAberta, setCarregandoAberta] = useState(false);
-  // Tradução sob demanda (não persiste; original fica intacto)
-  const [traduzido, setTraduzido] = useState<{ conteudo: string; descricao: string } | null>(null);
+  // Tradução pt-BR: por padrão mostra traduzido; cache persistido no servidor
+  // (coluna traducaoPt) pra não re-gastar tokens. `verOriginal` mostra o original.
+  const [traduzido, setTraduzido] = useState<Traducao | null>(null);
   const [traduzindo, setTraduzindo] = useState(false);
   const [verOriginal, setVerOriginal] = useState(false);
 
@@ -219,20 +223,31 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
     setVerOriginal(false);
     try {
       const r = await callServer<ServerResult>('skillsGetContent', id);
-      if (r.ok && r.data) setAberta(r.data as SkillFull);
-      else message.error(r.error || 'Erro ao carregar');
+      if (r.ok && r.data) {
+        const full = r.data as SkillFull;
+        setAberta(full);
+        if (full.traducao && (full.traducao.conteudo || full.traducao.descricao)) {
+          // Cache existe → mostra pt-BR na hora, sem gastar token.
+          setTraduzido(full.traducao);
+        } else {
+          // Sem cache → traduz uma vez (fica guardado pras próximas).
+          traduzirSkill(id);
+        }
+      } else {
+        message.error(r.error || 'Erro ao carregar');
+      }
     } finally { setCarregandoAberta(false); }
   };
 
-  const traduzirSkill = async () => {
-    if (!aberta) return;
+  const traduzirSkill = async (idArg?: string) => {
+    const id = idArg || aberta?.id;
+    if (!id) return;
     setTraduzindo(true);
     try {
-      const r = await callServer<ServerResult>('skillsTraduzir', aberta.id);
+      const r = await callServer<ServerResult>('skillsTraduzir', id);
       if (r.ok && r.data) {
-        setTraduzido(r.data as { conteudo: string; descricao: string });
+        setTraduzido(r.data as Traducao);
         setVerOriginal(false);
-        message.success('Tradução pronta');
       } else {
         message.error(r.error || 'Não consegui traduzir');
       }
@@ -512,18 +527,18 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                   value={verOriginal ? 'orig' : 'pt'}
                   onChange={(v) => setVerOriginal(v === 'orig')}
                   options={[
-                    { label: 'Traduzido', value: 'pt' },
+                    { label: 'Português', value: 'pt' },
                     { label: 'Original', value: 'orig' },
                   ]}
                 />
               ) : (
-                <Tooltip title="Traduzir descrição e conteúdo para português (não altera o original)">
+                <Tooltip title="Traduzir descrição e conteúdo para português (fica guardado, não gasta token de novo)">
                   <Button
                     icon={<Languages size={14} />}
                     loading={traduzindo}
-                    onClick={traduzirSkill}
+                    onClick={() => traduzirSkill()}
                   >
-                    Traduzir
+                    {traduzindo ? 'Traduzindo…' : 'Traduzir'}
                   </Button>
                 </Tooltip>
               )}
@@ -545,6 +560,17 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
         {carregandoAberta && <Skeleton active paragraph={{ rows: 6 }} />}
         {aberta && (
           <>
+            {traduzindo && !traduzido && (
+              <div style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 10,
+                background: `${t.accents.blue}1a`, border: `1px solid ${t.accents.blue}40`,
+                borderRadius: 999, padding: '3px 10px',
+                fontFamily: FONTS.ui, fontSize: 11, color: t.textSecondary,
+              }}>
+                <Spin size="small" />
+                Traduzindo para português…
+              </div>
+            )}
             {traduzido && (
               <div style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 10,
@@ -553,7 +579,7 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                 fontFamily: FONTS.ui, fontSize: 11, color: t.textSecondary,
               }}>
                 <Languages size={11} color={t.accents.sage} />
-                {verOriginal ? 'Mostrando original' : 'Traduzido por IA · use "Original" para o texto-fonte'}
+                {verOriginal ? 'Mostrando o original' : 'Traduzido por IA (guardado) · use "Original" pra ver o texto-fonte'}
               </div>
             )}
             {(traduzido && !verOriginal ? traduzido.descricao : aberta.descricao) && (

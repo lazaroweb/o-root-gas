@@ -36,6 +36,28 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.66.0] — 2026-06-18
+
+### Corrigido
+
+- **Crash ao editar um sistema (React #310).** O componente `DomainHints` (sugestões
+  de domínio no formulário de sistema) chamava `Form.useWatch('dominioCustomizado')`
+  **depois** de um `return` condicional. Ao abrir um sistema que já tinha `codinome`
+  preenchido (ex.: "A Origem v3"), os dados carregavam, um hook extra rodava e a tela
+  travava com "Algo travou na tela". Movidos todos os hooks pra antes do return.
+
+### Alterado
+
+- **Skills traduzidas por padrão + cache persistente.** Ao abrir uma skill, o Forja
+  agora mostra **português direto**. A tradução é **guardada** (coluna `traducaoPt`
+  na aba Skills) — abrir de novo não gasta token. O seletor vira **Português / Original**
+  pra ver o texto-fonte (inglês) quando quiser. O cache é invalidado automaticamente
+  se o conteúdo da skill mudar (reimport/edição).
+  - Server: `skillsTraduzir` persiste/lê cache; `skillsGetContent` devolve `traducao`;
+    `skillsSave` limpa o cache quando o conteúdo muda. `SCHEMA_VERSION` → `v1.44`.
+
+---
+
 ## [1.65.0] — 2026-06-18
 
 ### Adicionado
