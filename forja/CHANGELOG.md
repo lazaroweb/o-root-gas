@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.67.0] — 2026-06-18
+
+### Adicionado
+
+- **Status do modelo de IA no home das Skills.** No topo de "Minhas skills" agora
+  aparece qual LLM está sendo usado (com tier) e um **farol** verde/vermelho/cinza
+  indicando se está online — reaproveitando o `ModeloBadge` já existente (Chat,
+  Blueprint, Diagramas). Tooltip mostra latência da última chamada e traz o botão
+  **"Testar conexão"** (ping leve de 1 token). É o mesmo modelo que faz a tradução
+  das skills, então o usuário sempre vê de onde vem o texto e se está vivo.
+
+---
+
 ## [1.66.0] — 2026-06-18
 
 ### Corrigido

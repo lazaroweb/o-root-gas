@@ -7,6 +7,7 @@ import {
   BookMarked, Plus, Upload as UploadIcon, Copy, Trash2, Download, Search, Tag as TagIcon,
   ExternalLink, Sparkles, Eye, FileText, Save, X, FolderOpen, CheckCircle2, Info, Languages,
 } from 'lucide-react';
+import ModeloBadge from './ModeloBadge';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
@@ -318,6 +319,23 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
               label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><FolderOpen size={14} /> Minhas skills {skills.length > 0 && <Tag style={{ marginInlineEnd: 0 }}>{skills.length}</Tag>}</span>,
               children: (
                 <div style={{ padding: '14px 24px 24px', minHeight: 380, maxHeight: '70vh', overflow: 'auto' }}>
+                  {/* Status do LLM usado nesta seção (tradução das skills) */}
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12,
+                    padding: '8px 12px', borderRadius: 10,
+                    background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
+                    flexWrap: 'wrap',
+                  }}>
+                    <Languages size={14} color={t.accents.sage} />
+                    <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>
+                      IA usada para tradução das skills:
+                    </span>
+                    <ModeloBadge uso="chat" size="medium" />
+                    <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginLeft: 'auto' }}>
+                      passe o mouse para latência e status · botão "Testar conexão"
+                    </span>
+                  </div>
+
                   <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap' }}>
                     <Input
                       prefix={<Search size={13} color={t.textTertiary} />}
