@@ -1,0 +1,11 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Node
+node_modules/
+
+# Build / deploy artifacts
+dist/
+.clasp.json
+.gas-app/
