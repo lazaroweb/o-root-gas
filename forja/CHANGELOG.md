@@ -36,6 +36,14 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.63.3] — 2026-06-18
+
+### Alterado
+
+- **Driver: status visual de conexão.** O avatar de cada conta fica **verde com
+  bolinha de status** quando está conectada (cinza quando só registrada). O Drive
+  deste app também mostra o indicador verde.
+
 ## [1.63.2] — 2026-06-18
 
 ### Adicionado

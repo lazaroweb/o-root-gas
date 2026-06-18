@@ -513,8 +513,15 @@ export default function DriverPanel(): React.ReactElement {
         display: 'flex', alignItems: 'center', gap: 12,
         border: `1px solid ${t.border}`, borderRadius: 12, padding: '12px 14px', marginBottom: 12,
       }}>
-        <div style={{ width: 36, height: 36, borderRadius: 9, background: `${t.accents.sage}1f`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{
+          position: 'relative', width: 36, height: 36, borderRadius: 9,
+          background: `${t.accents.sage}1f`, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
           <HardDrive size={18} color={t.accents.sage} />
+          <span style={{
+            position: 'absolute', right: -2, bottom: -2, width: 11, height: 11,
+            borderRadius: 999, background: t.accents.sage, border: `2px solid ${t.surface}`,
+          }} />
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: FONTS.ui, fontSize: 13.5, fontWeight: 600, color: t.text }}>
@@ -546,8 +553,17 @@ export default function DriverPanel(): React.ReactElement {
                 display: 'flex', alignItems: 'center', gap: 12,
                 border: `1px solid ${t.borderSoft}`, borderRadius: 12, padding: '12px 14px',
               }}>
-                <div style={{ width: 36, height: 36, borderRadius: 9, background: `${t.accents.lavender}1f`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <Cloud size={18} color={t.accents.lavender} />
+                <div style={{
+                  position: 'relative', width: 36, height: 36, borderRadius: 9,
+                  background: conectada ? `${t.accents.sage}1f` : t.surfaceMuted,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <Cloud size={18} color={conectada ? t.accents.sage : t.textTertiary} />
+                  <span style={{
+                    position: 'absolute', right: -2, bottom: -2, width: 11, height: 11,
+                    borderRadius: 999, background: conectada ? t.accents.sage : t.textTertiary,
+                    border: `2px solid ${t.surface}`,
+                  }} />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontFamily: FONTS.ui, fontSize: 13.5, fontWeight: 600, color: t.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
