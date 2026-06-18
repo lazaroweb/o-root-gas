@@ -7760,6 +7760,49 @@ function getLlmConfig(): { baseUrl: string; modelo: string; apiKey: string; prov
   };
 }
 
+// ═══ Roteamento de IA por serviço (v1.69) ═══════════════════════════════════
+// Catálogo dos serviços que consomem IA. Cada serviço "proxy" pode ter um
+// modelo próprio (override) gravado em `propKey`; sem override, cai no modelo
+// global (LLM_MODEL). Serviços "gemini" são só pra visualização aqui (a troca
+// do modelo Gemini continua no select dedicado de Configurações → IA).
+// `complexidade` alimenta a sugestão de modelo (simples → modelo barato basta).
+interface ServicoIA {
+  id: string;            // = `uso` passado no forjaCallLLM
+  label: string;
+  descricao: string;
+  stack: 'proxy' | 'gemini';
+  complexidade: 'simples' | 'media' | 'pesada';
+  propKey: string;       // Script Property do override (proxy) ou modelo (gemini)
+  roteavel: boolean;     // proxy roteado por getModeloParaUso
+}
+
+const SERVICOS_IA: ServicoIA[] = [
+  { id: 'chat',      label: 'Forja IA (chat)',     descricao: 'Chat principal com ferramentas e contexto do portfólio.', stack: 'proxy',  complexidade: 'pesada',  propKey: 'LLM_MODEL_CHAT',      roteavel: true },
+  { id: 'lume',      label: 'Lume (copiloto)',     descricao: 'Assistente lateral que conhece seus dados.',              stack: 'proxy',  complexidade: 'media',   propKey: 'LLM_MODEL_LUME',      roteavel: true },
+  { id: 'dica',      label: 'Lume — dica proativa', descricao: 'Sugestão curta de 1 frase ao abrir a Lume.',             stack: 'proxy',  complexidade: 'simples', propKey: 'LLM_MODEL_DICA',      roteavel: true },
+  { id: 'traducao',  label: 'Tradução de skills',  descricao: 'Traduz a descrição/conteúdo das skills pra pt-BR.',       stack: 'proxy',  complexidade: 'simples', propKey: 'LLM_MODEL_TRADUCAO',  roteavel: true },
+  { id: 'blueprint', label: 'Blueprint',           descricao: 'Gera blueprint técnico + prompts (saída longa em JSON).', stack: 'proxy',  complexidade: 'pesada',  propKey: 'LLM_MODEL_BLUEPRINT', roteavel: true },
+  { id: 'diagrama',  label: 'Diagrama',            descricao: 'Gera diagramas Mermaid.',                                 stack: 'proxy',  complexidade: 'media',   propKey: 'LLM_MODEL_DIAGRAMA',  roteavel: true },
+  { id: 'auditoria', label: 'Auditoria',           descricao: 'Auditoria técnica de sistemas (override dedicado).',      stack: 'proxy',  complexidade: 'pesada',  propKey: 'LLM_MODEL_AUDITORIA', roteavel: true },
+  // Gemini (multimodal) — visualização; troca de modelo no select Gemini.
+  { id: 'fatura',     label: 'OCR de fatura (Gemini)',  descricao: 'Lê faturas de cartão em PDF/imagem.',                stack: 'gemini', complexidade: 'media',   propKey: 'GEMINI_MODEL', roteavel: false },
+  { id: 'recibo',     label: 'Recibos da empresa (Gemini)', descricao: 'Lê recibos/notas de despesa da empresa.',        stack: 'gemini', complexidade: 'media',   propKey: 'GEMINI_MODEL', roteavel: false },
+  { id: 'planoContas', label: 'Plano de contas (Gemini)', descricao: 'Gera plano de contas pessoal.',                    stack: 'gemini', complexidade: 'media',   propKey: 'GEMINI_MODEL', roteavel: false },
+];
+
+// Resolve o modelo a usar pra um serviço: override por serviço, senão global.
+function getModeloParaUso(uso?: string): string {
+  const cfg = getLlmConfig();
+  if (!uso) return cfg.modelo;
+  const svc = SERVICOS_IA.find((s) => s.id === uso && s.stack === 'proxy' && s.roteavel);
+  if (!svc) return cfg.modelo;
+  try {
+    const ov = PropertiesService.getScriptProperties().getProperty(svc.propKey);
+    if (ov && ov.trim()) return ov.trim();
+  } catch { /* segue baile */ }
+  return cfg.modelo;
+}
+
 // ═══ Modelo widget (v1.4.3) ═════════════════════════════════════════════════
 // Suporta o ModeloBadge na UI: devolve o modelo atual + classificação por
 // tier + sugestão de upgrade quando aplicável. Pensado pra dar ao user
@@ -7958,24 +8001,28 @@ function _lerStatusLLM(): UltimoStatusLLM | null {
   } catch { return null; }
 }
 
-function forjaCallLLM(messages: LlmMessage[], maxTokens?: number, modeloOverride?: string): string {
+function forjaCallLLM(messages: LlmMessage[], maxTokens?: number, modeloOverride?: string, uso?: string): string {
   // Wrapper retro-compatível — só devolve o texto. Atualiza _ultimoModeloUsado
   // pra quem precisar resgatar via getUltimoModeloUsado().
-  const r = forjaCallLLMDetalhado(messages, maxTokens, modeloOverride);
+  const r = forjaCallLLMDetalhado(messages, maxTokens, modeloOverride, uso);
   return r.texto;
 }
 
 // Versão detalhada: devolve modelo usado + latência além do texto. Útil pra
 // quem precisa stampar o modelo num artefato (Blueprints/Diagramas).
+// `uso` (opcional) habilita o roteamento por serviço: se não houver override
+// explícito, resolve o modelo via getModeloParaUso(uso). Sem `uso`, usa o
+// modelo global — comportamento idêntico ao anterior (zero quebra).
 function forjaCallLLMDetalhado(
   messages: LlmMessage[],
   maxTokens?: number,
   modeloOverride?: string,
+  uso?: string,
 ): { texto: string; modelo: string; latenciaMs: number } {
   const cfg = getLlmConfig();
   if (!cfg.baseUrl) throw new Error('Configure a Base URL do proxy em Configurações.');
   if (!cfg.apiKey) throw new Error('Configure a chave da API em Configurações.');
-  const modelo = (modeloOverride && modeloOverride.trim()) || cfg.modelo || 'gpt-4o-mini';
+  const modelo = (modeloOverride && modeloOverride.trim()) || getModeloParaUso(uso) || 'gpt-4o-mini';
   _ultimoModeloUsado = modelo;
   const t0 = Date.now();
 
@@ -8415,7 +8462,7 @@ function lumeChat(history: LlmMessage[], view?: string): ServerResult {
         messages.push({ role: m.role, content: String(m.content) });
       }
     }
-    const texto = forjaCallLLM(messages, 1400);
+    const texto = forjaCallLLM(messages, 1400, undefined, 'lume');
     return { ok: true, data: { texto: texto || '(sem resposta)' } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao falar com a Lume' };
@@ -8435,7 +8482,7 @@ function lumeDica(view?: string): ServerResult {
       { role: 'system', content: sistema },
       { role: 'user', content: 'Me dê uma dica pertinente agora.' },
     ];
-    const texto = forjaCallLLM(messages, 220);
+    const texto = forjaCallLLM(messages, 220, undefined, 'dica');
     return { ok: true, data: { texto: (texto || '').trim() } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar dica' };
@@ -9054,7 +9101,7 @@ function gerarBlueprint(input: { ideiaId?: string; sistemaId?: string; texto?: s
     const llm = forjaCallLLMDetalhado([
       { role: 'system', content: system },
       { role: 'user', content: contexto },
-    ], 3000);
+    ], 3000, undefined, 'blueprint');
 
     // Parse com fallback: se falhar, preserva resposta bruta.
     let json: { titulo?: string; conteudoMd?: string; prompts?: unknown } = {};
@@ -9117,7 +9164,7 @@ function gerarDiagrama(input: { texto?: string; ideiaId?: string; sistemaId?: st
     const llm = forjaCallLLMDetalhado([
       { role: 'system', content: system },
       { role: 'user', content: contexto },
-    ], 1500);
+    ], 1500, undefined, 'diagrama');
 
     // Parse com fallback em camadas:
     //   1) JSON limpo → ideal
@@ -11365,7 +11412,7 @@ function chatLLMComTools(history: LlmMessage[], sistemaId: string, opts?: { cont
         messages.push({ role: m.role, content: String(m.content) });
       }
     }
-    const resposta = forjaCallLLM(messages, 3500);
+    const resposta = forjaCallLLM(messages, 3500, undefined, 'chat');
     const parsed = _parseToolCalls(resposta);
     return { ok: true, data: { texto: parsed.texto || resposta, toolCalls: parsed.toolCalls } };
   } catch (e: unknown) {
@@ -12250,6 +12297,130 @@ function setModeloAuditoria(modelo: string): ServerResult {
   }
 }
 
+// ─── Roteamento de IA por serviço (painel Configurações → IA) ────────────────
+// Lista cada serviço de IA com o modelo efetivo, se tem override, endpoint e
+// (pro proxy) o farol de status compartilhado.
+function listarServicosIA(): ServerResult {
+  try {
+    const cfg = getLlmConfig();
+    const props = PropertiesService.getScriptProperties();
+    let geminiModelo = '';
+    try { geminiModelo = _geminiModelo(); } catch { geminiModelo = props.getProperty('GEMINI_MODEL') || ''; }
+
+    // Farol do proxy (compartilhado entre todos os serviços proxy).
+    const ultimo = _lerStatusLLM();
+    let saudeProxy: 'verde' | 'vermelho' | 'desconhecido' = 'desconhecido';
+    if (ultimo) {
+      const min = (Date.now() - ultimo.ts) / 60000;
+      if (min < 30) saudeProxy = ultimo.ok ? 'verde' : 'vermelho';
+    }
+
+    const servicos = SERVICOS_IA.map((s) => {
+      if (s.stack === 'gemini') {
+        const meta = _classificarModelo(geminiModelo);
+        return {
+          id: s.id, label: s.label, descricao: s.descricao, stack: s.stack,
+          complexidade: s.complexidade, roteavel: false,
+          modeloEfetivo: geminiModelo, overrideAtivo: false,
+          rotulo: meta.rotulo, tier: meta.tier,
+          endpoint: 'generativelanguage.googleapis.com',
+        };
+      }
+      const ov = (props.getProperty(s.propKey) || '').trim();
+      const modeloEfetivo = ov || cfg.modelo;
+      const meta = _classificarModelo(modeloEfetivo);
+      return {
+        id: s.id, label: s.label, descricao: s.descricao, stack: s.stack,
+        complexidade: s.complexidade, roteavel: s.roteavel,
+        modeloEfetivo, overrideAtivo: !!ov,
+        rotulo: meta.rotulo, tier: meta.tier,
+        endpoint: cfg.baseUrl,
+      };
+    });
+
+    const metaGlobal = _classificarModelo(cfg.modelo);
+    return {
+      ok: true,
+      data: {
+        global: {
+          configurado: !!cfg.modelo, modelo: cfg.modelo, provider: cfg.provider,
+          baseUrl: cfg.baseUrl, rotulo: metaGlobal.rotulo, tier: metaGlobal.tier,
+          saude: saudeProxy,
+        },
+        gemini: { configurado: !!props.getProperty('GEMINI_API_KEY'), modelo: geminiModelo },
+        servicos,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar serviços de IA' };
+  }
+}
+
+// Define (ou limpa, se vazio) o modelo de um serviço proxy roteável.
+function setModeloServico(uso: string, modelo: string): ServerResult {
+  try {
+    const svc = SERVICOS_IA.find((s) => s.id === uso && s.stack === 'proxy' && s.roteavel);
+    if (!svc) return { ok: false, error: 'Serviço não roteável: ' + uso };
+    const props = PropertiesService.getScriptProperties();
+    const m = String(modelo || '').trim();
+    if (!m) props.deleteProperty(svc.propKey);
+    else props.setProperty(svc.propKey, m);
+    return { ok: true, data: { id: uso, modelo: m, usandoGlobal: !m } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar modelo do serviço' };
+  }
+}
+
+// Pede pra própria LLM recomendar, dentre os modelos DISPONÍVEIS no provedor,
+// o mais barato/eficiente pra cada serviço (pela complexidade). Estima custo
+// pelo nome do modelo — não mantém tabela de preços.
+function sugerirRoteamentoIA(): ServerResult {
+  try {
+    const lr = listModelosDisponiveis();
+    if (!lr.ok || !lr.data) {
+      return { ok: false, error: 'Não consegui listar os modelos do seu provedor (GET /models falhou). Teste a conexão em Configurações → IA e tente de novo.' };
+    }
+    const modelosIds = (lr.data as { modelos: Array<{ id: string }> }).modelos.map((m) => m.id);
+    if (modelosIds.length === 0) return { ok: false, error: 'Seu provedor não retornou modelos em /models.' };
+
+    const servicosProxy = SERVICOS_IA.filter((s) => s.stack === 'proxy' && s.roteavel);
+    const catalogoTxt = servicosProxy
+      .map((s) => `- ${s.id} | ${s.label} | complexidade=${s.complexidade} | ${s.descricao}`)
+      .join('\n');
+    const modelosTxt = modelosIds.join(', ');
+
+    const sys = 'Você é um arquiteto de custos de LLM. Recebe a lista de MODELOS DISPONÍVEIS e uma lista de SERVIÇOS com sua complexidade. '
+      + 'Para CADA serviço, escolha o modelo MAIS BARATO/eficiente da lista que ainda entregue qualidade suficiente pra complexidade '
+      + '(simples = um modelo rápido/barato resolve; média = intermediário; pesada = precisa de um modelo capaz). '
+      + 'Estime custo/eficiência pelo NOME do modelo: haiku/mini/flash/nano/lite = baratos e rápidos; sonnet/gpt-4o/pro = intermediários; opus/ultra/gpt-4-turbo/reasoning = caros. '
+      + 'Use SOMENTE ids EXATOS da lista de modelos disponíveis. '
+      + 'Responda APENAS um JSON array válido, sem texto fora dele: '
+      + '[{"id":"<id do serviço>","modeloRecomendado":"<id>","alternativaMaisBarata":"<id ou string vazia>","motivo":"<1 frase curta>"}]';
+    const user = 'MODELOS DISPONÍVEIS:\n' + modelosTxt + '\n\nSERVIÇOS:\n' + catalogoTxt;
+
+    const txt = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: user }], 1500);
+    const ini = txt.indexOf('[');
+    const fim = txt.lastIndexOf(']');
+    if (ini < 0 || fim <= ini) throw new Error('A IA não retornou JSON. Tente de novo.');
+    const arr = JSON.parse(txt.slice(ini, fim + 1)) as Array<{ id: string; modeloRecomendado: string; alternativaMaisBarata?: string; motivo?: string }>;
+
+    const idsValidos = servicosProxy.map((s) => s.id);
+    const sugestoes = (Array.isArray(arr) ? arr : [])
+      .filter((x) => x && idsValidos.indexOf(String(x.id)) >= 0)
+      .map((x) => ({
+        id: String(x.id),
+        modeloRecomendado: String(x.modeloRecomendado || ''),
+        alternativaMaisBarata: String(x.alternativaMaisBarata || ''),
+        motivo: String(x.motivo || ''),
+        disponivel: modelosIds.indexOf(String(x.modeloRecomendado || '')) >= 0,
+      }));
+
+    return { ok: true, data: { sugestoes, modelosConsiderados: modelosIds.length, geradoEm: new Date().toISOString() } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao sugerir roteamento' };
+  }
+}
+
 // ─── Driver (Atelier) — navegador do Google Drive + registro de nuvens ───────
 // Lista pastas/arquivos do Drive da conta logada (read-only via Advanced Drive
 // Service v3 + escopo drive.readonly). Multi-cloud (OneDrive / outras contas
@@ -12796,14 +12967,14 @@ function skillsTraduzir(id: string, idioma?: string, forcar?: boolean): ServerRe
       + 'traduza conteúdo dentro de crases `assim`, blocos de código, comandos de terminal, nomes de '
       + 'arquivos, caminhos ou URLs. Responda somente com o texto traduzido, sem comentários.';
     const conteudoTraduzido = conteudo.trim()
-      ? forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: conteudo }], 4000)
+      ? forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: conteudo }], 4000, undefined, 'traducao')
       : conteudo;
     let descricaoTraduzida = descricao;
     if (descricao.trim()) {
       descricaoTraduzida = forjaCallLLM([
         { role: 'system', content: 'Traduza para ' + alvo + ' em uma única frase, sem aspas, mantendo termos técnicos:' },
         { role: 'user', content: descricao },
-      ], 400);
+      ], 400, undefined, 'traducao');
     }
     const resultado = {
       conteudo: String(conteudoTraduzido || '').trim(),

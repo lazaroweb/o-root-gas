@@ -6,6 +6,7 @@ import { PageHeader, Panel } from '../components/ui';
 import AutomacoesPanel from '../components/AutomacoesPanel';
 import UsuariosPanel from '../components/UsuariosPanel';
 import ModeloAuditoriaPanel from '../components/ModeloAuditoriaPanel';
+import RoteamentoIAPanel from '../components/RoteamentoIAPanel';
 import RegrasCategoriaPanel from '../components/RegrasCategoriaPanel';
 import ModelosDisponiveisWidget from '../components/ModelosDisponiveisWidget';
 import BackupRestorePanel from '../components/BackupRestorePanel';
@@ -242,6 +243,10 @@ export default function Configuracoes(): React.ReactElement {
                   </div>
                 </Form>
               </Panel>
+            </Col>
+
+            <Col xs={24}>
+              <RoteamentoIAPanel />
             </Col>
 
             <Col xs={24}>

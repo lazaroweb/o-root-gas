@@ -36,6 +36,33 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.69.0] — 2026-06-18
+
+### Adicionado
+
+- **Roteamento de IA por serviço (Configurações → IA).** Novo painel que lista
+  cada serviço que consome IA (Forja IA/chat, Lume, dica, tradução de skills,
+  blueprint, diagrama, auditoria + os de Gemini) com: descrição, **complexidade**,
+  endpoint, modelo efetivo, se tem override e o farol de status do proxy.
+  - **Modelo por serviço:** dá pra escolher um modelo específico por serviço
+    (dropdown com os modelos disponíveis do provedor); vazio = usa o padrão global.
+    Persistido em `LLM_MODEL_<SERVICO>`.
+  - **Sugestão por IA:** botão "Sugerir modelos (IA)" manda os modelos disponíveis
+    + o catálogo de serviços (com complexidade) pra própria LLM recomendar o modelo
+    mais barato/eficiente pra cada um (estimando custo pelo nome) — com justificativa
+    e botões "Aplicar" / "Aplicar todas". Evita gastar modelo caro onde um simples
+    resolve.
+  - **Resincronizar:** re-lista modelos e relê o status.
+
+### Alterado
+
+- **Roteamento real ligado nos serviços principais.** `chat`, `lume`, `dica`,
+  `traducao`, `blueprint` e `diagrama` agora resolvem o modelo via
+  `getModeloParaUso(uso)` (override por serviço → senão global). Auditoria já tinha
+  override dedicado. Quem não passa `uso` continua no modelo global (zero quebra).
+
+---
+
 ## [1.68.1] — 2026-06-18
 
 ### Corrigido
