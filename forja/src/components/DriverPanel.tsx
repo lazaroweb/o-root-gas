@@ -351,9 +351,9 @@ export default function DriverPanel(): React.ReactElement {
 
   // ─── Render: aba Arquivos ───────────────────────────────────────────────
   const fonteOptions = useMemo(() => ([
-    { value: 'local', short: 'Meu Drive', provedor: 'local' },
-    ...conectadas.map((c) => ({ value: c.id, short: c.rotulo || provedorLabel(c.provedor), provedor: c.provedor })),
-  ]), [conectadas]);
+    { value: 'local', short: 'Meu Drive', provedor: 'local', email: contaGoogle },
+    ...conectadas.map((c) => ({ value: c.id, short: c.rotulo || provedorLabel(c.provedor), provedor: c.provedor, email: c.email })),
+  ]), [conectadas, contaGoogle]);
 
   const renderArquivos = () => (
     <div style={{ padding: '14px 18px 18px' }}>
@@ -361,26 +361,37 @@ export default function DriverPanel(): React.ReactElement {
       <div style={{ display: 'flex', gap: 6, marginBottom: 12, overflowX: 'auto', paddingBottom: 2 }}>
         {fonteOptions.map((o) => {
           const ativo = o.value === fonteAtiva;
+          const tip = `${o.provedor === 'local' ? 'Conta deste app' : provedorLabel(o.provedor)}${o.email ? ` · ${o.email}` : ''} · conectada`;
           return (
-            <button
-              key={o.value}
-              onClick={() => trocarFonte(o.value)}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 7,
-                padding: '7px 13px', borderRadius: 999, cursor: 'pointer',
-                whiteSpace: 'nowrap', flexShrink: 0,
-                fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: ativo ? 600 : 500,
-                border: `1px solid ${ativo ? t.accents.blue : t.borderSoft}`,
-                background: ativo ? `${t.accents.blue}14` : 'transparent',
-                color: ativo ? t.text : t.textSecondary,
-                transition: 'all 0.15s',
-              }}
-            >
-              {o.provedor === 'local'
-                ? <HardDrive size={14} color={ativo ? t.accents.blue : t.textTertiary} />
-                : <Cloud size={14} color={ativo ? t.accents.blue : t.textTertiary} />}
-              {o.short}
-            </button>
+            <Tooltip key={o.value} title={tip}>
+              <button
+                onClick={() => trocarFonte(o.value)}
+                style={{
+                  position: 'relative',
+                  display: 'inline-flex', alignItems: 'center', gap: 7,
+                  padding: '7px 14px 7px 13px', borderRadius: 999, cursor: 'pointer',
+                  whiteSpace: 'nowrap', flexShrink: 0,
+                  fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: ativo ? 600 : 500,
+                  border: `1px solid ${ativo ? t.accents.blue : t.borderSoft}`,
+                  background: ativo ? `${t.accents.blue}14` : 'transparent',
+                  color: ativo ? t.text : t.textSecondary,
+                  transition: 'all 0.15s',
+                }}
+              >
+                <span style={{ position: 'relative', display: 'inline-flex' }}>
+                  {o.provedor === 'local'
+                    ? <HardDrive size={14} color={ativo ? t.accents.blue : t.textTertiary} />
+                    : <Cloud size={14} color={ativo ? t.accents.blue : t.textTertiary} />}
+                  {/* Bolinha verde: todas as fontes aqui estão conectadas */}
+                  <span style={{
+                    position: 'absolute', right: -4, bottom: -3, width: 8, height: 8,
+                    borderRadius: 999, background: t.accents.sage,
+                    border: `1.5px solid ${t.surface}`,
+                  }} />
+                </span>
+                {o.short}
+              </button>
+            </Tooltip>
           );
         })}
       </div>

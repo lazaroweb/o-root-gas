@@ -36,6 +36,14 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.63.4] — 2026-06-18
+
+### Alterado
+
+- **Driver: abas de fonte com status + tooltip.** Cada aba de conta na tela de
+  Arquivos ganha bolinha verde de "conectada" e tooltip com provedor + e-mail
+  ao passar o mouse.
+
 ## [1.63.3] — 2026-06-18
 
 ### Alterado
