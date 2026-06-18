@@ -1,6 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Table, Button, Modal, Form, Input, Space, message, Typography, Tag, Popconfirm } from 'antd';
-import { PlusOutlined, DeleteOutlined, WifiOutlined } from '@ant-design/icons';
+import { Plus, Trash2, Wifi } from 'lucide-react';
+const PlusOutlined = (p: any) => <Plus size={16} {...p} />;
+const DeleteOutlined = (p: any) => <Trash2 size={16} {...p} />;
+const WifiOutlined = (p: any) => <Wifi size={16} {...p} />;
+import { useTokens } from '../themeContext';
 import callServer from '../gas-client';
 import type { Pulso, ServerResponse } from '../types';
 
@@ -28,6 +32,7 @@ function getStatusTag(status: number): React.ReactElement {
 }
 
 export default function PulsosPanel({ sistemaId }: PulsosPanelProps): React.ReactElement {
+  const t = useTokens();
   const [pulsos, setPulsos] = useState<Pulso[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -127,12 +132,13 @@ export default function PulsosPanel({ sistemaId }: PulsosPanelProps): React.Reac
         loading={loading}
         pagination={false}
         size="small"
+        scroll={{ x: 'max-content' }}
         locale={{ emptyText: 'Nenhuma URL monitorada — adicione para rastrear uptime' }}
       />
 
-      <div style={{ marginTop: 12, padding: '8px 12px', background: '#1E2028', borderRadius: 6 }}>
-        <span style={{ color: '#5C5E6A', fontSize: 11 }}>
-          ⏱️ URLs são verificadas automaticamente a cada 15 minutos via trigger. Ative os triggers nas configurações.
+      <div style={{ marginTop: 12, padding: '10px 14px', background: t.surfaceMuted, borderRadius: 10 }}>
+        <span style={{ color: t.textSecondary, fontSize: 12 }}>
+          URLs são verificadas automaticamente a cada 15 minutos via trigger. Ative os triggers nas configurações.
         </span>
       </div>
 

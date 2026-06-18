@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Typography, Button, Card, Modal, Form, Input, InputNumber, Select, Space, Tag, Row, Col, Empty, Spin, Statistic, message } from 'antd';
-import { PlusOutlined, EditOutlined, RocketOutlined, DollarOutlined } from '@ant-design/icons';
+import { Typography, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, Row, Col, Empty, Spin, App as AntApp } from 'antd';
+import { Plus } from 'lucide-react';
+import { PageHeader, Panel, formatBRL } from '../components/ui';
+import { useTokens } from '../themeContext';
+import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import type { Oportunidade, Pessoa, ServerResponse } from '../types';
 
-const { Title, Text, Paragraph } = Typography;
+const { Text } = Typography;
 
 interface FormValues {
   titulo: string;
@@ -15,31 +18,16 @@ interface FormValues {
 }
 
 const ESTADO_OPTIONS = [
-  { value: 'prospectando', label: '🔍 Prospectando' },
-  { value: 'negociando', label: '🤝 Negociando' },
-  { value: 'proposta enviada', label: '📧 Proposta Enviada' },
-  { value: 'fechada', label: '✅ Fechada' },
-  { value: 'perdida', label: '❌ Perdida' },
-];
-
-const ESTADO_COLORS: Record<string, string> = {
-  prospectando: '#4A9EFF',
-  negociando: '#E8A838',
-  'proposta enviada': '#D4A853',
-  fechada: '#52C97F',
-  perdida: '#5C5E6A',
-};
-
-const MOCK_OPORTUNIDADES: Oportunidade[] = [
-  { id: 'o1', titulo: 'Dashboard para Logística XYZ', pessoaId: 'p1', valorEstimado: 5000, estado: 'negociando', proximoPasso: 'Enviar proposta até sexta' },
-  { id: 'o2', titulo: 'Automação de relatórios', pessoaId: 'p1', valorEstimado: 2500, estado: 'prospectando', proximoPasso: 'Agendar call de discovery' },
-];
-
-const MOCK_PESSOAS: Pessoa[] = [
-  { id: 'p1', nome: 'João Silva', contato: 'joao@empresa.com', papel: 'cliente', notas: '' },
+  { value: 'prospectando', label: 'Prospectando' },
+  { value: 'negociando', label: 'Negociando' },
+  { value: 'proposta enviada', label: 'Proposta enviada' },
+  { value: 'fechada', label: 'Fechada' },
+  { value: 'perdida', label: 'Perdida' },
 ];
 
 export default function OportunidadesView(): React.ReactElement {
+  const t = useTokens();
+  const { message } = AntApp.useApp();
   const [oportunidades, setOportunidades] = useState<Oportunidade[]>([]);
   const [pessoas, setPessoas] = useState<Pessoa[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,6 +35,10 @@ export default function OportunidadesView(): React.ReactElement {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm<FormValues>();
+
+  const estadoColor = (e: string): string => ({
+    prospectando: t.accents.blue, negociando: t.accents.clay, 'proposta enviada': t.accents.peach, fechada: t.accents.sage, perdida: t.textTertiary,
+  } as Record<string, string>)[e] || t.accents.blue;
 
   const loadData = () => {
     setLoading(true);
@@ -58,152 +50,100 @@ export default function OportunidadesView(): React.ReactElement {
         if (oRes.ok && oRes.data) setOportunidades(oRes.data);
         if (pRes.ok && pRes.data) setPessoas(pRes.data);
       })
-      .catch(() => {
-        setOportunidades(MOCK_OPORTUNIDADES);
-        setPessoas(MOCK_PESSOAS);
-      })
+      .catch(() => { setOportunidades([]); setPessoas([]); })
       .finally(() => setLoading(false));
   };
 
   useEffect(() => { loadData(); }, []);
 
   const handleOpen = (op?: Oportunidade) => {
-    if (op) {
-      setEditingId(op.id);
-      form.setFieldsValue(op);
-    } else {
-      setEditingId(null);
-      form.resetFields();
-    }
+    if (op) { setEditingId(op.id); form.setFieldsValue(op); }
+    else { setEditingId(null); form.resetFields(); }
     setModalOpen(true);
   };
 
   const handleSave = async (values: FormValues) => {
     setSaving(true);
     try {
-      if (editingId) {
-        await callServer('updateOportunidade', editingId, values);
-      } else {
-        await callServer('createOportunidade', { ...values, estado: values.estado || 'prospectando' });
-      }
-      message.success(editingId ? 'Oportunidade atualizada!' : 'Oportunidade criada!');
+      if (editingId) await callServer('updateOportunidade', editingId, values);
+      else await callServer('createOportunidade', { ...values, estado: values.estado || 'prospectando' });
+      message.success(editingId ? 'Oportunidade atualizada' : 'Oportunidade criada');
       setModalOpen(false);
       loadData();
-    } catch {
-      message.error('Erro ao salvar oportunidade');
-    } finally {
-      setSaving(false);
-    }
+    } catch { message.error('Erro ao salvar oportunidade'); }
+    finally { setSaving(false); }
   };
 
-  const getPessoaNome = (id: string): string => {
-    const p = pessoas.find(x => x.id === id);
-    return p ? p.nome : '—';
-  };
+  const getPessoaNome = (id: string): string => pessoas.find(x => x.id === id)?.nome || '—';
 
-  if (loading) return <Spin size="large" style={{ display: 'block', margin: '80px auto' }} />;
+  if (loading) return <Spin size="large" style={{ display: 'block', margin: '120px auto' }} />;
 
   const pipeline = oportunidades.filter(o => o.estado !== 'perdida');
   const totalPipeline = pipeline.reduce((sum, o) => sum + Number(o.valorEstimado || 0), 0);
-  const fechadas = oportunidades.filter(o => o.estado === 'fechada');
-  const totalFechado = fechadas.reduce((sum, o) => sum + Number(o.valorEstimado || 0), 0);
+  const totalFechado = oportunidades.filter(o => o.estado === 'fechada').reduce((sum, o) => sum + Number(o.valorEstimado || 0), 0);
+
+  const miniStat = (label: string, value: string, color: string) => (
+    <Panel padding={16} style={{ flex: 1 }}>
+      <Text style={{ color: t.textSecondary, fontSize: 12 }}>{label}</Text>
+      <div style={{ fontFamily: FONTS.display, fontSize: 22, fontWeight: 500, color, marginTop: 4 }}>{value}</div>
+    </Panel>
+  );
 
   return (
-    <div style={{ padding: '32px 40px', maxWidth: 1000 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 28 }}>
-        <Title level={3} style={{ color: '#E8E8ED', margin: 0, fontWeight: 600 }}>
-          <RocketOutlined style={{ marginRight: 10, color: '#D4A853' }} />
-          Oportunidades
-        </Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => handleOpen()}>Nova Oportunidade</Button>
-      </div>
+    <div className="forja-view" style={{ padding: '36px 40px', maxWidth: 1040, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
+      <PageHeader
+        title="Oportunidades"
+        subtitle="Seu pipeline comercial, do primeiro contato ao fechamento."
+        extra={<Button type="primary" icon={<Plus size={16} />} onClick={() => handleOpen()}>Nova oportunidade</Button>}
+      />
 
-      {/* Stats */}
-      <Row gutter={16} style={{ marginBottom: 24 }}>
-        <Col span={8}>
-          <Card style={{ borderColor: '#2A2D35' }} styles={{ body: { padding: '12px 16px' } }}>
-            <Statistic title={<span style={{ color: '#8B8D98', fontSize: 12 }}>Pipeline</span>} value={totalPipeline} prefix="R$" valueStyle={{ color: '#D4A853', fontSize: 20 }} />
-          </Card>
-        </Col>
-        <Col span={8}>
-          <Card style={{ borderColor: '#2A2D35' }} styles={{ body: { padding: '12px 16px' } }}>
-            <Statistic title={<span style={{ color: '#8B8D98', fontSize: 12 }}>Fechado</span>} value={totalFechado} prefix="R$" valueStyle={{ color: '#52C97F', fontSize: 20 }} />
-          </Card>
-        </Col>
-        <Col span={8}>
-          <Card style={{ borderColor: '#2A2D35' }} styles={{ body: { padding: '12px 16px' } }}>
-            <Statistic title={<span style={{ color: '#8B8D98', fontSize: 12 }}><DollarOutlined /> Ativas</span>} value={pipeline.length} valueStyle={{ color: '#4A9EFF', fontSize: 20 }} />
-          </Card>
-        </Col>
-      </Row>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 22 }}>
+        {miniStat('Pipeline', formatBRL(totalPipeline), t.accents.peach)}
+        {miniStat('Fechado', formatBRL(totalFechado), t.accents.sage)}
+        {miniStat('Ativas', String(pipeline.length), t.accents.blue)}
+      </div>
 
       {oportunidades.length === 0 ? (
         <Empty description="Nenhuma oportunidade registrada" style={{ marginTop: 48 }} />
       ) : (
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           {oportunidades.map(op => (
-            <Card
+            <div
               key={op.id}
-              hoverable
               onClick={() => handleOpen(op)}
-              style={{ borderColor: '#2A2D35', cursor: 'pointer' }}
-              styles={{ body: { padding: '16px 20px' } }}
+              style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, boxShadow: t.shadowSoft, padding: '16px 20px', cursor: 'pointer' }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <Text strong style={{ color: '#E8E8ED', fontSize: 15 }}>{op.titulo}</Text>
-                    <Tag color={ESTADO_COLORS[op.estado]}>{op.estado}</Tag>
+                    <Text strong style={{ color: t.text, fontSize: 15 }}>{op.titulo}</Text>
+                    <Tag bordered={false} style={{ background: `${estadoColor(op.estado)}1f`, color: estadoColor(op.estado), borderRadius: 999, textTransform: 'capitalize' }}>{op.estado}</Tag>
                   </div>
                   <div style={{ marginTop: 6, display: 'flex', gap: 16 }}>
-                    <Text style={{ color: '#5C5E6A', fontSize: 12 }}>👤 {getPessoaNome(op.pessoaId)}</Text>
-                    <Text style={{ color: '#5C5E6A', fontSize: 12 }}>📋 {op.proximoPasso || '—'}</Text>
+                    <Text style={{ color: t.textTertiary, fontSize: 12 }}>{getPessoaNome(op.pessoaId)}</Text>
+                    <Text style={{ color: t.textTertiary, fontSize: 12 }}>{op.proximoPasso || '—'}</Text>
                   </div>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <Text strong style={{ color: '#D4A853', fontSize: 16 }}>R$ {Number(op.valorEstimado || 0).toLocaleString()}</Text>
-                </div>
+                <Text strong style={{ color: t.accents.peach, fontSize: 16, fontFamily: FONTS.mono }}>{formatBRL(Number(op.valorEstimado || 0))}</Text>
               </div>
-            </Card>
+            </div>
           ))}
         </Space>
       )}
 
-      <Modal
-        title={editingId ? 'Editar Oportunidade' : 'Nova Oportunidade'}
-        open={modalOpen}
-        onCancel={() => setModalOpen(false)}
-        onOk={() => form.submit()}
-        confirmLoading={saving}
-        destroyOnClose
-        width={520}
-      >
+      <Modal title={editingId ? 'Editar oportunidade' : 'Nova oportunidade'} open={modalOpen} onCancel={() => setModalOpen(false)} onOk={() => form.submit()} confirmLoading={saving} destroyOnClose width={520}>
         <Form form={form} layout="vertical" onFinish={handleSave} initialValues={{ estado: 'prospectando', valorEstimado: 0 }}>
           <Form.Item name="titulo" label="Título" rules={[{ required: true, message: 'Obrigatório' }]}>
             <Input placeholder="Ex: Dashboard para Empresa XYZ" />
           </Form.Item>
           <Form.Item name="pessoaId" label="Pessoa vinculada">
-            <Select
-              placeholder="Selecione um contato"
-              allowClear
-              options={pessoas.map(p => ({ value: p.id, label: `${p.nome} (${p.papel})` }))}
-            />
+            <Select placeholder="Selecione um contato" allowClear options={pessoas.map(p => ({ value: p.id, label: `${p.nome} (${p.papel})` }))} />
           </Form.Item>
           <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name="valorEstimado" label="Valor estimado (R$)">
-                <InputNumber min={0} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="estado" label="Estado">
-                <Select options={ESTADO_OPTIONS} />
-              </Form.Item>
-            </Col>
+            <Col span={12}><Form.Item name="valorEstimado" label="Valor estimado (R$)"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></Col>
+            <Col span={12}><Form.Item name="estado" label="Estado"><Select options={ESTADO_OPTIONS} /></Form.Item></Col>
           </Row>
-          <Form.Item name="proximoPasso" label="Próximo passo">
-            <Input placeholder="O que fazer agora para avançar?" />
-          </Form.Item>
+          <Form.Item name="proximoPasso" label="Próximo passo"><Input placeholder="O que fazer agora para avançar?" /></Form.Item>
         </Form>
       </Modal>
     </div>

@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Button, Modal, Form, Input, Select, Space, message, Typography, Timeline as AntTimeline, Tag, Empty } from 'antd';
-import { PlusOutlined, EditOutlined } from '@ant-design/icons';
+import { Plus, Pencil } from 'lucide-react';
+const PlusOutlined = (p: any) => <Plus size={16} {...p} />;
+const EditOutlined = (p: any) => <Pencil size={16} {...p} />;
+import { useTokens } from '../themeContext';
 import callServer from '../gas-client';
 import type { Decisao, ServerResponse } from '../types';
 
@@ -36,6 +39,7 @@ const MOCK_DECISOES: Decisao[] = [
 ];
 
 export default function DecisoesPanel({ sistemaId }: DecisoesPanelProps): React.ReactElement {
+  const t = useTokens();
   const [decisoes, setDecisoes] = useState<Decisao[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -101,26 +105,26 @@ export default function DecisoesPanel({ sistemaId }: DecisoesPanelProps): React.
             children: (
               <div
                 style={{
-                  background: '#1E2028',
-                  borderRadius: 8,
+                  background: t.surfaceMuted,
+                  borderRadius: 10,
                   padding: '12px 16px',
-                  border: '1px solid #2A2D35',
+                  border: `1px solid ${t.border}`,
                   cursor: 'pointer',
                 }}
                 onClick={() => handleOpen(d)}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <Text strong style={{ color: '#E8E8ED', fontSize: 14 }}>{d.titulo}</Text>
+                  <Text strong style={{ color: t.text, fontSize: 14 }}>{d.titulo}</Text>
                   <Space size={8}>
                     <Tag color={STATUS_COLORS[d.status]} style={{ fontSize: 11 }}>{d.status}</Tag>
                     <Button type="text" size="small" icon={<EditOutlined />} onClick={(e) => { e.stopPropagation(); handleOpen(d); }} />
                   </Space>
                 </div>
-                <Text style={{ color: '#5C5E6A', fontSize: 11 }}>{d.data}</Text>
-                <Paragraph style={{ color: '#8B8D98', fontSize: 13, margin: '8px 0 4px' }} ellipsis={{ rows: 2 }}>
+                <Text style={{ color: t.textTertiary, fontSize: 11 }}>{d.data}</Text>
+                <Paragraph style={{ color: t.textSecondary, fontSize: 13, margin: '8px 0 4px' }} ellipsis={{ rows: 2 }}>
                   <strong>Decisão:</strong> {d.decisao}
                 </Paragraph>
-                <Paragraph style={{ color: '#5C5E6A', fontSize: 12, margin: 0 }} ellipsis={{ rows: 2 }}>
+                <Paragraph style={{ color: t.textTertiary, fontSize: 12, margin: 0 }} ellipsis={{ rows: 2 }}>
                   <strong>Justificativa:</strong> {d.justificativa}
                 </Paragraph>
               </div>

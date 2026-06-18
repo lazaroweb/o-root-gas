@@ -1,0 +1,42 @@
+---
+description: Garante contraste correto nos temas claro/noturno (Forja) em todo trabalho de UI
+globs: forja/src/**/*.tsx
+alwaysApply: true
+---
+
+# Contraste e tema (claro/noturno) — Forja
+
+O app **NÃO usa o `theme.darkAlgorithm` do Ant Design**. O tema escuro é montado
+à mão em `forja/src/theme.ts` via tokens. Consequência: componentes do antd com
+fundo "semântico" (Alert, Tag colorida, etc.) podem herdar o pastel **claro**
+padrão e virar "caixa branca" ilegível no noturno.
+
+## Regras (sempre seguir)
+
+- **Nunca** hardcode hex de cor para background/borda/texto em componentes.
+  Use os tokens via `useTokens()` / `useForja()` (`t.text`, `t.textSecondary`,
+  `t.textTertiary`, `t.surface`, `t.surfaceMuted`, `t.border`, `t.borderSoft`,
+  `t.accents.*`). Hex só é permitido em `theme.ts` (a paleta).
+- Para qualquer superfície colorida (banner, badge custom, destaque), derive da
+  paleta: fundo `${t.accents.X}1f`, borda `${t.accents.X}55`, texto `t.text`/`t.textSecondary`.
+- Se precisar de um fundo/borda/texto novo em um componente do antd, prefira
+  ajustar o token dele em `theme.ts > components` (conserta todo o app de uma vez)
+  em vez de remendar caso a caso.
+- **Antes de finalizar qualquer mudança de UI**, valide mentalmente OS DOIS temas:
+  no noturno o texto precisa contrastar com o fundo e nada pode ficar "branco no escuro".
+
+## Exemplo
+
+```tsx
+// ❌ RUIM — some no noturno (fundo claro fixo, texto sem token)
+<div style={{ background: '#fff', color: '#333' }}>Aviso</div>
+
+// ✅ BOM — usa tokens, contrasta nos dois temas
+const t = useTokens();
+<div style={{ background: `${t.accents.peach}1f`, border: `1px solid ${t.accents.peach}55`, color: t.text }}>
+  Aviso
+</div>
+```
+
+> `Alert` do antd já está tematizado globalmente em `theme.ts > components.Alert`
+> (info/success/warning/error). Use `<Alert/>` normal; não precisa estilizar inline.

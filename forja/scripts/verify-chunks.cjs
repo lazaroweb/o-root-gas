@@ -1,0 +1,10 @@
+const fs = require('fs');
+const h = fs.readFileSync('dist/App.html', 'utf8');
+const re = /window\.__forjaJs \+= ("(?:[^"\\]|\\.)*");/g;
+let m;
+const parts = [];
+while ((m = re.exec(h))) parts.push(JSON.parse(m[1]));
+const reconstructed = parts.join('');
+fs.writeFileSync('/tmp/forja_reconstructed.js', reconstructed);
+console.log('chunks found:', parts.length);
+console.log('reconstructed bytes:', reconstructed.length);

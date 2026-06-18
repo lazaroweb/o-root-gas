@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Typography, Button, Steps, Form, Input, Space, Spin, message, Card } from 'antd';
-import { ArrowLeftOutlined, CopyOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { Typography, Button, Steps, Form, Input, Space, Spin, message } from 'antd';
+import { ArrowLeft, Copy, Sparkles } from 'lucide-react';
+import { Panel } from '../components/ui';
+import { useTokens } from '../themeContext';
+import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import type { Ideia, ServerResponse } from '../types';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 interface GeneseWizardProps {
   ideiaId: string;
@@ -37,6 +40,7 @@ const MOCK_IDEIA: Ideia = {
 };
 
 export default function GeneseWizard({ ideiaId, onBack }: GeneseWizardProps): React.ReactElement {
+  const t = useTokens();
   const [ideia, setIdeia] = useState<Ideia | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentStep, setCurrentStep] = useState(0);
@@ -117,27 +121,26 @@ export default function GeneseWizard({ ideiaId, onBack }: GeneseWizardProps): Re
   // Resultado final
   if (kickoff) {
     return (
-      <div style={{ padding: '32px 40px', maxWidth: 720 }}>
-        <Space style={{ marginBottom: 24 }}>
-          <Button type="text" icon={<ArrowLeftOutlined />} onClick={onBack} style={{ color: '#8B8D98' }} />
-          <Title level={3} style={{ color: '#E8E8ED', margin: 0, fontWeight: 600 }}>
-            <ThunderboltOutlined style={{ marginRight: 8, color: '#D4A853' }} />
-            Gênese Completa!
-          </Title>
+      <div className="forja-view" style={{ padding: '36px 40px', maxWidth: 720, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
+        <Space style={{ marginBottom: 24 }} align="center">
+          <Button type="text" icon={<ArrowLeft size={18} />} onClick={onBack} style={{ color: t.textSecondary }} />
+          <span style={{ fontFamily: FONTS.display, fontWeight: 500, fontSize: 24, color: t.text, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <Sparkles size={20} color={t.accents.peach} /> Gênese completa
+          </span>
         </Space>
 
         <div
           style={{
-            background: '#0F1114',
-            border: '1px solid #2A2D35',
-            borderRadius: 8,
+            background: '#16171A',
+            border: `1px solid ${t.border}`,
+            borderRadius: 12,
             padding: 20,
             maxHeight: 450,
             overflow: 'auto',
-            fontFamily: '"JetBrains Mono", monospace',
-            fontSize: 12,
-            lineHeight: 1.6,
-            color: '#E8E8ED',
+            fontFamily: FONTS.mono,
+            fontSize: 12.5,
+            lineHeight: 1.7,
+            color: '#E8E6E1',
             whiteSpace: 'pre-wrap',
             marginBottom: 16,
           }}
@@ -146,13 +149,13 @@ export default function GeneseWizard({ ideiaId, onBack }: GeneseWizardProps): Re
         </div>
 
         <Space>
-          <Button type="primary" icon={<CopyOutlined />} onClick={handleCopy}>Copiar Prompt</Button>
-          <Button onClick={onBack}>Voltar às Ideias</Button>
+          <Button type="primary" icon={<Copy size={15} />} onClick={handleCopy}>Copiar prompt</Button>
+          <Button onClick={onBack}>Voltar às ideias</Button>
         </Space>
 
-        <div style={{ marginTop: 16, padding: '8px 12px', background: '#1E2028', borderRadius: 6 }}>
-          <Text style={{ color: '#5C5E6A', fontSize: 11 }}>
-            💡 Cole este prompt no Claude para iniciar o desenvolvimento do projeto. A ideia foi marcada como "em andamento".
+        <div style={{ marginTop: 16, padding: '10px 14px', background: t.surfaceMuted, borderRadius: 10 }}>
+          <Text style={{ color: t.textSecondary, fontSize: 12 }}>
+            Cole este prompt no Cursor ou Claude para iniciar o desenvolvimento. A ideia foi marcada como "em andamento". (Gênese 2.0 com blueprint completo chega na Fase 3.)
           </Text>
         </div>
       </div>
@@ -163,18 +166,17 @@ export default function GeneseWizard({ ideiaId, onBack }: GeneseWizardProps): Re
   const field = Object.keys(respostas)[currentStep] as keyof Respostas;
 
   return (
-    <div style={{ padding: '32px 40px', maxWidth: 640 }}>
-      <Space style={{ marginBottom: 24 }}>
-        <Button type="text" icon={<ArrowLeftOutlined />} onClick={onBack} style={{ color: '#8B8D98' }} />
-        <Title level={3} style={{ color: '#E8E8ED', margin: 0, fontWeight: 600 }}>
-          <ThunderboltOutlined style={{ marginRight: 8, color: '#D4A853' }} />
-          Gênese: {ideia?.titulo}
-        </Title>
+    <div className="forja-view" style={{ padding: '36px 40px', maxWidth: 640, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
+      <Space style={{ marginBottom: 24 }} align="center">
+        <Button type="text" icon={<ArrowLeft size={18} />} onClick={onBack} style={{ color: t.textSecondary }} />
+        <span style={{ fontFamily: FONTS.display, fontWeight: 500, fontSize: 24, color: t.text, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <Sparkles size={20} color={t.accents.peach} /> Gênese: {ideia?.titulo}
+        </span>
       </Space>
 
-      <Card style={{ borderColor: '#2A2D35', marginBottom: 24 }}>
-        <Text style={{ color: '#8B8D98' }}>{ideia?.descricao}</Text>
-      </Card>
+      <Panel style={{ marginBottom: 24 }}>
+        <Text style={{ color: t.textSecondary }}>{ideia?.descricao}</Text>
+      </Panel>
 
       <Steps
         current={currentStep}
@@ -184,9 +186,9 @@ export default function GeneseWizard({ ideiaId, onBack }: GeneseWizardProps): Re
       />
 
       <Form form={form} layout="vertical" onFinish={handleNext}>
-        <Title level={5} style={{ color: '#E8E8ED', fontWeight: 500, marginBottom: 16 }}>
+        <div style={{ fontFamily: FONTS.display, fontSize: 18, fontWeight: 500, color: t.text, marginBottom: 16 }}>
           {STEPS[currentStep].question}
-        </Title>
+        </div>
         <Form.Item name={field} rules={[{ required: true, message: 'Responda para continuar' }]}>
           <Input.TextArea
             rows={3}

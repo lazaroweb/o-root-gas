@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Form, Input, Select, InputNumber, Button, Typography, Space, message } from 'antd';
-import { ArrowLeftOutlined } from '@ant-design/icons';
+import { Form, Input, Select, InputNumber, Button, Space, App as AntApp } from 'antd';
+import { ArrowLeft } from 'lucide-react';
+import { useTokens } from '../themeContext';
+import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import type { Sistema, ServerResponse, Estagio } from '../types';
 
-const { Title } = Typography;
 const { TextArea } = Input;
 
 interface SistemaFormProps {
@@ -20,7 +21,9 @@ interface FormValues {
   proposito: string;
   stack: string;
   urlProd: string;
+  repoUrl: string;
   scoreSaude: number;
+  dominioCustomizado: string;
 }
 
 const ESTAGIO_OPTIONS = [
@@ -31,6 +34,8 @@ const ESTAGIO_OPTIONS = [
 ];
 
 export default function SistemaForm({ sistemaId, onBack, onSaved }: SistemaFormProps): React.ReactElement {
+  const t = useTokens();
+  const { message } = AntApp.useApp();
   const [form] = Form.useForm<FormValues>();
   const [loading, setLoading] = useState(false);
   const [loadingData, setLoadingData] = useState(false);
@@ -56,6 +61,7 @@ export default function SistemaForm({ sistemaId, onBack, onSaved }: SistemaFormP
             proposito: 'Demonstração local',
             stack: 'React, TypeScript',
             urlProd: '',
+            repoUrl: '',
             scoreSaude: 75,
           });
         })
@@ -86,18 +92,13 @@ export default function SistemaForm({ sistemaId, onBack, onSaved }: SistemaFormP
   };
 
   return (
-    <div style={{ padding: '32px 40px', maxWidth: 640 }}>
+    <div className="forja-view" style={{ padding: '36px 40px', maxWidth: 640, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
       {/* Header */}
-      <Space style={{ marginBottom: 28 }}>
-        <Button
-          type="text"
-          icon={<ArrowLeftOutlined />}
-          onClick={onBack}
-          style={{ color: '#8B8D98' }}
-        />
-        <Title level={3} style={{ color: '#E8E8ED', margin: 0, fontWeight: 600 }}>
-          {isEditing ? 'Editar Sistema' : 'Novo Sistema'}
-        </Title>
+      <Space style={{ marginBottom: 28 }} align="center">
+        <Button type="text" icon={<ArrowLeft size={18} />} onClick={onBack} style={{ color: t.textSecondary }} />
+        <span style={{ fontFamily: FONTS.display, fontWeight: 500, fontSize: 26, color: t.text }}>
+          {isEditing ? 'Editar sistema' : 'Novo sistema'}
+        </span>
       </Space>
 
       <Form
@@ -134,6 +135,18 @@ export default function SistemaForm({ sistemaId, onBack, onSaved }: SistemaFormP
           <Input placeholder="https://..." />
         </Form.Item>
 
+        <Form.Item
+          name="dominioCustomizado"
+          label="Domínio próprio (opcional)"
+          extra={<DomainHints form={form} />}
+        >
+          <Input placeholder="ex.: minhaotica.com.br" style={{ fontFamily: FONTS.mono }} />
+        </Form.Item>
+
+        <Form.Item name="repoUrl" label="Repositório (GitHub)">
+          <Input placeholder="https://github.com/usuario/repo" style={{ fontFamily: FONTS.mono }} />
+        </Form.Item>
+
         <Form.Item name="scoreSaude" label="Score de Saúde (0-100)">
           <InputNumber min={0} max={100} style={{ width: '100%' }} />
         </Form.Item>
@@ -147,6 +160,53 @@ export default function SistemaForm({ sistemaId, onBack, onSaved }: SistemaFormP
           </Space>
         </Form.Item>
       </Form>
+    </div>
+  );
+}
+
+// Sugestões inteligentes de domínio baseadas no codinome do sistema.
+// Clica e preenche o campo. Mostra também links pra checar disponibilidade.
+function DomainHints({ form }: { form: ReturnType<typeof Form.useForm<FormValues>>[0] }): React.ReactElement {
+  const t = useTokens();
+  const codinome = (Form.useWatch('codinome', form) || '').toString().toLowerCase().replace(/[^a-z0-9-]/g, '');
+  if (!codinome) return <span style={{ color: t.textTertiary, fontSize: 12 }}>Preencha o codinome pra ver sugestões.</span>;
+
+  const sugestoes = [
+    `${codinome}.com.br`,
+    `${codinome}.com`,
+    `${codinome}.app`,
+    `${codinome}.io`,
+  ];
+
+  const aplicar = (s: string) => form.setFieldValue('dominioCustomizado', s);
+  const valor = Form.useWatch('dominioCustomizado', form) as string | undefined;
+  const buscaUrl = valor
+    ? `https://registro.br/painel/dominios/${encodeURIComponent(valor)}`
+    : `https://registro.br/painel/dominios/${encodeURIComponent(codinome)}.com.br`;
+
+  return (
+    <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+      <span style={{ fontSize: 11, color: t.textTertiary }}>Sugestões:</span>
+      {sugestoes.map((s) => (
+        <button
+          key={s}
+          type="button"
+          onClick={() => aplicar(s)}
+          style={{
+            background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
+            borderRadius: 7, padding: '2px 8px', fontSize: 11, color: t.textSecondary,
+            cursor: 'pointer', fontFamily: FONTS.mono,
+          }}
+        >
+          {s}
+        </button>
+      ))}
+      <a
+        href={buscaUrl} target="_blank" rel="noopener noreferrer"
+        style={{ fontSize: 11, color: t.accents.blue, marginLeft: 6 }}
+      >
+        Verificar no Registro.br →
+      </a>
     </div>
   );
 }

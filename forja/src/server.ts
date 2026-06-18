@@ -1,8 +1,29 @@
 /// <reference types="google-apps-script" />
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// FORJA — SheetDB Engine + Server Functions
-// Motor genérico de CRUD sobre Google Sheets
+// FORJA — Server (Google Apps Script)
+// ─────────────────────────────────────────────────────────────────────────────
+// Este arquivo compila pra `dist/Server.js`, que vira o backend GAS da Forja.
+// Toda comunicação com o frontend acontece via `google.script.run.<funcao>()`.
+//
+// Estrutura geral:
+//   1.  SCHEMA + SheetDB engine          (~ linhas 10-200)   — CRUD genérico
+//   2.  Setup, migrations, settings      (~ linhas 200-400)
+//   3.  Entidades (Sistemas, Ideias…)    (~ linhas 400-2500) — CRUD por aba
+//   4.  Forja IA (LLM client + tools)    (~ linhas 2500-3500)
+//   5.  Operações (status, GitHub, API)  (~ linhas 3500-4200)
+//   6.  Automações & Alertas             (~ linhas 4200-4500)
+//   7.  Atelier (skills, snippets, etc.) (~ linhas 4500-4900)
+//   8.  Cofre + Snapshot/Backup           (~ linhas 4900-5300)
+//
+// Convenções:
+//   - Toda função pública usada pelo frontend retorna `ServerResult<T>`:
+//       { ok: true, data: T } | { ok: false, error: string }
+//   - IDs são UUIDs v4 gerados via Utilities.getUuid() (em dbCreate).
+//   - Migrações idempotentes vivem em `_executarMigracoes()` e usam flags em
+//     PropertiesService pra rodar 1x só.
+//   - Funções com `_` prefix são internas (não expostas ao frontend).
+//
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── Schema Definition ───────────────────────────────────────────────────────
@@ -13,16 +34,150 @@ interface SheetSchema {
 }
 
 const SCHEMA: SheetSchema[] = [
-  { name: 'Sistemas', columns: ['id', 'nome', 'codinome', 'estagio', 'proposito', 'stack', 'urlProd', 'scoreSaude'] },
+  { name: 'Sistemas', columns: ['id', 'nome', 'codinome', 'estagio', 'proposito', 'stack', 'urlProd', 'scoreSaude', 'repoUrl', 'scriptId', 'webAppUrl', 'dominioCustomizado', 'saudeBreakdown', 'saudeCalculadaEm', 'removidoNoGas', 'removidoNoGasEm'] },
+  { name: 'Usuarios', columns: ['id', 'email', 'nome', 'papel', 'ativo', 'criadoEm', 'criadoPor'] },
   { name: 'Recursos', columns: ['id', 'sistemaId', 'tipo', 'chave', 'descricao', 'link'] },
-  { name: 'Decisoes', columns: ['id', 'sistemaId', 'data', 'titulo', 'decisao', 'justificativa', 'status'] },
+  { name: 'Decisoes', columns: ['id', 'sistemaId', 'data', 'titulo', 'decisao', 'justificativa', 'status', 'prioridade', 'tags', 'estimativa'] },
   { name: 'Riscos', columns: ['id', 'sistemaId', 'area', 'descricao', 'gravidade', 'historicoIncidentes'] },
   { name: 'Ideias', columns: ['id', 'titulo', 'descricao', 'notaImpacto', 'notaEsforco', 'estado'] },
   { name: 'Oportunidades', columns: ['id', 'titulo', 'pessoaId', 'valorEstimado', 'estado', 'proximoPasso'] },
   { name: 'Pessoas', columns: ['id', 'nome', 'contato', 'papel', 'notas'] },
-  { name: 'Custos', columns: ['id', 'sistemaId', 'fornecedor', 'valor', 'recorrencia', 'proximaCobranca'] },
+  { name: 'Custos', columns: ['id', 'sistemaId', 'fornecedor', 'valor', 'recorrencia', 'proximaCobranca', 'categoria'] },
+  // FinEmpresaDespesas (v1.15): livro-caixa MENSAL de despesas avulsas da empresa
+  // (contas, recibos, notas) — separado dos `Custos` recorrentes. `competencia`
+  // YYYY-MM (mês de referência, derivado da data). `status` 'pago'|'pendente'|
+  // 'agendado'. `sistemaId` vincula opcionalmente a um app. `origem` 'manual'|
+  // 'import' e `documento` guarda o nome do PDF importado pra rastreabilidade.
+  { name: 'FinEmpresaDespesas', columns: ['id', 'data', 'competencia', 'fornecedor', 'descricao', 'categoria', 'valor', 'sistemaId', 'status', 'formaPagamento', 'origem', 'documento', 'notas', 'criadoEm', 'atualizadoEm'] },
   { name: 'Pulsos', columns: ['id', 'sistemaId', 'urlCheck', 'ultimoStatus', 'latenciaMs'] },
   { name: 'Timeline', columns: ['id', 'sistemaId', 'data', 'tipo', 'texto'] },
+  { name: 'Alertas', columns: ['id', 'tipo', 'severidade', 'titulo', 'mensagem', 'sistemaId', 'criadoEm', 'lidoEm', 'dedupeKey', 'link'] },
+  // ─── Novas entidades (Fase 1+) ─────────────────────────────────────────────
+  { name: 'Stacks', columns: ['id', 'nome', 'categoria', 'descricao', 'docsUrl'] },
+  { name: 'Apis', columns: ['id', 'nome', 'provider', 'categoria', 'baseUrl', 'healthUrl', 'modelo', 'chaveRef', 'ultimoStatus', 'latenciaMs', 'sistemaId'] },
+  // `canceladaEm` (v1.16): data (YYYY-MM-DD) em que a assinatura foi cancelada —
+  // append-only, preenchida automaticamente quando o status vira 'cancelada'.
+  // Permite calcular churn do mês.
+  { name: 'Receitas', columns: ['id', 'sistemaId', 'pessoaId', 'plano', 'valor', 'recorrencia', 'status', 'inicio', 'proximaCobranca', 'canceladaEm'] },
+  // PlanosApp (v1.16): catálogo de planos de assinatura por app. Core do negócio
+  // = vender plano mensal de cada app. `valor`/`recorrencia` viram default ao
+  // criar uma assinatura (escolhe app → plano → preço entra sozinho).
+  { name: 'PlanosApp', columns: ['id', 'sistemaId', 'nome', 'valor', 'recorrencia', 'descricao', 'ativo', 'ordem', 'criadoEm', 'atualizadoEm'] },
+  // Recebimentos (v1.18): ledger de pagamentos recebidos de assinaturas. Fecha o
+  // ciclo da cobrança — registra o realizado (vs. previsto/MRR) e, ao registrar,
+  // a próxima cobrança da assinatura é rolada pro próximo ciclo. `competencia`
+  // (YYYY-MM) referencia o mês do recebimento.
+  { name: 'Recebimentos', columns: ['id', 'receitaId', 'sistemaId', 'pessoaId', 'competencia', 'valor', 'data', 'recorrencia', 'notas', 'criadoEm'] },
+  // v1.4.1: `origem` marca geração (ex: 'forja-self' pra dogfooding) e
+  // `referencia` permite destacar um item como referência fixa no topo da
+  // lista. Append-only — schema migra sem desalinhar dados antigos.
+  // `modeloUsado` (v1.4.3): rastreia QUAL modelo LLM gerou cada artefato.
+  // Append-only — não reordenar pra não quebrar dados existentes.
+  // `parseAviso` (v1.4.3): 'sim' quando a IA não retornou JSON puro (fallback raw).
+  { name: 'Diagramas', columns: ['id', 'sistemaId', 'ideiaId', 'tipo', 'titulo', 'mermaid', 'data', 'origem', 'referencia', 'modeloUsado', 'parseAviso'] },
+  { name: 'Blueprints', columns: ['id', 'ideiaId', 'sistemaId', 'titulo', 'conteudoMd', 'promptsJson', 'data', 'origem', 'referencia', 'modeloUsado', 'parseAviso'] },
+  { name: 'Entrevistas', columns: ['id', 'pessoaId', 'data', 'tipo', 'transcricao', 'resumoIA', 'requisitos'] },
+  { name: 'Processos', columns: ['id', 'pessoaId', 'sistemaId', 'nome', 'tipo', 'mermaid', 'notas'] },
+  { name: 'Conselho', columns: ['id', 'contexto', 'persona', 'parecer', 'sintese', 'data'] },
+  { name: 'Auditorias', columns: ['id', 'sistemaId', 'criadoEm', 'modeloUsado', 'duracaoMs', 'scoreNoMomento', 'numFindings', 'payloadJson', 'fontesJson', 'registrosJson'] },
+  { name: 'Skills', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm'] },
+  { name: 'Provedores', columns: ['id', 'nome', 'categoria', 'urlSite', 'freeTier', 'precoBase', 'beneficios', 'limitacoes', 'idealPara', 'notas', 'status', 'tags', 'criadoEm', 'atualizadoEm'] },
+  { name: 'Cofre', columns: ['id', 'label', 'categoria', 'urlRef', 'usuario', 'iv', 'cipher', 'notas', 'criadoEm', 'atualizadoEm'] },
+  { name: 'Snippets', columns: ['id', 'titulo', 'descricao', 'linguagem', 'codigo', 'tags', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm'] },
+  { name: 'Templates', columns: ['id', 'nome', 'descricao', 'categoria', 'conteudo', 'variaveis', 'tags', 'criadoEm', 'atualizadoEm'] },
+  { name: 'Bookmarks', columns: ['id', 'titulo', 'url', 'descricao', 'categoria', 'tags', 'destacado', 'criadoEm', 'atualizadoEm'] },
+  // ─── Finanças pessoais (v1.3) ──────────────────────────────────────────────
+  // FinPessoalLancamentos: cada despesa/entrada pessoal. `valor` sempre positivo
+  // — o `tipo` ('despesa'|'entrada') é quem dita o sinal nos cálculos.
+  // `metodo`: cartao|pix|debito|dinheiro|boleto|transferencia.
+  // `cartaoId`: FK opcional pra FinPessoalCartoes (só quando metodo=cartao).
+  // `parcelas`/`parcelaAtual`: pra compras parceladas (ex: 3 de 12). MVP: a UI
+  // já mostra, mas não auto-gera as parcelas futuras — fica como nice-to-have.
+  // `recorrencia`: 'unica'|'mensal'|'semanal'|'anual' (default: unica).
+  // `status`: 'pago'|'pendente'|'agendado' (pra contas a pagar).
+  // `data`: YYYY-MM-DD do lançamento. `vencimento`: YYYY-MM-DD opcional.
+  // v1.3.1: + parcelaGrupoId (FK pra agrupar parcelas), recorrenciaOrigemId (FK
+  // pro lançamento que gerou a recorrência), recorrenciaAtiva ('sim'|'nao' —
+  // controla se o agendador continua replicando ou se o usuário pausou).
+  { name: 'FinPessoalLancamentos', columns: ['id', 'data', 'descricao', 'valor', 'tipo', 'categoria', 'metodo', 'cartaoId', 'status', 'vencimento', 'parcelas', 'parcelaAtual', 'recorrencia', 'tags', 'notas', 'parcelaGrupoId', 'recorrenciaOrigemId', 'recorrenciaAtiva', 'criadoEm', 'atualizadoEm'] },
+  // FinPessoalCartoes: cartões de crédito cadastrados pra calcular fatura aberta.
+  // `diaFechamento` e `diaVencimento`: 1-31 (a UI lida com meses curtos).
+  // `cor`: hex pra UI (ex: '#8b5cf6'). `ativo`: 'sim'|'nao'.
+  { name: 'FinPessoalCartoes', columns: ['id', 'nome', 'bandeira', 'limite', 'diaFechamento', 'diaVencimento', 'cor', 'apelido', 'ativo', 'criadoEm', 'atualizadoEm'] },
+  // FinPessoalOrcamentos: limite mensal por categoria. UI mostra barra de
+  // progresso "gasto / limite" no mês corrente. Quando estoura → alerta visual.
+  // `cor` opcional pra customização da barra; default herda da categoria.
+  { name: 'FinPessoalOrcamentos', columns: ['id', 'categoria', 'limiteMensal', 'cor', 'ativo', 'criadoEm', 'atualizadoEm'] },
+  // FinPessoalCategorias (v1.3.2 + v1.3.3 icone): catálogo gerenciado de
+  // categorias. `nome` é chave (lowercase, sem acentos) usada em lançamentos;
+  // `label` é display; `emoji` legacy (mantido pra fallback/compat); `icone`
+  // é o nome do ícone lucide-react (ex: 'shopping-cart') — renderizado pela
+  // UI no mesmo estilo dos ícones da sidebar pra manter coesão visual.
+  // IMPORTANTE: `icone` fica no FINAL pra migração ser append-only e não
+  // desalinhar dados de linhas antigas (regra de ouro do SheetDB).
+  { name: 'FinPessoalCategorias', columns: ['id', 'nome', 'label', 'emoji', 'cor', 'ordem', 'ativo', 'criadoEm', 'atualizadoEm', 'icone'] },
+  // FinPessoalRegrasCategoria (v1.43): memória de classificação. Cada regra mapeia
+  // a "assinatura" de um comércio (descrição normalizada) → categoria. Aprende
+  // quando o usuário recategoriza um lançamento e é reaplicada automaticamente em
+  // itens iguais (e na importação). `origem`: 'manual' | 'ia'.
+  { name: 'FinPessoalRegrasCategoria', columns: ['id', 'assinatura', 'categoria', 'origem', 'criadoEm', 'atualizadoEm'] },
+  // FinPessoalAssinaturas (v1.8): serviços recorrentes (streaming, música, SaaS,
+  // IA, cloud...). Entidade própria — separada dos lançamentos — pra controlar o
+  // "custo comprometido" mensal de assinaturas de forma isolada e rica.
+  // `valor` é o preço por ciclo; `ciclo` é 'mensal'|'anual' (o resumo normaliza
+  // anual→mensal dividindo por 12). `categoria` agrupa (streaming, musica, etc).
+  // `diaCobranca`: 1-31 (dia que cai a cobrança). `metodo`/`cartaoId`: como paga.
+  // `status`: 'ativa'|'pausada'|'cancelada' (só ativa entra no custo mensal).
+  // `cor`: hex da marca (Netflix vermelho, Spotify verde...) pra UI rica.
+  { name: 'FinPessoalAssinaturas', columns: ['id', 'nome', 'categoria', 'valor', 'ciclo', 'diaCobranca', 'metodo', 'cartaoId', 'status', 'dataInicio', 'cor', 'icone', 'plano', 'notas', 'criadoEm', 'atualizadoEm'] },
+  // FinPlanoContas (v1.11): plano de contas / centros de custo. Estrutura
+  // hierárquica leve (grupo → conta) usada pra classificar lançamentos de forma
+  // contábil. `codigo` é o código do centro de custo (ex: '3.01'); `grupo` é o
+  // agrupador (ex: 'Moradia'); `nome` é a conta (ex: 'Aluguel'); `tipo` é
+  // 'despesa'|'receita'. A IA (Gemini) pode gerar o plano a partir dos gastos.
+  { name: 'FinPlanoContas', columns: ['id', 'codigo', 'grupo', 'nome', 'tipo', 'descricao', 'cor', 'ordem', 'ativo', 'criadoEm', 'atualizadoEm'] },
+  // FinPessoalMembros (v1.12): membros da família que dividem contas no seu
+  // cartão. `relacao` é o parentesco (filha, irmã...). `cor`/`emoji` pra UI.
+  { name: 'FinPessoalMembros', columns: ['id', 'nome', 'relacao', 'cor', 'emoji', 'pix', 'telefone', 'ativo', 'notas', 'criadoEm', 'atualizadoEm'] },
+  // FinPessoalCobrancas (v1.12): o que cada membro te deve, por mês.
+  // `competencia` YYYY-MM. `status` 'pendente'|'pago'. `origem` 'manual'|
+  // 'lancamento'|'assinatura' e `origemId` rastreia o item que caiu na sua
+  // fatura (visibilidade "veio no meu cartão"). `recorrente` 'sim' replica todo
+  // mês (ex: assinatura de stream que o membro paga).
+  { name: 'FinPessoalCobrancas', columns: ['id', 'membroId', 'descricao', 'valor', 'competencia', 'status', 'origem', 'origemId', 'recorrente', 'dataPagamento', 'notas', 'criadoEm', 'atualizadoEm'] },
+  // FinPerfilIdeal (v1.53): "Perfil familiar ideal" — o orçamento-ALVO. Cada
+  // linha é uma despesa que a família PRECISA pra viver bem (aluguel, mercado,
+  // saúde, educação...), com o valor mensal ideal. Comparado com o gasto REAL
+  // (fixas + variáveis) pra mostrar o que regular pra chegar lá. `essencial`
+  // 'sim'|'nao' separa o que é vital do que é desejável. `valorMensal` é o alvo.
+  { name: 'FinPerfilIdeal', columns: ['id', 'categoria', 'descricao', 'valorMensal', 'essencial', 'ordem', 'notas', 'criadoEm', 'atualizadoEm'] },
+  // FinIdealDePara (v1.54): mapeamento "de-para" entre a categoria REAL dos
+  // lançamentos e o destino no Perfil ideal. `destino` pode ser: um slug de
+  // categoria do ideal (a categoria real conta NAQUELE alvo), 'cortar' (gasto
+  // não-estrutural a eliminar) ou 'fora' (extra aceitável, fica fora do ideal).
+  // Sem registro = comportamento padrão (auto-mapeia se o slug existe no ideal).
+  { name: 'FinIdealDePara', columns: ['id', 'categoriaReal', 'destino', 'criadoEm', 'atualizadoEm'] },
+  // ─── Códex (v1.4) ────────────────────────────────────────────────────────
+  // Atelier → Códex: o "DNA" de desenvolvimento do usuário. Padrões reutilizáveis
+  // que servem como (a) referência rápida e (b) contexto vivo pra Forja IA
+  // quando gera prompts/blueprints/diagramas.
+  // CodexSecoes: agrupadores temáticos (Design, Stack, Código...). 8 padrões
+  // são seedados na primeira leitura mas o user pode criar/editar/remover.
+  // `key` é slug único (lowercase). `icone` é nome lucide kebab-case.
+  { name: 'CodexSecoes', columns: ['id', 'key', 'label', 'icone', 'descricao', 'ordem', 'criadoEm'] },
+  // CodexCards: cada padrão concreto (ex: "Tipografia → Inter + JetBrains Mono").
+  // `valor` aceita markdown longo. `referencia` é uma URL opcional (docs, figma).
+  // `tags` é csv. `incluirEmIa` controla se o card vai pro contexto da IA.
+  { name: 'CodexCards', columns: ['id', 'secaoId', 'titulo', 'valor', 'referencia', 'tags', 'incluirEmIa', 'ordem', 'criadoEm', 'atualizadoEm'] },
+  // ─── Receituário (v1.4.2) ────────────────────────────────────────────────
+  // Atelier → Receituário: catálogo de features reutilizáveis que o user já
+  // construiu. Cada receita descreve uma feature transferível (UI, IA, infra,
+  // padrão arquitetural). `conteudo` aceita markdown longo com passo-a-passo
+  // de implementação. `destaque` pinna no topo. `arquivos` é csv opcional.
+  // `exemplo` (v1.14): bloco de exemplo concreto (markdown/código) que mostra na
+  // prática o que a receita faz — append-only, no fim pra não quebrar dados.
+  { name: 'Receituario', columns: ['id', 'nome', 'descricao', 'categoria', 'conteudo', 'tags', 'complexidade', 'tempoEstimado', 'arquivos', 'stack', 'icone', 'ordem', 'destaque', 'criadoEm', 'atualizadoEm', 'exemplo'] },
+  { name: 'Config', columns: ['chave', 'valor'] },
 ];
 
 // ─── SheetDB Core Engine ─────────────────────────────────────────────────────
@@ -55,11 +210,61 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
     sheet = ss.insertSheet(sheetName);
     sheet.getRange(1, 1, 1, columns.length).setValues([columns]);
     sheet.setFrozenRows(1);
+    return sheet;
+  }
+  // Migração: garante que (a) o header tenha pelo menos a quantidade de
+  // colunas do schema e (b) que os nomes estejam exatamente nas posições
+  // certas. Se algo divergir, reescreve o header. Isso é seguro pra
+  // migrações append-only — mas pra reordenações precisa de migração de
+  // dados separada (não fazemos aqui pra evitar perda).
+  const existingCols = sheet.getLastColumn();
+  const readWidth = Math.max(existingCols, columns.length);
+  const existingHeader = readWidth > 0
+    ? (sheet.getRange(1, 1, 1, readWidth).getValues()[0] as unknown[])
+    : [];
+  const matches = existingHeader.length >= columns.length &&
+    columns.every((c, i) => existingHeader[i] === c);
+  if (!matches) {
+    sheet.getRange(1, 1, 1, columns.length).setValues([columns]);
+    sheet.setFrozenRows(1);
   }
   return sheet;
 }
 
+// Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
+// Isso força um re-init em cada client após o deploy — sem isso, o cache
+// pula a verificação e usuários ficam com sheets desatualizadas.
+const SCHEMA_VERSION = 'v1.43-regras-categoria';
+
+// Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
+// (GAS re-instancia o módulo a cada request, então isso só ajuda quando
+// múltiplas funções são chamadas no mesmo round-trip — útil em batchs.)
+let _initDoneInSession = false;
+
+// initDatabase é hot path — chamado por quase toda função do server.
+// Cada chamada faz ~25 verificações de header (uma por sheet do SCHEMA),
+// cada uma é uma chamada à API do Sheets (~100-300ms). Total: 2-7s.
+//
+// Estratégia de cache em 2 níveis:
+// 1. Sessão (in-memory): pula tudo se já rodou neste request
+// 2. Persistente (PropertiesService): pula a verificação completa quando
+//    SCHEMA_VERSION bate com o último init bem-sucedido
+//
+// Pra forçar re-init manual: deletar a property FORJA_SCHEMA_INIT_VERSION
+// em "Project Settings → Script Properties" no editor do Apps Script.
 function initDatabase(): void {
+  if (_initDoneInSession) return;
+
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const lastVersion = props.getProperty('FORJA_SCHEMA_INIT_VERSION');
+    if (lastVersion === SCHEMA_VERSION) {
+      _initDoneInSession = true;
+      return; // schema já está atualizado, pula a verificação pesada
+    }
+    // Versão mudou ou nunca rodou: faz init completo + grava nova versão
+  } catch { /* PropertiesService pode falhar em contextos restritos */ }
+
   const ss = getSpreadsheet();
   for (const schema of SCHEMA) {
     getOrCreateSheet(schema.name, schema.columns);
@@ -69,6 +274,38 @@ function initDatabase(): void {
   if (defaultSheet && ss.getSheets().length > 1) {
     ss.deleteSheet(defaultSheet);
   }
+  // Migrações idempotentes (rodam só uma vez via flag em ScriptProperties)
+  _executarMigracoes();
+
+  // Marca como inicializado pra evitar próximos rounds
+  try {
+    PropertiesService.getScriptProperties().setProperty('FORJA_SCHEMA_INIT_VERSION', SCHEMA_VERSION);
+  } catch { /* segue baile */ }
+  _initDoneInSession = true;
+}
+
+// Exposto pro user forçar re-init se precisar (debug/manutenção).
+function forcarReinitDatabase(): ServerResult {
+  try {
+    PropertiesService.getScriptProperties().deleteProperty('FORJA_SCHEMA_INIT_VERSION');
+    _initDoneInSession = false;
+    initDatabase();
+    return { ok: true, data: { reinitDone: true, version: SCHEMA_VERSION } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function _executarMigracoes(): void {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    // Fase 14: GAS-imported systems tinham scoreSaude=80 fixo (sem significado).
+    // Zera pra cair no estado "Não avaliado" e preparar pra auditoria da Fase 15.
+    if (props.getProperty('MIGRATION_F14_SAUDE') !== 'done') {
+      try { migrarSaudeNaoAvaliada(); } catch { /* segue baile */ }
+      props.setProperty('MIGRATION_F14_SAUDE', 'done');
+    }
+  } catch { /* PropertiesService pode falhar em contextos limitados */ }
 }
 
 function generateId(): string {
@@ -144,6 +381,86 @@ function dbQuery(sheetName: string, filters: Record<string, unknown>): Record<st
   });
 }
 
+function dbDelete(sheetName: string, id: string): boolean {
+  const schema = SCHEMA.find(s => s.name === sheetName);
+  if (!schema) return false;
+  const sheet = getSpreadsheet().getSheetByName(sheetName);
+  if (!sheet) return false;
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return false;
+  const idCol = schema.columns.indexOf('id');
+  const data = sheet.getRange(2, 1, lastRow - 1, schema.columns.length).getValues();
+  const rowIndex = data.findIndex(row => row[idCol] === id);
+  if (rowIndex === -1) return false;
+  sheet.deleteRow(rowIndex + 2);
+  return true;
+}
+
+// Apaga VÁRIAS linhas de uma vez. Em vez de chamar deleteRow N vezes (cada uma
+// relê a planilha e desloca linhas — O(n²), trava com muitos itens), reescreve
+// a área de dados só com as linhas que ficam: 1 leitura + 1 limpeza + 1 escrita.
+// Devolve quantas foram removidas.
+function dbDeleteMany(sheetName: string, ids: string[]): number {
+  const schema = SCHEMA.find(s => s.name === sheetName);
+  if (!schema) return 0;
+  const sheet = getSpreadsheet().getSheetByName(sheetName);
+  if (!sheet) return 0;
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return 0;
+  const ncol = schema.columns.length;
+  const idCol = schema.columns.indexOf('id');
+  const data = sheet.getRange(2, 1, lastRow - 1, ncol).getValues();
+  const alvo: Record<string, boolean> = {};
+  for (const id of ids) alvo[String(id)] = true;
+  const manter = data.filter((row) => !alvo[String(row[idCol])]);
+  const removidos = data.length - manter.length;
+  if (removidos === 0) return 0;
+  sheet.getRange(2, 1, data.length, ncol).clearContent();
+  if (manter.length > 0) sheet.getRange(2, 1, manter.length, ncol).setValues(manter);
+  return removidos;
+}
+
+// Atualiza os MESMOS campos em VÁRIAS linhas de uma vez (1 leitura + 1 escrita),
+// em vez de chamar dbUpdate N vezes. Devolve quantas foram atualizadas.
+function dbUpdateMany(sheetName: string, ids: string[], patch: Record<string, unknown>): number {
+  const schema = SCHEMA.find(s => s.name === sheetName);
+  if (!schema) return 0;
+  const sheet = getSpreadsheet().getSheetByName(sheetName);
+  if (!sheet) return 0;
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return 0;
+  const ncol = schema.columns.length;
+  const idCol = schema.columns.indexOf('id');
+  const data = sheet.getRange(2, 1, lastRow - 1, ncol).getValues();
+  const alvo: Record<string, boolean> = {};
+  for (const id of ids) alvo[String(id)] = true;
+  const cols: Array<{ idx: number; val: unknown }> = [];
+  for (const col in patch) {
+    const ci = schema.columns.indexOf(col);
+    if (ci >= 0) cols.push({ idx: ci, val: patch[col] });
+  }
+  let n = 0;
+  for (const row of data) {
+    if (!alvo[String(row[idCol])]) continue;
+    for (const c of cols) row[c.idx] = c.val;
+    n++;
+  }
+  if (n > 0) sheet.getRange(2, 1, data.length, ncol).setValues(data);
+  return n;
+}
+
+// Normaliza um valor de recorrência para custo/receita MENSAL
+function toMonthly(valor: number, recorrencia: string): number {
+  const r = String(recorrencia || '').toLowerCase();
+  // Vendas avulsas/únicas (personalizadas) NÃO são recorrentes: ficam fora do MRR.
+  if (r.indexOf('avuls') >= 0 || r.indexOf('unic') >= 0 || r.indexOf('única') >= 0 || r.indexOf('one') >= 0) return 0;
+  if (r.indexOf('anual') >= 0 || r.indexOf('ano') >= 0 || r.indexOf('year') >= 0) return valor / 12;
+  if (r.indexOf('trimes') >= 0) return valor / 3;
+  if (r.indexOf('semes') >= 0) return valor / 6;
+  if (r.indexOf('sema') >= 0 || r.indexOf('week') >= 0) return valor * 4.33;
+  return valor; // mensal (padrão)
+}
+
 // ─── Seed Data ───────────────────────────────────────────────────────────────
 
 function seedDatabase(): void {
@@ -156,9 +473,9 @@ function seedDatabase(): void {
   const ideiaId = generateId();
 
   const seedSistemas = [
-    { id: forjaId, nome: 'FORJA', codinome: 'forja', estagio: 'forja', proposito: 'Central de comando e governança de sistemas', stack: 'GAS, React, TypeScript, Ant Design', urlProd: '', scoreSaude: 85 },
-    { id: saasId, nome: 'ClientFlow', codinome: 'cflow', estagio: 'tempera', proposito: 'CRM simplificado para freelancers', stack: 'Next.js, Supabase, Vercel', urlProd: 'https://clientflow.app', scoreSaude: 92 },
-    { id: ideiaId, nome: 'QuoteForge', codinome: 'qforge', estagio: 'faisca', proposito: 'Gerador de propostas comerciais com IA', stack: '', urlProd: '', scoreSaude: 0 },
+    { id: forjaId, nome: 'FORJA', codinome: 'forja', estagio: 'forja', proposito: 'Central de comando e governança de sistemas', stack: 'GAS, React, TypeScript, Ant Design', urlProd: '', repoUrl: '', scoreSaude: 85 },
+    { id: saasId, nome: 'ClientFlow', codinome: 'cflow', estagio: 'tempera', proposito: 'CRM simplificado para freelancers', stack: 'Next.js, Supabase, Vercel', urlProd: 'https://clientflow.app', repoUrl: '', scoreSaude: 92 },
+    { id: ideiaId, nome: 'QuoteForge', codinome: 'qforge', estagio: 'faisca', proposito: 'Gerador de propostas comerciais com IA', stack: '', urlProd: '', repoUrl: '', scoreSaude: 0 },
   ];
 
   const sistemasSheet = getOrCreateSheet('Sistemas', SCHEMA[0].columns);
@@ -174,14 +491,65 @@ function seedDatabase(): void {
     { sistemaId: forjaId, fornecedor: 'Google Workspace', valor: 0, recorrencia: 'mensal', proximaCobranca: '' },
   ];
 
-  const custosSheet = getOrCreateSheet('Custos', SCHEMA[7].columns);
+  const custosSchema = SCHEMA.find(s => s.name === 'Custos')!;
+  const custosSheet = getOrCreateSheet('Custos', custosSchema.columns);
   for (const c of seedCustos) {
     const id = generateId();
-    const row = SCHEMA[7].columns.map(col => {
+    const row = custosSchema.columns.map(col => {
       if (col === 'id') return id;
       return (c as Record<string, unknown>)[col] ?? '';
     });
     custosSheet.appendRow(row);
+  }
+
+  // Receitas (assinaturas) de exemplo
+  const hoje = new Date();
+  const proxMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 5);
+  const inicio4m = new Date(hoje.getFullYear(), hoje.getMonth() - 4, 1).toISOString().split('T')[0];
+  const seedReceitas = [
+    { sistemaId: saasId, plano: 'Pro', valor: 149, recorrencia: 'mensal', status: 'ativa', inicio: inicio4m, proximaCobranca: proxMes.toISOString().split('T')[0] },
+    { sistemaId: saasId, plano: 'Starter', valor: 49, recorrencia: 'mensal', status: 'ativa', inicio: inicio4m, proximaCobranca: proxMes.toISOString().split('T')[0] },
+  ];
+  const receitasSchema = SCHEMA.find(s => s.name === 'Receitas')!;
+  const receitasSheet = getOrCreateSheet('Receitas', receitasSchema.columns);
+  for (const r of seedReceitas) {
+    const id = generateId();
+    const row = receitasSchema.columns.map(col => {
+      if (col === 'id') return id;
+      return (r as Record<string, unknown>)[col] ?? '';
+    });
+    receitasSheet.appendRow(row);
+  }
+}
+
+// ─── Catálogo de Stacks (idempotente) ────────────────────────────────────────
+
+function seedStacks(): void {
+  const existentes = dbGetAll('Stacks');
+  if (existentes.length > 0) return;
+  const catalogo: Array<[string, string, string, string]> = [
+    ['Next.js', 'Frontend/Fullstack', 'Framework React para web e APIs', 'https://nextjs.org/docs'],
+    ['React', 'Frontend', 'Biblioteca de UI baseada em componentes', 'https://react.dev'],
+    ['React Native (Expo)', 'Mobile', 'Apps iOS/Android com JS/React', 'https://docs.expo.dev'],
+    ['Tailwind CSS', 'Estilo', 'CSS utilitário para design rápido', 'https://tailwindcss.com/docs'],
+    ['shadcn/ui', 'UI', 'Componentes acessíveis para React/Tailwind', 'https://ui.shadcn.com'],
+    ['Supabase', 'Backend/DB', 'Postgres + Auth + Storage gerenciado', 'https://supabase.com/docs'],
+    ['Firebase', 'Backend/DB', 'Auth, Firestore e hosting do Google', 'https://firebase.google.com/docs'],
+    ['PostgreSQL', 'Banco', 'Banco relacional robusto', 'https://www.postgresql.org/docs'],
+    ['Prisma', 'ORM', 'ORM TypeScript para bancos SQL', 'https://www.prisma.io/docs'],
+    ['Vercel', 'Hospedagem', 'Deploy de frontend e serverless', 'https://vercel.com/docs'],
+    ['Cloudflare', 'Infra/CDN', 'CDN, Workers e Pages', 'https://developers.cloudflare.com'],
+    ['Google Apps Script', 'Plataforma', 'Apps zero-infra sobre Google Workspace', 'https://developers.google.com/apps-script'],
+    ['Node.js', 'Runtime', 'Runtime JavaScript no servidor', 'https://nodejs.org/docs'],
+    ['n8n', 'Automação', 'Automação de fluxos low-code', 'https://docs.n8n.io'],
+    ['Stripe', 'Pagamentos', 'Cobranças e assinaturas', 'https://stripe.com/docs'],
+    ['Anthropic Claude', 'IA/LLM', 'Modelos de linguagem Claude', 'https://docs.anthropic.com'],
+    ['OpenAI', 'IA/LLM', 'Modelos GPT e APIs de IA', 'https://platform.openai.com/docs'],
+  ];
+  const schema = SCHEMA.find(s => s.name === 'Stacks')!;
+  const sheet = getOrCreateSheet('Stacks', schema.columns);
+  for (const [nome, categoria, descricao, docsUrl] of catalogo) {
+    sheet.appendRow([generateId(), nome, categoria, descricao, docsUrl]);
   }
 }
 
@@ -197,6 +565,7 @@ function initApp(): ServerResult {
   try {
     initDatabase();
     seedDatabase();
+    seedStacks();
     const sistemas = dbGetAll('Sistemas');
     const custos = dbGetAll('Custos');
     const totalCusto = custos.reduce((sum, c) => sum + Number(c['valor'] || 0), 0);
@@ -258,9 +627,595 @@ function updateSistema(id: string, data: Record<string, unknown>): ServerResult 
   }
 }
 
+// ─── Importação de projetos do Google Apps Script ─────────────────────────────
+// Usa Drive API (lista standalone scripts) e Apps Script API (deployments → web app URL).
+// Requer scopes: drive.metadata.readonly, script.projects.readonly, script.deployments.readonly.
+
+function slugifyCodinome(nome: string): string {
+  return String(nome || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+    .slice(0, 28) || 'app';
+}
+
+// Usa o Drive Advanced Service (habilitado no manifest) em vez de REST puro.
+// Isso força o Google a detectar que o app precisa de acesso ao Drive, então
+// na primeira chamada o usuário é prompt-ado pra autorizar de verdade.
+function listGASProjects(): ServerResult {
+  try {
+    const meuScriptId = ScriptApp.getScriptId();
+    // Tenta primeiro com Shared Drives habilitados (Workspace)
+    let response: GoogleAppsScript.Drive_v3.Schema.FileList;
+    try {
+      response = (Drive as unknown as { Files: { list: (opts: Record<string, unknown>) => GoogleAppsScript.Drive_v3.Schema.FileList } }).Files.list({
+        q: "mimeType='application/vnd.google-apps.script' and trashed=false",
+        fields: 'files(id,name,modifiedTime,description,ownedByMe,driveId)',
+        pageSize: 200,
+        orderBy: 'modifiedTime desc',
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+        corpora: 'allDrives',
+      });
+    } catch {
+      // Fallback: organizações que bloqueiam corpora=allDrives
+      response = (Drive as unknown as { Files: { list: (opts: Record<string, unknown>) => GoogleAppsScript.Drive_v3.Schema.FileList } }).Files.list({
+        q: "mimeType='application/vnd.google-apps.script' and trashed=false",
+        fields: 'files(id,name,modifiedTime,description,ownedByMe)',
+        pageSize: 200,
+        orderBy: 'modifiedTime desc',
+      });
+    }
+
+    const files = (response.files || []) as Array<{ id?: string; name?: string; modifiedTime?: string; description?: string; ownedByMe?: boolean; driveId?: string }>;
+    const sistemas = dbGetAll('Sistemas') as Array<Record<string, unknown>>;
+    const importados = new Set(sistemas.map((s) => String(s.scriptId || '')).filter(Boolean));
+
+    const candidatos = files
+      .filter((f) => !!f.id && f.id !== meuScriptId)
+      .map((f) => ({
+        scriptId: f.id!,
+        nome: f.name || '(sem nome)',
+        ultimaModificacao: f.modifiedTime || '',
+        descricao: f.description || '',
+        jaImportado: importados.has(f.id!),
+        ownedByMe: f.ownedByMe !== false,
+        emSharedDrive: !!f.driveId,
+      }));
+    return { ok: true, data: candidatos };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // Se o Google bloqueou por falta de scope, devolve sinal AUTH_NEEDED pro front
+    if (/permission|authoriz|scope|403|401/i.test(msg)) {
+      const editorUrl = `https://script.google.com/home/projects/${ScriptApp.getScriptId()}/edit`;
+      return { ok: false, error: 'AUTH_NEEDED::' + editorUrl };
+    }
+    return { ok: false, error: 'Erro ao listar projetos do GAS: ' + msg };
+  }
+}
+
+function getGASDeployment(scriptId: string): ServerResult {
+  try {
+    const token = ScriptApp.getOAuthToken();
+    const url = `https://script.googleapis.com/v1/projects/${encodeURIComponent(scriptId)}/deployments`;
+    const resp = UrlFetchApp.fetch(url, {
+      headers: { Authorization: 'Bearer ' + token },
+      muteHttpExceptions: true,
+    });
+    if (resp.getResponseCode() >= 400) {
+      return { ok: true, data: { webAppUrl: '' } };
+    }
+    const body = JSON.parse(resp.getContentText()) as { deployments?: Array<{ entryPoints?: Array<{ entryPointType?: string; webApp?: { url?: string } }> }> };
+    const deps = body.deployments || [];
+    for (const d of deps) {
+      const eps = d.entryPoints || [];
+      for (const ep of eps) {
+        if (ep.entryPointType === 'WEB_APP' && ep.webApp && ep.webApp.url) {
+          return { ok: true, data: { webAppUrl: ep.webApp.url } };
+        }
+      }
+    }
+    return { ok: true, data: { webAppUrl: '' } };
+  } catch (e: unknown) {
+    return { ok: true, data: { webAppUrl: '' }, error: e instanceof Error ? e.message : undefined };
+  }
+}
+
+interface GASImportItem { scriptId: string; nome: string; }
+
+function getGASProjectMetadata(scriptId: string): ServerResult {
+  try {
+    if (!scriptId) return { ok: false, error: 'scriptId vazio' };
+    const token = ScriptApp.getOAuthToken();
+    const url = `https://script.googleapis.com/v1/projects/${encodeURIComponent(scriptId)}`;
+    const resp = UrlFetchApp.fetch(url, {
+      headers: { Authorization: 'Bearer ' + token },
+      muteHttpExceptions: true,
+    });
+    const code = resp.getResponseCode();
+    if (code === 404) return { ok: false, error: 'Projeto não encontrado. Confira o scriptId.' };
+    if (code === 401 || code === 403) return { ok: false, error: 'Sem permissão para ler este projeto.' };
+    if (code >= 400) return { ok: false, error: 'Apps Script API retornou ' + code };
+    const body = JSON.parse(resp.getContentText()) as { title?: string; updateTime?: string };
+    return { ok: true, data: { nome: body.title || '', ultimaModificacao: body.updateTime || '' } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar projeto' };
+  }
+}
+
+function importGASById(scriptId: string): ServerResult {
+  try {
+    const id = String(scriptId || '').trim();
+    if (!id) return { ok: false, error: 'Informe o scriptId.' };
+
+    const sistemas = dbGetAll('Sistemas') as Array<Record<string, unknown>>;
+    if (sistemas.some((s) => String(s.scriptId || '') === id)) {
+      return { ok: false, error: 'Este projeto já foi importado.' };
+    }
+
+    const meta = getGASProjectMetadata(id);
+    if (!meta.ok) return meta;
+    const metaData = (meta.data || {}) as { nome?: string };
+    const nome = metaData.nome || 'App do GAS';
+
+    return importGASProjects([{ scriptId: id, nome }]);
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao importar por ID' };
+  }
+}
+
+function syncGASMetadata(sistemaId: string): ServerResult {
+  try {
+    const sistema = dbGetById('Sistemas', sistemaId) as Record<string, unknown> | null;
+    if (!sistema) return { ok: false, error: 'Sistema não encontrado' };
+    const scriptId = String(sistema.scriptId || '');
+    if (!scriptId) return { ok: false, error: 'Este sistema não tem scriptId vinculado.' };
+
+    const meta = getGASProjectMetadata(scriptId);
+    if (!meta.ok) return meta;
+    const metaData = (meta.data || {}) as { nome?: string };
+
+    const dep = getGASDeployment(scriptId);
+    const depData = (dep.data || {}) as { webAppUrl?: string };
+    const webAppUrl = depData.webAppUrl || '';
+
+    const patch: Record<string, unknown> = {};
+    if (metaData.nome && metaData.nome !== sistema.nome) patch.nome = metaData.nome;
+    if (webAppUrl && webAppUrl !== sistema.webAppUrl) {
+      patch.webAppUrl = webAppUrl;
+      patch.urlProd = webAppUrl;
+    }
+    if (Object.keys(patch).length === 0) return { ok: true, data: { atualizado: false, sistema } };
+    const updated = dbUpdate('Sistemas', sistemaId, patch);
+    return { ok: true, data: { atualizado: true, sistema: updated } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao sincronizar' };
+  }
+}
+
+// Tenta achar um repositório do GitHub do usuário cujo nome bata com o nome do projeto GAS.
+// Retorna a URL do repo se houver match razoável (exato no slug ou containment forte).
+function tryMatchGitHubRepo(nomeProjeto: string, repos: Array<{ name: string; url: string }>): string {
+  if (!repos.length) return '';
+  const slug = slugifyCodinome(nomeProjeto);
+  if (!slug) return '';
+  const slugified = repos.map((r) => ({ ...r, slug: slugifyCodinome(r.name) }));
+  const exato = slugified.find((r) => r.slug === slug);
+  if (exato) return exato.url;
+  const contem = slugified.find((r) => r.slug && (r.slug.indexOf(slug) >= 0 || slug.indexOf(r.slug) >= 0));
+  if (contem) return contem.url;
+  return '';
+}
+
+function fetchGitHubReposLite(): Array<{ name: string; url: string }> {
+  try {
+    const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+    if (!token) return [];
+    const res = UrlFetchApp.fetch('https://api.github.com/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member', {
+      muteHttpExceptions: true,
+      headers: ghHeaders(token),
+    });
+    if (res.getResponseCode() !== 200) return [];
+    const repos = JSON.parse(res.getContentText()) as Array<Record<string, unknown>>;
+    return repos.map((r) => ({ name: String(r['name'] || ''), url: String(r['html_url'] || '') })).filter((r) => r.name && r.url);
+  } catch { return []; }
+}
+
+function importGASProjects(items: GASImportItem[]): ServerResult {
+  try {
+    if (!Array.isArray(items) || items.length === 0) return { ok: false, error: 'Selecione ao menos um projeto.' };
+    const sistemas = dbGetAll('Sistemas') as Array<Record<string, unknown>>;
+    const jaImportados = new Set(sistemas.map((s) => String(s.scriptId || '')).filter(Boolean));
+    const codinomesUsados = new Set(sistemas.map((s) => String(s.codinome || '')).filter(Boolean));
+
+    // 1 chamada só ao GitHub pra todos os items (se configurado)
+    const ghRepos = fetchGitHubReposLite();
+
+    const criados: Array<Record<string, unknown>> = [];
+    for (const item of items) {
+      if (!item || !item.scriptId) continue;
+      if (jaImportados.has(item.scriptId)) continue;
+
+      let codinome = slugifyCodinome(item.nome);
+      let n = 2;
+      while (codinomesUsados.has(codinome)) { codinome = slugifyCodinome(item.nome) + '-' + n++; }
+      codinomesUsados.add(codinome);
+
+      const dep = getGASDeployment(item.scriptId);
+      const webAppUrl = dep.ok && dep.data ? String((dep.data as { webAppUrl?: string }).webAppUrl || '') : '';
+      const repoUrl = tryMatchGitHubRepo(item.nome, ghRepos);
+
+      const novo = dbCreate('Sistemas', {
+        nome: item.nome,
+        codinome,
+        estagio: webAppUrl ? 'prateleira' : 'forja',
+        proposito: 'Importado do Google Apps Script',
+        stack: 'Google Apps Script',
+        urlProd: webAppUrl,
+        scoreSaude: 0,
+        repoUrl,
+        scriptId: item.scriptId,
+        webAppUrl,
+      });
+      criados.push(novo);
+      jaImportados.add(item.scriptId);
+    }
+    return { ok: true, data: { criados: criados.length, sistemas: criados } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao importar projetos do GAS' };
+  }
+}
+
+// Sincroniza a sessão Sistemas com o estado real do GAS (two-way leve):
+//  • detecta projetos novos no GAS ainda não importados (pra oferecer import);
+//  • detecta sistemas cujo scriptId sumiu do GAS (apagado/lixeira) e os
+//    SINALIZA como `removidoNoGas` (não-destrutivo) — quem decide remover é o user;
+//  • se um app sinalizado reaparece no GAS, limpa a flag (restaurado).
+// Sistemas SEM scriptId (criados manualmente, ex.: FORJA) nunca são tocados.
+function sincronizarGAS(): ServerResult {
+  try {
+    const lista = listGASProjects();
+    if (!lista.ok) return lista; // propaga AUTH_NEEDED / erro pro front
+    const candidatos = (lista.data || []) as Array<{ scriptId: string; nome: string; jaImportado: boolean }>;
+    const gasIds = new Set(candidatos.map((c) => c.scriptId));
+    const nomePorId: Record<string, string> = {};
+    candidatos.forEach((c) => { nomePorId[c.scriptId] = c.nome; });
+    const novos = candidatos.filter((c) => !c.jaImportado);
+
+    // Projeto SELF: a própria Forja é excluída da listagem do Drive (pra não se
+    // auto-importar nem se auto-flagar como removida). Tratamos ele à parte:
+    // nunca removemos, vinculamos o card FORJA ao scriptId real e atualizamos o
+    // nome a partir do título do projeto no GAS.
+    const meuScriptId = ScriptApp.getScriptId();
+    let selfNome = '';
+    // Fonte primária: Drive (mesmo serviço que lista os outros projetos com
+    // sucesso). Fallback: Apps Script API projects.get.
+    try {
+      const f = (Drive as unknown as { Files: { get: (id: string, opts?: Record<string, unknown>) => { name?: string } } })
+        .Files.get(meuScriptId, { fields: 'name', supportsAllDrives: true });
+      selfNome = String((f && f.name) || '').trim();
+    } catch { /* tenta fallback */ }
+    if (!selfNome) {
+      try {
+        const m = getGASProjectMetadata(meuScriptId);
+        if (m.ok && m.data) selfNome = String((m.data as { nome?: string }).nome || '').trim();
+      } catch { /* segue sem renomear o self */ }
+    }
+
+    const sistemas = dbGetAll('Sistemas') as Array<Record<string, unknown>>;
+    const removidos: Array<{ id: string; nome: string }> = [];
+    const renomeados: Array<{ id: string; de: string; para: string }> = [];
+    let restaurados = 0;
+    const agora = new Date().toISOString();
+
+    // Trava de segurança: só conclui "removido" se a listagem trouxe ao menos 1
+    // projeto. Evita falso-positivo em massa caso a Drive API devolva vazio por
+    // hiccup transitório.
+    const podeDetectarRemocao = gasIds.size > 0;
+
+    // Acha (ou elege) o sistema que representa a própria Forja, pra vincular o
+    // scriptId self uma única vez.
+    const jaTemSelf = sistemas.some((s) => String(s['scriptId'] || '') === meuScriptId);
+
+    for (const s of sistemas) {
+      const sid = String(s['scriptId'] || '');
+      const nomeAtual = String(s['nome'] || '').trim();
+      const flagged = !!s['removidoNoGas'] && String(s['removidoNoGas']).toLowerCase() !== 'false';
+
+      // Caso self (já vinculado): nunca remove; só atualiza o nome.
+      if (sid && sid === meuScriptId) {
+        const patch: Record<string, unknown> = {};
+        if (selfNome && selfNome !== nomeAtual) { patch.nome = selfNome; renomeados.push({ id: String(s['id']), de: nomeAtual, para: selfNome }); }
+        if (flagged) { patch.removidoNoGas = ''; patch.removidoNoGasEm = ''; }
+        if (Object.keys(patch).length > 0) dbUpdate('Sistemas', String(s['id']), patch);
+        continue;
+      }
+
+      if (!sid) continue; // criados manualmente: nunca tocar
+
+      const estaNoGas = gasIds.has(sid);
+      if (!estaNoGas && podeDetectarRemocao) {
+        if (!flagged) dbUpdate('Sistemas', String(s['id']), { removidoNoGas: true, removidoNoGasEm: agora });
+        removidos.push({ id: String(s['id']), nome: nomeAtual });
+      } else if (estaNoGas) {
+        // Está no GAS: traz a nomenclatura atual e limpa flag se reapareceu.
+        const patch: Record<string, unknown> = {};
+        const gasNome = String(nomePorId[sid] || '').trim();
+        if (gasNome && gasNome !== nomeAtual) {
+          patch.nome = gasNome;
+          renomeados.push({ id: String(s['id']), de: nomeAtual, para: gasNome });
+        }
+        if (flagged) { patch.removidoNoGas = ''; patch.removidoNoGasEm = ''; restaurados++; }
+        if (Object.keys(patch).length > 0) dbUpdate('Sistemas', String(s['id']), patch);
+      }
+    }
+
+    // Garante que a própria Forja exista como sistema (self). Se não há card
+    // vinculado ao scriptId self, vincula um card "forja" semente existente ou
+    // cria um novo — assim o projeto atual sempre aparece na bancada.
+    let selfVinculado = false;
+    if (!jaTemSelf) {
+      const seed = sistemas.find((s) => !String(s['scriptId'] || '') && (String(s['codinome'] || '').toLowerCase() === 'forja' || String(s['nome'] || '').trim().toLowerCase() === 'forja'));
+      const nomeFinal = selfNome || 'FORJA';
+      if (seed) {
+        const seedNome = String(seed['nome'] || '').trim();
+        const patch: Record<string, unknown> = { scriptId: meuScriptId, removidoNoGas: '', removidoNoGasEm: '' };
+        if (nomeFinal && nomeFinal !== seedNome) { patch.nome = nomeFinal; renomeados.push({ id: String(seed['id']), de: seedNome, para: nomeFinal }); }
+        dbUpdate('Sistemas', String(seed['id']), patch);
+        selfVinculado = true;
+      } else {
+        const codinomesUsados = new Set(sistemas.map((s) => String(s['codinome'] || '')).filter(Boolean));
+        let codinome = slugifyCodinome(nomeFinal);
+        let n = 2;
+        while (codinomesUsados.has(codinome)) { codinome = slugifyCodinome(nomeFinal) + '-' + n++; }
+        const dep = getGASDeployment(meuScriptId);
+        const webAppUrl = dep.ok && dep.data ? String((dep.data as { webAppUrl?: string }).webAppUrl || '') : '';
+        dbCreate('Sistemas', {
+          nome: nomeFinal,
+          codinome,
+          estagio: 'forja',
+          proposito: 'Central de comando e governança de sistemas',
+          stack: 'Google Apps Script, React, TypeScript',
+          urlProd: webAppUrl,
+          scoreSaude: 0,
+          repoUrl: '',
+          scriptId: meuScriptId,
+          webAppUrl,
+        });
+        selfVinculado = true;
+      }
+    }
+
+    try { PropertiesService.getScriptProperties().setProperty('GAS_LAST_SYNC', agora); } catch { /* segue baile */ }
+    return { ok: true, data: { novos: novos.length, novosLista: novos, removidos, renomeados, restaurados, selfVinculado, ultimaSync: agora } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao sincronizar com o GAS' };
+  }
+}
+
+// Remove definitivamente um sistema do Forja (a linha em Sistemas). Usado quando
+// o user confirma que um app removido no GAS também deve sair do Forja.
+function removerSistema(id: string): ServerResult {
+  try {
+    const alvo = String(id || '').trim();
+    if (!alvo) return { ok: false, error: 'Informe o id do sistema.' };
+    const ok = dbDelete('Sistemas', alvo);
+    if (!ok) return { ok: false, error: 'Sistema não encontrado' };
+    return { ok: true, data: { removido: true } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover sistema' };
+  }
+}
+
+// Limpa só a flag "removido no GAS" — mantém o sistema (caso o user queira
+// preservar a governança mesmo sem o projeto no GAS).
+function descartarFlagRemocaoGas(id: string): ServerResult {
+  try {
+    const upd = dbUpdate('Sistemas', String(id || ''), { removidoNoGas: '', removidoNoGasEm: '' });
+    if (!upd) return { ok: false, error: 'Sistema não encontrado' };
+    return { ok: true, data: upd };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao descartar aviso' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONTROLE DE ACESSO (RBAC) — Fase 1
+//   Papéis: admin > operacional > leitor. O "owner" (quem implantou) é sempre
+//   admin e não pode ser rebaixado/removido. Identidade vem de
+//   Session.getActiveUser() (confiável no mesmo Workspace; a Fase 2 adiciona
+//   login externo via Google Sign-In + sessão).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+type PapelAcesso = 'admin' | 'operacional' | 'leitor';
+const _RANK_PAPEL: Record<PapelAcesso, number> = { leitor: 1, operacional: 2, admin: 3 };
+
+function _emailAtual(): string {
+  try { return String(Session.getActiveUser().getEmail() || '').trim().toLowerCase(); } catch { return ''; }
+}
+
+// Busca nome e foto do perfil Google do usuário logado.
+// Usa o endpoint OpenID userinfo (funciona só com os scopes userinfo.* —
+// não exige habilitar a People API no projeto GCP). Resultado é cacheado
+// por algumas horas pra não bater na rede a cada load.
+interface PerfilGoogle { nome: string; foto: string; email: string }
+
+function _perfilGoogle(): PerfilGoogle {
+  const vazio: PerfilGoogle = { nome: '', foto: '', email: '' };
+  try {
+    const c = CacheService.getUserCache();
+    const hit = c ? c.get('perfil_google_v1') : null;
+    if (hit) return JSON.parse(hit) as PerfilGoogle;
+  } catch { /* cache off, segue */ }
+
+  const out: PerfilGoogle = { nome: '', foto: '', email: '' };
+  try {
+    const token = ScriptApp.getOAuthToken();
+    const resp = UrlFetchApp.fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: 'Bearer ' + token },
+      muteHttpExceptions: true,
+    });
+    if (resp.getResponseCode() === 200) {
+      const data = JSON.parse(resp.getContentText() || '{}') as { name?: string; picture?: string; email?: string };
+      out.nome = String(data.name || '');
+      out.foto = String(data.picture || '');
+      out.email = String(data.email || '').trim().toLowerCase();
+    }
+  } catch { /* sem rede / sem scope: devolve vazio */ }
+
+  try {
+    const c2 = CacheService.getUserCache();
+    if (c2 && (out.nome || out.foto || out.email)) c2.put('perfil_google_v1', JSON.stringify(out), 21600);
+  } catch { /* ignora */ }
+
+  return (out.nome || out.foto || out.email) ? out : vazio;
+}
+
+function _ownerEmail(): string {
+  try {
+    const p = PropertiesService.getScriptProperties();
+    let o = p.getProperty('OWNER_EMAIL');
+    if (!o) {
+      let eff = '';
+      try { eff = String(Session.getEffectiveUser().getEmail() || '').trim().toLowerCase(); } catch { eff = ''; }
+      if (!eff) eff = _emailAtual();
+      if (eff) { p.setProperty('OWNER_EMAIL', eff); o = eff; }
+    }
+    return String(o || '').toLowerCase();
+  } catch { return ''; }
+}
+
+function _garantirOwnerNaLista(email: string): void {
+  if (!email) return;
+  try {
+    const existe = (dbGetAll('Usuarios') as Array<Record<string, unknown>>)
+      .some((u) => String(u['email'] || '').trim().toLowerCase() === email);
+    if (!existe) {
+      dbCreate('Usuarios', { email, nome: 'Owner', papel: 'admin', ativo: true, criadoEm: new Date().toISOString(), criadoPor: 'sistema' });
+    }
+  } catch { /* segue baile */ }
+}
+
+interface AcessoAtual { email: string; nome: string; papel: PapelAcesso | null; isOwner: boolean }
+
+function _acessoAtual(): AcessoAtual {
+  const email = _emailAtual();
+  const owner = _ownerEmail();
+  if (email && owner && email === owner) {
+    _garantirOwnerNaLista(email);
+    return { email, nome: 'Owner', papel: 'admin', isOwner: true };
+  }
+  if (!email) return { email: '', nome: '', papel: null, isOwner: false };
+  const u = (dbGetAll('Usuarios') as Array<Record<string, unknown>>)
+    .find((x) => String(x['email'] || '').trim().toLowerCase() === email);
+  if (u) {
+    const ativo = !(String(u['ativo']).toLowerCase() === 'false' || u['ativo'] === false || u['ativo'] === '');
+    const p = String(u['papel'] || 'operacional').toLowerCase();
+    const papel = (['admin', 'operacional', 'leitor'].indexOf(p) >= 0 ? p : 'operacional') as PapelAcesso;
+    if (ativo) return { email, nome: String(u['nome'] || ''), papel, isOwner: false };
+  }
+  return { email, nome: '', papel: null, isOwner: false };
+}
+
+function _temPapel(min: PapelAcesso): boolean {
+  const a = _acessoAtual();
+  if (!a.papel) return false;
+  return _RANK_PAPEL[a.papel] >= _RANK_PAPEL[min];
+}
+
+// Retorna um ServerResult de erro quando o papel é insuficiente, ou null quando ok.
+function _exigirPapel(min: PapelAcesso): ServerResult | null {
+  if (!_temPapel(min)) return { ok: false, error: 'PERMISSAO_NEGADA::Você não tem permissão para esta ação.' };
+  return null;
+}
+
+function getMeuAcesso(): ServerResult {
+  try {
+    const a = _acessoAtual();
+    const perfil = _perfilGoogle();
+    const email = a.email || perfil.email;
+    const nome = perfil.nome || a.nome || (email ? email.split('@')[0] : '');
+    return { ok: true, data: { email, nome, foto: perfil.foto, papel: a.papel, isOwner: a.isOwner, autenticado: !!a.papel } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao obter acesso' };
+  }
+}
+
+function getUsuarios(): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
+  try {
+    const owner = _ownerEmail();
+    const us = (dbGetAll('Usuarios') as Array<Record<string, unknown>>)
+      .map((u) => ({
+        id: String(u['id'] || ''),
+        email: String(u['email'] || ''),
+        nome: String(u['nome'] || ''),
+        papel: String(u['papel'] || 'operacional'),
+        ativo: !(String(u['ativo']).toLowerCase() === 'false' || u['ativo'] === false || u['ativo'] === ''),
+        criadoEm: String(u['criadoEm'] || ''),
+        isOwner: String(u['email'] || '').trim().toLowerCase() === owner,
+      }))
+      .sort((a, b) => (a.isOwner === b.isOwner ? a.nome.localeCompare(b.nome) : a.isOwner ? -1 : 1));
+    return { ok: true, data: us };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar usuários' };
+  }
+}
+
+function salvarUsuario(input: Record<string, unknown>): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
+  try {
+    const email = String(input['email'] || '').trim().toLowerCase();
+    if (!email || email.indexOf('@') < 0) return { ok: false, error: 'Informe um e-mail válido.' };
+    const papelRaw = String(input['papel'] || 'operacional').toLowerCase();
+    const papel = (['admin', 'operacional', 'leitor'].indexOf(papelRaw) >= 0 ? papelRaw : 'operacional');
+    const nome = String(input['nome'] || '').trim();
+    const ativo = input['ativo'] === undefined ? true : !(input['ativo'] === false || String(input['ativo']).toLowerCase() === 'false');
+    const owner = _ownerEmail();
+
+    const todos = dbGetAll('Usuarios') as Array<Record<string, unknown>>;
+    const existente = todos.find((u) => String(u['email'] || '').trim().toLowerCase() === email);
+
+    // Owner é blindado: não pode ser rebaixado nem desativado.
+    if (email === owner && (papel !== 'admin' || !ativo)) {
+      return { ok: false, error: 'O owner não pode ser rebaixado nem desativado.' };
+    }
+
+    if (existente) {
+      const upd = dbUpdate('Usuarios', String(existente['id']), { nome, papel, ativo });
+      return { ok: true, data: upd };
+    }
+    const novo = dbCreate('Usuarios', { email, nome, papel, ativo, criadoEm: new Date().toISOString(), criadoPor: _emailAtual() });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar usuário' };
+  }
+}
+
+function removerUsuario(id: string): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
+  try {
+    const u = dbGetById('Usuarios', String(id || ''));
+    if (!u) return { ok: false, error: 'Usuário não encontrado' };
+    const owner = _ownerEmail();
+    if (String(u['email'] || '').trim().toLowerCase() === owner) {
+      return { ok: false, error: 'O owner não pode ser removido.' };
+    }
+    if (String(u['email'] || '').trim().toLowerCase() === _emailAtual()) {
+      return { ok: false, error: 'Você não pode remover a si mesmo.' };
+    }
+    dbDelete('Usuarios', String(id));
+    return { ok: true, data: { removido: true } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover usuário' };
+  }
+}
+
 function getCustosBySistema(id: string): ServerResult {
   try {
-    const custos = dbQuery('Custos', { sistemaId: id });
+    const alvo = String(id || '').trim();
+    const custos = (dbGetAll('Custos') as Array<Record<string, unknown>>)
+      .filter((c) => String(c.sistemaId || '').trim() === alvo);
     return { ok: true, data: custos };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar custos' };
@@ -289,7 +1244,9 @@ function getDashboardStats(): ServerResult {
 
 function getRecursosBySistema(sistemaId: string): ServerResult {
   try {
-    const recursos = dbQuery('Recursos', { sistemaId });
+    const alvo = String(sistemaId || '').trim();
+    const recursos = (dbGetAll('Recursos') as Array<Record<string, unknown>>)
+      .filter((r) => String(r.sistemaId || '').trim() === alvo);
     return { ok: true, data: recursos };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar recursos' };
@@ -337,7 +1294,13 @@ function deleteRecurso(id: string): ServerResult {
 
 function getDecisoesBySistema(sistemaId: string): ServerResult {
   try {
-    const decisoes = dbQuery('Decisoes', { sistemaId });
+    // Comparação tolerante (trim + string) — dbQuery faz `===` estrito que
+    // explodia silenciosamente quando o Sheets armazenava com espaço/quebra
+    // de linha, ou quando o sistemaId vinha como Number. Isso causava o bug
+    // do badge mostrar contagem > 0 mas o painel mostrar lista vazia.
+    const alvo = String(sistemaId || '').trim();
+    const decisoes = (dbGetAll('Decisoes') as Array<Record<string, unknown>>)
+      .filter((d) => String(d.sistemaId || '').trim() === alvo);
     return { ok: true, data: decisoes };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar decisões' };
@@ -363,11 +1326,297 @@ function updateDecisao(id: string, data: Record<string, unknown>): ServerResult 
   }
 }
 
+function deleteDecisao(id: string): ServerResult {
+  try {
+    const ok = dbDelete('Decisoes', id);
+    if (!ok) return { ok: false, error: 'Decisão não encontrada' };
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar decisão' };
+  }
+}
+
+// Move uma decisão pra uma nova coluna do Kanban. Operação leve, otimizada
+// pra ser chamada quando o usuário arrasta o card entre colunas.
+function moverDecisaoStatus(payload: { id: string; status: string }): ServerResult {
+  try {
+    if (!payload || !payload.id || !payload.status) {
+      return { ok: false, error: 'id e status são obrigatórios' };
+    }
+    const updated = dbUpdate('Decisoes', payload.id, { status: String(payload.status) });
+    if (!updated) return { ok: false, error: 'Decisão não encontrada' };
+    return { ok: true, data: updated };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao mover' };
+  }
+}
+
+// Diagnóstico cirúrgico: pega TODAS as decisões e mostra exatamente o
+// sistemaId de cada uma (tipo, length, charcode) pra entender por que o
+// sumário acha N itens mas a query direta acha 0. Usado pelo botão de
+// debug no BacklogPanel quando há discrepância.
+function diagnosticarBacklogSistema(sistemaIdAlvo: string): ServerResult {
+  try {
+    const alvoBruto = sistemaIdAlvo;
+    const alvoTrim = String(sistemaIdAlvo || '').trim();
+    const todas = dbGetAll('Decisoes') as Array<Record<string, unknown>>;
+
+    // Amostra dos primeiros 5 sistemaIds encontrados na planilha, com tipo
+    const amostraTipos = todas.slice(0, 5).map((d) => ({
+      sistemaId: d.sistemaId,
+      tipo: typeof d.sistemaId,
+      asString: String(d.sistemaId || ''),
+      trimmed: String(d.sistemaId || '').trim(),
+      length: String(d.sistemaId || '').length,
+      lengthTrim: String(d.sistemaId || '').trim().length,
+      titulo: d.titulo,
+      status: d.status,
+    }));
+
+    // Quantos batem por cada estratégia
+    const batemEstrito = todas.filter((d) => d.sistemaId === alvoBruto).length;
+    const batemString = todas.filter((d) => String(d.sistemaId || '') === alvoBruto).length;
+    const batemTrim = todas.filter((d) => String(d.sistemaId || '').trim() === alvoTrim).length;
+    const batemTrimAmbos = todas.filter((d) => {
+      const a = String(d.sistemaId || '').trim();
+      const b = alvoTrim;
+      return a === b;
+    }).length;
+
+    // Lista os IDs distintos presentes na planilha
+    const idsDistintos = Array.from(new Set(todas.map((d) => String(d.sistemaId || '').trim()))).slice(0, 20);
+
+    return {
+      ok: true,
+      data: {
+        sistemaIdAlvo: alvoBruto,
+        sistemaIdAlvoLength: String(alvoBruto || '').length,
+        sistemaIdAlvoTrim: alvoTrim,
+        totalDecisoesNaPlanilha: todas.length,
+        batemEstrito,
+        batemString,
+        batemTrim,
+        batemTrimAmbos,
+        idsDistintos,
+        amostraTipos,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Diagnóstico + recuperação: encontra decisões/riscos com sistemaId inválido
+// (vazio, "<ID>", "undefined") e tenta amarrar a algum sistema. Se passado
+// `sistemaIdDestino`, aplica direto; caso contrário, lista os órfãos pra UI
+// decidir.
+function diagnosticarDecisoesOrfas(payload: { sistemaIdDestino?: string } = {}): ServerResult {
+  try {
+    const ehInvalido = (s: unknown): boolean => {
+      const v = String(s || '').trim();
+      return !v || v === '<ID>' || v === 'undefined' || v === 'null';
+    };
+
+    const decisoes = (dbGetAll('Decisoes') as Array<Record<string, unknown>>).filter((d) => ehInvalido(d.sistemaId));
+    const riscos = (dbGetAll('Riscos') as Array<Record<string, unknown>>).filter((r) => ehInvalido(r.sistemaId));
+
+    if (!payload.sistemaIdDestino) {
+      return {
+        ok: true,
+        data: {
+          decisoesOrfas: decisoes.length,
+          riscosOrfos: riscos.length,
+          amostraDecisoes: decisoes.slice(0, 5).map((d) => ({ id: d.id, titulo: d.titulo, data: d.data })),
+          amostraRiscos: riscos.slice(0, 5).map((r) => ({ id: r.id, area: r.area, descricao: r.descricao })),
+        },
+      };
+    }
+
+    // Sistema destino: confirma que existe
+    const sistemas = dbGetAll('Sistemas') as Array<Record<string, unknown>>;
+    if (!sistemas.find((s) => s.id === payload.sistemaIdDestino)) {
+      return { ok: false, error: 'Sistema destino não encontrado' };
+    }
+
+    let decisoesCorrigidas = 0;
+    for (const d of decisoes) {
+      try {
+        dbUpdate('Decisoes', String(d.id), { sistemaId: payload.sistemaIdDestino });
+        decisoesCorrigidas++;
+      } catch { /* segue */ }
+    }
+    let riscosCorrigidos = 0;
+    for (const r of riscos) {
+      try {
+        dbUpdate('Riscos', String(r.id), { sistemaId: payload.sistemaIdDestino });
+        riscosCorrigidos++;
+      } catch { /* segue */ }
+    }
+
+    return { ok: true, data: { decisoesCorrigidas, riscosCorrigidos } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Seed do backlog "Forja v2.0": registra a lista de melhorias que a gente
+// guardou pra próxima versão como itens no Kanban do próprio sistema Forja.
+// Idempotente — só insere se ainda não tem nenhum item com a tag "forja-v2".
+// O usuário roda essa função uma vez via UI ou via Apps Script editor.
+function seedForjaV2Backlog(sistemaId: string): ServerResult {
+  try {
+    if (!sistemaId) return { ok: false, error: 'sistemaId é obrigatório' };
+
+    const existentes = (dbGetAll('Decisoes') as Array<Record<string, unknown>>)
+      .filter((d) => String(d.sistemaId || '') === sistemaId)
+      .filter((d) => String(d.tags || '').toLowerCase().indexOf('forja-v2') >= 0);
+    if (existentes.length > 0) {
+      return { ok: true, data: { criados: 0, ja_existiam: existentes.length, mensagem: 'Backlog v2.0 já estava semeado' } };
+    }
+
+    interface ItemBacklog {
+      titulo: string;
+      decisao: string;
+      justificativa: string;
+      prioridade: string;
+      estimativa: string;
+      status: string;
+    }
+
+    const itens: ItemBacklog[] = [
+      {
+        titulo: 'Multi-usuário com perfis (admin/cliente/operador)',
+        decisao: 'Implementar autenticação por perfil. Admin vê tudo; Cliente vê só os sistemas dele; Operador vê portfólio mas sem editar configurações sensíveis.',
+        justificativa: 'Forja hoje é single-user (vinculada ao dono do Sheet). Pra vender como SaaS ou compartilhar com clientes precisa multi-tenancy.',
+        prioridade: 'alta',
+        estimativa: '2 semanas',
+        status: 'backlog',
+      },
+      {
+        titulo: 'Webhooks de entrada (receber eventos de sistemas externos)',
+        decisao: 'Endpoint público doPost autenticado que recebe pulsos / erros / receitas de fora e popula a timeline e alertas automaticamente.',
+        justificativa: 'Hoje só consumimos APIs (Uptime, GitHub, LLM). Faltam webhooks de entrada pra automação real: Stripe → Receita, Sentry → Alerta, GitHub Actions → Pulso de deploy.',
+        prioridade: 'alta',
+        estimativa: '1 semana',
+        status: 'backlog',
+      },
+      {
+        titulo: 'IA proativa (notifica achados sem o usuário pedir)',
+        decisao: 'A auditoria agendada já roda. Adicionar: relatório diário no email com top 3 achados críticos, e push no Drawer de Alertas quando novo finding ALTA aparecer.',
+        justificativa: 'Auditoria agendada hoje só registra. A IA poderia ser mais proativa em chamar atenção pra problemas urgentes — virar mais um "co-piloto" do que uma "ferramenta".',
+        prioridade: 'media',
+        estimativa: '4 dias',
+        status: 'backlog',
+      },
+    ];
+
+    let criados = 0;
+    for (const item of itens) {
+      dbCreate('Decisoes', {
+        sistemaId,
+        data: new Date().toISOString().slice(0, 10),
+        titulo: item.titulo,
+        decisao: item.decisao,
+        justificativa: item.justificativa,
+        status: item.status,
+        prioridade: item.prioridade,
+        tags: 'forja-v2,roadmap',
+        estimativa: item.estimativa,
+      });
+      criados++;
+    }
+
+    return { ok: true, data: { criados, ja_existiam: 0, mensagem: `${criados} itens v2.0 adicionados ao backlog` } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao semear backlog' };
+  }
+}
+
+// Gera um prompt em markdown com todo o backlog "a fazer" + "fazendo" do
+// sistema, pronto pra colar no Cursor/Claude. Inclui contexto do projeto
+// (nome, propósito, stack, repo) pra que a IA externa entenda o ambiente.
+function gerarPromptBacklog(sistemaId: string): ServerResult {
+  try {
+    const sistema = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => s.id === sistemaId);
+    if (!sistema) return { ok: false, error: 'Sistema não encontrado' };
+
+    const decisoes = (dbGetAll('Decisoes') as Array<Record<string, unknown>>)
+      .filter((d) => String(d.sistemaId || '') === sistemaId)
+      .filter((d) => {
+        const s = String(d.status || '').toLowerCase();
+        return s === 'backlog' || s === 'fazendo' || s === 'ativa' || s === '';
+      });
+
+    const linhas: string[] = [];
+    linhas.push('# Backlog — ' + String(sistema.nome || sistemaId));
+    linhas.push('');
+    linhas.push('_Exportado da Forja em ' + new Date().toLocaleString('pt-BR') + '_');
+    linhas.push('');
+    linhas.push('## Contexto do projeto');
+    if (sistema.proposito) linhas.push('- **Propósito:** ' + String(sistema.proposito));
+    if (sistema.stack) linhas.push('- **Stack:** ' + String(sistema.stack));
+    if (sistema.urlProd || sistema.dominioCustomizado) linhas.push('- **URL:** ' + String(sistema.dominioCustomizado || sistema.urlProd));
+    if (sistema.repoUrl) linhas.push('- **Repo:** ' + String(sistema.repoUrl));
+    linhas.push('');
+
+    if (decisoes.length === 0) {
+      linhas.push('## Backlog vazio');
+      linhas.push('');
+      linhas.push('Nenhum item em "backlog" ou "fazendo" pra este sistema.');
+      return { ok: true, data: { markdown: linhas.join('\n'), total: 0 } };
+    }
+
+    const ordemPrioridade: Record<string, number> = { alta: 0, media: 1, baixa: 2 };
+    decisoes.sort((a, b) => {
+      const pa = ordemPrioridade[String(a.prioridade || 'media').toLowerCase()] ?? 1;
+      const pb = ordemPrioridade[String(b.prioridade || 'media').toLowerCase()] ?? 1;
+      return pa - pb;
+    });
+
+    linhas.push('## Itens a executar (' + decisoes.length + ')');
+    linhas.push('');
+    decisoes.forEach((d, i) => {
+      const prio = String(d.prioridade || 'media').toUpperCase();
+      const status = String(d.status || 'backlog').toUpperCase();
+      linhas.push('### ' + (i + 1) + '. [' + prio + '] ' + String(d.titulo));
+      linhas.push('');
+      linhas.push('- **Status:** ' + status);
+      if (d.estimativa) linhas.push('- **Estimativa:** ' + String(d.estimativa));
+      if (d.tags) linhas.push('- **Tags:** ' + String(d.tags));
+      linhas.push('');
+      linhas.push('**O que fazer:** ' + String(d.decisao || ''));
+      linhas.push('');
+      if (d.justificativa) {
+        linhas.push('**Por quê:** ' + String(d.justificativa));
+        linhas.push('');
+      }
+    });
+
+    linhas.push('---');
+    linhas.push('');
+    linhas.push('## Instruções pra IA');
+    linhas.push('');
+    linhas.push('Você está recebendo o backlog atual deste projeto. Faça o seguinte:');
+    linhas.push('');
+    linhas.push('1. Comece pelos itens marcados como **[ALTA]**.');
+    linhas.push('2. Pra cada item, antes de codar, **resuma o que entendeu** em 2 linhas e pergunte se está correto.');
+    linhas.push('3. Depois implemente, escrevendo código direto no projeto.');
+    linhas.push('4. Ao concluir cada item, **diga explicitamente "concluído"** pra eu marcar no kanban da Forja.');
+    linhas.push('5. Se faltar contexto, peça antes de assumir.');
+
+    return { ok: true, data: { markdown: linhas.join('\n'), total: decisoes.length } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar prompt' };
+  }
+}
+
 // ─── Riscos (Mapa de Quebra) ─────────────────────────────────────────────────
 
 function getRiscosBySistema(sistemaId: string): ServerResult {
   try {
-    const riscos = dbQuery('Riscos', { sistemaId });
+    const alvo = String(sistemaId || '').trim();
+    const riscos = (dbGetAll('Riscos') as Array<Record<string, unknown>>)
+      .filter((r) => String(r.sistemaId || '').trim() === alvo);
     return { ok: true, data: riscos };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar riscos' };
@@ -610,7 +1859,9 @@ function gerarGenese(ideiaId: string, respostas: Record<string, string>): Server
 
 function getPulsosBySistema(sistemaId: string): ServerResult {
   try {
-    const pulsos = dbQuery('Pulsos', { sistemaId });
+    const alvo = String(sistemaId || '').trim();
+    const pulsos = (dbGetAll('Pulsos') as Array<Record<string, unknown>>)
+      .filter((p) => String(p.sistemaId || '').trim() === alvo);
     return { ok: true, data: pulsos };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar pulsos' };
@@ -822,6 +2073,11614 @@ function buscaGlobal(query: string): ServerResult {
     return { ok: true, data: resultados.slice(0, 10) };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro na busca' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DASHBOARD — dados consolidados (KPIs, série de MRR, apps, contas a vencer)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function getDashboardData(): ServerResult {
+  try {
+    initDatabase();
+    seedStacks();
+    const sistemas = dbGetAll('Sistemas');
+    const custos = dbGetAll('Custos');
+    const receitas = dbGetAll('Receitas');
+
+    const custoMensal = custos.reduce((sum, c) => sum + toMonthly(Number(c['valor'] || 0), String(c['recorrencia'] || 'mensal')), 0);
+    const receitasAtivas = receitas.filter(r => String(r['status'] || 'ativa').toLowerCase() !== 'cancelada');
+    const mrr = receitasAtivas.reduce((sum, r) => sum + toMonthly(Number(r['valor'] || 0), String(r['recorrencia'] || 'mensal')), 0);
+    const lucro = mrr - custoMensal;
+
+    const ativos = sistemas.filter(s => s['estagio'] === 'forja' || s['estagio'] === 'tempera');
+    const saudeMedia = ativos.length > 0
+      ? Math.round(ativos.reduce((sum, s) => sum + Number(s['scoreSaude'] || 0), 0) / ativos.length)
+      : 0;
+
+    // Série de MRR dos últimos 6 meses (a partir da data de início das assinaturas)
+    const mrrSeries: Array<{ label: string; valor: number }> = [];
+    const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const agora = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const ref = new Date(agora.getFullYear(), agora.getMonth() - i, 1);
+      const fimMes = new Date(ref.getFullYear(), ref.getMonth() + 1, 0);
+      const valorMes = receitasAtivas.reduce((sum, r) => {
+        const inicioStr = String(r['inicio'] || '');
+        const inicio = inicioStr ? new Date(inicioStr) : new Date(0);
+        if (inicio <= fimMes) return sum + toMonthly(Number(r['valor'] || 0), String(r['recorrencia'] || 'mensal'));
+        return sum;
+      }, 0);
+      mrrSeries.push({ label: `${meses[ref.getMonth()]}/${String(ref.getFullYear()).slice(2)}`, valor: Math.round(valorMes) });
+    }
+    // Custos não têm histórico mensal no schema → mantemos o custo atual constante (linha plana, honesto).
+    // Lucro por mês = MRR do mês − custo mensal atual.
+    const custoSerie = mrrSeries.map(() => Math.round(custoMensal));
+    const lucroSerie = mrrSeries.map((m) => Math.round(m.valor - custoMensal));
+
+    // Apps com MRR e status
+    const apps = sistemas.map(s => {
+      const mrrApp = receitasAtivas
+        .filter(r => r['sistemaId'] === s['id'])
+        .reduce((sum, r) => sum + toMonthly(Number(r['valor'] || 0), String(r['recorrencia'] || 'mensal')), 0);
+      const saude = Number(s['scoreSaude'] || 0);
+      const status = s['estagio'] === 'prateleira' ? 'arquivado' : (saude >= 70 ? 'ativo' : saude > 0 ? 'atencao' : 'rascunho');
+      const removidoNoGas = !!s['removidoNoGas'] && String(s['removidoNoGas']).toLowerCase() !== 'false';
+      return { id: s['id'], nome: s['nome'], estagio: s['estagio'], cliente: '', mrr: Math.round(mrrApp), saude, status, removidoNoGas };
+    });
+
+    // Contas a vencer (próximos 30 dias) — custos a pagar + receitas a receber
+    const hoje = new Date();
+    const limite = new Date(hoje.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const contas: Array<{ tipo: string; nome: string; descricao: string; valor: number; data: string; dias: number }> = [];
+    for (const c of custos) {
+      const d = String(c['proximaCobranca'] || '');
+      if (!d) continue;
+      const data = new Date(d);
+      if (data >= hoje && data <= limite) {
+        contas.push({ tipo: 'pagar', nome: String(c['fornecedor'] || ''), descricao: String(c['categoria'] || 'Custo'), valor: Number(c['valor'] || 0), data: d, dias: Math.ceil((data.getTime() - hoje.getTime()) / 86400000) });
+      }
+    }
+    for (const r of receitasAtivas) {
+      const d = String(r['proximaCobranca'] || '');
+      if (!d) continue;
+      const data = new Date(d);
+      if (data >= hoje && data <= limite) {
+        const sistema = r['sistemaId'] ? dbGetById('Sistemas', String(r['sistemaId'])) : null;
+        contas.push({ tipo: 'receber', nome: sistema ? String(sistema['nome']) : String(r['plano'] || 'Assinatura'), descricao: `Plano ${r['plano'] || ''}`, valor: Number(r['valor'] || 0), data: d, dias: Math.ceil((data.getTime() - hoje.getTime()) / 86400000) });
+      }
+    }
+    contas.sort((a, b) => a.dias - b.dias);
+
+    return {
+      ok: true,
+      data: {
+        kpis: { mrr: Math.round(mrr), custoMensal: Math.round(custoMensal), lucro: Math.round(lucro), saudeMedia },
+        mrrSeries,
+        custoSerie,
+        lucroSerie,
+        apps,
+        contas: contas.slice(0, 8),
+        totais: { sistemas: sistemas.length, ativos: ativos.length, assinaturas: receitasAtivas.length },
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao carregar dashboard' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FINANCEIRO — custos (a pagar), receitas (a receber) e consolidado
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function getCustos(): ServerResult {
+  try {
+    const custos = dbGetAll('Custos').map((c) => {
+      const s = c['sistemaId'] ? dbGetById('Sistemas', String(c['sistemaId'])) : null;
+      return { ...c, sistemaNome: s ? String(s['nome']) : '' };
+    });
+    return { ok: true, data: custos };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar custos' };
+  }
+}
+
+function createCusto(data: Record<string, unknown>): ServerResult {
+  try {
+    return { ok: true, data: dbCreate('Custos', data) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao criar custo' };
+  }
+}
+
+function updateCusto(id: string, data: Record<string, unknown>): ServerResult {
+  try {
+    const upd = dbUpdate('Custos', id, data);
+    return upd ? { ok: true, data: upd } : { ok: false, error: 'Custo não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atualizar custo' };
+  }
+}
+
+function deleteCusto(id: string): ServerResult {
+  try {
+    return dbDelete('Custos', id) ? { ok: true } : { ok: false, error: 'Custo não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar custo' };
+  }
+}
+
+// Consolidado financeiro: KPIs, lucro por app, série de 6 meses e vencimentos.
+function getFinanceiro(): ServerResult {
+  try {
+    const sistemas = dbGetAll('Sistemas');
+    const custos = dbGetAll('Custos');
+    const receitas = dbGetAll('Receitas');
+    const despesas = dbGetAll('FinEmpresaDespesas');
+    const receitasAtivas = receitas.filter(r => String(r['status'] || 'ativa').toLowerCase() !== 'cancelada');
+
+    const custoMensal = custos.reduce((s, c) => s + toMonthly(Number(c['valor'] || 0), String(c['recorrencia'] || 'mensal')), 0);
+    const mrr = receitasAtivas.reduce((s, r) => s + toMonthly(Number(r['valor'] || 0), String(r['recorrencia'] || 'mensal')), 0);
+
+    // Despesas do mês corrente (livro-caixa) — somam à saída de caixa, junto com
+    // os custos recorrentes. Fecha a foto entrada × saída do mês.
+    const _ag = new Date();
+    const compAtual = `${_ag.getFullYear()}-${String(_ag.getMonth() + 1).padStart(2, '0')}`;
+    const despesasDoMes = despesas.filter(d => String(d['competencia'] || '') === compAtual);
+    const despesasMes = despesasDoMes.reduce((s, d) => s + Number(d['valor'] || 0), 0);
+    const saidaMes = custoMensal + despesasMes;
+    const resultadoMes = mrr - saidaMes;
+    const lucro = mrr - custoMensal; // margem recorrente (sem despesas variáveis)
+    const margemRecorrente = mrr > 0 ? Math.round((lucro / mrr) * 100) : 0;
+    const margem = mrr > 0 ? Math.round((resultadoMes / mrr) * 100) : 0; // margem de caixa (com despesas)
+
+    const nomeDe = (id: unknown) => { const s = id ? dbGetById('Sistemas', String(id)) : null; return s ? String(s['nome']) : 'Sem app'; };
+
+    // Lucro por app — agora com despesas do mês por app pra dar o lucro REAL
+    // (MRR − custo recorrente − despesa variável do mês).
+    const mapa: Record<string, { sistemaId: string; nome: string; mrr: number; custo: number; despesa: number; lucro: number }> = {};
+    const garante = (id: string) => { if (!mapa[id]) mapa[id] = { sistemaId: id, nome: id ? nomeDe(id) : 'Sem app', mrr: 0, custo: 0, despesa: 0, lucro: 0 }; return mapa[id]; };
+    sistemas.forEach(s => garante(String(s['id'])));
+    receitasAtivas.forEach(r => { const g = garante(String(r['sistemaId'] || '')); g.mrr += toMonthly(Number(r['valor'] || 0), String(r['recorrencia'] || 'mensal')); });
+    custos.forEach(c => { const g = garante(String(c['sistemaId'] || '')); g.custo += toMonthly(Number(c['valor'] || 0), String(c['recorrencia'] || 'mensal')); });
+    despesasDoMes.forEach(d => { const g = garante(String(d['sistemaId'] || '')); g.despesa += Number(d['valor'] || 0); });
+    const porApp = Object.values(mapa)
+      .map(g => ({ sistemaId: g.sistemaId, nome: g.nome, mrr: Math.round(g.mrr), custo: Math.round(g.custo), despesa: Math.round(g.despesa), lucro: Math.round(g.mrr - g.custo - g.despesa) }))
+      .filter(g => g.mrr > 0 || g.custo > 0 || g.despesa > 0)
+      .sort((a, b) => b.lucro - a.lucro);
+
+    // Série de 6 meses (MRR x Custo recorrente acumulado por início)
+    const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const agora = new Date();
+    const serie: Array<{ label: string; mrr: number; custo: number }> = [];
+    for (let i = 5; i >= 0; i--) {
+      const ref = new Date(agora.getFullYear(), agora.getMonth() - i, 1);
+      const fimMes = new Date(ref.getFullYear(), ref.getMonth() + 1, 0);
+      const mrrMes = receitasAtivas.reduce((s, r) => {
+        const ini = String(r['inicio'] || '') ? new Date(String(r['inicio'])) : new Date(0);
+        return ini <= fimMes ? s + toMonthly(Number(r['valor'] || 0), String(r['recorrencia'] || 'mensal')) : s;
+      }, 0);
+      const compRef = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}`;
+      const despesaMesRef = despesas.filter(d => String(d['competencia'] || '') === compRef).reduce((s, d) => s + Number(d['valor'] || 0), 0);
+      serie.push({ label: `${meses[ref.getMonth()]}/${String(ref.getFullYear()).slice(2)}`, mrr: Math.round(mrrMes), custo: Math.round(custoMensal), despesa: Math.round(despesaMesRef) });
+    }
+
+    // Vencimentos próximos 45 dias
+    const hoje = new Date();
+    const limite = new Date(hoje.getTime() + 45 * 24 * 60 * 60 * 1000);
+    const vencimentos: Array<{ tipo: string; nome: string; descricao: string; valor: number; data: string; dias: number }> = [];
+    for (const c of custos) {
+      const d = String(c['proximaCobranca'] || ''); if (!d) continue;
+      const data = new Date(d);
+      if (data >= hoje && data <= limite) vencimentos.push({ tipo: 'pagar', nome: String(c['fornecedor'] || 'Custo'), descricao: `${c['categoria'] || 'Custo'} · ${nomeDe(c['sistemaId'])}`, valor: Number(c['valor'] || 0), data: d, dias: Math.ceil((data.getTime() - hoje.getTime()) / 86400000) });
+    }
+    for (const r of receitasAtivas) {
+      const d = String(r['proximaCobranca'] || ''); if (!d) continue;
+      const data = new Date(d);
+      if (data >= hoje && data <= limite) vencimentos.push({ tipo: 'receber', nome: nomeDe(r['sistemaId']), descricao: `Plano ${r['plano'] || ''}`, valor: Number(r['valor'] || 0), data: d, dias: Math.ceil((data.getTime() - hoje.getTime()) / 86400000) });
+    }
+    vencimentos.sort((a, b) => a.dias - b.dias);
+
+    const aReceber45 = vencimentos.filter(v => v.tipo === 'receber').reduce((s, v) => s + v.valor, 0);
+    const aPagar45 = vencimentos.filter(v => v.tipo === 'pagar').reduce((s, v) => s + v.valor, 0);
+
+    return {
+      ok: true,
+      data: {
+        kpis: { mrr: Math.round(mrr), custoMensal: Math.round(custoMensal), lucro: Math.round(lucro), margem, margemRecorrente, assinaturasAtivas: receitasAtivas.length, aReceber45: Math.round(aReceber45), aPagar45: Math.round(aPagar45), despesasMes: Math.round(despesasMes), saidaMes: Math.round(saidaMes), resultadoMes: Math.round(resultadoMes) },
+        porApp,
+        serie,
+        vencimentos,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao carregar financeiro' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VAULT — segredos em Script Properties (nunca retornados ao cliente)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function saveSecret(chave: string, valor: string): ServerResult {
+  try {
+    if (!chave) return { ok: false, error: 'Chave inválida' };
+    const props = PropertiesService.getScriptProperties();
+    if (valor === '' || valor === null || valor === undefined) {
+      props.deleteProperty(chave);
+    } else {
+      props.setProperty(chave, String(valor));
+    }
+    return { ok: true };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar segredo' };
+  }
+}
+
+// Configurações não-sensíveis (URL do proxy, modelo padrão, usuário GitHub) +
+// flags indicando quais segredos já estão definidos (sem revelar valores).
+function getSettings(): ServerResult {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const get = (k: string) => props.getProperty(k) || '';
+    const has = (k: string) => !!props.getProperty(k);
+    return {
+      ok: true,
+      data: {
+        llm: {
+          baseUrl: get('LLM_BASE_URL'),
+          modelo: get('LLM_MODEL'),
+          provider: get('LLM_PROVIDER') || 'proxy',
+          temChave: has('LLM_API_KEY'),
+        },
+        gemini: {
+          modelo: _geminiModelo(),
+          temChave: has('GEMINI_API_KEY'),
+        },
+        github: {
+          usuario: get('GITHUB_USER'),
+          temToken: has('GITHUB_TOKEN'),
+        },
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ler configurações' };
+  }
+}
+
+function saveSettings(settings: Record<string, unknown>): ServerResult {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const set = (k: string, v: unknown) => {
+      if (v === undefined || v === null) return;
+      const s = String(v);
+      if (s === '') props.deleteProperty(k); else props.setProperty(k, s);
+    };
+    const llm = (settings['llm'] || {}) as Record<string, unknown>;
+    const gemini = (settings['gemini'] || {}) as Record<string, unknown>;
+    const github = (settings['github'] || {}) as Record<string, unknown>;
+    if ('baseUrl' in llm) set('LLM_BASE_URL', llm['baseUrl']);
+    if ('modelo' in llm) set('LLM_MODEL', llm['modelo']);
+    if ('provider' in llm) set('LLM_PROVIDER', llm['provider']);
+    if ('apiKey' in llm && String(llm['apiKey'] || '') !== '') set('LLM_API_KEY', llm['apiKey']);
+    if ('modelo' in gemini) set('GEMINI_MODEL', gemini['modelo']);
+    if ('apiKey' in gemini && String(gemini['apiKey'] || '') !== '') set('GEMINI_API_KEY', gemini['apiKey']);
+    if ('usuario' in github) set('GITHUB_USER', github['usuario']);
+    if ('token' in github && String(github['token'] || '') !== '') set('GITHUB_TOKEN', github['token']);
+    return { ok: true };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar configurações' };
+  }
+}
+
+// Sincroniza propriedades que o usuário cadastrou no Apps Script com nomes
+// alternativos, mapeando-as para as chaves canônicas que a Forja usa.
+function syncSettings(): ServerResult {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const userProps = PropertiesService.getUserProperties();
+    const all: Record<string, string> = {};
+    // Script properties têm prioridade; user properties como complemento.
+    const up = userProps.getProperties();
+    for (const k in up) all[k] = up[k];
+    const sp = props.getProperties();
+    for (const k in sp) all[k] = sp[k];
+
+    // Índice case-insensitive: NOME_NORMALIZADO -> { key, value }
+    const norm: Record<string, { key: string; value: string }> = {};
+    for (const k in all) {
+      const n = k.replace(/[\s-]+/g, '_').toUpperCase();
+      norm[n] = { key: k, value: all[k] };
+    }
+
+    const aliases: Record<string, string[]> = {
+      LLM_BASE_URL: ['LLM_BASE_URL', 'BASE_URL', 'PROXY_URL', 'PROXY_BASE_URL', 'LLM_URL', 'API_BASE_URL', 'API_BASE', 'OPENAI_BASE_URL', 'OPENAI_API_BASE', 'ANTHROPIC_BASE_URL', 'OPENROUTER_BASE_URL', 'URL'],
+      LLM_MODEL: ['LLM_MODEL', 'MODEL', 'MODELO', 'LLM_MODELO', 'DEFAULT_MODEL', 'OPENAI_MODEL', 'ANTHROPIC_MODEL'],
+      LLM_API_KEY: ['LLM_API_KEY', 'API_KEY', 'APIKEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'PROXY_API_KEY', 'PROXY_KEY', 'LLM_KEY', 'OPENAI_KEY', 'ANTHROPIC_KEY', 'KEY'],
+      LLM_PROVIDER: ['LLM_PROVIDER', 'PROVIDER', 'PROVEDOR'],
+      GITHUB_USER: ['GITHUB_USER', 'GITHUB_USERNAME', 'GITHUB_USUARIO', 'GH_USER', 'GIT_USER'],
+      GITHUB_TOKEN: ['GITHUB_TOKEN', 'GITHUB_PAT', 'GITHUB_ACCESS_TOKEN', 'GH_TOKEN', 'GH_PAT', 'GIT_TOKEN', 'PAT'],
+    };
+
+    const sensiveis: Record<string, boolean> = { LLM_API_KEY: true, GITHUB_TOKEN: true };
+    const mapeados: string[] = [];
+
+    for (const canonico in aliases) {
+      const atual = props.getProperty(canonico);
+      if (atual && atual !== '') continue; // já configurado, não sobrescreve
+      for (const alias of aliases[canonico]) {
+        if (alias === canonico) continue; // mesmo nome, nada a fazer
+        const achado = norm[alias];
+        if (achado && achado.value) {
+          props.setProperty(canonico, achado.value);
+          const valorMostrado = sensiveis[canonico] ? '••••••••' : achado.value;
+          mapeados.push(`${achado.key} → ${canonico} (${valorMostrado})`);
+          break;
+        }
+      }
+    }
+
+    // Auto-detecta o provedor pela chave encontrada, se ainda não definido.
+    if (!props.getProperty('LLM_PROVIDER')) {
+      if (norm['ANTHROPIC_API_KEY'] || norm['ANTHROPIC_KEY']) props.setProperty('LLM_PROVIDER', 'anthropic');
+      else if (norm['OPENAI_API_KEY'] || norm['OPENAI_KEY']) props.setProperty('LLM_PROVIDER', 'openai');
+    }
+
+    const settings = getSettings();
+    return {
+      ok: true,
+      data: {
+        mapeados,
+        encontradas: Object.keys(all).sort(),
+        settings: settings.ok ? settings.data : null,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao sincronizar' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STACKS — catálogo de tecnologias
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function getStacks(): ServerResult {
+  try {
+    seedStacks();
+    return { ok: true, data: dbGetAll('Stacks') };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar stacks' };
+  }
+}
+
+function createStack(data: Record<string, unknown>): ServerResult {
+  try {
+    return { ok: true, data: dbCreate('Stacks', data) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao criar stack' };
+  }
+}
+
+function deleteStack(id: string): ServerResult {
+  try {
+    return dbDelete('Stacks', id) ? { ok: true } : { ok: false, error: 'Stack não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar stack' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RECEITAS — assinaturas (contas a receber)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function getReceitas(): ServerResult {
+  try {
+    return { ok: true, data: dbGetAll('Receitas') };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar receitas' };
+  }
+}
+
+function createReceita(data: Record<string, unknown>): ServerResult {
+  try {
+    const d = { ...data };
+    // Já nasce cancelada? carimba a data pra churn.
+    if (String(d['status'] || '').toLowerCase() === 'cancelada' && !d['canceladaEm']) {
+      d['canceladaEm'] = new Date().toISOString().substring(0, 10);
+    }
+    return { ok: true, data: dbCreate('Receitas', d) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao criar receita' };
+  }
+}
+
+function updateReceita(id: string, data: Record<string, unknown>): ServerResult {
+  try {
+    const atual = dbGetById('Receitas', id);
+    const d = { ...data };
+    if (atual) {
+      const statusNovo = String(d['status'] ?? atual['status'] ?? '').toLowerCase();
+      const jaTinha = String(atual['canceladaEm'] || '');
+      if (statusNovo === 'cancelada' && !jaTinha) {
+        // Virou cancelada agora → carimba a data pra contar no churn do mês.
+        d['canceladaEm'] = new Date().toISOString().substring(0, 10);
+      } else if (statusNovo !== 'cancelada' && jaTinha) {
+        // Reativou → limpa o carimbo.
+        d['canceladaEm'] = '';
+      }
+    }
+    const updated = dbUpdate('Receitas', id, d);
+    return updated ? { ok: true, data: updated } : { ok: false, error: 'Receita não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atualizar receita' };
+  }
+}
+
+function deleteReceita(id: string): ServerResult {
+  try {
+    return dbDelete('Receitas', id) ? { ok: true } : { ok: false, error: 'Receita não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar receita' };
+  }
+}
+
+// Painel de receita recorrente (SaaS): MRR/ARR, assinantes, ARPU, novo MRR e
+// churn do mês, MRR por app e próximas cobranças. Core do negócio = assinaturas.
+function getResumoReceitas(): ServerResult {
+  try {
+    const receitas = dbGetAll('Receitas') as Array<Record<string, unknown>>;
+    const sistemas = dbGetAll('Sistemas') as Array<Record<string, unknown>>;
+    const pessoas = dbGetAll('Pessoas') as Array<Record<string, unknown>>;
+    const nomeApp = (id: unknown) => { const s = sistemas.find((x) => String(x['id']) === String(id)); return s ? String(s['nome']) : 'Sem app'; };
+    const nomeCliente = (id: unknown) => { const p = pessoas.find((x) => String(x['id']) === String(id)); return p ? String(p['nome']) : ''; };
+
+    const hoje = new Date();
+    const ano = hoje.getFullYear();
+    const mesAtual = hoje.getMonth();
+    const ehDoMes = (iso: string) => {
+      if (!/^\d{4}-\d{2}/.test(String(iso))) return false;
+      const d = new Date(String(iso));
+      return d.getFullYear() === ano && d.getMonth() === mesAtual;
+    };
+    const eRecorrente = (r: string) => toMonthly(1, r) > 0; // avulsa/única → 0
+
+    const ativas = receitas.filter((r) => String(r['status'] || 'ativa').toLowerCase() === 'ativa');
+    const recorrentesAtivas = ativas.filter((r) => eRecorrente(String(r['recorrencia'] || 'mensal')));
+
+    let mrr = 0;
+    const clientesSet: Record<string, boolean> = {};
+    for (const r of recorrentesAtivas) {
+      mrr += toMonthly(Number(r['valor'] || 0), String(r['recorrencia'] || 'mensal'));
+      const cid = String(r['pessoaId'] || '');
+      if (cid) clientesSet[cid] = true;
+    }
+    const assinaturasAtivas = recorrentesAtivas.length;
+    const clientesAtivos = Object.keys(clientesSet).length;
+    const arpu = assinaturasAtivas > 0 ? mrr / assinaturasAtivas : 0;
+
+    // Novo MRR no mês: assinaturas recorrentes ativas que começaram neste mês.
+    let novoMrrMes = 0; let novasAssinaturasMes = 0;
+    for (const r of recorrentesAtivas) {
+      if (ehDoMes(String(r['inicio'] || ''))) { novoMrrMes += toMonthly(Number(r['valor'] || 0), String(r['recorrencia'] || 'mensal')); novasAssinaturasMes++; }
+    }
+
+    // Churn no mês: canceladas com canceladaEm neste mês (MRR perdido).
+    let churnMrr = 0; let churnQtd = 0;
+    for (const r of receitas) {
+      if (String(r['status'] || '').toLowerCase() === 'cancelada' && ehDoMes(String(r['canceladaEm'] || ''))) {
+        churnMrr += toMonthly(Number(r['valor'] || 0), String(r['recorrencia'] || 'mensal'));
+        churnQtd++;
+      }
+    }
+
+    // Vendas avulsas faturadas no mês (pela data de início).
+    let avulsasMesValor = 0; let avulsasMesQtd = 0;
+    for (const r of receitas) {
+      const rec = String(r['recorrencia'] || '');
+      if (!eRecorrente(rec) && String(r['status'] || 'ativa').toLowerCase() !== 'cancelada' && ehDoMes(String(r['inicio'] || ''))) {
+        avulsasMesValor += Number(r['valor'] || 0); avulsasMesQtd++;
+      }
+    }
+
+    // MRR por app.
+    const mapaApp: Record<string, { sistemaId: string; nome: string; mrr: number; assinaturas: number; clientes: Record<string, boolean> }> = {};
+    for (const r of recorrentesAtivas) {
+      const sid = String(r['sistemaId'] || '');
+      if (!mapaApp[sid]) mapaApp[sid] = { sistemaId: sid, nome: nomeApp(sid), mrr: 0, assinaturas: 0, clientes: {} };
+      mapaApp[sid].mrr += toMonthly(Number(r['valor'] || 0), String(r['recorrencia'] || 'mensal'));
+      mapaApp[sid].assinaturas++;
+      const cid = String(r['pessoaId'] || ''); if (cid) mapaApp[sid].clientes[cid] = true;
+    }
+    const porApp = Object.values(mapaApp)
+      .map((g) => ({ sistemaId: g.sistemaId, nome: g.nome, mrr: Math.round(g.mrr), assinaturas: g.assinaturas, clientes: Object.keys(g.clientes).length }))
+      .sort((a, b) => b.mrr - a.mrr);
+
+    // Próximas cobranças (próximos 45 dias) + atrasadas, só de assinaturas ativas.
+    const limite = new Date(); limite.setDate(limite.getDate() + 45);
+    const inicioHoje = new Date(ano, mesAtual, hoje.getDate());
+    const proximas = ativas
+      .filter((r) => /^\d{4}-\d{2}-\d{2}/.test(String(r['proximaCobranca'] || '')))
+      .map((r) => {
+        const d = new Date(String(r['proximaCobranca']));
+        const dias = Math.round((d.getTime() - inicioHoje.getTime()) / 86400000);
+        return {
+          id: String(r['id']),
+          sistemaId: String(r['sistemaId'] || ''),
+          app: nomeApp(r['sistemaId']),
+          cliente: nomeCliente(r['pessoaId']),
+          plano: String(r['plano'] || ''),
+          valor: Number(r['valor'] || 0),
+          recorrencia: String(r['recorrencia'] || 'mensal'),
+          proximaCobranca: String(r['proximaCobranca']),
+          dias,
+        };
+      })
+      .filter((x) => x.dias <= 45)
+      .sort((a, b) => a.dias - b.dias);
+    const aReceber45 = proximas.reduce((s, x) => s + x.valor, 0);
+
+    // Recebido no mês (realizado) — ledger Recebimentos da competência atual.
+    const compAtual = `${ano}-${String(mesAtual + 1).padStart(2, '0')}`;
+    const recebimentos = dbGetAll('Recebimentos') as Array<Record<string, unknown>>;
+    const recebimentosMes = recebimentos.filter((r) => String(r['competencia']) === compAtual);
+    const recebidoMes = recebimentosMes.reduce((s, r) => s + Number(r['valor'] || 0), 0);
+
+    // Inadimplência: assinaturas ativas com cobrança vencida (proximaCobranca < hoje).
+    let inadimplenciaValor = 0; let inadimplenciaQtd = 0;
+    for (const x of proximas) { if (x.dias < 0) { inadimplenciaValor += x.valor; inadimplenciaQtd++; } }
+
+    return {
+      ok: true,
+      data: {
+        mrr: Math.round(mrr), arr: Math.round(mrr * 12),
+        assinaturasAtivas, clientesAtivos, arpu: Math.round(arpu),
+        novoMrrMes: Math.round(novoMrrMes), novasAssinaturasMes,
+        churnMrr: Math.round(churnMrr), churnQtd,
+        avulsasMesValor: Math.round(avulsasMesValor), avulsasMesQtd,
+        recebidoMes: Math.round(recebidoMes), recebimentosMesQtd: recebimentosMes.length,
+        inadimplenciaValor: Math.round(inadimplenciaValor), inadimplenciaQtd,
+        porApp, proximas, aReceber45: Math.round(aReceber45),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao resumir receitas' };
+  }
+}
+
+// ─── Catálogo de planos por app (v1.16) ───────────────────────────────────────
+
+function getPlanosApp(sistemaId?: string): ServerResult {
+  try {
+    let rows = dbGetAll('PlanosApp') as Array<Record<string, unknown>>;
+    if (sistemaId) rows = rows.filter((r) => String(r['sistemaId']) === sistemaId);
+    rows.sort((a, b) => Number(a['ordem'] || 0) - Number(b['ordem'] || 0) || String(a['nome']).localeCompare(String(b['nome'])));
+    return { ok: true, data: rows };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar planos' };
+  }
+}
+
+function salvarPlanoApp(payload: Record<string, unknown>): ServerResult {
+  try {
+    const id = payload['id'] ? String(payload['id']) : '';
+    const data: Record<string, unknown> = {
+      sistemaId: String(payload['sistemaId'] || ''),
+      nome: String(payload['nome'] || '').trim(),
+      valor: Math.abs(Number(payload['valor'] || 0)),
+      recorrencia: String(payload['recorrencia'] || 'mensal'),
+      descricao: String(payload['descricao'] || '').trim(),
+      ativo: String(payload['ativo'] || 'sim'),
+      ordem: Number(payload['ordem'] || 0),
+      atualizadoEm: new Date().toISOString(),
+    };
+    if (!data['sistemaId']) return { ok: false, error: 'Selecione o app do plano.' };
+    if (!data['nome']) return { ok: false, error: 'Informe o nome do plano.' };
+    if (id) {
+      const upd = dbUpdate('PlanosApp', id, data);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Plano não encontrado' };
+    }
+    data['criadoEm'] = new Date().toISOString();
+    return { ok: true, data: dbCreate('PlanosApp', data) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar plano' };
+  }
+}
+
+function deletarPlanoApp(id: string): ServerResult {
+  try {
+    return dbDelete('PlanosApp', id) ? { ok: true } : { ok: false, error: 'Plano não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar plano' };
+  }
+}
+
+// ─── Recebimentos (v1.18) — fecha o ciclo da cobrança ─────────────────────────
+
+// Avança uma data (YYYY-MM-DD) por um ciclo da recorrência. Avulsa/única não rola.
+function _avancarCiclo(dataISO: string, recorrencia: string): string {
+  const r = String(recorrencia || 'mensal').toLowerCase();
+  const base = /^\d{4}-\d{2}-\d{2}/.test(String(dataISO)) ? new Date(String(dataISO)) : new Date();
+  if (r.indexOf('avuls') >= 0 || r.indexOf('unic') >= 0) return dataISO; // não recorrente
+  if (r.indexOf('sema') >= 0 || r.indexOf('week') >= 0) base.setDate(base.getDate() + 7);
+  else if (r.indexOf('anual') >= 0 || r.indexOf('ano') >= 0 || r.indexOf('year') >= 0) base.setMonth(base.getMonth() + 12);
+  else if (r.indexOf('trimes') >= 0) base.setMonth(base.getMonth() + 3);
+  else if (r.indexOf('semes') >= 0) base.setMonth(base.getMonth() + 6);
+  else base.setMonth(base.getMonth() + 1); // mensal (padrão)
+  return base.toISOString().substring(0, 10);
+}
+
+function getRecebimentos(competencia?: string): ServerResult {
+  try {
+    let rows = dbGetAll('Recebimentos') as Array<Record<string, unknown>>;
+    if (competencia) rows = rows.filter((r) => String(r['competencia']) === competencia);
+    rows.sort((a, b) => String(b['data']).localeCompare(String(a['data'])));
+    return { ok: true, data: rows };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar recebimentos' };
+  }
+}
+
+// Registra o recebimento de uma assinatura e rola a próxima cobrança pro ciclo
+// seguinte (a partir da próxima cobrança atual, ou da data do recebimento).
+function registrarRecebimento(receitaId: string, payload?: Record<string, unknown>): ServerResult {
+  try {
+    const receita = dbGetById('Receitas', String(receitaId));
+    if (!receita) return { ok: false, error: 'Assinatura não encontrada' };
+    const p = payload || {};
+    const data = String(p['data'] || new Date().toISOString().substring(0, 10));
+    const valor = p['valor'] !== undefined && p['valor'] !== null && p['valor'] !== ''
+      ? Math.abs(Number(p['valor'])) : Number(receita['valor'] || 0);
+    const recorrencia = String(receita['recorrencia'] || 'mensal');
+
+    const criado = dbCreate('Recebimentos', {
+      receitaId: String(receitaId),
+      sistemaId: String(receita['sistemaId'] || ''),
+      pessoaId: String(receita['pessoaId'] || ''),
+      competencia: _competenciaDe(data),
+      valor,
+      data,
+      recorrencia,
+      notas: String(p['notas'] || ''),
+      criadoEm: new Date().toISOString(),
+    });
+
+    // Rola a próxima cobrança a partir da que estava agendada (ou da data recebida).
+    const baseRolagem = String(receita['proximaCobranca'] || '') || data;
+    const proxima = _avancarCiclo(baseRolagem, recorrencia);
+    const patch: Record<string, unknown> = {};
+    if (proxima && proxima !== baseRolagem) patch['proximaCobranca'] = proxima;
+    if (Object.keys(patch).length) dbUpdate('Receitas', String(receitaId), patch);
+
+    return { ok: true, data: { recebimento: criado, proximaCobranca: patch['proximaCobranca'] || receita['proximaCobranca'] } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao registrar recebimento' };
+  }
+}
+
+function deletarRecebimento(id: string): ServerResult {
+  try {
+    return dbDelete('Recebimentos', id) ? { ok: true } : { ok: false, error: 'Recebimento não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar recebimento' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SERVIÇO DE PDF (v1.19) — geração server-side confiável no GAS
+//   Em vez de window.print() (instável dentro do iframe do Apps Script), o PDF é
+//   gerado no servidor: monta-se um HTML, converte-se com
+//   Utilities.newBlob(html).getAs('application/pdf') e devolve-se em base64 pro
+//   cliente baixar. Reaproveitável por recibos, faturas e relatórios.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function _escHtml(s: unknown): string {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function _fmtBRLpdf(v: number): string {
+  const n = Number(v || 0);
+  const neg = n < 0;
+  const fixed = Math.abs(n).toFixed(2);
+  const partes = fixed.split('.');
+  const inteiro = partes[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return `${neg ? '-' : ''}R$ ${inteiro},${partes[1]}`;
+}
+
+function _fmtDataBR(iso: string): string {
+  const s = String(iso || '');
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+  return s;
+}
+
+function _fmtCompetenciaBR(comp: string): string {
+  const m = /^(\d{4})-(\d{2})/.exec(String(comp || ''));
+  if (!m) return String(comp || '');
+  const meses = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+  const nome = meses[Number(m[2]) - 1] || m[2];
+  return `${nome.charAt(0).toUpperCase()}${nome.slice(1)}/${m[1]}`;
+}
+
+// Documento HTML base, estilizado e pronto pra impressão (A4) — fontes do sistema
+// (não dependemos de fontes externas, que não carregam na conversão pra PDF).
+function _pdfDoc(titulo: string, corpoHtml: string): string {
+  return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8" />'
+    + '<title>' + _escHtml(titulo) + '</title><style>'
+    + '* { box-sizing: border-box; } '
+    + 'body { font-family: Helvetica, Arial, sans-serif; color: #2A2724; margin: 0; padding: 40px 44px; font-size: 13px; line-height: 1.5; } '
+    + 'h1,h2,h3 { margin: 0; font-weight: 600; letter-spacing: -0.01em; } '
+    + '.muted { color: #8C8378; } .right { text-align: right; } .center { text-align: center; } '
+    + 'table { width: 100%; border-collapse: collapse; } '
+    + 'th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: #8C8378; padding: 8px 6px; border-bottom: 1px solid #E7E1D8; } '
+    + 'td { padding: 9px 6px; border-bottom: 1px solid #F2EEE7; } '
+    + '.tag { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; } '
+    + '.mono { font-family: "Courier New", monospace; } '
+    + '</style></head><body>' + corpoHtml + '</body></html>';
+}
+
+function _htmlToPdfResult(html: string, filename: string): ServerResult {
+  try {
+    const safe = filename.replace(/[^\w.\-]+/g, '_');
+    const nome = /\.pdf$/i.test(safe) ? safe : safe + '.pdf';
+    const blob = Utilities.newBlob(html, 'text/html', nome).getAs('application/pdf');
+    const base64 = Utilities.base64Encode(blob.getBytes());
+    return { ok: true, data: { filename: nome, mime: 'application/pdf', base64 } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Falha ao gerar o PDF' };
+  }
+}
+
+// ─── Perfil do emissor (usado no cabeçalho de recibos/faturas) ─────────────────
+
+interface EmpresaPerfil { nome: string; documento: string; email: string; telefone: string; pix: string; endereco: string; }
+
+function _empresaPerfil(): EmpresaPerfil {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty('EMPRESA_PERFIL');
+    const p = raw ? JSON.parse(raw) : {};
+    return {
+      nome: String(p.nome || 'FORJA'),
+      documento: String(p.documento || ''),
+      email: String(p.email || ''),
+      telefone: String(p.telefone || ''),
+      pix: String(p.pix || ''),
+      endereco: String(p.endereco || ''),
+    };
+  } catch (_e) {
+    return { nome: 'FORJA', documento: '', email: '', telefone: '', pix: '', endereco: '' };
+  }
+}
+
+function getEmpresaPerfil(): ServerResult {
+  return { ok: true, data: _empresaPerfil() };
+}
+
+function salvarEmpresaPerfil(perfil: Record<string, unknown>): ServerResult {
+  try {
+    const p: EmpresaPerfil = {
+      nome: String(perfil['nome'] || '').trim() || 'FORJA',
+      documento: String(perfil['documento'] || '').trim(),
+      email: String(perfil['email'] || '').trim(),
+      telefone: String(perfil['telefone'] || '').trim(),
+      pix: String(perfil['pix'] || '').trim(),
+      endereco: String(perfil['endereco'] || '').trim(),
+    };
+    PropertiesService.getScriptProperties().setProperty('EMPRESA_PERFIL', JSON.stringify(p));
+    return { ok: true, data: p };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar perfil' };
+  }
+}
+
+// ─── Recibo / Fatura de assinatura em PDF ──────────────────────────────────────
+
+// tipo: 'recibo' (pago) | 'fatura' (a cobrar). Se houver recebimentoId, usa os
+// dados do recebimento (valor/data/competência); senão, gera pra próxima cobrança.
+function gerarDocumentoReceitaPdf(receitaId: string, tipo?: string, recebimentoId?: string): ServerResult {
+  try {
+    const receita = dbGetById('Receitas', String(receitaId));
+    if (!receita) return { ok: false, error: 'Assinatura não encontrada' };
+    const ehRecibo = String(tipo || 'recibo') !== 'fatura';
+
+    let recebimento: Record<string, unknown> | null = null;
+    if (recebimentoId) recebimento = dbGetById('Recebimentos', String(recebimentoId));
+    if (ehRecibo && !recebimento) {
+      const todos = (dbGetAll('Recebimentos') as Array<Record<string, unknown>>)
+        .filter((r) => String(r['receitaId']) === String(receitaId))
+        .sort((a, b) => String(b['data']).localeCompare(String(a['data'])));
+      recebimento = todos[0] || null;
+    }
+
+    const sistema = receita['sistemaId'] ? dbGetById('Sistemas', String(receita['sistemaId'])) : null;
+    const cliente = receita['pessoaId'] ? dbGetById('Pessoas', String(receita['pessoaId'])) : null;
+    const emp = _empresaPerfil();
+
+    const valor = recebimento ? Number(recebimento['valor'] || 0) : Number(receita['valor'] || 0);
+    const dataDoc = recebimento ? String(recebimento['data'] || '') : (String(receita['proximaCobranca'] || '') || new Date().toISOString().substring(0, 10));
+    const competencia = recebimento ? String(recebimento['competencia'] || '') : _competenciaDe(dataDoc);
+    const recorrencia = String(receita['recorrencia'] || 'mensal');
+    const plano = String(receita['plano'] || '');
+    const appNome = sistema ? String(sistema['nome']) : 'Aplicação';
+    const clienteNome = cliente ? String(cliente['nome']) : 'Cliente';
+    const clienteContato = cliente ? String(cliente['contato'] || '') : '';
+
+    const titulo = ehRecibo ? 'Recibo' : 'Fatura';
+    const numero = (ehRecibo ? 'R' : 'F') + '-' + (competencia ? competencia.replace('-', '') : '000000') + '-' + String(recebimento ? recebimento['id'] : receita['id']).substring(0, 6).toUpperCase();
+    const accent = ehRecibo ? '#7FA98B' : '#D99B73';
+
+    const descricao = 'Assinatura' + (plano ? ' ' + plano : '') + ' — ' + appNome;
+    const frase = ehRecibo
+      ? 'Recebemos de <strong>' + _escHtml(clienteNome) + '</strong> a importância de <strong>' + _fmtBRLpdf(valor) + '</strong>, referente à ' + _escHtml(descricao) + ' (competência ' + _escHtml(_fmtCompetenciaBR(competencia)) + ').'
+      : 'Fatura para <strong>' + _escHtml(clienteNome) + '</strong> no valor de <strong>' + _fmtBRLpdf(valor) + '</strong>, referente à ' + _escHtml(descricao) + ' (competência ' + _escHtml(_fmtCompetenciaBR(competencia)) + ').';
+
+    const emissorLinhas = [
+      emp.documento ? 'Doc: ' + _escHtml(emp.documento) : '',
+      emp.email ? _escHtml(emp.email) : '',
+      emp.telefone ? _escHtml(emp.telefone) : '',
+      emp.endereco ? _escHtml(emp.endereco) : '',
+    ].filter((x) => x).join(' · ');
+
+    const corpo =
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid ' + accent + ';padding-bottom:18px;margin-bottom:24px;">'
+      + '<div><div style="font-size:22px;font-weight:600;">' + _escHtml(emp.nome) + '</div>'
+      + (emissorLinhas ? '<div class="muted" style="margin-top:4px;font-size:11.5px;">' + emissorLinhas + '</div>' : '')
+      + '</div>'
+      + '<div class="right"><span class="tag" style="background:' + accent + '22;color:' + accent + ';">' + titulo.toUpperCase() + '</span>'
+      + '<div class="mono muted" style="margin-top:8px;font-size:11px;">Nº ' + _escHtml(numero) + '</div>'
+      + '<div class="muted" style="font-size:11px;">' + (ehRecibo ? 'Data' : 'Vencimento') + ': ' + _escHtml(_fmtDataBR(dataDoc)) + '</div>'
+      + '</div></div>'
+
+      + '<div style="margin-bottom:22px;"><div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;">' + (ehRecibo ? 'Pagador' : 'Cliente') + '</div>'
+      + '<div style="font-size:15px;font-weight:600;margin-top:3px;">' + _escHtml(clienteNome) + '</div>'
+      + (clienteContato ? '<div class="muted" style="font-size:12px;">' + _escHtml(clienteContato) + '</div>' : '') + '</div>'
+
+      + '<div style="background:#F6F3EE;border:1px solid #E7E1D8;border-radius:12px;padding:18px 20px;margin-bottom:22px;">'
+      + '<div class="muted" style="font-size:11px;">Valor ' + (ehRecibo ? 'recebido' : 'a pagar') + '</div>'
+      + '<div style="font-size:30px;font-weight:600;color:' + accent + ';">' + _fmtBRLpdf(valor) + '</div></div>'
+
+      + '<table style="margin-bottom:22px;"><thead><tr>'
+      + '<th>Descrição</th><th>Competência</th><th>Recorrência</th><th class="right">Valor</th>'
+      + '</tr></thead><tbody><tr>'
+      + '<td>' + _escHtml(descricao) + '</td>'
+      + '<td>' + _escHtml(_fmtCompetenciaBR(competencia)) + '</td>'
+      + '<td style="text-transform:capitalize;">' + _escHtml(recorrencia) + '</td>'
+      + '<td class="right mono">' + _fmtBRLpdf(valor) + '</td>'
+      + '</tr></tbody></table>'
+
+      + '<p style="font-size:13px;line-height:1.7;">' + frase + '</p>'
+
+      + (!ehRecibo && emp.pix ? '<div style="margin-top:8px;font-size:12.5px;">Pague via PIX: <strong>' + _escHtml(emp.pix) + '</strong></div>' : '')
+
+      + '<div style="margin-top:48px;display:flex;justify-content:space-between;align-items:flex-end;">'
+      + '<div class="muted" style="font-size:10.5px;">Documento gerado pela FORJA em ' + _escHtml(_fmtDataBR(new Date().toISOString())) + '</div>'
+      + (ehRecibo ? '<div class="center" style="font-size:11px;"><div style="border-top:1px solid #B9B1A6;width:220px;padding-top:6px;">' + _escHtml(emp.nome) + '</div></div>' : '')
+      + '</div>';
+
+    return _htmlToPdfResult(_pdfDoc(titulo + ' ' + numero, corpo), titulo.toLowerCase() + '-' + numero);
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar documento' };
+  }
+}
+
+// ─── Relatório mensal em PDF (substitui o window.print, instável no iframe) ─────
+
+function gerarRelatorioPdf(mes?: number, ano?: number, incluirIA?: boolean): ServerResult {
+  try {
+    const res = gerarRelatorioMensal(mes, ano, incluirIA);
+    if (!res.ok || !res.data) return { ok: false, error: res.error || 'Erro ao montar relatório' };
+    const r = res.data as {
+      periodo: { mesNome: string; ano: number };
+      kpis: { totalSistemas: number; totalClientes: number; totalIdeias: number; saudeMedia: number; mrr: number; custoMensal: number; lucro: number };
+      sistemas: Array<Record<string, unknown>>;
+      alertas: Array<Record<string, unknown>>;
+      proximasContas: Array<Record<string, unknown>>;
+      resumoIA: string;
+      geradoEm: string;
+    };
+
+    const kpiBox = (label: string, valor: string) =>
+      '<div style="background:#F6F3EE;border:1px solid #E7E1D8;border-radius:10px;padding:12px 14px;">'
+      + '<div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;">' + _escHtml(label) + '</div>'
+      + '<div style="font-size:20px;font-weight:600;margin-top:4px;">' + _escHtml(valor) + '</div></div>';
+
+    const sistemasRows = r.sistemas.length === 0
+      ? '<tr><td colspan="5" class="muted">Nenhum sistema cadastrado.</td></tr>'
+      : r.sistemas.map((s) =>
+        '<tr><td><strong>' + _escHtml(s['nome']) + '</strong><br><span class="mono muted" style="font-size:10px;">' + _escHtml(s['codinome'] || '') + '</span></td>'
+        + '<td style="text-transform:capitalize;">' + _escHtml(s['estagio'] || '—') + '</td>'
+        + '<td>' + _escHtml(s['stack'] || '—') + '</td>'
+        + '<td class="right">' + _escHtml(s['scoreSaude']) + '%</td>'
+        + '<td class="right mono">' + (Number(s['custoMensal'] || 0) > 0 ? _fmtBRLpdf(Number(s['custoMensal'])) : '—') + '</td></tr>'
+      ).join('');
+
+    const alertasHtml = r.alertas.length === 0
+      ? '<p class="muted">Nenhum alerta no período.</p>'
+      : '<ul style="padding-left:18px;margin:0;">' + r.alertas.map((a) =>
+        '<li style="margin-bottom:6px;"><strong>' + _escHtml(a['titulo']) + '</strong> — ' + _escHtml(a['mensagem']) + '</li>'
+      ).join('') + '</ul>';
+
+    const contasHtml = r.proximasContas.length === 0
+      ? '<p class="muted">Nada vence nos próximos 30 dias.</p>'
+      : '<table><thead><tr><th>Fornecedor</th><th>Vencimento</th><th class="right">Valor</th></tr></thead><tbody>'
+      + r.proximasContas.map((c) =>
+        '<tr><td>' + _escHtml(c['fornecedor']) + '</td><td>' + _escHtml(_fmtDataBR(String(c['proximaCobranca']))) + '</td><td class="right mono">' + _fmtBRLpdf(Number(c['valor'] || 0)) + '</td></tr>'
+      ).join('') + '</tbody></table>';
+
+    const corpo =
+      '<div style="border-bottom:2px solid #D99B73;padding-bottom:18px;margin-bottom:24px;">'
+      + '<div class="muted" style="font-size:10px;letter-spacing:0.16em;text-transform:uppercase;">FORJA — Relatório Mensal</div>'
+      + '<h1 style="font-size:32px;margin-top:6px;">' + _escHtml(r.periodo.mesNome) + ' <span class="muted" style="font-weight:400;">' + _escHtml(r.periodo.ano) + '</span></h1>'
+      + '<div class="muted" style="font-size:11px;margin-top:4px;">Gerado em ' + _escHtml(new Date(r.geradoEm).toLocaleString('pt-BR')) + '</div></div>'
+
+      + (r.resumoIA ? '<h2 style="font-size:18px;margin-bottom:10px;">Resumo executivo</h2><div style="background:#F6F3EE;border:1px solid #E7E1D8;border-radius:10px;padding:16px 18px;white-space:pre-wrap;margin-bottom:26px;line-height:1.7;">' + _escHtml(r.resumoIA) + '</div>' : '')
+
+      + '<h2 style="font-size:18px;margin-bottom:12px;">Indicadores</h2>'
+      + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:26px;">'
+      + kpiBox('Sistemas', String(r.kpis.totalSistemas)) + kpiBox('Clientes', String(r.kpis.totalClientes))
+      + kpiBox('Saúde média', r.kpis.saudeMedia + '%') + kpiBox('MRR', _fmtBRLpdf(r.kpis.mrr))
+      + kpiBox('Custos', _fmtBRLpdf(r.kpis.custoMensal)) + kpiBox('Lucro', _fmtBRLpdf(r.kpis.lucro))
+      + kpiBox('Ideias', String(r.kpis.totalIdeias)) + '</div>'
+
+      + '<h2 style="font-size:18px;margin-bottom:12px;">Sistemas (' + r.sistemas.length + ')</h2>'
+      + '<table style="margin-bottom:26px;"><thead><tr><th>Nome</th><th>Estágio</th><th>Stack</th><th class="right">Saúde</th><th class="right">Custo</th></tr></thead><tbody>' + sistemasRows + '</tbody></table>'
+
+      + '<h2 style="font-size:18px;margin-bottom:12px;">Alertas (' + r.alertas.length + ')</h2><div style="margin-bottom:26px;">' + alertasHtml + '</div>'
+
+      + '<h2 style="font-size:18px;margin-bottom:12px;">Próximas cobranças (30 dias)</h2><div style="margin-bottom:26px;">' + contasHtml + '</div>'
+
+      + '<div style="border-top:1px solid #E7E1D8;padding-top:14px;margin-top:32px;" class="muted right"><span style="float:left;">FORJA · gerado automaticamente</span>' + _escHtml(r.periodo.mesNome) + ' ' + _escHtml(r.periodo.ano) + '</div>';
+
+    const nome = 'forja-relatorio-' + r.periodo.ano + '-' + String(mes || (new Date().getMonth() + 1)).padStart(2, '0');
+    return _htmlToPdfResult(_pdfDoc('Relatório ' + r.periodo.mesNome + ' ' + r.periodo.ano, corpo), nome);
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar relatório PDF' };
+  }
+}
+
+// ─── Despesas da empresa em PDF (relatório do mês + comprovante avulso) ─────────
+
+function gerarRelatorioDespesasPdf(competencia?: string): ServerResult {
+  try {
+    const agora = new Date();
+    const comp = competencia || `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
+    const resR = getResumoDespesasEmpresa(comp);
+    const despR = getDespesasEmpresa(comp);
+    if (!resR.ok || !resR.data) return { ok: false, error: resR.error || 'Erro ao resumir despesas' };
+    const resumo = resR.data as {
+      total: number; pago: number; pendente: number; qtd: number; deltaPct: number | null;
+      porCategoria: Array<{ categoria: string; total: number }>;
+      porApp: Array<{ nome: string; total: number }>;
+    };
+    const despesas = (despR.ok && despR.data ? despR.data : []) as Array<Record<string, unknown>>;
+    const emp = _empresaPerfil();
+
+    const kpiBox = (label: string, valor: string, cor?: string) =>
+      '<div style="background:#F6F3EE;border:1px solid #E7E1D8;border-radius:10px;padding:12px 14px;">'
+      + '<div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;">' + _escHtml(label) + '</div>'
+      + '<div style="font-size:20px;font-weight:600;margin-top:4px;' + (cor ? 'color:' + cor + ';' : '') + '">' + _escHtml(valor) + '</div></div>';
+
+    const catRows = resumo.porCategoria.length === 0 ? '' : resumo.porCategoria.map((c) => {
+      const pct = resumo.total > 0 ? Math.round((c.total / resumo.total) * 100) : 0;
+      return '<tr><td>' + _escHtml(c.categoria) + '</td><td class="right">' + pct + '%</td><td class="right mono">' + _fmtBRLpdf(c.total) + '</td></tr>';
+    }).join('');
+
+    const despRows = despesas.length === 0
+      ? '<tr><td colspan="5" class="muted">Nenhuma despesa neste mês.</td></tr>'
+      : despesas.slice().sort((a, b) => String(a['data']).localeCompare(String(b['data']))).map((d) =>
+        '<tr><td>' + _escHtml(_fmtDataBR(String(d['data']))) + '</td>'
+        + '<td><strong>' + _escHtml(d['descricao'] || '—') + '</strong>' + (d['fornecedor'] ? '<br><span class="muted" style="font-size:10.5px;">' + _escHtml(d['fornecedor']) + '</span>' : '') + '</td>'
+        + '<td>' + _escHtml(d['categoria'] || 'Outro') + '</td>'
+        + '<td style="text-transform:capitalize;">' + _escHtml(d['status'] || 'pendente') + '</td>'
+        + '<td class="right mono">' + _fmtBRLpdf(Number(d['valor'] || 0)) + '</td></tr>'
+      ).join('');
+
+    const deltaTxt = resumo.deltaPct === null ? '' : ' · <span style="color:' + (resumo.deltaPct > 0 ? '#C98AA0' : '#7FA98B') + ';">' + (resumo.deltaPct > 0 ? '+' : '') + resumo.deltaPct + '% vs. mês anterior</span>';
+
+    const corpo =
+      '<div style="border-bottom:2px solid #C2A37A;padding-bottom:18px;margin-bottom:24px;">'
+      + '<div class="muted" style="font-size:10px;letter-spacing:0.16em;text-transform:uppercase;">' + _escHtml(emp.nome) + ' — Despesas</div>'
+      + '<h1 style="font-size:30px;margin-top:6px;">' + _escHtml(_fmtCompetenciaBR(comp)) + '</h1>'
+      + '<div class="muted" style="font-size:11px;margin-top:4px;">Gerado em ' + _escHtml(_fmtDataBR(new Date().toISOString())) + deltaTxt + '</div></div>'
+
+      + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:26px;">'
+      + kpiBox('Total do mês', _fmtBRLpdf(resumo.total), '#C2A37A')
+      + kpiBox('Pago', _fmtBRLpdf(resumo.pago), '#7FA98B')
+      + kpiBox('A pagar', _fmtBRLpdf(resumo.pendente), '#D99B73')
+      + kpiBox('Lançamentos', String(resumo.qtd)) + '</div>'
+
+      + (catRows ? '<h2 style="font-size:18px;margin-bottom:12px;">Por categoria</h2><table style="margin-bottom:26px;"><thead><tr><th>Categoria</th><th class="right">%</th><th class="right">Valor</th></tr></thead><tbody>' + catRows + '</tbody></table>' : '')
+
+      + '<h2 style="font-size:18px;margin-bottom:12px;">Lançamentos (' + despesas.length + ')</h2>'
+      + '<table><thead><tr><th>Data</th><th>Despesa</th><th>Categoria</th><th>Status</th><th class="right">Valor</th></tr></thead><tbody>' + despRows + '</tbody></table>'
+
+      + '<div style="border-top:1px solid #E7E1D8;padding-top:14px;margin-top:32px;" class="muted right"><span style="float:left;">FORJA · relatório de despesas</span>' + _escHtml(_fmtCompetenciaBR(comp)) + '</div>';
+
+    return _htmlToPdfResult(_pdfDoc('Despesas ' + _fmtCompetenciaBR(comp), corpo), 'forja-despesas-' + comp);
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar relatório de despesas' };
+  }
+}
+
+function gerarComprovanteDespesaPdf(despesaId: string): ServerResult {
+  try {
+    const d = dbGetById('FinEmpresaDespesas', String(despesaId));
+    if (!d) return { ok: false, error: 'Despesa não encontrada' };
+    const emp = _empresaPerfil();
+    const sistema = d['sistemaId'] ? dbGetById('Sistemas', String(d['sistemaId'])) : null;
+    const valor = Number(d['valor'] || 0);
+    const numero = 'D-' + String(d['competencia'] || '').replace('-', '') + '-' + String(d['id']).substring(0, 6).toUpperCase();
+    const accent = '#C2A37A';
+
+    const linha = (rotulo: string, valorTxt: string) =>
+      '<tr><td class="muted" style="width:170px;">' + _escHtml(rotulo) + '</td><td><strong>' + valorTxt + '</strong></td></tr>';
+
+    const corpo =
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid ' + accent + ';padding-bottom:18px;margin-bottom:24px;">'
+      + '<div><div style="font-size:22px;font-weight:600;">' + _escHtml(emp.nome) + '</div>'
+      + (emp.documento ? '<div class="muted" style="margin-top:4px;font-size:11.5px;">Doc: ' + _escHtml(emp.documento) + '</div>' : '') + '</div>'
+      + '<div class="right"><span class="tag" style="background:' + accent + '22;color:' + accent + ';">COMPROVANTE</span>'
+      + '<div class="mono muted" style="margin-top:8px;font-size:11px;">Nº ' + _escHtml(numero) + '</div></div></div>'
+
+      + '<div style="background:#F6F3EE;border:1px solid #E7E1D8;border-radius:12px;padding:18px 20px;margin-bottom:22px;">'
+      + '<div class="muted" style="font-size:11px;">Valor</div>'
+      + '<div style="font-size:30px;font-weight:600;color:' + accent + ';">' + _fmtBRLpdf(valor) + '</div></div>'
+
+      + '<table style="margin-bottom:8px;"><tbody>'
+      + linha('Descrição', _escHtml(d['descricao'] || '—'))
+      + (d['fornecedor'] ? linha('Fornecedor', _escHtml(d['fornecedor'])) : '')
+      + linha('Categoria', _escHtml(d['categoria'] || 'Outro'))
+      + linha('Data', _escHtml(_fmtDataBR(String(d['data']))))
+      + linha('Competência', _escHtml(_fmtCompetenciaBR(String(d['competencia']))))
+      + linha('Status', _escHtml(String(d['status'] || 'pendente')))
+      + (d['formaPagamento'] ? linha('Forma de pagamento', _escHtml(d['formaPagamento'])) : '')
+      + (sistema ? linha('Aplicação', _escHtml(sistema['nome'])) : '')
+      + (d['notas'] ? linha('Notas', _escHtml(d['notas'])) : '')
+      + '</tbody></table>'
+
+      + '<div style="border-top:1px solid #E7E1D8;padding-top:14px;margin-top:32px;" class="muted">Documento gerado pela FORJA em ' + _escHtml(_fmtDataBR(new Date().toISOString())) + '</div>';
+
+    return _htmlToPdfResult(_pdfDoc('Comprovante ' + numero, corpo), 'comprovante-' + numero);
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar comprovante' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RESUMO FINANCEIRO POR E-MAIL (v1.19) — digest de cobranças/contas
+//   Envia (manual ou diariamente via trigger) um resumo do que há pra receber,
+//   o que está atrasado, recebido no mês, contas a pagar e despesas pendentes.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface ResumoFinEmail {
+  aReceber: Array<{ app: string; cliente: string; valor: number; data: string; dias: number }>;
+  atrasadas: Array<{ app: string; cliente: string; valor: number; data: string; dias: number }>;
+  aPagar: Array<{ fornecedor: string; valor: number; data: string; dias: number }>;
+  despesasPendentes: Array<{ descricao: string; valor: number; data: string }>;
+  totais: { aReceber: number; atrasadas: number; recebidoMes: number; aPagar: number; despesasPendentes: number };
+}
+
+function _dadosResumoFinanceiro(): ResumoFinEmail {
+  const hoje = new Date();
+  const inicioHoje = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
+  const JANELA = 15;
+
+  const resR = getResumoReceitas();
+  const resumo = (resR.ok && resR.data ? resR.data : { proximas: [], recebidoMes: 0 }) as {
+    proximas: Array<{ app: string; cliente: string; valor: number; proximaCobranca: string; dias: number }>;
+    recebidoMes: number;
+  };
+  const aReceber = resumo.proximas.filter((p) => p.dias >= 0 && p.dias <= JANELA)
+    .map((p) => ({ app: p.app, cliente: p.cliente, valor: p.valor, data: p.proximaCobranca, dias: p.dias }));
+  const atrasadas = resumo.proximas.filter((p) => p.dias < 0)
+    .map((p) => ({ app: p.app, cliente: p.cliente, valor: p.valor, data: p.proximaCobranca, dias: p.dias }));
+
+  const custos = dbGetAll('Custos') as Array<Record<string, unknown>>;
+  const aPagar: ResumoFinEmail['aPagar'] = [];
+  for (const c of custos) {
+    const d = String(c['proximaCobranca'] || ''); if (!/^\d{4}-\d{2}-\d{2}/.test(d)) continue;
+    const data = new Date(d);
+    const dias = Math.round((data.getTime() - inicioHoje.getTime()) / 86400000);
+    if (dias >= -30 && dias <= JANELA) aPagar.push({ fornecedor: String(c['fornecedor'] || 'Custo'), valor: Number(c['valor'] || 0), data: d, dias });
+  }
+  aPagar.sort((a, b) => a.dias - b.dias);
+
+  const compAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
+  const despesas = dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>;
+  const despesasPendentes = despesas
+    .filter((d) => String(d['competencia']) === compAtual && String(d['status']) !== 'pago')
+    .map((d) => ({ descricao: String(d['descricao'] || 'Despesa'), valor: Number(d['valor'] || 0), data: String(d['data'] || '') }));
+
+  const soma = (arr: Array<{ valor: number }>) => arr.reduce((s, x) => s + x.valor, 0);
+  return {
+    aReceber, atrasadas, aPagar, despesasPendentes,
+    totais: {
+      aReceber: soma(aReceber), atrasadas: soma(atrasadas), recebidoMes: Number(resumo.recebidoMes || 0),
+      aPagar: soma(aPagar), despesasPendentes: soma(despesasPendentes),
+    },
+  };
+}
+
+function _htmlEmailResumoFinanceiro(d: ResumoFinEmail): string {
+  const card = (label: string, valor: number, cor: string) =>
+    '<td style="padding:6px;"><div style="background:#F6F3EE;border:1px solid #E7E1D8;border-radius:10px;padding:12px 14px;">'
+    + '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#8C8378;">' + label + '</div>'
+    + '<div style="font-size:18px;font-weight:600;color:' + cor + ';margin-top:3px;">' + _fmtBRLpdf(valor) + '</div></div></td>';
+
+  const secao = (titulo: string, linhas: string[], cor: string) => {
+    if (linhas.length === 0) return '';
+    return '<h3 style="font-size:14px;margin:22px 0 8px;color:' + cor + ';">' + titulo + '</h3>'
+      + '<table style="width:100%;border-collapse:collapse;font-size:13px;">' + linhas.join('') + '</table>';
+  };
+
+  const linhaReceber = (x: { app: string; cliente: string; valor: number; data: string; dias: number }) =>
+    '<tr><td style="padding:6px 4px;border-bottom:1px solid #F2EEE7;">' + _escHtml(x.app) + (x.cliente ? ' · ' + _escHtml(x.cliente) : '')
+    + '<br><span style="color:#8C8378;font-size:11px;">' + (x.dias < 0 ? 'atrasada ' + Math.abs(x.dias) + 'd' : x.dias === 0 ? 'hoje' : 'em ' + x.dias + 'd') + ' · ' + _escHtml(_fmtDataBR(x.data)) + '</span></td>'
+    + '<td style="padding:6px 4px;border-bottom:1px solid #F2EEE7;text-align:right;font-family:monospace;">' + _fmtBRLpdf(x.valor) + '</td></tr>';
+
+  const linhaPagar = (x: { fornecedor: string; valor: number; data: string; dias: number }) =>
+    '<tr><td style="padding:6px 4px;border-bottom:1px solid #F2EEE7;">' + _escHtml(x.fornecedor)
+    + '<br><span style="color:#8C8378;font-size:11px;">' + (x.dias < 0 ? 'vencida ' + Math.abs(x.dias) + 'd' : x.dias === 0 ? 'hoje' : 'em ' + x.dias + 'd') + ' · ' + _escHtml(_fmtDataBR(x.data)) + '</span></td>'
+    + '<td style="padding:6px 4px;border-bottom:1px solid #F2EEE7;text-align:right;font-family:monospace;">' + _fmtBRLpdf(x.valor) + '</td></tr>';
+
+  const linhaDesp = (x: { descricao: string; valor: number; data: string }) =>
+    '<tr><td style="padding:6px 4px;border-bottom:1px solid #F2EEE7;">' + _escHtml(x.descricao)
+    + '<br><span style="color:#8C8378;font-size:11px;">' + _escHtml(_fmtDataBR(x.data)) + '</span></td>'
+    + '<td style="padding:6px 4px;border-bottom:1px solid #F2EEE7;text-align:right;font-family:monospace;">' + _fmtBRLpdf(x.valor) + '</td></tr>';
+
+  return '<div style="font-family:Helvetica,Arial,sans-serif;color:#2A2724;max-width:600px;margin:0 auto;padding:8px;">'
+    + '<div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#8C8378;">FORJA — Resumo financeiro</div>'
+    + '<h1 style="font-size:24px;margin:4px 0 16px;">' + _escHtml(_fmtDataBR(new Date().toISOString())) + '</h1>'
+    + '<table style="width:100%;border-collapse:collapse;"><tr>'
+    + card('A receber (15d)', d.totais.aReceber, '#7FA98B')
+    + card('Em atraso', d.totais.atrasadas, '#C98AA0') + '</tr><tr>'
+    + card('A pagar (15d)', d.totais.aPagar, '#C2A37A')
+    + card('Despesas pendentes', d.totais.despesasPendentes, '#D99B73') + '</tr></table>'
+    + secao('🔴 Em atraso', d.atrasadas.map(linhaReceber), '#C98AA0')
+    + secao('💰 A receber (próx. 15 dias)', d.aReceber.map(linhaReceber), '#7FA98B')
+    + secao('📄 A pagar (próx. 15 dias)', d.aPagar.map(linhaPagar), '#C2A37A')
+    + secao('🧾 Despesas pendentes do mês', d.despesasPendentes.map(linhaDesp), '#D99B73')
+    + '<div style="margin-top:24px;padding-top:14px;border-top:1px solid #E7E1D8;color:#8C8378;font-size:11px;">Recebido no mês: ' + _fmtBRLpdf(d.totais.recebidoMes) + ' · Enviado automaticamente pela FORJA.</div>'
+    + '</div>';
+}
+
+function _emailResumoConfig(): { email: string; ativo: boolean; hora: number } {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty('RESUMO_FIN_CFG');
+    const p = raw ? JSON.parse(raw) : {};
+    return { email: String(p.email || ''), ativo: !!p.ativo, hora: Number(p.hora >= 0 ? p.hora : 8) };
+  } catch { return { email: '', ativo: false, hora: 8 }; }
+}
+
+function getConfigResumoFinanceiro(): ServerResult {
+  const cfg = _emailResumoConfig();
+  let emailEfetivo = cfg.email;
+  if (!emailEfetivo) { try { emailEfetivo = Session.getActiveUser().getEmail(); } catch { emailEfetivo = ''; } }
+  return { ok: true, data: { ...cfg, emailEfetivo } };
+}
+
+function salvarConfigResumoFinanceiro(cfg: Record<string, unknown>): ServerResult {
+  try {
+    const atual = _emailResumoConfig();
+    const novo = {
+      email: cfg['email'] !== undefined ? String(cfg['email'] || '').trim() : atual.email,
+      ativo: cfg['ativo'] !== undefined ? !!cfg['ativo'] : atual.ativo,
+      hora: cfg['hora'] !== undefined ? Math.max(0, Math.min(23, Number(cfg['hora']))) : atual.hora,
+    };
+    PropertiesService.getScriptProperties().setProperty('RESUMO_FIN_CFG', JSON.stringify(novo));
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar config' };
+  }
+}
+
+function enviarResumoFinanceiroEmail(email?: string): ServerResult {
+  try {
+    let destino = String(email || '').trim();
+    if (!destino) destino = _emailResumoConfig().email;
+    if (!destino) { try { destino = Session.getActiveUser().getEmail(); } catch { destino = ''; } }
+    if (!destino) return { ok: false, error: 'Sem e-mail de destino. Informe um e-mail nas configurações.' };
+
+    const dados = _dadosResumoFinanceiro();
+    const vazio = dados.aReceber.length === 0 && dados.atrasadas.length === 0 && dados.aPagar.length === 0 && dados.despesasPendentes.length === 0;
+    const html = _htmlEmailResumoFinanceiro(dados);
+    const assunto = 'FORJA · Resumo financeiro' + (dados.atrasadas.length > 0 ? ' — ' + dados.atrasadas.length + ' em atraso' : '');
+    MailApp.sendEmail({ to: destino, subject: assunto, htmlBody: html });
+    return { ok: true, data: { enviadoPara: destino, vazio } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao enviar e-mail' };
+  }
+}
+
+// Handler global do trigger diário (sem args).
+function enviarResumoFinanceiroDiario(): void {
+  try {
+    const cfg = _emailResumoConfig();
+    if (!cfg.ativo) return;
+    enviarResumoFinanceiroEmail(cfg.email);
+  } catch (_e) { /* trigger silencioso */ }
+}
+
+function ativarResumoFinanceiroDiario(hora?: number, email?: string): ServerResult {
+  try {
+    const h = Math.max(0, Math.min(23, Number(hora >= 0 ? hora : 8)));
+    ScriptApp.getProjectTriggers().forEach((tr) => { if (tr.getHandlerFunction() === 'enviarResumoFinanceiroDiario') ScriptApp.deleteTrigger(tr); });
+    ScriptApp.newTrigger('enviarResumoFinanceiroDiario').timeBased().atHour(h).everyDays(1).create();
+    const atual = _emailResumoConfig();
+    const novo = { email: email !== undefined ? String(email || '').trim() : atual.email, ativo: true, hora: h };
+    PropertiesService.getScriptProperties().setProperty('RESUMO_FIN_CFG', JSON.stringify(novo));
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao agendar resumo diário' };
+  }
+}
+
+function desativarResumoFinanceiroDiario(): ServerResult {
+  try {
+    ScriptApp.getProjectTriggers().forEach((tr) => { if (tr.getHandlerFunction() === 'enviarResumoFinanceiroDiario') ScriptApp.deleteTrigger(tr); });
+    const atual = _emailResumoConfig();
+    PropertiesService.getScriptProperties().setProperty('RESUMO_FIN_CFG', JSON.stringify({ ...atual, ativo: false }));
+    return { ok: true, data: { ...atual, ativo: false } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao desativar' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FINANÇAS PESSOAIS (v1.3) — mini sistema financeiro pessoal
+//   • Lançamentos: despesas (cartão/Pix/débito/dinheiro/boleto) + entradas
+//   • Cartões: cadastro com limite + ciclo de fatura
+//   • Agregados: resumo mensal, fatura aberta por cartão
+//   • Tudo separado dos custos/receitas do negócio (sheets dedicados)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Helper: normaliza string vazia → undefined, mantém zero como número válido.
+function _emptyToNull<T>(v: T): T | null {
+  if (v === '' || v === null || v === undefined) return null;
+  return v;
+}
+
+// Helper: extrai 'YYYY-MM' de uma data 'YYYY-MM-DD' ou objeto Date.
+function _toYYYYMM(d: unknown): string {
+  if (!d) return '';
+  if (d instanceof Date) {
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    return `${yyyy}-${mm}`;
+  }
+  const s = String(d);
+  if (s.length >= 7) return s.substring(0, 7);
+  return '';
+}
+
+// ─── Competência por fatura (cartão) ────────────────────────────────────────────
+// O que importa NÃO é o mês da compra, e sim o mês em que você PAGA a fatura
+// (vencimento). Uma compra fecha no `diaFechamento` e a fatura vence no
+// `diaVencimento` — que pode cair no mesmo mês do fechamento (venc > fech) ou no
+// mês seguinte (venc <= fech). Agrupar pelo vencimento deixa o painel e o "gasto
+// do mês" alinhados com "o que tenho que pagar naquele mês".
+//
+// Retorna { comp: 'YYYY-MM' do vencimento, vencimento: 'YYYY-MM-DD' (ou '') }.
+function _faturaInfoCartao(dataStr: unknown, diaFech: number, diaVenc: number): { comp: string; vencimento: string } {
+  const s = String(dataStr || '').substring(0, 10);
+  const d = new Date(s + 'T00:00:00');
+  if (isNaN(d.getTime())) return { comp: _toYYYYMM(dataStr), vencimento: '' };
+  // Mês de fechamento
+  let cy = d.getFullYear();
+  let cm = d.getMonth(); // 0-based
+  if (d.getDate() > diaFech) { cm += 1; if (cm > 11) { cm = 0; cy += 1; } }
+  // Mês de vencimento: igual ao fechamento se venc > fech; senão, mês seguinte.
+  let vy = cy;
+  let vm = cm;
+  if (diaVenc > 0 && diaVenc <= diaFech) { vm += 1; if (vm > 11) { vm = 0; vy += 1; } }
+  const comp = `${vy}-${String(vm + 1).padStart(2, '0')}`;
+  let vencimento = '';
+  if (diaVenc > 0) {
+    const ultimo = new Date(vy, vm + 1, 0).getDate();
+    vencimento = `${comp}-${String(Math.min(diaVenc, ultimo)).padStart(2, '0')}`;
+  }
+  return { comp, vencimento };
+}
+
+// Mês da fatura (vencimento) de uma compra de cartão. Mantido por compat.
+function _compFaturaCartao(dataStr: unknown, diaFech: number, diaVenc?: number): string {
+  return _faturaInfoCartao(dataStr, diaFech, Number(diaVenc || 0)).comp;
+}
+
+function _cartoesMap(): Record<string, Record<string, unknown>> {
+  const map: Record<string, Record<string, unknown>> = {};
+  for (const c of dbGetAll('FinPessoalCartoes') as Array<Record<string, unknown>>) {
+    map[String(c['id'])] = c;
+  }
+  return map;
+}
+
+// Mês "contábil" de um lançamento: cartão → mês do vencimento da fatura; demais
+// → mês da data. Se o lançamento já tiver um `vencimento` explícito, ele manda.
+function _competenciaLancamento(l: Record<string, unknown>, cartoesMap: Record<string, Record<string, unknown>>): string {
+  if (String(l['metodo']) === 'cartao' && l['cartaoId'] && cartoesMap[String(l['cartaoId'])]) {
+    // IMPORTANTE: usa _toYYYYMM (trata Date E string). O Sheets converte strings
+    // de data ("2026-06-19") em objetos Date ao gravar; aí String(venc) virava
+    // "Fri Jun..." e o regex falhava, jogando a competência pro mês da COMPRA em
+    // vez do mês do VENCIMENTO — e a "Fatura atual" do mês aparecia zerada.
+    const vencComp = _toYYYYMM(l['vencimento']);
+    if (/^\d{4}-\d{2}$/.test(vencComp)) return vencComp;
+    const cartao = cartoesMap[String(l['cartaoId'])];
+    return _faturaInfoCartao(l['data'], Number(cartao['diaFechamento'] || 1), Number(cartao['diaVencimento'] || 0)).comp;
+  }
+  return _toYYYYMM(l['data']);
+}
+
+// ─── Serialização segura de linhas ──────────────────────────────────────────────
+// CAUSA RAIZ do bug "resumo aponta N pendentes mas a lista vem vazia":
+// `google.script.run` devolve `null` SILENCIOSAMENTE quando o valor de retorno
+// contém algo que ele não consegue serializar pro client (ex.: uma célula que o
+// Sheets devolveu como Date, um número NaN/Infinity, ou um valor de erro como
+// #N/A vindo da importação da fatura). Funções que retornam só agregados
+// (getResumoFinPessoal: números/strings) sobrevivem; funções que retornam as
+// LINHAS CRUAS da planilha (getLancamentosPessoais/getPendentesPessoais) podem
+// quebrar — e quando quebram, o callServer recebe null e a lista fica vazia,
+// mesmo o resumo contando certo. Daí a divergência. A correção: coagir todo
+// valor a um primitivo JSON-safe antes de devolver.
+function _valorJsonSafe(v: unknown): string | number | boolean {
+  if (v === null || v === undefined) return '';
+  if (v instanceof Date) {
+    if (isNaN(v.getTime())) return '';
+    const yyyy = v.getFullYear();
+    const mm = String(v.getMonth() + 1).padStart(2, '0');
+    const dd = String(v.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  if (typeof v === 'number') return isFinite(v) ? v : 0;
+  if (typeof v === 'boolean') return v;
+  return String(v);
+}
+
+function _sanitizarLinha(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k in row) {
+    if (Object.prototype.hasOwnProperty.call(row, k)) out[k] = _valorJsonSafe(row[k]);
+  }
+  return out;
+}
+
+// ─── Lançamentos ───────────────────────────────────────────────────────────────
+// `mes` opcional no formato 'YYYY-MM'. Se omitido, retorna tudo.
+function getLancamentosPessoais(mes?: string): ServerResult {
+  try {
+    const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    let filtrados = todos;
+    if (mes) {
+      const cartoesMap = _cartoesMap();
+      // Mesmo critério do resumo: despesa de cartão entra no mês da FATURA; o
+      // resto (e entradas) pelo mês da data. Antes filtrava só por mês da data e
+      // a aba Lançamentos ficava vazia (compras de cartão datadas em outro mês).
+      filtrados = todos.filter((l) =>
+        String(l['tipo']) === 'despesa'
+          ? _competenciaLancamento(l, cartoesMap) === mes
+          : _toYYYYMM(l['data']) === mes);
+    }
+    // Ordena por data decrescente (mais recente primeiro)
+    filtrados.sort((a, b) => String(b['data'] || '').localeCompare(String(a['data'] || '')));
+    return { ok: true, data: filtrados.map(_sanitizarLinha) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar lançamentos pessoais' };
+  }
+}
+
+// Endpoint dedicado pros pendentes/agendados — sem filtro de mês, pra alimentar
+// a aba "A pagar" e o cálculo do badge. Retorna linhas SANITIZADAS (ver
+// `_sanitizarLinha`) — sem isso, uma célula não-serializável fazia o
+// google.script.run devolver null e a aba "A pagar" aparecia vazia.
+function getPendentesPessoais(): ServerResult {
+  try {
+    const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    const pendentes = todos.filter((l) =>
+      String(l['tipo']) === 'despesa' &&
+      (String(l['status']) === 'pendente' || String(l['status']) === 'agendado')
+    );
+    pendentes.sort((a, b) => {
+      const da = String(a['vencimento'] || a['data'] || '');
+      const db = String(b['vencimento'] || b['data'] || '');
+      return da.localeCompare(db);
+    });
+    return { ok: true, data: pendentes.map(_sanitizarLinha) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar pendentes pessoais' };
+  }
+}
+
+// Helper: soma N meses a uma data 'YYYY-MM-DD' preservando o dia (cap em
+// último dia do mês se overflow — ex: 31/jan + 1 mês = 28/29 fev).
+function _addMonths(dataStr: string, meses: number): string {
+  const [y, m, d] = dataStr.split('-').map(Number);
+  const dt = new Date(y, m - 1 + meses, 1);
+  const ultimo = new Date(dt.getFullYear(), dt.getMonth() + 1, 0).getDate();
+  const diaFinal = Math.min(d, ultimo);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(diaFinal).padStart(2, '0')}`;
+}
+
+function salvarLancamentoPessoal(payload: Record<string, unknown>): ServerResult {
+  try {
+    const id = payload['id'] ? String(payload['id']) : '';
+    const parcelas = Math.max(1, Number(payload['parcelas'] || 1));
+    const parcelaAtual = Math.max(1, Math.min(parcelas, Number(payload['parcelaAtual'] || 1)));
+    const recorrencia = String(payload['recorrencia'] || 'unica');
+
+    // Sanitiza payload base. `valor` sempre positivo (o `tipo` dita sinal).
+    const base: Record<string, unknown> = {
+      data: String(payload['data'] || new Date().toISOString().substring(0, 10)),
+      descricao: String(payload['descricao'] || '').trim(),
+      valor: Math.abs(Number(payload['valor'] || 0)),
+      tipo: String(payload['tipo'] || 'despesa'),
+      categoria: String(payload['categoria'] || 'outros'),
+      metodo: String(payload['metodo'] || 'pix'),
+      cartaoId: _emptyToNull(payload['cartaoId']) || '',
+      status: String(payload['status'] || 'pago'),
+      vencimento: _emptyToNull(payload['vencimento']) || '',
+      parcelas,
+      parcelaAtual,
+      recorrencia,
+      tags: String(payload['tags'] || ''),
+      notas: String(payload['notas'] || ''),
+      parcelaGrupoId: String(payload['parcelaGrupoId'] || ''),
+      recorrenciaOrigemId: String(payload['recorrenciaOrigemId'] || ''),
+      recorrenciaAtiva: String(payload['recorrenciaAtiva'] || (recorrencia !== 'unica' ? 'sim' : 'nao')),
+      atualizadoEm: new Date().toISOString(),
+    };
+
+    // UPDATE: só altera o registro atual, não toca em parcelas/recorrências.
+    if (id) {
+      const upd = dbUpdate('FinPessoalLancamentos', id, base);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Lançamento não encontrado' };
+    }
+
+    // INSERT — 3 cenários:
+    // (a) Parcelado (parcelas > 1): gera N lançamentos compartilhando grupo.
+    // (b) Recorrência única que pula > 1: apenas o primeiro (agendador faz o resto).
+    // (c) Lançamento normal: 1 inserção.
+    base['criadoEm'] = new Date().toISOString();
+
+    if (parcelas > 1) {
+      // Gera grupo de parcelas. Cada parcela é um lançamento independente.
+      const grupoId = `pg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      const dataBase = String(base['data']);
+      // ParcelaAtual do payload define em qual parcela estamos (ex: estou criando
+      // a 3 de 12 — então a 1 e 2 já passaram). Geramos do 1 ao N.
+      const criados: Array<Record<string, unknown>> = [];
+      for (let i = 1; i <= parcelas; i++) {
+        // Data de cada parcela: parcela `i` cai (i - parcelaAtual) meses depois
+        // da data informada. Negativo = parcela passada.
+        const offsetMeses = i - parcelaAtual;
+        const dataParcela = _addMonths(dataBase, offsetMeses);
+        const descParcela = `${String(base['descricao'])} (${i}/${parcelas})`;
+        const reg = {
+          ...base,
+          data: dataParcela,
+          vencimento: base['vencimento'] ? _addMonths(String(base['vencimento']), offsetMeses) : '',
+          parcelaAtual: i,
+          descricao: descParcela,
+          parcelaGrupoId: grupoId,
+          // Parcelas passadas (i < parcelaAtual) = pagas; futuras = pendentes;
+          // a atual respeita o status escolhido pelo usuário.
+          status: i < parcelaAtual ? 'pago' : i > parcelaAtual ? 'pendente' : String(base['status']),
+          criadoEm: new Date().toISOString(),
+        };
+        criados.push(dbCreate('FinPessoalLancamentos', reg) as Record<string, unknown>);
+      }
+      return {
+        ok: true,
+        data: {
+          grupoId,
+          parcelas: criados.length,
+          primeiro: criados[0],
+        },
+      };
+    }
+
+    // Normal: insere e retorna
+    const created = dbCreate('FinPessoalLancamentos', base);
+    return { ok: true, data: created };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar lançamento' };
+  }
+}
+
+// Deleta todas as parcelas de um grupo (ou só uma). Aceita `id` único OU
+// `parcelaGrupoId` pra remover o grupo inteiro.
+function deletarParcelasDoGrupo(parcelaGrupoId: string): ServerResult {
+  try {
+    if (!parcelaGrupoId) return { ok: false, error: 'Grupo não informado' };
+    const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    const alvos = todos.filter((l) => String(l['parcelaGrupoId']) === parcelaGrupoId);
+    const removidas = dbDeleteMany('FinPessoalLancamentos', alvos.map((a) => String(a['id'])));
+    return { ok: true, data: { removidas } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover grupo' };
+  }
+}
+
+function deletarLancamentoPessoal(id: string): ServerResult {
+  try {
+    return dbDelete('FinPessoalLancamentos', id)
+      ? { ok: true }
+      : { ok: false, error: 'Lançamento não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar lançamento' };
+  }
+}
+
+// Atalho útil: marcar um lançamento como pago (botão único na lista de contas)
+function marcarLancamentoPago(id: string): ServerResult {
+  try {
+    const upd = dbUpdate('FinPessoalLancamentos', id, {
+      status: 'pago',
+      atualizadoEm: new Date().toISOString(),
+    });
+    return upd ? { ok: true, data: upd } : { ok: false, error: 'Lançamento não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao marcar como pago' };
+  }
+}
+
+// Dá baixa em LOTE: marca vários lançamentos como pagos de uma vez. Usado pelo
+// botão "Pagar fatura" (settle de tudo que está vencido/no mês do cartão).
+// Recebe um JSON array de ids — uma única chamada em vez de N round-trips.
+function marcarLancamentosPagos(idsJson: string): ServerResult {
+  try {
+    let ids: string[];
+    try { ids = JSON.parse(String(idsJson || '[]')) as string[]; }
+    catch { return { ok: false, error: 'Lista de ids inválida.' }; }
+    if (!Array.isArray(ids) || ids.length === 0) return { ok: false, error: 'Nenhum lançamento pra pagar.' };
+    const agora = new Date().toISOString();
+    const pagos = dbUpdateMany('FinPessoalLancamentos', ids.map(String), { status: 'pago', atualizadoEm: agora });
+    return { ok: true, data: { pagos } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao dar baixa em lote' };
+  }
+}
+
+// ─── Cartões pessoais ──────────────────────────────────────────────────────────
+function getCartoesPessoais(mes?: string): ServerResult {
+  try {
+    const cartoes = dbGetAll('FinPessoalCartoes') as Array<Record<string, unknown>>;
+    const cartoesMap: Record<string, Record<string, unknown>> = {};
+    for (const c of cartoes) cartoesMap[String(c['id'] || '')] = c;
+    // Enriquece cada cartão com o total EM ABERTO (lançamentos de cartão não
+    // pagos) e o limite disponível, pra mostrar na frente do card sem precisar
+    // abrir a fatura. Mesma regra do "TOTAL EM ABERTO" da gaveta.
+    const naoPagos = (dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>)
+      .filter((l) => String(l['metodo'] || '') === 'cartao' && String(l['status'] || '') !== 'pago');
+    const emAbertoPorCartao: Record<string, number> = {};
+    // Pendente da FATURA DO MÊS selecionado (por competência) — alimenta o
+    // sinal de status na frente do card: 0 = paga (verde), > 0 = em aberto.
+    const aPagarMesPorCartao: Record<string, number> = {};
+    for (const l of naoPagos) {
+      const cid = String(l['cartaoId'] || '').trim();
+      if (!cid) continue;
+      const valor = Math.abs(Number(l['valor'] || 0));
+      emAbertoPorCartao[cid] = (emAbertoPorCartao[cid] || 0) + valor;
+      if (mes && _competenciaLancamento(l, cartoesMap) === mes) {
+        aPagarMesPorCartao[cid] = (aPagarMesPorCartao[cid] || 0) + valor;
+      }
+    }
+    const enriquecidos = cartoes.map((c) => {
+      const id = String(c['id'] || '');
+      const limite = Number(c['limite'] || 0);
+      const emAberto = emAbertoPorCartao[id] || 0;
+      return { ...c, emAberto, disponivel: limite - emAberto, aPagarMes: aPagarMesPorCartao[id] || 0 };
+    });
+    return { ok: true, data: enriquecidos };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar cartões' };
+  }
+}
+
+function salvarCartaoPessoal(payload: Record<string, unknown>): ServerResult {
+  try {
+    const id = payload['id'] ? String(payload['id']) : '';
+    const data: Record<string, unknown> = {
+      nome: String(payload['nome'] || '').trim(),
+      bandeira: String(payload['bandeira'] || 'outra'),
+      limite: Number(payload['limite'] || 0),
+      diaFechamento: Math.max(1, Math.min(31, Number(payload['diaFechamento'] || 1))),
+      diaVencimento: Math.max(1, Math.min(31, Number(payload['diaVencimento'] || 10))),
+      cor: String(payload['cor'] || '#8b5cf6'),
+      apelido: String(payload['apelido'] || ''),
+      ativo: String(payload['ativo'] || 'sim'),
+      atualizadoEm: new Date().toISOString(),
+    };
+    if (id) {
+      const upd = dbUpdate('FinPessoalCartoes', id, data);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Cartão não encontrado' };
+    }
+    data['criadoEm'] = new Date().toISOString();
+    return { ok: true, data: dbCreate('FinPessoalCartoes', data) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar cartão' };
+  }
+}
+
+function deletarCartaoPessoal(id: string): ServerResult {
+  try {
+    return dbDelete('FinPessoalCartoes', id)
+      ? { ok: true }
+      : { ok: false, error: 'Cartão não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar cartão' };
+  }
+}
+
+// ─── Assinaturas pessoais (v1.8) ────────────────────────────────────────────
+// Serviços recorrentes (Netflix, Spotify, ChatGPT...). Entidade própria pra
+// controlar o custo comprometido mensal de forma isolada dos lançamentos.
+
+function getAssinaturas(): ServerResult {
+  try {
+    initDatabase();
+    const assinaturas = dbGetAll('FinPessoalAssinaturas') as Array<Record<string, unknown>>;
+    return { ok: true, data: assinaturas };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar assinaturas' };
+  }
+}
+
+function salvarAssinatura(payload: Record<string, unknown>): ServerResult {
+  try {
+    initDatabase();
+    const id = payload['id'] ? String(payload['id']) : '';
+    const data: Record<string, unknown> = {
+      nome: String(payload['nome'] || '').trim(),
+      categoria: String(payload['categoria'] || 'streaming'),
+      valor: Number(payload['valor'] || 0),
+      ciclo: String(payload['ciclo'] || 'mensal'),
+      diaCobranca: Math.max(1, Math.min(31, Number(payload['diaCobranca'] || 1))),
+      metodo: String(payload['metodo'] || 'cartao'),
+      cartaoId: String(payload['cartaoId'] || ''),
+      status: String(payload['status'] || 'ativa'),
+      dataInicio: String(payload['dataInicio'] || ''),
+      cor: String(payload['cor'] || '#8b5cf6'),
+      icone: String(payload['icone'] || 'tv'),
+      plano: String(payload['plano'] || ''),
+      notas: String(payload['notas'] || ''),
+      atualizadoEm: new Date().toISOString(),
+    };
+    if (id) {
+      const upd = dbUpdate('FinPessoalAssinaturas', id, data);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Assinatura não encontrada' };
+    }
+    data['criadoEm'] = new Date().toISOString();
+    return { ok: true, data: dbCreate('FinPessoalAssinaturas', data) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar assinatura' };
+  }
+}
+
+function deletarAssinatura(id: string): ServerResult {
+  try {
+    initDatabase();
+    return dbDelete('FinPessoalAssinaturas', id)
+      ? { ok: true }
+      : { ok: false, error: 'Assinatura não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar assinatura' };
+  }
+}
+
+// Alterna status: ativa → pausada → ativa, ou cancela.
+function alternarStatusAssinatura(id: string, novoStatus: string): ServerResult {
+  try {
+    initDatabase();
+    const status = ['ativa', 'pausada', 'cancelada'].indexOf(novoStatus) >= 0 ? novoStatus : 'ativa';
+    const upd = dbUpdate('FinPessoalAssinaturas', id, { status, atualizadoEm: new Date().toISOString() });
+    return upd ? { ok: true, data: upd } : { ok: false, error: 'Assinatura não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao alterar status' };
+  }
+}
+
+// Resumo das assinaturas: custo mensal (normalizado), anual projetado, por
+// categoria, contagens por status, próximas cobranças do mês, mais cara.
+function getResumoAssinaturas(): ServerResult {
+  try {
+    initDatabase();
+    const todas = dbGetAll('FinPessoalAssinaturas') as Array<Record<string, unknown>>;
+
+    // Custo mensal equivalente de uma assinatura (anual / 12).
+    const custoMensalDe = (a: Record<string, unknown>): number => {
+      const v = Number(a['valor'] || 0);
+      return String(a['ciclo']) === 'anual' ? v / 12 : v;
+    };
+
+    const ativas = todas.filter((a) => String(a['status']) === 'ativa');
+    const pausadas = todas.filter((a) => String(a['status']) === 'pausada');
+    const canceladas = todas.filter((a) => String(a['status']) === 'cancelada');
+
+    const totalMensal = ativas.reduce((s, a) => s + custoMensalDe(a), 0);
+    const totalAnual = totalMensal * 12;
+
+    // Por categoria (só ativas) — custo mensal equivalente
+    const porCategoria: Record<string, number> = {};
+    for (const a of ativas) {
+      const cat = String(a['categoria'] || 'outros');
+      porCategoria[cat] = (porCategoria[cat] || 0) + custoMensalDe(a);
+    }
+
+    // Próximas cobranças do mês corrente (ordenadas por dia) — só ativas
+    const hoje = new Date();
+    const diaHoje = hoje.getDate();
+    const proximasCobrancas = ativas
+      .map((a) => ({
+        id: String(a['id']),
+        nome: String(a['nome']),
+        cor: String(a['cor'] || '#8b5cf6'),
+        icone: String(a['icone'] || 'tv'),
+        diaCobranca: Number(a['diaCobranca'] || 1),
+        valorMes: custoMensalDe(a),
+        ciclo: String(a['ciclo'] || 'mensal'),
+        jaPassou: Number(a['diaCobranca'] || 1) < diaHoje,
+      }))
+      .sort((x, y) => x.diaCobranca - y.diaCobranca);
+
+    // Mais cara (por custo mensal equivalente)
+    let maisCara: { nome: string; valorMes: number; cor: string } | null = null;
+    for (const a of ativas) {
+      const cm = custoMensalDe(a);
+      if (!maisCara || cm > maisCara.valorMes) {
+        maisCara = { nome: String(a['nome']), valorMes: cm, cor: String(a['cor'] || '#8b5cf6') };
+      }
+    }
+
+    return {
+      ok: true,
+      data: {
+        totalMensal,
+        totalAnual,
+        qtdAtivas: ativas.length,
+        qtdPausadas: pausadas.length,
+        qtdCanceladas: canceladas.length,
+        mediaPorAssinatura: ativas.length > 0 ? totalMensal / ativas.length : 0,
+        porCategoria,
+        proximasCobrancas,
+        maisCara,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao calcular resumo de assinaturas' };
+  }
+}
+
+// ─── Inteligência financeira / Norte (v1.9) ─────────────────────────────────
+// A "parte inteligente" do Financeiro Pessoal. Análise determinística (rápida e
+// confiável) do retrato financeiro de longo prazo: despesas fixas (recorrências
+// + assinaturas) vs renda, comprometimento, capacidade de poupança, fundo de
+// reserva, projeções (12m e 5 anos), plano de redução e score de saúde. A IA
+// entra sob demanda via gerarPlanoReducaoIA() pra um plano narrativo profundo.
+
+// Config armazenada em ScriptProperties (simples, sem sheet extra).
+const _FIN_CFG = {
+  renda: 'FIN_RENDA_MENSAL',
+  metaMeses: 'FIN_META_RESERVA_MESES',
+  reserva: 'FIN_RESERVA_ATUAL',
+  rendimento: 'FIN_RENDIMENTO_ANUAL',
+};
+
+function getConfigFinanceira(): ServerResult {
+  try {
+    const p = PropertiesService.getScriptProperties();
+    return {
+      ok: true,
+      data: {
+        rendaMensal: Number(p.getProperty(_FIN_CFG.renda) || 0),
+        metaReservaMeses: Number(p.getProperty(_FIN_CFG.metaMeses) || 6),
+        reservaAtual: Number(p.getProperty(_FIN_CFG.reserva) || 0),
+        rendimentoAnual: Number(p.getProperty(_FIN_CFG.rendimento) || 10),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ler config' };
+  }
+}
+
+function salvarConfigFinanceira(payload: Record<string, unknown>): ServerResult {
+  try {
+    const p = PropertiesService.getScriptProperties();
+    if (payload['rendaMensal'] !== undefined) p.setProperty(_FIN_CFG.renda, String(Math.max(0, Number(payload['rendaMensal']) || 0)));
+    if (payload['metaReservaMeses'] !== undefined) p.setProperty(_FIN_CFG.metaMeses, String(Math.max(1, Number(payload['metaReservaMeses']) || 6)));
+    if (payload['reservaAtual'] !== undefined) p.setProperty(_FIN_CFG.reserva, String(Math.max(0, Number(payload['reservaAtual']) || 0)));
+    if (payload['rendimentoAnual'] !== undefined) p.setProperty(_FIN_CFG.rendimento, String(Math.max(0, Number(payload['rendimentoAnual']) || 0)));
+    return getConfigFinanceira();
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar config' };
+  }
+}
+
+function _clamp(v: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, v));
+}
+
+function _ultimos3MesesCompletos(): string[] {
+  const arr: string[] = [];
+  const now = new Date();
+  for (let k = 1; k <= 3; k++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - k, 1);
+    arr.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  return arr;
+}
+
+// Janela de N competências TERMINANDO no mês atual (inclui o mês corrente).
+// Ex.: _ultimosMesesComp(4) em jun/26 → ['2026-06','2026-05','2026-04','2026-03'].
+// Usado pela inteligência (Norte) pra refletir gastos recém-lançados — antes a
+// janela só pegava meses FECHADOS e o que você lançava no mês atual sumia da média.
+function _ultimosMesesComp(n: number): string[] {
+  const arr: string[] = [];
+  const now = new Date();
+  for (let k = 0; k < Math.max(1, n); k++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - k, 1);
+    arr.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  return arr;
+}
+
+function _fmtBRL(v: number): string {
+  const n = Math.round(v * 100) / 100;
+  return 'R$ ' + n.toFixed(2).replace('.', ',');
+}
+
+function _nomeCatAss(g: string): string {
+  const m: Record<string, string> = {
+    streaming: 'Streaming', musica: 'Música', jogos: 'Jogos', ia: 'IA',
+    software: 'Software', cloud: 'Armazenamento', telecom: 'Telefonia/Internet',
+    educacao: 'Educação', noticias: 'Leitura', fitness: 'Saúde/Fitness', outros: 'Outros',
+  };
+  return m[g] || g;
+}
+
+interface FixaItem {
+  id: string; nome: string; valorMes: number; categoria: string;
+  cartaoId: string; metodo: string; origem: string; ciclo: string;
+}
+interface PlanoItem {
+  id: string; tipo: string; severidade: string; titulo: string;
+  descricao: string; economiaEstimadaMes: number; itens?: string[];
+}
+
+function _construirPlanoReducao(
+  fixas: FixaItem[], comprometimento: number, renda: number, variaveisMedia: number,
+): PlanoItem[] {
+  const plano: PlanoItem[] = [];
+
+  // 1. Consolidar serviços redundantes (streaming/música/jogos)
+  const grupos = ['streaming', 'musica', 'jogos'];
+  for (const g of grupos) {
+    const itens = fixas.filter((i) => i.categoria === g);
+    if (itens.length >= 2) {
+      const ord = [...itens].sort((a, b) => b.valorMes - a.valorMes);
+      const cortaveis = ord.slice(1); // mantém o mais caro/principal
+      const economia = cortaveis.reduce((s, i) => s + i.valorMes, 0);
+      const totalGrupo = itens.reduce((s, i) => s + i.valorMes, 0);
+      if (economia > 0) {
+        plano.push({
+          id: 'grp-' + g,
+          tipo: 'consolidar',
+          severidade: itens.length >= 3 ? 'alta' : 'media',
+          titulo: `Consolidar ${_nomeCatAss(g)} — ${itens.length} serviços`,
+          descricao: `Você tem ${itens.length} serviços de ${_nomeCatAss(g).toLowerCase()} somando ${_fmtBRL(totalGrupo)}/mês (${itens.map((i) => i.nome).join(', ')}). Manter o principal e pausar os outros (revezando por mês) libera caixa sem perder muito.`,
+          economiaEstimadaMes: economia,
+          itens: cortaveis.map((i) => i.nome),
+        });
+      }
+    }
+  }
+
+  // 2. Comprometimento de renda acima do saudável (>50%)
+  if (renda > 0 && comprometimento > 0.5) {
+    const top = [...fixas].slice(0, 3);
+    plano.push({
+      id: 'comprometimento',
+      tipo: 'alerta',
+      severidade: 'alta',
+      titulo: 'Comprometimento de renda acima de 50%',
+      descricao: `Suas despesas fixas comprometem ${(comprometimento * 100).toFixed(0)}% da renda — o ideal é ficar abaixo de 50% pra ter folga. Revise/negocie as 3 maiores: ${top.map((i) => `${i.nome} (${_fmtBRL(i.valorMes)})`).join(', ')}.`,
+      economiaEstimadaMes: 0,
+    });
+  }
+
+  // 3. Gasto variável alto → orçamento. Economia conservadora de 15%.
+  if (renda > 0 && variaveisMedia > 0 && variaveisMedia / renda > 0.3) {
+    plano.push({
+      id: 'variaveis',
+      tipo: 'habito',
+      severidade: 'media',
+      titulo: 'Despesas variáveis representam fatia grande',
+      descricao: `Em média você gasta ${_fmtBRL(variaveisMedia)}/mês em despesas variáveis (mercado, lazer, etc.), ${((variaveisMedia / renda) * 100).toFixed(0)}% da renda. Um orçamento por categoria com meta de cortar ~15% já faz diferença real.`,
+      economiaEstimadaMes: variaveisMedia * 0.15,
+    });
+  }
+
+  // 4. Telecom: consolidar operadoras / planos duplicados
+  const telecom = fixas.filter((i) => i.categoria === 'telecom');
+  if (telecom.length >= 2) {
+    const ord = [...telecom].sort((a, b) => b.valorMes - a.valorMes);
+    const economia = ord.slice(1).reduce((s, i) => s + i.valorMes, 0) * 0.5;
+    plano.push({
+      id: 'telecom',
+      tipo: 'consolidar',
+      severidade: 'media',
+      titulo: 'Planos de telefonia/internet duplicados',
+      descricao: `Você tem ${telecom.length} contratos de telefonia/internet (${telecom.map((i) => i.nome).join(', ')}). Combos família/portabilidade costumam reduzir bastante o total.`,
+      economiaEstimadaMes: economia,
+    });
+  }
+
+  return plano.sort((a, b) => b.economiaEstimadaMes - a.economiaEstimadaMes);
+}
+
+interface InsightItem { tipo: string; texto: string }
+
+function _construirInsights(d: {
+  comprometimento: number; taxaPoupanca: number; capacidadePoupanca: number;
+  porCategoria: Record<string, number>; totalFixasMensal: number;
+  economiaPotencialMes: number; mesesParaMeta: number | null;
+  progressoReserva: number; rendaMensal: number;
+  despesasVariaveisMedia: number; variaveisPorCategoria: Record<string, number>;
+}): InsightItem[] {
+  const out: InsightItem[] = [];
+  if (d.rendaMensal <= 0) return out;
+
+  out.push({
+    tipo: d.comprometimento > 0.5 ? 'alerta' : 'positivo',
+    texto: `Suas despesas fixas comprometem ${(d.comprometimento * 100).toFixed(0)}% da renda${d.comprometimento > 0.5 ? ' — acima do ideal (50%).' : ' — dentro de um patamar saudável.'}`,
+  });
+
+  if (d.capacidadePoupanca > 0) {
+    out.push({
+      tipo: 'positivo',
+      texto: `No ritmo atual sobra ${_fmtBRL(d.capacidadePoupanca)}/mês pra poupar (${(d.taxaPoupanca * 100).toFixed(0)}% da renda).`,
+    });
+  } else {
+    out.push({
+      tipo: 'alerta',
+      texto: `Atenção: hoje suas despesas superam a renda em ${_fmtBRL(Math.abs(d.capacidadePoupanca))}/mês. Priorize cortes antes de poupar.`,
+    });
+  }
+
+  if (d.despesasVariaveisMedia > 0) {
+    const cats = Object.entries(d.variaveisPorCategoria).sort((a, b) => b[1] - a[1]);
+    const top = cats[0];
+    const pctRenda = d.rendaMensal > 0 ? (d.despesasVariaveisMedia / d.rendaMensal) * 100 : 0;
+    out.push({
+      tipo: pctRenda > 30 ? 'alerta' : 'neutro',
+      texto: `Despesas variáveis somam ~${_fmtBRL(d.despesasVariaveisMedia)}/mês (${pctRenda.toFixed(0)}% da renda)${top ? `, lideradas por ${top[0]} (${_fmtBRL(top[1])}/mês)` : ''}.`,
+    });
+  }
+
+  const streaming = d.porCategoria['streaming'] || 0;
+  if (streaming > 0) {
+    out.push({
+      tipo: 'neutro',
+      texto: `Streaming soma ${_fmtBRL(streaming)}/mês (${d.totalFixasMensal > 0 ? ((streaming / d.totalFixasMensal) * 100).toFixed(0) : 0}% das suas fixas).`,
+    });
+  }
+
+  if (d.economiaPotencialMes > 0) {
+    out.push({
+      tipo: 'positivo',
+      texto: `Seguindo o plano de redução você economiza ~${_fmtBRL(d.economiaPotencialMes)}/mês = ${_fmtBRL(d.economiaPotencialMes * 12)}/ano.`,
+    });
+  }
+
+  if (d.progressoReserva >= 1) {
+    out.push({ tipo: 'positivo', texto: 'Parabéns: seu fundo de reserva já atingiu a meta. Hora de fazer o dinheiro render.' });
+  } else if (d.mesesParaMeta !== null) {
+    out.push({ tipo: 'neutro', texto: `No ritmo atual, seu fundo de reserva atinge a meta em ${d.mesesParaMeta} ${d.mesesParaMeta === 1 ? 'mês' : 'meses'}.` });
+  }
+
+  return out;
+}
+
+function getInteligenciaFinanceira(): ServerResult {
+  try {
+    initDatabase();
+    const p = PropertiesService.getScriptProperties();
+    const rendaCfg = Number(p.getProperty(_FIN_CFG.renda) || 0);
+    const metaMeses = Number(p.getProperty(_FIN_CFG.metaMeses) || 6);
+    const reservaAtual = Number(p.getProperty(_FIN_CFG.reserva) || 0);
+    const rendimentoAnual = Number(p.getProperty(_FIN_CFG.rendimento) || 10);
+
+    const lancs = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    const assinaturas = (dbGetAll('FinPessoalAssinaturas') as Array<Record<string, unknown>>)
+      .filter((a) => String(a['status']) === 'ativa');
+    const cartoes = dbGetAll('FinPessoalCartoes') as Array<Record<string, unknown>>;
+
+    const mensalRec = (l: Record<string, unknown>): number => {
+      const v = Number(l['valor'] || 0);
+      const r = String(l['recorrencia'] || 'mensal');
+      if (r === 'semanal') return v * 4.345;
+      if (r === 'anual') return v / 12;
+      return v;
+    };
+    const mensalAss = (a: Record<string, unknown>): number =>
+      String(a['ciclo']) === 'anual' ? Number(a['valor'] || 0) / 12 : Number(a['valor'] || 0);
+
+    // Despesas fixas = recorrências (origens ativas, tipo despesa) + assinaturas ativas
+    const recorrenciasDesp = lancs.filter((l) =>
+      String(l['tipo']) === 'despesa' &&
+      String(l['recorrencia'] || 'unica') !== 'unica' &&
+      !String(l['recorrenciaOrigemId'] || '') &&
+      String(l['recorrenciaAtiva'] || 'sim') !== 'nao'
+    );
+    const fixasItens: FixaItem[] = [];
+    for (const r of recorrenciasDesp) {
+      fixasItens.push({
+        id: String(r['id']), nome: String(r['descricao'] || '(sem nome)'),
+        valorMes: mensalRec(r), categoria: String(r['categoria'] || 'outros'),
+        cartaoId: String(r['cartaoId'] || ''), metodo: String(r['metodo'] || ''),
+        origem: 'recorrencia', ciclo: String(r['recorrencia'] || 'mensal'),
+      });
+    }
+    for (const a of assinaturas) {
+      fixasItens.push({
+        id: String(a['id']), nome: String(a['nome'] || '(sem nome)'),
+        valorMes: mensalAss(a), categoria: String(a['categoria'] || 'outros'),
+        cartaoId: String(a['cartaoId'] || ''), metodo: String(a['metodo'] || ''),
+        origem: 'assinatura', ciclo: String(a['ciclo'] || 'mensal'),
+      });
+    }
+    fixasItens.sort((x, y) => y.valorMes - x.valorMes);
+    const totalFixasMensal = fixasItens.reduce((s, i) => s + i.valorMes, 0);
+
+    // Renda: declarada (config) tem prioridade; senão deriva
+    const recorrenciasEnt = lancs.filter((l) =>
+      String(l['tipo']) === 'entrada' &&
+      String(l['recorrencia'] || 'unica') !== 'unica' &&
+      !String(l['recorrenciaOrigemId'] || '') &&
+      String(l['recorrenciaAtiva'] || 'sim') !== 'nao'
+    );
+    const rendaRecorrente = recorrenciasEnt.reduce((s, l) => s + mensalRec(l), 0);
+    // Janela: mês atual + 3 anteriores. Inclui o corrente pra refletir o que
+    // você acabou de lançar (antes a janela só pegava meses fechados → sumia).
+    const cartoesMap = _cartoesMap();
+    const mesesRef = _ultimosMesesComp(4);
+    const mesCorrente = mesesRef[0];
+    // Meses-base de uma série: prioriza meses FECHADOS com dados; cai no mês
+    // corrente apenas quando ele é o único histórico (recém começou a lançar).
+    // Assim um mês corrente PARCIAL não dilui a média quando já há meses fechados.
+    const mesesBase = (porMes: Record<string, number>): string[] => {
+      const fechadosComDado = mesesRef.filter((m) => m !== mesCorrente && (porMes[m] || 0) > 0);
+      if (fechadosComDado.length) return fechadosComDado;
+      return (porMes[mesCorrente] || 0) > 0 ? [mesCorrente] : [];
+    };
+    const mediaInteligente = (porMes: Record<string, number>): number => {
+      const ms = mesesBase(porMes);
+      return ms.length ? ms.reduce((s, m) => s + porMes[m], 0) / ms.length : 0;
+    };
+
+    const entradasPorMes: Record<string, number> = {};
+    for (const l of lancs) {
+      if (String(l['tipo']) !== 'entrada') continue;
+      const m = _competenciaLancamento(l, cartoesMap);
+      if (mesesRef.indexOf(m) >= 0) entradasPorMes[m] = (entradasPorMes[m] || 0) + Number(l['valor'] || 0);
+    }
+    const mediaEntradas = mediaInteligente(entradasPorMes);
+    const rendaDerivada = Math.max(rendaRecorrente, mediaEntradas);
+    const rendaMensal = rendaCfg > 0 ? rendaCfg : rendaDerivada;
+    const rendaFonte = rendaCfg > 0 ? 'declarada' : (rendaRecorrente >= mediaEntradas ? 'recorrencias' : 'media3m');
+
+    // Despesas variáveis: despesas únicas (não recorrentes, não clones de
+    // recorrência). Agora agrupadas pela COMPETÊNCIA (mês da fatura p/ cartão),
+    // igual ao resto do app — antes usava a data da COMPRA e os gastos de cartão
+    // importados caíam fora da janela.
+    const variaveisPorMes: Record<string, number> = {};
+    const variaveisMesCat: Record<string, Record<string, number>> = {};
+    for (const l of lancs) {
+      if (String(l['tipo']) !== 'despesa') continue;
+      if (String(l['recorrencia'] || 'unica') !== 'unica') continue;
+      if (String(l['recorrenciaOrigemId'] || '')) continue;
+      const comp = _competenciaLancamento(l, cartoesMap);
+      if (mesesRef.indexOf(comp) < 0) continue;
+      const val = Number(l['valor'] || 0);
+      variaveisPorMes[comp] = (variaveisPorMes[comp] || 0) + val;
+      const cat = String(l['categoria'] || 'outros');
+      if (!variaveisMesCat[comp]) variaveisMesCat[comp] = {};
+      variaveisMesCat[comp][cat] = (variaveisMesCat[comp][cat] || 0) + val;
+    }
+    const variaveisBaseMeses = mesesBase(variaveisPorMes);
+    const despesasVariaveisMedia = mediaInteligente(variaveisPorMes);
+    // Variáveis por categoria, em MÉDIA mensal sobre os mesmos meses-base — pra
+    // bater com o total de variáveis e mostrar pra onde o gasto livre está indo.
+    const variaveisPorCategoria: Record<string, number> = {};
+    if (variaveisBaseMeses.length) {
+      for (const m of variaveisBaseMeses) {
+        const catMap = variaveisMesCat[m] || {};
+        for (const c in catMap) variaveisPorCategoria[c] = (variaveisPorCategoria[c] || 0) + catMap[c];
+      }
+      for (const c in variaveisPorCategoria) variaveisPorCategoria[c] = variaveisPorCategoria[c] / variaveisBaseMeses.length;
+    }
+
+    const custoMensalTotal = totalFixasMensal + despesasVariaveisMedia;
+    const capacidadePoupanca = rendaMensal - custoMensalTotal;
+    const comprometimento = rendaMensal > 0 ? totalFixasMensal / rendaMensal : 0;
+    const taxaPoupanca = rendaMensal > 0 ? capacidadePoupanca / rendaMensal : 0;
+
+    // Por cartão (carga fixa comprometida na fatura)
+    const porCartao = cartoes.map((c) => {
+      const itens = fixasItens.filter((i) => i.cartaoId === String(c['id']));
+      const total = itens.reduce((s, i) => s + i.valorMes, 0);
+      const limite = Number(c['limite'] || 0);
+      return {
+        id: String(c['id']), nome: String(c['apelido'] || c['nome']), cor: String(c['cor'] || '#8b5cf6'),
+        limite, totalFixoMes: total, qtdItens: itens.length,
+        pctLimite: limite > 0 ? (total / limite) * 100 : 0,
+      };
+    }).sort((a, b) => b.totalFixoMes - a.totalFixoMes);
+    const semCartao = fixasItens.filter((i) => !i.cartaoId).reduce((s, i) => s + i.valorMes, 0);
+
+    // Por categoria (fixas)
+    const porCategoria: Record<string, number> = {};
+    for (const i of fixasItens) porCategoria[i.categoria] = (porCategoria[i.categoria] || 0) + i.valorMes;
+
+    // Fundo de reserva
+    const metaValor = custoMensalTotal * metaMeses;
+    const faltaReserva = Math.max(0, metaValor - reservaAtual);
+    const progressoReserva = metaValor > 0 ? Math.min(1, reservaAtual / metaValor) : 0;
+    const mesesParaMeta = capacidadePoupanca > 0 && faltaReserva > 0
+      ? Math.ceil(faltaReserva / capacidadePoupanca)
+      : (faltaReserva <= 0 ? 0 : null);
+
+    // Score de saúde financeira (0-100)
+    let score: number | null = null;
+    if (rendaMensal > 0) {
+      const sc = _clamp(100 - Math.max(0, comprometimento - 0.3) * 200, 0, 100);
+      const sp = _clamp(taxaPoupanca * 400, 0, 100);
+      const sr = _clamp(progressoReserva * 100, 0, 100);
+      score = Math.round(0.4 * sc + 0.35 * sp + 0.25 * sr);
+    }
+
+    // Projeção 12 meses (saldo acumulado a partir da reserva atual)
+    const proj12: Array<{ mes: string; label: string; saldo: number }> = [];
+    let acc = reservaAtual;
+    const now = new Date();
+    for (let k = 1; k <= 12; k++) {
+      acc += capacidadePoupanca;
+      const d = new Date(now.getFullYear(), now.getMonth() + k, 1);
+      proj12.push({
+        mes: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        label: d.toLocaleDateString('pt-BR', { month: 'short' }),
+        saldo: Math.round(acc),
+      });
+    }
+
+    // Projeção longo prazo (5 anos) com aporte mensal + juros compostos
+    const taxaMensal = Math.pow(1 + rendimentoAnual / 100, 1 / 12) - 1;
+    const projLongo: Array<{ ano: number; patrimonio: number; aportado: number }> = [];
+    let patrimonio = reservaAtual;
+    let aportado = reservaAtual;
+    const aporte = Math.max(0, capacidadePoupanca);
+    for (let ano = 1; ano <= 5; ano++) {
+      for (let m = 0; m < 12; m++) { patrimonio = patrimonio * (1 + taxaMensal) + aporte; aportado += aporte; }
+      projLongo.push({ ano, patrimonio: Math.round(patrimonio), aportado: Math.round(aportado) });
+    }
+
+    // Plano de redução determinístico
+    const plano = _construirPlanoReducao(fixasItens, comprometimento, rendaMensal, despesasVariaveisMedia);
+    const economiaPotencialMes = plano.reduce((s, i) => s + (i.economiaEstimadaMes || 0), 0);
+
+    // Insights
+    const insights = _construirInsights({
+      comprometimento, taxaPoupanca, capacidadePoupanca, porCategoria,
+      totalFixasMensal, economiaPotencialMes, mesesParaMeta, progressoReserva, rendaMensal,
+      despesasVariaveisMedia, variaveisPorCategoria,
+    });
+
+    return {
+      ok: true,
+      data: {
+        configurado: rendaMensal > 0,
+        rendaMensal, rendaFonte, rendaDeclarada: rendaCfg, rendaDerivada,
+        totalFixasMensal, despesasVariaveisMedia, custoMensalTotal,
+        variaveisPorCategoria, variaveisMesesBase: variaveisBaseMeses.length,
+        capacidadePoupanca, comprometimento, taxaPoupanca, score,
+        fixasItens, porCategoria, porCartao, semCartao, qtdFixas: fixasItens.length,
+        reserva: { metaMeses, metaValor, reservaAtual, faltaReserva, progressoReserva, mesesParaMeta },
+        proj12, projLongo, rendimentoAnual,
+        plano, economiaPotencialMes,
+        insights,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao calcular inteligência financeira' };
+  }
+}
+
+// Plano profundo via IA (sob demanda). Persiste o último plano gerado.
+function gerarPlanoReducaoIA(): ServerResult {
+  try {
+    const intel = getInteligenciaFinanceira();
+    if (!intel.ok) return intel;
+    const d = intel.data as Record<string, unknown>;
+    if (!d['configurado']) return { ok: false, error: 'Configure sua renda mensal primeiro pra gerar o plano.' };
+
+    const reserva = d['reserva'] as Record<string, unknown>;
+    const resumo = {
+      rendaMensal: d['rendaMensal'],
+      despesasFixasMensal: d['totalFixasMensal'],
+      despesasVariaveisMediaMensal: d['despesasVariaveisMedia'],
+      custoMensalTotal: d['custoMensalTotal'],
+      sobraMensalParaPoupar: d['capacidadePoupanca'],
+      comprometimentoRendaPct: Math.round(Number(d['comprometimento']) * 100),
+      scoreSaude: d['score'],
+      fundoReserva: {
+        meta: reserva['metaValor'], atual: reserva['reservaAtual'],
+        faltam: reserva['faltaReserva'], mesesParaMeta: reserva['mesesParaMeta'],
+      },
+      despesasFixas: (d['fixasItens'] as FixaItem[]).map((i) => ({
+        nome: i.nome, valorMes: Math.round(i.valorMes), categoria: i.categoria, tipo: i.origem,
+      })),
+      patrimonioProjetado5anos: (d['projLongo'] as Array<Record<string, unknown>>),
+    };
+
+    const sys = 'Você é um consultor financeiro pessoal brasileiro experiente, direto e acolhedor. Foco em planejamento de longo prazo, redução inteligente de despesas, construção de reserva de emergência e patrimônio (abundância). Responda SEMPRE em português do Brasil, em markdown limpo e acionável. Use os números fornecidos; não invente dados. Seja específico e prático.';
+    const user = `Retrato financeiro mensal (em reais) de uma pessoa:\n\n${JSON.stringify(resumo, null, 2)}\n\nGere um plano com estas seções em markdown:\n\n## Diagnóstico\n(3-4 frases sobre a situação atual, usando os números reais)\n\n## Plano de redução de despesas\n(lista priorizada — para cada item: o que cortar/negociar → quanto economiza por mês → como fazer na prática)\n\n## Estratégia de reserva de emergência\n(como chegar na meta mais rápido com a sobra atual)\n\n## Caminho para a abundância (1 a 5 anos)\n(o que fazer com a sobra depois da reserva pronta — investir, metas de patrimônio, usando a projeção de 5 anos)\n\n## 3 dicas de ouro\n\nSeja conciso e específico.`;
+
+    const msgs: LlmMessage[] = [{ role: 'system', content: sys }, { role: 'user', content: user }];
+    const r = forjaCallLLMDetalhado(msgs, 1900);
+    const registro = { texto: r.texto, modelo: r.modelo, latenciaMs: r.latenciaMs, criadoEm: new Date().toISOString() };
+    try { PropertiesService.getScriptProperties().setProperty('FIN_PLANO_IA', JSON.stringify(registro)); } catch { /* ok */ }
+    return { ok: true, data: registro };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar plano com IA' };
+  }
+}
+
+function getUltimoPlanoIA(): ServerResult {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty('FIN_PLANO_IA');
+    return { ok: true, data: raw ? JSON.parse(raw) : null };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ler plano' };
+  }
+}
+
+// ─── Perfil familiar ideal (v1.53) ────────────────────────────────────────────
+// O orçamento-ALVO da família: quanto CADA despesa essencial deveria custar pra
+// uma vida sustentável. A UI compara com o gasto REAL pra mostrar o que ajustar.
+
+function getPerfilIdeal(): ServerResult {
+  try {
+    initDatabase();
+    const itens = (dbGetAll('FinPerfilIdeal') as Array<Record<string, unknown>>)
+      .map((i) => _sanitizarLinha(i))
+      .sort((a, b) => {
+        const oa = Number(a['ordem'] || 0); const ob = Number(b['ordem'] || 0);
+        if (oa !== ob) return oa - ob;
+        return Number(b['valorMensal'] || 0) - Number(a['valorMensal'] || 0);
+      });
+    return { ok: true, data: itens };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar perfil ideal' };
+  }
+}
+
+function salvarItemPerfilIdeal(payload: Record<string, unknown>): ServerResult {
+  try {
+    initDatabase();
+    const id = payload['id'] ? String(payload['id']) : '';
+    const data: Record<string, unknown> = {
+      categoria: String(payload['categoria'] || 'outros').toLowerCase().trim(),
+      descricao: String(payload['descricao'] || '').trim(),
+      valorMensal: Math.max(0, Number(payload['valorMensal'] || 0)),
+      essencial: String(payload['essencial'] || 'sim') === 'nao' ? 'nao' : 'sim',
+      ordem: Number(payload['ordem'] || 0),
+      notas: String(payload['notas'] || ''),
+      atualizadoEm: new Date().toISOString(),
+    };
+    if (!data['descricao']) return { ok: false, error: 'Descrição obrigatória' };
+    if (id) {
+      const upd = dbUpdate('FinPerfilIdeal', id, data);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Item não encontrado' };
+    }
+    data['criadoEm'] = new Date().toISOString();
+    return { ok: true, data: dbCreate('FinPerfilIdeal', data) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar item' };
+  }
+}
+
+function removerItemPerfilIdeal(id: string): ServerResult {
+  try {
+    return dbDelete('FinPerfilIdeal', id)
+      ? { ok: true }
+      : { ok: false, error: 'Item não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover item' };
+  }
+}
+
+// Comparativo IDEAL × REAL. Reaproveita a agregação da inteligência (Norte):
+// gasto real por categoria = despesas fixas (recorrências + assinaturas) +
+// despesas variáveis (média mensal). Cruza com o orçamento-alvo por categoria.
+function getPerfilIdealComparativo(): ServerResult {
+  try {
+    initDatabase();
+    const intel = getInteligenciaFinanceira();
+    const d = (intel.ok && intel.data ? intel.data : {}) as Record<string, unknown>;
+    const rendaMensal = Number(d['rendaMensal'] || 0);
+    const fixasPorCat = (d['porCategoria'] || {}) as Record<string, number>;
+    const varPorCat = (d['variaveisPorCategoria'] || {}) as Record<string, number>;
+
+    // Gasto real por categoria (fixas + variáveis), normalizando a chave.
+    const norm = (s: string): string => String(s || 'outros').toLowerCase().trim();
+    const realPorCat: Record<string, number> = {};
+    for (const k in fixasPorCat) realPorCat[norm(k)] = (realPorCat[norm(k)] || 0) + Number(fixasPorCat[k] || 0);
+    for (const k in varPorCat) realPorCat[norm(k)] = (realPorCat[norm(k)] || 0) + Number(varPorCat[k] || 0);
+
+    const itensRaw = (dbGetAll('FinPerfilIdeal') as Array<Record<string, unknown>>).map((i) => _sanitizarLinha(i));
+    const itens = itensRaw.map((i) => ({
+      id: String(i['id']),
+      categoria: norm(String(i['categoria'] || 'outros')),
+      descricao: String(i['descricao'] || ''),
+      valorMensal: Number(i['valorMensal'] || 0),
+      essencial: String(i['essencial'] || 'sim') !== 'nao',
+      ordem: Number(i['ordem'] || 0),
+      notas: String(i['notas'] || ''),
+    })).sort((a, b) => (a.ordem - b.ordem) || (b.valorMensal - a.valorMensal));
+
+    // Ideal por categoria (soma dos itens-alvo).
+    const idealPorCat: Record<string, number> = {};
+    for (const it of itens) idealPorCat[it.categoria] = (idealPorCat[it.categoria] || 0) + it.valorMensal;
+
+    // União das categorias (ideal ∪ real) pra montar o comparativo.
+    const cats: Record<string, boolean> = {};
+    for (const k in idealPorCat) cats[k] = true;
+    for (const k in realPorCat) cats[k] = true;
+    const comparativo = Object.keys(cats).map((cat) => {
+      const ideal = idealPorCat[cat] || 0;
+      const real = realPorCat[cat] || 0;
+      const diff = real - ideal; // >0 gastando acima do ideal
+      let status: string;
+      if (ideal <= 0) status = 'sem_meta';        // gasta mas não definiu alvo
+      else if (real <= 0) status = 'sem_gasto';    // tem alvo mas ainda não gasta
+      else if (real <= ideal * 1.02) status = 'dentro';
+      else if (real <= ideal * 1.2) status = 'atencao';
+      else status = 'acima';
+      return { categoria: cat, ideal, real, diff, status };
+    }).sort((a, b) => Math.max(b.ideal, b.real) - Math.max(a.ideal, a.real));
+
+    const totalIdeal = itens.reduce((s, i) => s + i.valorMensal, 0);
+    const totalIdealEssencial = itens.filter((i) => i.essencial).reduce((s, i) => s + i.valorMensal, 0);
+    const totalReal = Object.keys(realPorCat).reduce((s, k) => s + realPorCat[k], 0);
+
+    return {
+      ok: true,
+      data: {
+        configurado: itens.length > 0,
+        rendaMensal,
+        rendaConfigurada: rendaMensal > 0,
+        itens,
+        comparativo,
+        totalIdeal,
+        totalIdealEssencial,
+        totalReal,
+        diferencaTotal: totalReal - totalIdeal,
+        saldoIdeal: rendaMensal - totalIdeal,   // sobra/déficit vivendo no ideal
+        saldoReal: rendaMensal - totalReal,      // sobra/déficit hoje
+        qtdItens: itens.length,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao montar comparativo' };
+  }
+}
+
+// ─── Ideal × Real (v1.54): comparação com de-para ─────────────────────────────
+// Separa o que é COMPARÁVEL (categoria real bate com um alvo do ideal, direto ou
+// via de-para) do que está FORA DO IDEAL (gasto sem alvo — a cortar ou aceitar).
+
+function _normCat(s: unknown): string {
+  return String(s || 'outros').toLowerCase().trim();
+}
+
+function getDeParaIdeal(): ServerResult {
+  try {
+    initDatabase();
+    const rows = (dbGetAll('FinIdealDePara') as Array<Record<string, unknown>>).map((r) => _sanitizarLinha(r));
+    return { ok: true, data: rows };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ler de-para' };
+  }
+}
+
+// Upsert por categoriaReal. destino vazio ('') REMOVE o mapeamento (volta ao
+// comportamento padrão). Aceita slug do ideal, 'cortar' ou 'fora'.
+function salvarDeParaIdeal(categoriaReal: string, destino: string): ServerResult {
+  try {
+    initDatabase();
+    const cr = _normCat(categoriaReal);
+    if (!cr) return { ok: false, error: 'Categoria real obrigatória' };
+    const dest = String(destino || '').toLowerCase().trim();
+    const rows = dbGetAll('FinIdealDePara') as Array<Record<string, unknown>>;
+    const existente = rows.find((r) => _normCat(r['categoriaReal']) === cr);
+    if (!dest) {
+      if (existente) dbDelete('FinIdealDePara', String(existente['id']));
+      return { ok: true, data: null };
+    }
+    if (existente) {
+      const upd = dbUpdate('FinIdealDePara', String(existente['id']), { destino: dest, atualizadoEm: new Date().toISOString() });
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Erro ao atualizar' };
+    }
+    return { ok: true, data: dbCreate('FinIdealDePara', { categoriaReal: cr, destino: dest, criadoEm: new Date().toISOString(), atualizadoEm: new Date().toISOString() }) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar de-para' };
+  }
+}
+
+// Aplica vários mapeamentos de uma vez (usado pelo "aplicar sugestões da IA").
+function salvarDeParaIdealLote(mapeamentos: Array<{ categoriaReal: string; destino: string }>): ServerResult {
+  try {
+    let n = 0;
+    for (const m of (mapeamentos || [])) {
+      const r = salvarDeParaIdeal(m.categoriaReal, m.destino);
+      if (r.ok) n++;
+    }
+    return { ok: true, data: { aplicados: n } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao aplicar de-para' };
+  }
+}
+
+// Monta o gasto REAL por categoria + amostras de descrição (pra IA classificar).
+function _realPorCategoriaComAmostras(): { realPorCat: Record<string, number>; amostras: Record<string, string[]> } {
+  const intel = getInteligenciaFinanceira();
+  const d = (intel.ok && intel.data ? intel.data : {}) as Record<string, unknown>;
+  const fixasPorCat = (d['porCategoria'] || {}) as Record<string, number>;
+  const varPorCat = (d['variaveisPorCategoria'] || {}) as Record<string, number>;
+  const realPorCat: Record<string, number> = {};
+  for (const k in fixasPorCat) realPorCat[_normCat(k)] = (realPorCat[_normCat(k)] || 0) + Number(fixasPorCat[k] || 0);
+  for (const k in varPorCat) realPorCat[_normCat(k)] = (realPorCat[_normCat(k)] || 0) + Number(varPorCat[k] || 0);
+
+  // Amostras de descrição (até 6 por categoria) pra IA entender o que é cada uma.
+  const amostras: Record<string, string[]> = {};
+  const lancs = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+  for (const l of lancs) {
+    if (String(l['tipo']) !== 'despesa') continue;
+    const cat = _normCat(l['categoria']);
+    const desc = String(l['descricao'] || '').trim();
+    if (!desc) continue;
+    if (!amostras[cat]) amostras[cat] = [];
+    if (amostras[cat].length < 6 && amostras[cat].indexOf(desc) < 0) amostras[cat].push(desc);
+  }
+  return { realPorCat, amostras };
+}
+
+function getIdealComparativo(): ServerResult {
+  try {
+    initDatabase();
+    const intel = getInteligenciaFinanceira();
+    const di = (intel.ok && intel.data ? intel.data : {}) as Record<string, unknown>;
+    const rendaMensal = Number(di['rendaMensal'] || 0);
+
+    const itens = (dbGetAll('FinPerfilIdeal') as Array<Record<string, unknown>>).map((i) => _sanitizarLinha(i));
+    const idealPorCat: Record<string, number> = {};
+    for (const it of itens) {
+      const c = _normCat(it['categoria']);
+      idealPorCat[c] = (idealPorCat[c] || 0) + Number(it['valorMensal'] || 0);
+    }
+    const totalIdeal = Object.keys(idealPorCat).reduce((s, k) => s + idealPorCat[k], 0);
+
+    const { realPorCat } = _realPorCategoriaComAmostras();
+
+    // de-para: categoriaReal → destino
+    const deParaRows = dbGetAll('FinIdealDePara') as Array<Record<string, unknown>>;
+    const deP: Record<string, string> = {};
+    for (const r of deParaRows) deP[_normCat(r['categoriaReal'])] = String(r['destino'] || '').toLowerCase().trim();
+
+    // Resolve o destino de cada categoria real.
+    const realComparavelPorIdeal: Record<string, number> = {};
+    const fontesPorIdeal: Record<string, Array<{ categoriaReal: string; valor: number }>> = {};
+    const foraDoIdeal: Array<{ categoriaReal: string; real: number; destino: string }> = [];
+
+    for (const cr in realPorCat) {
+      const rv = realPorCat[cr];
+      let destino = deP[cr];
+      if (destino === undefined || destino === '') {
+        // Padrão: se a categoria real existe como alvo no ideal, auto-mapeia.
+        destino = idealPorCat[cr] !== undefined ? cr : '';
+      }
+      if (destino && destino !== 'cortar' && destino !== 'fora' && idealPorCat[destino] !== undefined) {
+        realComparavelPorIdeal[destino] = (realComparavelPorIdeal[destino] || 0) + rv;
+        if (!fontesPorIdeal[destino]) fontesPorIdeal[destino] = [];
+        fontesPorIdeal[destino].push({ categoriaReal: cr, valor: rv });
+      } else {
+        foraDoIdeal.push({ categoriaReal: cr, real: rv, destino: (destino === 'cortar' || destino === 'fora') ? destino : '' });
+      }
+    }
+
+    // Comparáveis: uma linha por categoria do ideal.
+    const comparaveis = Object.keys(idealPorCat).map((cat) => {
+      const ideal = idealPorCat[cat];
+      const real = realComparavelPorIdeal[cat] || 0;
+      const diff = real - ideal;
+      let status: string;
+      if (real <= 0) status = 'sem_gasto';
+      else if (real <= ideal * 1.02) status = 'dentro';
+      else if (real <= ideal * 1.2) status = 'atencao';
+      else status = 'acima';
+      return { categoria: cat, ideal, real, diff, status, fontes: fontesPorIdeal[cat] || [] };
+    }).sort((a, b) => Math.max(b.ideal, b.real) - Math.max(a.ideal, a.real));
+
+    foraDoIdeal.sort((a, b) => b.real - a.real);
+
+    const totalRealComparavel = Object.keys(realComparavelPorIdeal).reduce((s, k) => s + realComparavelPorIdeal[k], 0);
+    const totalFora = foraDoIdeal.reduce((s, f) => s + f.real, 0);
+    const totalCortar = foraDoIdeal.filter((f) => f.destino === 'cortar').reduce((s, f) => s + f.real, 0);
+
+    return {
+      ok: true,
+      data: {
+        rendaMensal,
+        rendaConfigurada: rendaMensal > 0,
+        temIdeal: itens.length > 0,
+        idealCategorias: Object.keys(idealPorCat).sort(),
+        totalIdeal,
+        comparaveis,
+        foraDoIdeal,
+        totalRealComparavel,
+        totalFora,
+        totalCortar,
+        qtdFora: foraDoIdeal.length,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao montar Ideal × Real' };
+  }
+}
+
+// IA: sugere o de-para (cada categoria real → alvo do ideal | cortar | fora) e
+// um resumo do que cortar/adequar. O cliente revisa e aplica em lote.
+function analisarIdealIA(): ServerResult {
+  try {
+    initDatabase();
+    const itens = (dbGetAll('FinPerfilIdeal') as Array<Record<string, unknown>>).map((i) => _sanitizarLinha(i));
+    if (!itens.length) return { ok: false, error: 'Monte seu Perfil ideal primeiro pra eu poder comparar.' };
+    const idealCats: Record<string, { total: number; descricoes: string[] }> = {};
+    for (const it of itens) {
+      const c = _normCat(it['categoria']);
+      if (!idealCats[c]) idealCats[c] = { total: 0, descricoes: [] };
+      idealCats[c].total += Number(it['valorMensal'] || 0);
+      const d = String(it['descricao'] || '').trim();
+      if (d) idealCats[c].descricoes.push(d);
+    }
+
+    const { realPorCat, amostras } = _realPorCategoriaComAmostras();
+    const idealResumo = Object.keys(idealCats).map((c) => ({
+      categoria: c, alvoMensal: Math.round(idealCats[c].total), itens: idealCats[c].descricoes,
+    }));
+    const realResumo = Object.keys(realPorCat).map((c) => ({
+      categoriaReal: c, gastoMensal: Math.round(realPorCat[c]), exemplos: amostras[c] || [],
+    })).sort((a, b) => b.gastoMensal - a.gastoMensal);
+
+    const slugs = Object.keys(idealCats);
+    const sys = 'Você é um consultor financeiro brasileiro. Vai relacionar as categorias de gasto REAL de uma pessoa com o ORÇAMENTO IDEAL que ela definiu. '
+      + 'Para CADA categoria real, escolha um destino: '
+      + `(a) o slug de uma categoria do ideal (quando o gasto pertence àquele alvo) — slugs válidos: [${slugs.join(', ')}]; `
+      + '(b) "cortar" quando é um gasto NÃO-essencial/não-estrutural que deveria ser eliminado pra chegar no ideal; '
+      + '(c) "fora" quando é um extra aceitável que simplesmente não faz parte do ideal. '
+      + 'Responda APENAS JSON válido, sem markdown, no formato: '
+      + '{"mapeamentos":[{"categoriaReal":"<slug>","destino":"<slug|cortar|fora>","motivo":"<curto>"}],"resumo":"<markdown curto: o que cortar/adequar pra chegar no ideal>"}.';
+    const user = `IDEAL (alvos por categoria):\n${JSON.stringify(idealResumo, null, 2)}\n\nREAL (gasto por categoria + exemplos de lançamentos):\n${JSON.stringify(realResumo, null, 2)}`;
+
+    const msgs: LlmMessage[] = [{ role: 'system', content: sys }, { role: 'user', content: user }];
+    const r = forjaCallLLMDetalhado(msgs, 1600);
+    const parsed = extrairJson(r.texto) as Record<string, unknown>;
+    const mapeamentos = Array.isArray(parsed['mapeamentos'])
+      ? (parsed['mapeamentos'] as Array<Record<string, unknown>>).map((m) => ({
+          categoriaReal: _normCat(m['categoriaReal']),
+          destino: String(m['destino'] || '').toLowerCase().trim(),
+          motivo: String(m['motivo'] || ''),
+        })).filter((m) => m.categoriaReal && m.destino)
+      : [];
+    return { ok: true, data: { mapeamentos, resumo: String(parsed['resumo'] || ''), modelo: r.modelo } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao analisar com IA' };
+  }
+}
+
+// ─── Plano "do real ao ideal" (v1.55) ─────────────────────────────────────────
+// Determinístico: calcula a distância até o ideal e os maiores ofensores
+// (cortar / adequar / extra). A narrativa em fases vem da IA sob demanda.
+
+interface OfensorIdeal { categoria: string; tipo: string; atual: number; alvo: number; economia: number }
+
+function _calcularOfensoresIdeal(): {
+  renda: number; rendaConfigurada: boolean; totalIdeal: number; totalRealAtual: number;
+  gap: number; economiaPotencial: number; sobraNoIdeal: number; pctAlinhado: number;
+  ofensores: OfensorIdeal[];
+} {
+  const comp = getIdealComparativo();
+  const d = (comp.ok && comp.data ? comp.data : {}) as Record<string, unknown>;
+  const renda = Number(d['rendaMensal'] || 0);
+  const totalIdeal = Number(d['totalIdeal'] || 0);
+  const totalRealComparavel = Number(d['totalRealComparavel'] || 0);
+  const totalFora = Number(d['totalFora'] || 0);
+  const totalRealAtual = totalRealComparavel + totalFora;
+
+  const ofensores: OfensorIdeal[] = [];
+  // 1. Adequar: categorias comparáveis gastando ACIMA do alvo.
+  for (const l of (d['comparaveis'] as Array<Record<string, unknown>> || [])) {
+    const diff = Number(l['diff'] || 0);
+    if (diff > 0.5) ofensores.push({ categoria: String(l['categoria']), tipo: 'adequar', atual: Number(l['real'] || 0), alvo: Number(l['ideal'] || 0), economia: diff });
+  }
+  // 2. Cortar / extra: gastos fora do ideal.
+  for (const f of (d['foraDoIdeal'] as Array<Record<string, unknown>> || [])) {
+    const real = Number(f['real'] || 0);
+    if (real <= 0.5) continue;
+    const destino = String(f['destino'] || '');
+    const tipo = destino === 'cortar' ? 'cortar' : destino === 'fora' ? 'extra' : 'rever';
+    ofensores.push({ categoria: String(f['categoriaReal']), tipo, atual: real, alvo: 0, economia: real });
+  }
+  ofensores.sort((a, b) => b.economia - a.economia);
+
+  const economiaPotencial = ofensores.reduce((s, o) => s + o.economia, 0);
+  const gap = Math.max(0, totalRealAtual - totalIdeal);
+  const sobraNoIdeal = renda - totalIdeal;
+  const pctAlinhado = totalRealAtual > 0 ? Math.max(0, Math.min(1, 1 - gap / totalRealAtual)) : 1;
+
+  return { renda, rendaConfigurada: renda > 0, totalIdeal, totalRealAtual, gap, economiaPotencial, sobraNoIdeal, pctAlinhado, ofensores };
+}
+
+function getPlanoIdealResumo(): ServerResult {
+  try {
+    initDatabase();
+    const base = _calcularOfensoresIdeal();
+    let ultimoPlano: unknown = null;
+    try {
+      const raw = PropertiesService.getScriptProperties().getProperty('FIN_PLANO_IDEAL');
+      ultimoPlano = raw ? JSON.parse(raw) : null;
+    } catch { /* ok */ }
+    return { ok: true, data: { ...base, ultimoPlano } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao montar resumo do plano' };
+  }
+}
+
+function gerarPlanoIdealIA(): ServerResult {
+  try {
+    initDatabase();
+    const base = _calcularOfensoresIdeal();
+    if (base.totalIdeal <= 0) return { ok: false, error: 'Monte seu Perfil ideal primeiro.' };
+    if (base.ofensores.length === 0) return { ok: false, error: 'Você já está no ideal — nada a regular. 👏' };
+
+    const tipoLabel: Record<string, string> = { cortar: 'cortar (não-estrutural)', adequar: 'adequar ao alvo', extra: 'extra fora do ideal', rever: 'classificar' };
+    const ofensoresTxt = base.ofensores.map((o) => ({
+      categoria: o.categoria, acao: tipoLabel[o.tipo] || o.tipo,
+      gastaHoje: Math.round(o.atual), alvo: Math.round(o.alvo), economiaMes: Math.round(o.economia),
+    }));
+    const resumo = {
+      rendaMensal: Math.round(base.renda),
+      custoIdealMensal: Math.round(base.totalIdeal),
+      custoRealHoje: Math.round(base.totalRealAtual),
+      distanciaAteOIdeal: Math.round(base.gap),
+      economiaPotencialMensal: Math.round(base.economiaPotencial),
+      sobraQuandoNoIdeal: Math.round(base.sobraNoIdeal),
+      ofensores: ofensoresTxt,
+    };
+
+    const sys = 'Você é um consultor financeiro pessoal brasileiro, prático e acolhedor. Vai montar um plano REALISTA pra a pessoa sair do gasto atual e chegar no orçamento IDEAL dela. '
+      + 'Responda em português do Brasil, em markdown limpo e acionável. Use SOMENTE os números fornecidos (em reais/mês); não invente. '
+      + 'Priorize os maiores ofensores e ações fáceis primeiro (quick wins). Sequencie em FASES mensais realistas (ex.: Mês 1, Mês 2, Mês 3) — nem tudo dá pra cortar de uma vez. '
+      + 'Para cada ação: o que fazer na prática, quanto economiza por mês e em que fase. Some a economia acumulada por fase mostrando a aproximação do ideal.';
+    const user = `Retrato (R$/mês):\n${JSON.stringify(resumo, null, 2)}\n\n`
+      + 'Gere o plano com estas seções em markdown:\n\n'
+      + '## Onde você está\n(2-3 frases: distância até o ideal e o que isso significa)\n\n'
+      + '## Roteiro por fases\n(Mês 1 / Mês 2 / Mês 3… — para cada fase: ações concretas, economia da fase e economia acumulada)\n\n'
+      + '## Quando chegar no ideal\n(qual será a sobra mensal e o que fazer com ela)\n\n'
+      + '## 3 lembretes pra não recair\n\nSeja específico e conciso.';
+
+    const msgs: LlmMessage[] = [{ role: 'system', content: sys }, { role: 'user', content: user }];
+    const r = forjaCallLLMDetalhado(msgs, 1800);
+    const registro = { texto: r.texto, modelo: r.modelo, criadoEm: new Date().toISOString() };
+    try { PropertiesService.getScriptProperties().setProperty('FIN_PLANO_IDEAL', JSON.stringify(registro)); } catch { /* ok */ }
+    return { ok: true, data: registro };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar plano com IA' };
+  }
+}
+
+// ─── Importar fatura de cartão via IA (v1.10) ─────────────────────────────────
+// O cliente extrai o texto do PDF (pdf.js no navegador) e manda pra cá. A IA
+// estrutura as compras em itens {data, descricao, valor, categoria}. O cliente
+// revisa numa tabela e chama importarFaturaLancamentos pra criar tudo de uma vez
+// — cada compra vira um lançamento individual no cartão escolhido.
+function interpretarFaturaIA(textoFatura: string): ServerResult {
+  try {
+    const txt = String(textoFatura || '').replace(/\u0000/g, ' ').slice(0, 14000);
+    if (txt.trim().length < 20) return { ok: false, error: 'Texto da fatura vazio ou muito curto.' };
+    const sys = 'Você é um extrator de dados de faturas de cartão de crédito brasileiras. '
+      + 'Recebe o texto bruto de uma fatura e extrai TODAS as compras/lançamentos. '
+      + 'Responda ESTRITAMENTE em JSON válido (sem texto fora do JSON, sem cercas markdown) no formato: '
+      + '{"emissor":"","periodo":"","total":0,"itens":[{"data":"YYYY-MM-DD","descricao":"","valor":0,"categoria":""}]}. '
+      + 'Regras de SINAL do valor: POSITIVO para compras e encargos; NEGATIVO apenas para ESTORNOS, DEVOLUÇÕES e REEMBOLSOS de compras '
+      + '(ex.: "ESTORNO DE ANUIDADE -22,00" vira -22.00). NUNCA descarte um estorno — ele abate o total. '
+      + 'ATENÇÃO — não confunda PAGAMENTO com estorno: linhas de PAGAMENTO da fatura (ex.: "PAGAMENTO", "PAGAMENTO PIX", "PGTO", "PAGTO", "DÉBITO AUTOMÁTICO", "pagamento/créditos", saldo/pagamento da fatura anterior) '
+      + 'QUITAM a fatura e NÃO são compras — IGNORE-as por completo, mesmo que apareçam com valor negativo no detalhamento. '
+      + 'CRÍTICO sobre números: use SEMPRE ponto como separador decimal e NUNCA vírgula nem separador de milhar — '
+      + 'ex.: escreva 1285.90 (jamais 1.285,90) e 44.00 (jamais 44,00). Números são tokens JSON puros, sem aspas. '
+      + 'Faturas brasileiras vêm com vírgula decimal e ponto de milhar; CONVERTA antes de responder. '
+      + 'COMPRAS PARCELADAS: SEMPRE preserve a parcela na descrição no formato (x/y) — ex.: "LOJA X (02/05)" ou "MERCADOLIVRE 03/03". '
+      + 'Se a fatura escrever "x de y" ou "parcela x/y", normalize para (x/y) na descrição. É ESSENCIAL pra projetar as próximas faturas; nunca remova a parcela. '
+      + 'Extraia as COMPRAS, os ENCARGOS financeiros (juros, multa por atraso, IOF, anuidade/mensalidade, seguro) E os ESTORNOS/DEVOLUÇÕES (com valor negativo). '
+      + 'IGNORE: pagamentos da fatura, limite e linhas de total/subtotal. '
+      + 'O campo "total" é o VALOR TOTAL A PAGAR da fatura (rótulos: "valor total", "total a pagar" ou "Saldo"). '
+      + 'CRÉDITO DE SALDO ANTERIOR: se os PAGAMENTOS/CRÉDITOS do período forem MAIORES que o "saldo da fatura anterior", existe um crédito a favor do cliente — '
+      + 'inclua a DIFERENÇA (saldo anterior − pagamentos) como UM item NEGATIVO com descrição "Crédito de saldo anterior" e categoria "outros"; ele reduz o total. '
+      + 'CONCILIE: a soma de (compras + encargos − estornos − crédito de saldo anterior) deve bater com o "total" (valor a pagar). '
+      + 'Se a soma ficar MAIOR que o total, verifique se você não incluiu por engano um PAGAMENTO (remova), esqueceu um estorno negativo, ou esqueceu o crédito de saldo anterior. '
+      + 'Se a data do item não tiver ano, use o ano do período da fatura. '
+      + 'categoria: classifique cada item em uma de [mercado, transporte, alimentacao, lazer, saude, casa, assinaturas, vestuario, educacao, viagem, encargos, outros] (use "encargos" para juros, multa, IOF, anuidade e seguro). '
+      + 'Não invente itens que não estejam no texto. Português do Brasil.';
+    const msgs: LlmMessage[] = [
+      { role: 'system', content: sys },
+      { role: 'user', content: 'Texto da fatura:\n\n' + txt },
+    ];
+    const r = forjaCallLLMDetalhado(msgs, 8000);
+    let parsed: Record<string, unknown>;
+    try { parsed = extrairJsonFatura(r.texto) as Record<string, unknown>; }
+    catch { return { ok: false, error: 'A IA não retornou um JSON válido. Tente de novo ou cole o texto manualmente.' }; }
+    const itensRaw = Array.isArray(parsed['itens']) ? parsed['itens'] as Array<Record<string, unknown>> : [];
+    const itens = itensRaw.map((it) => ({
+      data: String(it['data'] || ''),
+      descricao: String(it['descricao'] || '').trim(),
+      // Preserva o SINAL: estornos/devoluções vêm negativos e abatem o total.
+      valor: Number(it['valor'] || 0),
+      categoria: String(it['categoria'] || 'outros').toLowerCase().trim(),
+    })).filter((it) => it.descricao && it.valor !== 0 && !_ehPagamentoFatura(it.descricao, it.valor));
+    if (itens.length === 0) return { ok: false, error: 'Não encontrei compras na fatura. Confira o arquivo ou cole o texto manualmente.' };
+    return {
+      ok: true,
+      data: {
+        emissor: String(parsed['emissor'] || ''),
+        periodo: String(parsed['periodo'] || ''),
+        total: Math.abs(Number(parsed['total'] || 0)),
+        itens,
+        modelo: r.modelo,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao interpretar fatura' };
+  }
+}
+
+// Detecta parcela na descrição: aceita "x/y", "parcela x/y" e "x de y".
+// Null se y<=1 ou x fora de [1,y].
+function _detectarParcelaDesc(desc: string): { atual: number; total: number } | null {
+  const s = String(desc || '');
+  const m = s.match(/\b(\d{1,2})\s*\/\s*(\d{1,2})\b/)
+    || s.match(/\bparc(?:ela)?\.?\s*(\d{1,2})\s*(?:\/|de)\s*(\d{1,2})\b/i)
+    || s.match(/\b(\d{1,2})\s+de\s+(\d{1,2})\b/i);
+  if (!m) return null;
+  const atual = Number(m[1]);
+  const total = Number(m[2]);
+  if (total > 1 && atual >= 1 && atual <= total) return { atual, total };
+  return null;
+}
+
+// Remove o "x/y" da descrição (onde estiver) e devolve o nome do estabelecimento
+// limpo — usado pra exibir e pra montar a chave de agrupamento.
+function _descSemParcela(desc: string): string {
+  return String(desc || '')
+    .replace(/\bparc(?:ela)?\.?\s*\d{1,2}\s*(?:\/|de)\s*\d{1,2}\b/gi, ' ')
+    .replace(/\(?\b\d{1,2}\s*\/\s*\d{1,2}\b\)?/g, ' ')
+    .replace(/\b\d{1,2}\s+de\s+\d{1,2}\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Chave estável (sem acento, minúscula, alfanumérica) da descrição pra agrupar
+// a mesma compra parcelada entre faturas. "SAMSUNG NO ITAU (15/21)" e a mesma
+// compra na fatura seguinte "(16/21)" geram a MESMA chave.
+function _normDescFatura(desc: string): string {
+  return _descSemParcela(desc)
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+// Detecta uma linha de PAGAMENTO da fatura (quitação) — que NÃO é uma compra e
+// deve ser ignorada na importação. Diferente de um ESTORNO/DEVOLUÇÃO (que é
+// reembolso de compra e entra como negativo). Heurística: aparece com valor
+// negativo (crédito) E a descrição cita pagamento/débito automático. Assim um
+// estabelecimento qualquer (positivo) ou um estorno (negativo, mas sem a
+// palavra "pagamento") nunca são confundidos.
+function _ehPagamentoFatura(desc: string, valor: number): boolean {
+  if (Number(valor) >= 0) return false; // pagamentos são créditos (negativos)
+  const d = String(desc || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return /\bpagamento\b|\bpagamentos\b|\bpagto\b|\bpgto\b|debito automatico|deb\.?\s*automatico|pagto\.?\s*recebido|pagamento\/credito|pag\.?\s*fatura/.test(d);
+}
+
+// Soma N meses (pode ser negativo) a uma competência 'YYYY-MM'.
+function _addMesesComp(comp: string, n: number): string {
+  const [y, m] = comp.split('-').map(Number);
+  const dt = new Date(y, (m - 1) + n, 1);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// Data de vencimento materializada num mês 'YYYY-MM' (cap no último dia).
+function _vencimentoNoMes(comp: string, diaVenc: number): string {
+  if (!/^\d{4}-\d{2}$/.test(comp)) return '';
+  const [y, m] = comp.split('-').map(Number);
+  const ultimo = new Date(y, m, 0).getDate();
+  const dia = diaVenc > 0 ? Math.min(diaVenc, ultimo) : ultimo;
+  return `${comp}-${String(dia).padStart(2, '0')}`;
+}
+
+// Importa os lançamentos de uma fatura. Para compras PARCELADAS (x/y) materializa
+// a parcela ATUAL + as FUTURAS (x+1..y) como lançamentos pendentes nos meses
+// seguintes — assim viram "débito futuro" e aparecem no painel/próximas faturas.
+// Cada grupo recebe um `parcelaGrupoId` DETERMINÍSTICO (cartão+descrição+total+
+// valor+mês da 1ª parcela). Reimportar a próxima fatura NÃO duplica: a mesma
+// compra cai no mesmo grupo (já existe) e é ignorada — só as compras novas
+// entram. Itens à vista têm dedupe por (cartão+mês+descrição+valor).
+function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPadrao?: string, competenciaFatura?: string): ServerResult {
+  try {
+    let itens: Array<Record<string, unknown>>;
+    try { itens = JSON.parse(String(itensJson || '[]')) as Array<Record<string, unknown>>; }
+    catch { return { ok: false, error: 'Lista de itens inválida.' }; }
+    if (!Array.isArray(itens) || itens.length === 0) return { ok: false, error: 'Nenhum item pra importar.' };
+
+    const status = String(statusPadrao || 'pendente');
+    const hoje = new Date().toISOString().substring(0, 10);
+    const agora = new Date().toISOString();
+    const cid = String(cartaoId || '');
+    const cartao = dbGetById('FinPessoalCartoes', cid);
+    const diaVenc = cartao ? Number(cartao['diaVencimento'] || 0) : 0;
+    const diaFech = cartao ? Number(cartao['diaFechamento'] || 1) : 1;
+
+    // Mês (competência) da fatura = mês em que ela vence/você paga.
+    const compFat = String(competenciaFatura || '').substring(0, 7);
+    const temCompFat = /^\d{4}-\d{2}$/.test(compFat);
+    const vencimentoFatura = temCompFat ? _vencimentoNoMes(compFat, diaVenc) : '';
+
+    // Snapshot ANTES do loop pra dedupe (não inclui o que criamos agora).
+    const existentes = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    const gruposExistentes: Record<string, boolean> = {};
+    for (const l of existentes) {
+      const g = String(l['parcelaGrupoId'] || '');
+      if (g) gruposExistentes[g] = true;
+    }
+
+    let criados = 0;        // parcelas atuais + itens à vista gravados
+    let parcelasFuturas = 0; // parcelas futuras provisionadas
+    let gruposNovos = 0;     // compras parceladas novas
+    let duplicados = 0;      // ignorados por já existirem
+
+    for (const it of itens) {
+      // Preserva o SINAL: estornos/créditos entram como despesa NEGATIVA, que
+      // abate a fatura (some corretamente no "a pagar" e no total do mês).
+      const valor = Number(it['valor'] || 0);
+      const descricao = String(it['descricao'] || '').trim();
+      if (!descricao || valor === 0) continue;
+      // Trava: pagamentos da fatura (quitação) não são compras — nunca importa.
+      if (_ehPagamentoFatura(descricao, valor)) continue;
+      const categoria = String(it['categoria'] || 'outros');
+      const dataItem = String(it['data'] || hoje);
+      const valorCents = Math.round(valor * 100);
+
+      // Parcela: do texto "x/y" ou dos campos estruturados, se vierem.
+      const parc = _detectarParcelaDesc(descricao)
+        || (Number(it['parcelas']) > 1
+          ? { atual: Math.max(1, Number(it['parcelaAtual'] || 1)), total: Number(it['parcelas']) }
+          : null);
+
+      // Competência da parcela ATUAL: o mês da fatura (se informado), senão pelo
+      // ciclo do cartão a partir da data da compra.
+      const compAtual = temCompFat ? compFat : _faturaInfoCartao(dataItem, diaFech, diaVenc).comp;
+
+      if (parc) {
+        // Âncora estável: mês da 1ª parcela (não muda entre faturas).
+        const compP1 = _addMesesComp(compAtual, -(parc.atual - 1));
+        const grupoId = `imp:${cid}:${_normDescFatura(descricao)}:${parc.total}:${valorCents}:${compP1}`;
+        if (gruposExistentes[grupoId]) { duplicados++; continue; }
+        gruposExistentes[grupoId] = true;
+        gruposNovos++;
+        const merchant = _descSemParcela(descricao) || descricao;
+        // Materializa a parcela atual + as futuras (atual..total).
+        for (let j = parc.atual; j <= parc.total; j++) {
+          const compJ = _addMesesComp(compAtual, j - parc.atual);
+          const vencJ = _vencimentoNoMes(compJ, diaVenc);
+          const ehAtual = j === parc.atual;
+          dbCreate('FinPessoalLancamentos', {
+            data: ehAtual ? dataItem : (vencJ || dataItem),
+            descricao: `${merchant} (${j}/${parc.total})`,
+            valor,
+            tipo: 'despesa',
+            categoria,
+            metodo: 'cartao',
+            cartaoId: cid,
+            status: ehAtual ? status : 'pendente',
+            vencimento: ehAtual ? (vencimentoFatura || vencJ) : vencJ,
+            parcelas: parc.total,
+            parcelaAtual: j,
+            recorrencia: 'unica',
+            tags: 'fatura-importada',
+            notas: ehAtual ? 'Importado da fatura via IA (parcelado)' : 'Parcela futura provisionada na importação',
+            parcelaGrupoId: grupoId,
+            recorrenciaOrigemId: '',
+            recorrenciaAtiva: 'nao',
+            criadoEm: agora,
+            atualizadoEm: agora,
+          });
+          if (ehAtual) criados++; else parcelasFuturas++;
+        }
+      } else {
+        // À vista: dedupe contra o snapshot (mesmo cartão, mês, descrição, valor).
+        const nd = _normDescFatura(descricao);
+        const dup = existentes.some((l) => {
+          if (String(l['cartaoId']) !== cid) return false;
+          if (Math.round(Number(l['valor'] || 0) * 100) !== valorCents) return false;
+          if (_normDescFatura(String(l['descricao'] || '')) !== nd) return false;
+          if (!temCompFat) return true;
+          const vm = String(l['vencimento'] || '').substring(0, 7);
+          return vm === compFat || _toYYYYMM(l['data']) === compFat;
+        });
+        if (dup) { duplicados++; continue; }
+        dbCreate('FinPessoalLancamentos', {
+          data: dataItem,
+          descricao,
+          valor,
+          tipo: 'despesa',
+          categoria,
+          metodo: 'cartao',
+          cartaoId: cid,
+          status,
+          vencimento: vencimentoFatura,
+          parcelas: 1,
+          parcelaAtual: 1,
+          recorrencia: 'unica',
+          tags: 'fatura-importada',
+          notas: 'Importado da fatura via IA',
+          parcelaGrupoId: '',
+          recorrenciaOrigemId: '',
+          recorrenciaAtiva: 'nao',
+          criadoEm: agora,
+          atualizadoEm: agora,
+        });
+        criados++;
+      }
+    }
+    // Auto-classifica os recém-importados que ficaram em 'outros' usando as
+    // regras já aprendidas (comércios recorrentes). Idempotente e silencioso.
+    let reclassificados = 0;
+    try {
+      reclassificados = ((aplicarRegrasCategoria(temCompFat ? compFat : undefined, true).data as { alterados: number } | undefined)?.alterados) || 0;
+    } catch { /* segue baile */ }
+
+    return { ok: true, data: { criados, parcelasFuturas, gruposNovos, duplicados, reclassificados } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao importar fatura' };
+  }
+}
+
+// Lê a fatura (PDF/imagem) DIRETO com o Gemini multimodal — sem extração de
+// texto no cliente. Mais preciso pra layout em tabela e funciona em PDF
+// escaneado. Classifica cada compra numa conta do plano de contas (se existir).
+function interpretarFaturaGemini(base64: string, mimeType: string): ServerResult {
+  try {
+    if (!geminiTemChave()) return { ok: false, error: 'Configure a chave do Gemini em Configurações pra usar a leitura direta.' };
+    const dados = String(base64 || '').replace(/^data:[^;]+;base64,/, '');
+    if (dados.length < 50) return { ok: false, error: 'Arquivo vazio ou inválido.' };
+
+    const plano = dbGetAll('FinPlanoContas') as Array<Record<string, unknown>>;
+    const contasLista = plano
+      .filter((c) => String(c['ativo'] || 'sim') !== 'nao')
+      .map((c) => `${c['grupo']} > ${c['nome']}`)
+      .slice(0, 120)
+      .join('; ');
+
+    const sys = 'Você é um extrator de dados de faturas de cartão de crédito brasileiras. '
+      + 'Lê o documento e extrai TODAS as compras/lançamentos com precisão. Português do Brasil.';
+    const instr = 'Extraia os LANÇAMENTOS desta fatura: TODAS as compras, os encargos financeiros cobrados '
+      + '(juros, multa por atraso, IOF, anuidade/mensalidade, seguro/proteção) E os ESTORNOS/DEVOLUÇÕES/REEMBOLSOS de compras. '
+      + 'NÃO inclua PAGAMENTOS da fatura: linhas como "PAGAMENTO", "PAGAMENTO PIX", "PGTO", "PAGTO", "DÉBITO AUTOMÁTICO", "pagamento/créditos" ou pagamento/saldo da fatura anterior '
+      + 'QUITAM a fatura e NÃO são compras — IGNORE-as por completo, mesmo aparecendo com valor negativo no detalhamento. '
+      + 'IGNORE também: limite e as linhas de total/subtotal. '
+      + 'Para cada lançamento devolva: data (YYYY-MM-DD; se faltar o ano use o do período da fatura; encargo sem data use a data de fechamento/vencimento da fatura), '
+      + 'descricao. COMPRAS PARCELADAS: SEMPRE preserve a parcela no formato (x/y) — ex.: "SAMSUNG (05/06)" ou "MERCADOLIVRE 03/03"; '
+      + 'se a fatura escrever "x de y" ou "parcela x/y", normalize para (x/y). É ESSENCIAL pra projetar as próximas faturas; NUNCA remova a parcela. '
+      + 'valor com SINAL: POSITIVO para compras/encargos e NEGATIVO apenas para estornos/devoluções/reembolsos (ex.: "ESTORNO DE ANUIDADE -22,00" → -22.00). NUNCA descarte um estorno. '
+      + 'Use SEMPRE ponto decimal e sem separador de milhar — ex.: 1285.90, nunca 1.285,90. '
+      + 'e categoria (slug curto, minúsculo, sem acento; use "encargos" para juros, multa, IOF, anuidade e seguro). '
+      + 'O campo "total" é o VALOR TOTAL A PAGAR da fatura ("valor total", "total a pagar" ou "Saldo"). '
+      + 'CRÉDITO DE SALDO ANTERIOR: se os PAGAMENTOS/CRÉDITOS do período forem MAIORES que o "saldo da fatura anterior", há um crédito a favor do cliente — '
+      + 'inclua a DIFERENÇA (saldo anterior − pagamentos) como UM item NEGATIVO "Crédito de saldo anterior", categoria "outros"; ele reduz o total. '
+      + 'CONCILIE: a soma de (compras + encargos − estornos − crédito de saldo anterior) deve bater com o "total" (valor a pagar). '
+      + 'Se a soma ficar MAIOR que o total, confira se você não incluiu por engano um PAGAMENTO (remova), esqueceu um estorno negativo, ou o crédito de saldo anterior. '
+      + (contasLista
+        ? `Classifique cada compra escolhendo a melhor CONTA deste plano de contas (devolva "conta" = nome exato e "grupo" = grupo correspondente). Encargos podem usar conta "Outros". Se nenhuma servir, use conta "Outros". Plano de contas: ${contasLista}. `
+        : 'Devolva "conta" e "grupo" vazios. ')
+      + 'Responda APENAS JSON no formato: {"emissor":"","periodo":"","total":0,"itens":[{"data":"","descricao":"","valor":0,"categoria":"","conta":"","grupo":""}]}.';
+
+    const partes: GeminiParte[] = [
+      { text: instr },
+      { inline_data: { mime_type: mimeType || 'application/pdf', data: dados } },
+    ];
+    const r = geminiGenerateContent(partes, { system: sys, json: true, maxTokens: 8192, temperature: 0.1 });
+    let parsed: Record<string, unknown>;
+    try { parsed = JSON.parse(r.texto) as Record<string, unknown>; }
+    catch {
+      try { parsed = extrairJsonFatura(r.texto) as Record<string, unknown>; }
+      catch { return { ok: false, error: 'O Gemini não retornou um JSON válido. Tente de novo.' }; }
+    }
+    const itensRaw = Array.isArray(parsed['itens']) ? parsed['itens'] as Array<Record<string, unknown>> : [];
+    const itens = itensRaw.map((it) => {
+      const conta = String(it['conta'] || '').trim();
+      const cat = String(it['categoria'] || '').trim() || _slug(conta || 'outros');
+      return {
+        data: String(it['data'] || ''),
+        descricao: String(it['descricao'] || '').trim(),
+        // Preserva o SINAL: estornos/devoluções vêm negativos e abatem o total.
+        valor: Number(it['valor'] || 0),
+        categoria: cat,
+        conta,
+        grupo: String(it['grupo'] || '').trim(),
+      };
+    }).filter((it) => it.descricao && it.valor !== 0 && !_ehPagamentoFatura(it.descricao, it.valor));
+    if (itens.length === 0) return { ok: false, error: 'Não encontrei compras na fatura. Tente o modo de colar texto.' };
+    return {
+      ok: true,
+      data: {
+        emissor: String(parsed['emissor'] || ''),
+        periodo: String(parsed['periodo'] || ''),
+        total: Math.abs(Number(parsed['total'] || 0)),
+        itens,
+        modelo: r.modelo,
+        fonte: 'gemini',
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ler a fatura com o Gemini' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Despesas da empresa (v1.15) — livro-caixa MENSAL de despesas avulsas
+// (contas, boletos, recibos, notas). Separado dos `Custos` recorrentes.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const _CATEGORIAS_EMPRESA = ['Hospedagem', 'API/LLM', 'Domínio', 'Banco de dados', 'Ferramenta', 'Marketing', 'Serviços', 'Impostos', 'Outro'];
+
+function _competenciaDe(data: string): string {
+  const s = String(data || '');
+  if (/^\d{4}-\d{2}/.test(s)) return s.substring(0, 7);
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function getDespesasEmpresa(competencia?: string): ServerResult {
+  try {
+    let rows = dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>;
+    if (competencia) rows = rows.filter((r) => String(r['competencia']) === competencia);
+    rows.sort((a, b) => String(b['data'] || '').localeCompare(String(a['data'] || '')));
+    return { ok: true, data: rows };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar despesas' };
+  }
+}
+
+function salvarDespesaEmpresa(payload: Record<string, unknown>): ServerResult {
+  try {
+    const id = payload['id'] ? String(payload['id']) : '';
+    const data = String(payload['data'] || new Date().toISOString().substring(0, 10));
+    const reg: Record<string, unknown> = {
+      data,
+      competencia: _competenciaDe(data),
+      fornecedor: String(payload['fornecedor'] || '').trim(),
+      descricao: String(payload['descricao'] || '').trim(),
+      categoria: String(payload['categoria'] || 'Outro'),
+      valor: Math.abs(Number(payload['valor'] || 0)),
+      sistemaId: String(payload['sistemaId'] || ''),
+      status: String(payload['status'] || 'pendente'),
+      formaPagamento: String(payload['formaPagamento'] || ''),
+      origem: String(payload['origem'] || 'manual'),
+      documento: String(payload['documento'] || ''),
+      notas: String(payload['notas'] || ''),
+      atualizadoEm: new Date().toISOString(),
+    };
+    if (!reg['fornecedor'] && !reg['descricao']) return { ok: false, error: 'Informe ao menos fornecedor ou descrição.' };
+    if (Number(reg['valor']) <= 0) return { ok: false, error: 'Informe um valor válido.' };
+    if (id) {
+      const upd = dbUpdate('FinEmpresaDespesas', id, reg);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Despesa não encontrada' };
+    }
+    reg['criadoEm'] = new Date().toISOString();
+    return { ok: true, data: dbCreate('FinEmpresaDespesas', reg) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar despesa' };
+  }
+}
+
+function deletarDespesaEmpresa(id: string): ServerResult {
+  try {
+    return dbDelete('FinEmpresaDespesas', id) ? { ok: true } : { ok: false, error: 'Despesa não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar despesa' };
+  }
+}
+
+function marcarDespesaEmpresaPaga(id: string, pago: boolean): ServerResult {
+  try {
+    const upd = dbUpdate('FinEmpresaDespesas', id, {
+      status: pago ? 'pago' : 'pendente',
+      atualizadoEm: new Date().toISOString(),
+    });
+    return upd ? { ok: true, data: upd } : { ok: false, error: 'Despesa não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atualizar despesa' };
+  }
+}
+
+function getResumoDespesasEmpresa(competencia?: string): ServerResult {
+  try {
+    const agora = new Date();
+    const comp = competencia || `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
+    const todas = dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>;
+    const doMes = todas.filter((r) => String(r['competencia']) === comp);
+    let total = 0; let pago = 0; let pendente = 0;
+    const porCat: Record<string, number> = {};
+    for (const r of doMes) {
+      const v = Number(r['valor'] || 0);
+      total += v;
+      if (String(r['status']) === 'pago') pago += v; else pendente += v;
+      const c = String(r['categoria'] || 'Outro');
+      porCat[c] = (porCat[c] || 0) + v;
+    }
+    const [y, m] = comp.split('-').map(Number);
+    const prev = new Date(y, m - 2, 1);
+    const compPrev = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+    const totalPrev = todas.filter((r) => String(r['competencia']) === compPrev).reduce((s, r) => s + Number(r['valor'] || 0), 0);
+    const deltaPct = totalPrev > 0 ? Math.round(((total - totalPrev) / totalPrev) * 100) : null;
+    const porCategoria = Object.keys(porCat).map((c) => ({ categoria: c, total: porCat[c] })).sort((a, b) => b.total - a.total);
+
+    // Evolução de 6 meses (até a competência selecionada) pra ver tendência.
+    const mesesAbrev = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const serie: Array<{ label: string; total: number }> = [];
+    for (let i = 5; i >= 0; i--) {
+      const ref = new Date(y, m - 1 - i, 1);
+      const cRef = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}`;
+      const tot = todas.filter((r) => String(r['competencia']) === cRef).reduce((s, r) => s + Number(r['valor'] || 0), 0);
+      serie.push({ label: `${mesesAbrev[ref.getMonth()]}/${String(ref.getFullYear()).slice(2)}`, total: Math.round(tot) });
+    }
+
+    // Despesa por app no mês (qual produto puxa mais custo variável).
+    const porAppMap: Record<string, number> = {};
+    for (const r of doMes) { const sid = String(r['sistemaId'] || ''); porAppMap[sid] = (porAppMap[sid] || 0) + Number(r['valor'] || 0); }
+    const porApp = Object.keys(porAppMap).map((sid) => {
+      const s = sid ? dbGetById('Sistemas', sid) : null;
+      return { sistemaId: sid, nome: s ? String(s['nome']) : 'Sem app', total: Math.round(porAppMap[sid]) };
+    }).sort((a, b) => b.total - a.total);
+
+    return { ok: true, data: { competencia: comp, total, pago, pendente, qtd: doMes.length, deltaPct, porCategoria, serie, porApp } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao resumir despesas' };
+  }
+}
+
+function importarDespesasEmpresa(itensJson: string, statusPadrao?: string, documento?: string): ServerResult {
+  try {
+    let itens: Array<Record<string, unknown>>;
+    try { itens = JSON.parse(String(itensJson || '[]')) as Array<Record<string, unknown>>; }
+    catch { return { ok: false, error: 'Lista de itens inválida.' }; }
+    if (!Array.isArray(itens) || itens.length === 0) return { ok: false, error: 'Nenhum item pra importar.' };
+    const status = String(statusPadrao || 'pendente');
+    const hoje = new Date().toISOString().substring(0, 10);
+    let criados = 0;
+    for (const it of itens) {
+      const valor = Math.abs(Number(it['valor'] || 0));
+      if (valor <= 0) continue;
+      const data = String(it['data'] || hoje);
+      const fornecedor = String(it['fornecedor'] || '').trim();
+      const descricao = String(it['descricao'] || '').trim() || fornecedor || 'Despesa';
+      dbCreate('FinEmpresaDespesas', {
+        data,
+        competencia: _competenciaDe(data),
+        fornecedor,
+        descricao,
+        categoria: String(it['categoria'] || 'Outro'),
+        valor,
+        sistemaId: String(it['sistemaId'] || ''),
+        status,
+        formaPagamento: '',
+        origem: 'import',
+        documento: String(documento || ''),
+        notas: 'Importado de conta/recibo via IA',
+        criadoEm: new Date().toISOString(),
+        atualizadoEm: new Date().toISOString(),
+      });
+      criados++;
+    }
+    return { ok: true, data: { criados } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao importar despesas' };
+  }
+}
+
+// Lê uma conta/boleto/recibo/nota (PDF ou imagem) DIRETO com o Gemini multimodal.
+// Extrai fornecedor + data + valor total e, se houver linhas discriminadas
+// relevantes, os itens. Classifica nas categorias da empresa.
+function interpretarReciboGemini(base64: string, mimeType: string): ServerResult {
+  try {
+    if (!geminiTemChave()) return { ok: false, error: 'Configure a chave do Gemini em Configurações pra usar a leitura direta.' };
+    const dados = String(base64 || '').replace(/^data:[^;]+;base64,/, '');
+    if (dados.length < 50) return { ok: false, error: 'Arquivo vazio ou inválido.' };
+
+    const cats = _CATEGORIAS_EMPRESA.join(', ');
+    const sys = 'Você é um extrator de dados de contas, boletos, notas fiscais e recibos de despesa de empresas brasileiras. '
+      + 'Lê o documento e extrai os dados de pagamento com precisão. Português do Brasil.';
+    const instr = 'Extraia desta conta/recibo: '
+      + 'fornecedor (nome do emissor/prestador), '
+      + 'data no formato YYYY-MM-DD (prefira a data de VENCIMENTO; se não houver, use a de emissão), '
+      + 'valor total a pagar (número positivo com ponto decimal). '
+      + 'Se o documento listar itens/serviços discriminados que valham a pena separar, devolva-os em "itens" (cada um com "descricao" e "valor"); '
+      + 'se for uma conta de valor único, devolva "itens" como lista vazia. '
+      + `Classifique a despesa (e cada item, se houver) escolhendo a melhor categoria desta lista: ${cats}. Se nenhuma servir, use "Outro". `
+      + 'Responda APENAS JSON no formato: {"fornecedor":"","data":"","total":0,"categoria":"","itens":[{"descricao":"","valor":0,"categoria":""}]}.';
+
+    const partes: GeminiParte[] = [
+      { text: instr },
+      { inline_data: { mime_type: mimeType || 'application/pdf', data: dados } },
+    ];
+    const r = geminiGenerateContent(partes, { system: sys, json: true, maxTokens: 4096, temperature: 0.1 });
+    let parsed: Record<string, unknown>;
+    try { parsed = JSON.parse(r.texto) as Record<string, unknown>; }
+    catch {
+      try { parsed = extrairJson(r.texto) as Record<string, unknown>; }
+      catch { return { ok: false, error: 'O Gemini não retornou um JSON válido. Tente de novo.' }; }
+    }
+
+    const fornecedor = String(parsed['fornecedor'] || '').trim();
+    const dataDoc = String(parsed['data'] || '').trim();
+    const total = Math.abs(Number(parsed['total'] || 0));
+    const catDoc = String(parsed['categoria'] || '').trim() || 'Outro';
+
+    const itensRaw = Array.isArray(parsed['itens']) ? parsed['itens'] as Array<Record<string, unknown>> : [];
+    let itens = itensRaw.map((it) => ({
+      data: dataDoc,
+      fornecedor,
+      descricao: String(it['descricao'] || '').trim(),
+      valor: Math.abs(Number(it['valor'] || 0)),
+      categoria: String(it['categoria'] || '').trim() || catDoc,
+    })).filter((it) => it.descricao && it.valor > 0);
+
+    // Sem itens discriminados → cria 1 despesa com o total do documento.
+    if (itens.length === 0) {
+      const valor = total > 0 ? total : 0;
+      if (valor <= 0) return { ok: false, error: 'Não consegui identificar o valor. Lance manualmente ou tente outro arquivo.' };
+      itens = [{ data: dataDoc, fornecedor, descricao: fornecedor || 'Despesa', valor, categoria: catDoc }];
+    }
+
+    return {
+      ok: true,
+      data: {
+        fornecedor,
+        data: dataDoc,
+        total: total || itens.reduce((s, it) => s + it.valor, 0),
+        categoria: catDoc,
+        itens,
+        modelo: r.modelo,
+        fonte: 'gemini',
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ler a conta com o Gemini' };
+  }
+}
+
+// ─── Plano de contas / centros de custo (v1.11) ───────────────────────────────
+
+function _slug(s: string): string {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'outros';
+}
+
+function getPlanoContas(): ServerResult {
+  try {
+    const rows = dbGetAll('FinPlanoContas') as Array<Record<string, unknown>>;
+    rows.sort((a, b) => Number(a['ordem'] || 0) - Number(b['ordem'] || 0));
+    return { ok: true, data: rows };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar plano de contas' };
+  }
+}
+
+function salvarContaPlano(payload: Record<string, unknown>): ServerResult {
+  try {
+    const id = payload['id'] ? String(payload['id']) : '';
+    const data: Record<string, unknown> = {
+      codigo: String(payload['codigo'] || '').trim(),
+      grupo: String(payload['grupo'] || 'Geral').trim(),
+      nome: String(payload['nome'] || '').trim(),
+      tipo: String(payload['tipo'] || 'despesa'),
+      descricao: String(payload['descricao'] || '').trim(),
+      cor: String(payload['cor'] || '#6b7280'),
+      ordem: Number(payload['ordem'] || 0),
+      ativo: String(payload['ativo'] || 'sim'),
+      atualizadoEm: new Date().toISOString(),
+    };
+    if (!data['nome']) return { ok: false, error: 'Informe o nome da conta.' };
+    if (id) {
+      const upd = dbUpdate('FinPlanoContas', id, data);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Conta não encontrada' };
+    }
+    data['criadoEm'] = new Date().toISOString();
+    return { ok: true, data: dbCreate('FinPlanoContas', data) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar conta' };
+  }
+}
+
+function deletarContaPlano(id: string): ServerResult {
+  try {
+    return dbDelete('FinPlanoContas', id) ? { ok: true } : { ok: false, error: 'Conta não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar conta' };
+  }
+}
+
+// Resumo dos gastos do usuário pra alimentar a IA na geração do plano de contas.
+function _resumoGastosParaPlano(): string {
+  const lancs = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+  const porCat: Record<string, { qtd: number; total: number; exemplos: string[] }> = {};
+  for (const l of lancs) {
+    if (String(l['tipo'] || 'despesa') !== 'despesa') continue;
+    const cat = String(l['categoria'] || 'outros');
+    if (!porCat[cat]) porCat[cat] = { qtd: 0, total: 0, exemplos: [] };
+    porCat[cat].qtd += 1;
+    porCat[cat].total += Math.abs(Number(l['valor'] || 0));
+    const d = String(l['descricao'] || '').trim();
+    if (d && porCat[cat].exemplos.length < 4 && porCat[cat].exemplos.indexOf(d) < 0) porCat[cat].exemplos.push(d);
+  }
+  const linhas = Object.keys(porCat)
+    .sort((a, b) => porCat[b].total - porCat[a].total)
+    .slice(0, 40)
+    .map((c) => `- ${c}: ${porCat[c].qtd} lançamentos, total R$ ${porCat[c].total.toFixed(2)} (ex: ${porCat[c].exemplos.join(', ') || '—'})`);
+  const assinaturas = dbGetAll('FinPessoalAssinaturas') as Array<Record<string, unknown>>;
+  const ass = assinaturas.slice(0, 30).map((a) => `${a['nome']} (${a['categoria']})`).join(', ');
+  return `Categorias atuais e gastos:\n${linhas.join('\n') || '(sem lançamentos ainda)'}\n\nAssinaturas: ${ass || '(nenhuma)'}`;
+}
+
+function gerarPlanoContasIA(substituir?: boolean): ServerResult {
+  try {
+    if (!geminiTemChave()) return { ok: false, error: 'Configure a chave do Gemini em Configurações primeiro.' };
+    const contexto = _resumoGastosParaPlano();
+    const sys = 'Você é um contador brasileiro especialista em finanças pessoais. '
+      + 'Monta um PLANO DE CONTAS (centros de custo) claro e prático pra organizar despesas e receitas pessoais. Português do Brasil.';
+    const user = 'Com base nos gastos reais abaixo, gere um plano de contas enxuto e bem estruturado (grupos com contas), '
+      + 'cobrindo as despesas existentes e antecipando categorias comuns que faltam. '
+      + 'Use grupos como Moradia, Alimentação, Transporte, Saúde, Lazer, Pessoal, Educação, Financeiro, Assinaturas e um grupo de Receitas. '
+      + 'Cada conta deve ter um código hierárquico (ex: "3.01", "3.02"; receitas começam em "1."). '
+      + 'Responda APENAS JSON: {"contas":[{"codigo":"","grupo":"","nome":"","tipo":"despesa|receita","descricao":""}]}. '
+      + 'Máximo ~35 contas.\n\n' + contexto;
+    const r = geminiGenerateContent([{ text: user }], { system: sys, json: true, maxTokens: 4096, temperature: 0.3 });
+    let parsed: Record<string, unknown>;
+    try { parsed = JSON.parse(r.texto) as Record<string, unknown>; }
+    catch {
+      try { parsed = extrairJson(r.texto) as Record<string, unknown>; }
+      catch { return { ok: false, error: 'O Gemini não retornou um JSON válido.' }; }
+    }
+    const contas = Array.isArray(parsed['contas']) ? parsed['contas'] as Array<Record<string, unknown>> : [];
+    if (contas.length === 0) return { ok: false, error: 'A IA não retornou contas.' };
+
+    if (substituir) {
+      const atuais = dbGetAll('FinPlanoContas') as Array<Record<string, unknown>>;
+      for (const c of atuais) dbDelete('FinPlanoContas', String(c['id']));
+    }
+    const paleta = ['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#06b6d4', '#84cc16', '#a855f7', '#0ea5e9'];
+    const gruposCor: Record<string, string> = {};
+    let gi = 0;
+    let ordem = 0;
+    for (const c of contas) {
+      const grupo = String(c['grupo'] || 'Geral').trim();
+      if (!gruposCor[grupo]) { gruposCor[grupo] = paleta[gi % paleta.length]; gi += 1; }
+      dbCreate('FinPlanoContas', {
+        codigo: String(c['codigo'] || '').trim(),
+        grupo,
+        nome: String(c['nome'] || '').trim(),
+        tipo: String(c['tipo'] || 'despesa'),
+        descricao: String(c['descricao'] || '').trim(),
+        cor: gruposCor[grupo],
+        ordem: ordem++,
+        ativo: 'sim',
+        criadoEm: new Date().toISOString(),
+        atualizadoEm: new Date().toISOString(),
+      });
+    }
+    const rows = dbGetAll('FinPlanoContas') as Array<Record<string, unknown>>;
+    rows.sort((a, b) => Number(a['ordem'] || 0) - Number(b['ordem'] || 0));
+    return { ok: true, data: { contas: rows, modelo: r.modelo } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar plano de contas' };
+  }
+}
+
+// ─── Família: membros + cobranças compartilhadas (v1.12) ──────────────────────
+// Resolve o caso "compras de familiares caem no meu cartão": cadastro de membros
+// e cobranças por mês (o que cada um te deve), com status de pagamento, vínculo
+// ao lançamento/assinatura de origem e detecção do que caiu na fatura e ainda
+// não foi atribuído.
+
+const _PALETA_MEMBROS = ['#ec4899', '#8b5cf6', '#06b6d4', '#f59e0b', '#10b981', '#ef4444', '#3b82f6', '#a855f7'];
+
+function getMembros(): ServerResult {
+  try {
+    const rows = dbGetAll('FinPessoalMembros') as Array<Record<string, unknown>>;
+    return { ok: true, data: rows };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar membros' };
+  }
+}
+
+function salvarMembro(payload: Record<string, unknown>): ServerResult {
+  try {
+    const id = payload['id'] ? String(payload['id']) : '';
+    const existentes = dbGetAll('FinPessoalMembros') as Array<Record<string, unknown>>;
+    const data: Record<string, unknown> = {
+      nome: String(payload['nome'] || '').trim(),
+      relacao: String(payload['relacao'] || '').trim(),
+      cor: String(payload['cor'] || _PALETA_MEMBROS[existentes.length % _PALETA_MEMBROS.length]),
+      emoji: String(payload['emoji'] || ''),
+      pix: String(payload['pix'] || '').trim(),
+      telefone: String(payload['telefone'] || '').trim(),
+      ativo: String(payload['ativo'] || 'sim'),
+      notas: String(payload['notas'] || ''),
+      atualizadoEm: new Date().toISOString(),
+    };
+    if (!data['nome']) return { ok: false, error: 'Informe o nome do membro.' };
+    if (id) {
+      const upd = dbUpdate('FinPessoalMembros', id, data);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Membro não encontrado' };
+    }
+    data['criadoEm'] = new Date().toISOString();
+    return { ok: true, data: dbCreate('FinPessoalMembros', data) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar membro' };
+  }
+}
+
+function deletarMembro(id: string): ServerResult {
+  try {
+    // Remove também as cobranças do membro pra não deixar órfãs.
+    const cobr = dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>;
+    for (const c of cobr) if (String(c['membroId']) === String(id)) dbDelete('FinPessoalCobrancas', String(c['id']));
+    return dbDelete('FinPessoalMembros', id) ? { ok: true } : { ok: false, error: 'Membro não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar membro' };
+  }
+}
+
+function getCobrancas(competencia?: string): ServerResult {
+  try {
+    let rows = dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>;
+    if (competencia) rows = rows.filter((c) => String(c['competencia']) === competencia);
+    rows.sort((a, b) => String(b['competencia'] || '').localeCompare(String(a['competencia'] || '')));
+    // Sanitiza: cobranças têm competencia/dataPagamento que o Sheets pode
+    // devolver como Date → google.script.run falhava em silêncio e o drawer do
+    // membro aparecia vazio mesmo com cobrança existindo.
+    return { ok: true, data: rows.map(_sanitizarLinha) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar cobranças' };
+  }
+}
+
+function salvarCobranca(payload: Record<string, unknown>): ServerResult {
+  try {
+    const id = payload['id'] ? String(payload['id']) : '';
+    const agora = new Date();
+    const compPadrao = `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
+    const status = String(payload['status'] || 'pendente');
+    const data: Record<string, unknown> = {
+      membroId: String(payload['membroId'] || ''),
+      descricao: String(payload['descricao'] || '').trim(),
+      valor: Math.abs(Number(payload['valor'] || 0)),
+      competencia: String(payload['competencia'] || compPadrao),
+      status,
+      origem: String(payload['origem'] || 'manual'),
+      origemId: String(payload['origemId'] || ''),
+      recorrente: String(payload['recorrente'] || 'nao'),
+      dataPagamento: status === 'pago' ? String(payload['dataPagamento'] || agora.toISOString().substring(0, 10)) : '',
+      notas: String(payload['notas'] || ''),
+      atualizadoEm: new Date().toISOString(),
+    };
+    if (!data['membroId']) return { ok: false, error: 'Selecione o membro.' };
+    if (!data['descricao']) return { ok: false, error: 'Informe a descrição.' };
+    if (id) {
+      const upd = dbUpdate('FinPessoalCobrancas', id, data);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Cobrança não encontrada' };
+    }
+    data['criadoEm'] = new Date().toISOString();
+    return { ok: true, data: dbCreate('FinPessoalCobrancas', data) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar cobrança' };
+  }
+}
+
+function deletarCobranca(id: string): ServerResult {
+  try {
+    return dbDelete('FinPessoalCobrancas', id) ? { ok: true } : { ok: false, error: 'Cobrança não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar cobrança' };
+  }
+}
+
+function marcarCobrancaPaga(id: string, pago: boolean): ServerResult {
+  try {
+    const upd = dbUpdate('FinPessoalCobrancas', id, {
+      status: pago ? 'pago' : 'pendente',
+      dataPagamento: pago ? new Date().toISOString().substring(0, 10) : '',
+      atualizadoEm: new Date().toISOString(),
+    });
+    return upd ? { ok: true, data: upd } : { ok: false, error: 'Cobrança não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atualizar cobrança' };
+  }
+}
+
+// Retorna as cobranças vinculadas a um lançamento específico (origem=lancamento).
+// Usado pra pré-preencher a modal "Atribuir a membros".
+function getCobrancasDoLancamento(lancamentoId: string): ServerResult {
+  try {
+    const alvo = String(lancamentoId || '').trim();
+    if (!alvo) return { ok: true, data: [] };
+    const rows = (dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>)
+      .filter((c) => String(c['origem']) === 'lancamento' && String(c['origemId']) === alvo)
+      .map(_sanitizarLinha);
+    return { ok: true, data: rows };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar cobranças do lançamento' };
+  }
+}
+
+// Lista enxuta das atribuições (origem=lancamento): só origemId + membroId, de
+// TODOS os meses. Usado pra marcar no lançamento (avatar do membro) que ele já
+// foi atribuído, em qualquer tela.
+function getAtribuicoesLancamentos(): ServerResult {
+  try {
+    const rows = (dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>)
+      .filter((c) => String(c['origem']) === 'lancamento' && c['origemId'])
+      .map((c) => ({ origemId: String(c['origemId']), membroId: String(c['membroId']) }));
+    return { ok: true, data: rows };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar atribuições' };
+  }
+}
+
+// Atribui um lançamento a um ou mais membros (rateio). Substitui (replace) as
+// cobranças anteriores desse lançamento pelas novas — idempotente, então pode
+// reabrir e reeditar à vontade. `atribuicoesJson` = [{membroId, valor}].
+// `competencia` (YYYY-MM): mês em que a cobrança aparece na aba Família. Passar
+// o mês ATIVO da UI — senão um gasto de mês passado caía numa competência que a
+// Família (que mostra o mês ativo) não exibia, e a atribuição "sumia".
+function atribuirLancamentoMembros(lancamentoId: string, atribuicoesJson: string, competencia?: string): ServerResult {
+  try {
+    const alvo = String(lancamentoId || '').trim();
+    if (!alvo) return { ok: false, error: 'Lançamento não informado.' };
+    let atribuicoes: Array<{ membroId: string; valor: number }>;
+    try { atribuicoes = JSON.parse(String(atribuicoesJson || '[]')); }
+    catch { return { ok: false, error: 'Atribuições inválidas.' }; }
+
+    const lanc = dbGetById('FinPessoalLancamentos', alvo);
+    if (!lanc) return { ok: false, error: 'Lançamento não encontrado.' };
+    const descricao = String(lanc['descricao'] || 'Lançamento');
+    const competenciaFinal = String(competencia || '').match(/^\d{4}-\d{2}$/)
+      ? String(competencia)
+      : (_toYYYYMM(lanc['vencimento'] || lanc['data']) || _toYYYYMM(new Date()));
+
+    // Remove as cobranças antigas desse lançamento (replace limpo).
+    const antigas = (dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>)
+      .filter((c) => String(c['origem']) === 'lancamento' && String(c['origemId']) === alvo);
+    for (const c of antigas) dbDelete('FinPessoalCobrancas', String(c['id']));
+
+    let criadas = 0;
+    const agora = new Date().toISOString();
+    for (const a of atribuicoes) {
+      const membroId = String(a.membroId || '').trim();
+      const valor = Math.abs(Number(a.valor || 0));
+      if (!membroId || valor <= 0) continue;
+      dbCreate('FinPessoalCobrancas', {
+        membroId,
+        descricao,
+        valor,
+        competencia: competenciaFinal,
+        status: 'pendente',
+        origem: 'lancamento',
+        origemId: alvo,
+        recorrente: 'nao',
+        dataPagamento: '',
+        notas: '',
+        criadoEm: agora,
+        atualizadoEm: agora,
+      });
+      criadas++;
+    }
+    return { ok: true, data: { criadas } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atribuir lançamento' };
+  }
+}
+
+// Atribui VÁRIOS lançamentos a UM membro de uma vez, 100% do valor de cada um.
+// Pra "essa fatura toda é do fulano" ou "esses itens são do fulano". Faz replace
+// limpo das cobranças de cada lançamento (idempotente). `competencia` (YYYY-MM)
+// = mês ativo da UI (cai na Família desse mês); se vazio, usa o do lançamento.
+function atribuirLancamentosLote(idsJson: string, membroId: string, competencia?: string): ServerResult {
+  try {
+    const membro = String(membroId || '').trim();
+    if (!membro) return { ok: false, error: 'Membro não informado.' };
+    let ids: string[];
+    try { ids = JSON.parse(String(idsJson || '[]')); }
+    catch { return { ok: false, error: 'Lista de lançamentos inválida.' }; }
+    if (!Array.isArray(ids) || ids.length === 0) return { ok: false, error: 'Nenhum lançamento selecionado.' };
+
+    const todasCobr = dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>;
+    let criadas = 0;
+    const agora = new Date().toISOString();
+    for (const rawId of ids) {
+      const alvo = String(rawId || '').trim();
+      if (!alvo) continue;
+      const lanc = dbGetById('FinPessoalLancamentos', alvo);
+      if (!lanc) continue;
+      const valor = Math.abs(Number(lanc['valor'] || 0));
+      if (valor <= 0) continue;
+      const competenciaFinal = String(competencia || '').match(/^\d{4}-\d{2}$/)
+        ? String(competencia)
+        : (_toYYYYMM(lanc['vencimento'] || lanc['data']) || _toYYYYMM(new Date()));
+      // Replace limpo: remove cobranças antigas desse lançamento.
+      const antigas = todasCobr.filter((c) => String(c['origem']) === 'lancamento' && String(c['origemId']) === alvo);
+      for (const c of antigas) dbDelete('FinPessoalCobrancas', String(c['id']));
+      dbCreate('FinPessoalCobrancas', {
+        membroId: membro,
+        descricao: String(lanc['descricao'] || 'Lançamento'),
+        valor,
+        competencia: competenciaFinal,
+        status: 'pendente',
+        origem: 'lancamento',
+        origemId: alvo,
+        recorrente: 'nao',
+        dataPagamento: '',
+        notas: '',
+        criadoEm: agora,
+        atualizadoEm: agora,
+      });
+      criadas++;
+    }
+    return { ok: true, data: { criadas } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atribuir lançamentos em lote' };
+  }
+}
+
+// Cobranças de um membro (todos os meses) ENRIQUECIDAS com o detalhe do
+// lançamento de origem: cartão, data da compra, categoria e vencimento da
+// fatura. Alimenta o drawer detalhado e o PDF que o usuário envia ao membro.
+function getCobrancasMembroDetalhado(membroId: string): ServerResult {
+  try {
+    const alvo = String(membroId || '').trim();
+    if (!alvo) return { ok: true, data: [] };
+    const cartoesMap = _cartoesMap();
+    const lancMap: Record<string, Record<string, unknown>> = {};
+    for (const l of dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>) lancMap[String(l['id'])] = l;
+
+    const rows = (dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>)
+      .filter((c) => String(c['membroId']) === alvo)
+      .map((c) => {
+        const base = _sanitizarLinha(c) as Record<string, unknown>;
+        const lanc = String(c['origem']) === 'lancamento' && c['origemId'] ? lancMap[String(c['origemId'])] : null;
+        if (lanc) {
+          const cartao = lanc['cartaoId'] ? cartoesMap[String(lanc['cartaoId'])] : null;
+          base['dataCompra'] = _valorJsonSafe(lanc['data']);
+          base['metodo'] = String(lanc['metodo'] || '');
+          base['categoria'] = String(lanc['categoria'] || base['categoria'] || '');
+          base['lancamentoValor'] = Math.abs(Number(lanc['valor'] || 0));
+          if (cartao) {
+            const diaFech = Number(cartao['diaFechamento'] || 1);
+            const diaVenc = Number(cartao['diaVencimento'] || 0);
+            const info = _faturaInfoCartao(lanc['data'], diaFech, diaVenc);
+            base['cartaoNome'] = String(cartao['apelido'] || cartao['nome'] || '');
+            base['cartaoBandeira'] = String(cartao['bandeira'] || '');
+            base['faturaCompetencia'] = info.comp;
+            if (info.vencimento) base['vencimentoFatura'] = info.vencimento;
+          }
+        }
+        return base;
+      });
+    // Pendentes primeiro, depois por competência desc.
+    rows.sort((a, b) => {
+      const pa = String(a['status']) === 'pago' ? 1 : 0;
+      const pb = String(b['status']) === 'pago' ? 1 : 0;
+      if (pa !== pb) return pa - pb;
+      return String(b['competencia'] || '').localeCompare(String(a['competencia'] || ''));
+    });
+    return { ok: true, data: rows };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao detalhar cobranças do membro' };
+  }
+}
+
+// PDF da "fatura" de um membro: tudo o que ele deve, com detalhe (cartão, data da
+// compra, vencimento). `apenasPendentes` (default true) ignora o que já pagou.
+function gerarPdfCobrancasMembro(membroId: string, apenasPendentes?: boolean): ServerResult {
+  try {
+    const membro = dbGetById('FinPessoalMembros', String(membroId || ''));
+    if (!membro) return { ok: false, error: 'Membro não encontrado.' };
+    const det = getCobrancasMembroDetalhado(String(membroId));
+    if (!det.ok) return det;
+    let itens = (det.data as Array<Record<string, unknown>>) || [];
+    if (apenasPendentes !== false) itens = itens.filter((c) => String(c['status']) !== 'pago');
+    const total = itens.reduce((s, c) => s + Number(c['valor'] || 0), 0);
+    const emp = _empresaPerfil();
+    const nomeMembro = String(membro['nome'] || 'Membro');
+    const emoji = String(membro['emoji'] || '');
+    const pixMembro = String(membro['pix'] || '').trim() || emp.pix;
+    const telMembro = String(membro['telefone'] || '').trim();
+    const relacaoMembro = String(membro['relacao'] || '').trim();
+
+    const linhas = itens.map((c) => {
+      const detParts: string[] = [];
+      if (c['cartaoNome']) detParts.push('Cartão ' + _escHtml(c['cartaoNome']));
+      if (c['dataCompra']) detParts.push('Compra ' + _escHtml(_fmtDataBR(String(c['dataCompra']))));
+      if (c['vencimentoFatura']) detParts.push('Vence ' + _escHtml(_fmtDataBR(String(c['vencimentoFatura']))));
+      const sub = detParts.length ? '<br><span class="muted" style="font-size:10.5px;">' + detParts.join(' · ') + '</span>' : '';
+      return '<tr><td><strong>' + _escHtml(c['descricao'] || '—') + '</strong>' + sub + '</td>'
+        + '<td>' + _escHtml(_fmtCompetenciaBR(String(c['competencia'] || ''))) + '</td>'
+        + '<td style="text-transform:capitalize;">' + _escHtml(String(c['status'] || 'pendente')) + '</td>'
+        + '<td class="right mono">' + _fmtBRLpdf(Number(c['valor'] || 0)) + '</td></tr>';
+    }).join('');
+
+    const corpo = '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:26px;">'
+      + '<div><div class="muted" style="font-size:10px;letter-spacing:0.16em;text-transform:uppercase;">' + _escHtml(emp.nome) + ' — Cobrança</div>'
+      + '<h1 style="font-size:28px;margin-top:6px;">' + _escHtml((emoji ? emoji + ' ' : '') + nomeMembro) + '</h1>'
+      + ((relacaoMembro || telMembro) ? '<div class="muted" style="font-size:11.5px;margin-top:2px;">' + _escHtml([relacaoMembro, telMembro].filter(Boolean).join(' · ')) + '</div>' : '')
+      + '<div class="muted" style="font-size:11px;margin-top:4px;">Gerado em ' + _escHtml(_fmtDataBR(new Date().toISOString())) + '</div></div>'
+      + '<div class="right"><div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;">Total a receber</div>'
+      + '<div style="font-size:26px;font-weight:600;margin-top:2px;color:#B05A2A;">' + _fmtBRLpdf(total) + '</div>'
+      + '<div class="muted" style="font-size:11px;">' + itens.length + ' item(ns)</div></div></div>'
+      + (itens.length === 0
+        ? '<div class="muted" style="padding:30px;text-align:center;">Nada pendente — está tudo em dia. 🎉</div>'
+        : '<table><thead><tr><th>Descrição</th><th>Competência</th><th>Status</th><th class="right">Valor</th></tr></thead>'
+          + '<tbody>' + linhas + '</tbody>'
+          + '<tfoot><tr><td colspan="3" class="right" style="font-weight:600;border-top:2px solid #E7E1D8;">Total</td>'
+          + '<td class="right mono" style="font-weight:600;border-top:2px solid #E7E1D8;">' + _fmtBRLpdf(total) + '</td></tr></tfoot></table>')
+      + (pixMembro ? '<div style="margin-top:22px;padding:14px 16px;background:#F6F3EE;border:1px solid #E7E1D8;border-radius:10px;font-size:13px;">Pague via PIX: <strong>' + _escHtml(pixMembro) + '</strong></div>' : '')
+      + '<div style="border-top:1px solid #E7E1D8;padding-top:14px;margin-top:32px;" class="muted">Documento gerado pela FORJA · ' + _escHtml(_fmtDataBR(new Date().toISOString())) + '</div>';
+
+    const html = _pdfDoc('Cobrança — ' + nomeMembro, corpo);
+    return _htmlToPdfResult(html, 'cobranca_' + nomeMembro.toLowerCase().replace(/\s+/g, '_'));
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar PDF do membro' };
+  }
+}
+
+// Painel anual (12 meses do ano informado): pra cada mês, entradas (salário e
+// afins), despesas por cartão + outros, saldo do mês e saldo acumulado. Inclui
+// projeção das recorrências (entradas/despesas) nos meses futuros ainda não
+// materializados — assim dá pra "bater o olho" no ano todo e ver o saldo.
+function getPainelAnual(ano?: number): ServerResult {
+  try {
+    const agora = new Date();
+    const anoRef = Number(ano) || agora.getFullYear();
+    const cartoesList = dbGetAll('FinPessoalCartoes') as Array<Record<string, unknown>>;
+    const cartoesMap: Record<string, Record<string, unknown>> = {};
+    for (const c of cartoesList) cartoesMap[String(c['id'])] = c;
+    const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+
+    const meses: Array<Record<string, unknown>> = [];
+    const hojeComp = `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
+
+    // Recorrências ativas (pra projetar meses futuros sem lançamento materializado)
+    const recorrentes = todos.filter((l) =>
+      String(l['recorrencia'] || 'unica') !== 'unica' &&
+      String(l['recorrenciaAtiva'] || 'sim') === 'sim' &&
+      !String(l['recorrenciaOrigemId'] || ''));
+
+    let acumulado = 0;
+    for (let m = 1; m <= 12; m++) {
+      const comp = `${anoRef}-${String(m).padStart(2, '0')}`;
+      const ehFuturo = comp > hojeComp;
+
+      const despesasMes = todos.filter((l) => String(l['tipo']) === 'despesa' && _competenciaLancamento(l, cartoesMap) === comp);
+      const entradasMes = todos.filter((l) => String(l['tipo']) === 'entrada' && _toYYYYMM(l['data']) === comp);
+
+      const porCartao: Record<string, number> = {};
+      let outros = 0;
+      for (const l of despesasMes) {
+        const v = Number(l['valor'] || 0);
+        if (String(l['metodo']) === 'cartao' && l['cartaoId'] && cartoesMap[String(l['cartaoId'])]) {
+          const nome = String(cartoesMap[String(l['cartaoId'])]['apelido'] || cartoesMap[String(l['cartaoId'])]['nome'] || 'Cartão');
+          porCartao[nome] = (porCartao[nome] || 0) + v;
+        } else {
+          outros += v;
+        }
+      }
+      let totalDespesas = despesasMes.reduce((s, l) => s + Number(l['valor'] || 0), 0);
+      let totalEntradas = entradasMes.reduce((s, l) => s + Number(l['valor'] || 0), 0);
+
+      // Projeção de recorrências em meses futuros (sem instância materializada).
+      if (ehFuturo) {
+        for (const r of recorrentes) {
+          const periodicidade = String(r['recorrencia']);
+          const dataOrig = String(r['data'] || '');
+          if (!dataOrig) continue;
+          // Só projeta mensal/anual de forma simples (semanal aproxima por mês).
+          const compOrig = _toYYYYMM(dataOrig);
+          if (comp < compOrig) continue;
+          let cai = false;
+          if (periodicidade === 'anual') cai = dataOrig.substring(5, 7) === String(m).padStart(2, '0');
+          else cai = true; // mensal/semanal: todo mês
+          if (!cai) continue;
+          // Já existe instância materializada nesse mês? (evita dupla contagem)
+          const jaTem = todos.some((l) =>
+            String(l['recorrenciaOrigemId']) === String(r['id']) && _toYYYYMM(l['data']) === comp);
+          if (jaTem) continue;
+          const v = Math.abs(Number(r['valor'] || 0)) * (periodicidade === 'semanal' ? 4.33 : 1);
+          if (String(r['tipo']) === 'entrada') totalEntradas += v;
+          else {
+            totalDespesas += v;
+            if (String(r['metodo']) === 'cartao' && r['cartaoId'] && cartoesMap[String(r['cartaoId'])]) {
+              const nome = String(cartoesMap[String(r['cartaoId'])]['apelido'] || cartoesMap[String(r['cartaoId'])]['nome'] || 'Cartão');
+              porCartao[nome] = (porCartao[nome] || 0) + v;
+            } else outros += v;
+          }
+        }
+      }
+
+      const saldoMes = totalEntradas - totalDespesas;
+      acumulado += saldoMes;
+      meses.push({
+        comp,
+        mesNum: m,
+        futuro: ehFuturo,
+        atual: comp === hojeComp,
+        totalEntradas,
+        totalDespesas,
+        saldoMes,
+        saldoAcumulado: acumulado,
+        porCartao: Object.keys(porCartao).sort().map((nome) => ({ nome, valor: porCartao[nome] })),
+        outros,
+      });
+    }
+
+    const totalEntradasAno = meses.reduce((s, x) => s + Number(x['totalEntradas'] || 0), 0);
+    const totalDespesasAno = meses.reduce((s, x) => s + Number(x['totalDespesas'] || 0), 0);
+    return {
+      ok: true,
+      data: {
+        ano: anoRef,
+        meses,
+        totalEntradasAno,
+        totalDespesasAno,
+        saldoAno: totalEntradasAno - totalDespesasAno,
+        cartoes: cartoesList.map((c) => String(c['apelido'] || c['nome'] || '')).filter(Boolean),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao montar painel anual' };
+  }
+}
+
+// Composição de UM mês (competência): despesas agrupadas por cartão (+ outros),
+// com os itens de cada grupo, e as entradas. Fonte única do modal de detalhe do
+// painel e do PDF do mês — assim os dois NUNCA divergem.
+function _composicaoMes(comp: string): Record<string, unknown> {
+  const cartoesMap = _cartoesMap();
+  const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+  const despesas = todos.filter((l) => String(l['tipo']) === 'despesa' && _competenciaLancamento(l, cartoesMap) === comp);
+  const entradas = todos.filter((l) => String(l['tipo']) === 'entrada' && _toYYYYMM(l['data']) === comp);
+
+  const grupos: Record<string, { key: string; nome: string; bandeira: string; cor: string; total: number; itens: Array<Record<string, unknown>> }> = {};
+  for (const l of despesas) {
+    const ehCartao = String(l['metodo']) === 'cartao' && l['cartaoId'] && cartoesMap[String(l['cartaoId'])];
+    const cartao = ehCartao ? cartoesMap[String(l['cartaoId'])] : null;
+    const key = ehCartao ? String(l['cartaoId']) : 'outros';
+    const nome = cartao ? String(cartao['apelido'] || cartao['nome'] || 'Cartão') : 'Outros (pix, dinheiro, débito)';
+    if (!grupos[key]) grupos[key] = { key, nome, bandeira: cartao ? String(cartao['bandeira'] || '') : '', cor: cartao ? String(cartao['cor'] || '') : '', total: 0, itens: [] };
+    grupos[key].total += Number(l['valor'] || 0);
+    grupos[key].itens.push(_sanitizarLinha(l));
+  }
+  // Ordena itens por data (recente primeiro) e grupos por total desc.
+  const cartoes = Object.values(grupos).map((g) => {
+    g.itens.sort((a, b) => String(b['data'] || '').localeCompare(String(a['data'] || '')));
+    return g;
+  }).sort((a, b) => b.total - a.total);
+
+  const totalDespesas = despesas.reduce((s, l) => s + Number(l['valor'] || 0), 0);
+  const totalEntradas = entradas.reduce((s, l) => s + Number(l['valor'] || 0), 0);
+  entradas.sort((a, b) => String(b['data'] || '').localeCompare(String(a['data'] || '')));
+
+  return {
+    comp,
+    entradas: entradas.map(_sanitizarLinha),
+    cartoes,
+    totalEntradas,
+    totalDespesas,
+    saldo: totalEntradas - totalDespesas,
+    qtdLancamentos: despesas.length + entradas.length,
+  };
+}
+
+function getComposicaoMes(comp: string): ServerResult {
+  try {
+    const c = String(comp || '').substring(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(c)) return { ok: false, error: 'Mês inválido.' };
+    return { ok: true, data: _composicaoMes(c) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao detalhar o mês' };
+  }
+}
+
+// PDF do mês do painel: composição completa por cartão + entradas + saldo.
+function gerarPdfMesPainel(comp: string): ServerResult {
+  try {
+    const c = String(comp || '').substring(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(c)) return { ok: false, error: 'Mês inválido.' };
+    const d = _composicaoMes(c);
+    const emp = _empresaPerfil();
+    const cartoes = d['cartoes'] as Array<{ nome: string; bandeira: string; total: number; itens: Array<Record<string, unknown>> }>;
+    const entradas = d['entradas'] as Array<Record<string, unknown>>;
+    const totalDespesas = Number(d['totalDespesas'] || 0);
+    const totalEntradas = Number(d['totalEntradas'] || 0);
+    const saldo = Number(d['saldo'] || 0);
+
+    const card = (label: string, valor: number, cor?: string) =>
+      '<div style="flex:1;min-width:130px;border:1px solid #E7E1D8;border-radius:10px;padding:12px 14px;">'
+      + '<div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;">' + _escHtml(label) + '</div>'
+      + '<div style="font-size:20px;font-weight:600;margin-top:4px;' + (cor ? 'color:' + cor + ';' : '') + '">' + _fmtBRLpdf(valor) + '</div></div>';
+
+    const blocosCartao = cartoes.map((g) => {
+      const linhasItens = g.itens.map((it) =>
+        '<tr><td>' + _escHtml(_fmtDataBR(String(it['data']))) + '</td>'
+        + '<td><strong>' + _escHtml(it['descricao'] || '—') + '</strong></td>'
+        + '<td style="text-transform:capitalize;">' + _escHtml(it['categoria'] || 'outros') + '</td>'
+        + '<td style="text-transform:capitalize;">' + _escHtml(it['status'] || 'pendente') + '</td>'
+        + '<td class="right mono">' + _fmtBRLpdf(Number(it['valor'] || 0)) + '</td></tr>').join('');
+      return '<div style="margin-top:22px;">'
+        + '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">'
+        + '<h3 style="font-size:15px;">' + _escHtml(g.nome) + (g.bandeira ? ' <span class="muted" style="font-weight:400;font-size:12px;">' + _escHtml(g.bandeira) + '</span>' : '') + '</h3>'
+        + '<span style="font-weight:600;">' + _fmtBRLpdf(g.total) + '</span></div>'
+        + '<table><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Status</th><th class="right">Valor</th></tr></thead>'
+        + '<tbody>' + linhasItens + '</tbody></table></div>';
+    }).join('');
+
+    const blocoEntradas = entradas.length > 0
+      ? '<div style="margin-top:22px;"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">'
+        + '<h3 style="font-size:15px;">Receitas</h3><span style="font-weight:600;color:#5B7A52;">' + _fmtBRLpdf(totalEntradas) + '</span></div>'
+        + '<table><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th class="right">Valor</th></tr></thead><tbody>'
+        + entradas.map((it) => '<tr><td>' + _escHtml(_fmtDataBR(String(it['data']))) + '</td><td><strong>' + _escHtml(it['descricao'] || '—') + '</strong></td>'
+          + '<td style="text-transform:capitalize;">' + _escHtml(it['categoria'] || 'renda') + '</td><td class="right mono">' + _fmtBRLpdf(Number(it['valor'] || 0)) + '</td></tr>').join('')
+        + '</tbody></table></div>'
+      : '';
+
+    const corpo = '<div style="margin-bottom:18px;">'
+      + '<div class="muted" style="font-size:10px;letter-spacing:0.16em;text-transform:uppercase;">' + _escHtml(emp.nome) + ' — Resumo do mês</div>'
+      + '<h1 style="font-size:30px;margin-top:6px;">' + _escHtml(_fmtCompetenciaBR(c)) + '</h1>'
+      + '<div class="muted" style="font-size:11px;margin-top:4px;">Gerado em ' + _escHtml(_fmtDataBR(new Date().toISOString())) + ' · despesa de cartão no mês do vencimento</div></div>'
+      + '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;">'
+      + card('Receita', totalEntradas, '#5B7A52') + card('Despesa', totalDespesas, '#A6543B') + card('Saldo', saldo, saldo >= 0 ? '#5B7A52' : '#A6543B') + '</div>'
+      + (cartoes.length === 0 && entradas.length === 0 ? '<div class="muted" style="padding:30px;text-align:center;">Sem movimentações neste mês.</div>' : blocosCartao + blocoEntradas)
+      + '<div style="border-top:1px solid #E7E1D8;padding-top:14px;margin-top:32px;" class="muted right"><span style="float:left;">FORJA · resumo do mês</span>' + _escHtml(_fmtCompetenciaBR(c)) + '</div>';
+
+    return _htmlToPdfResult(_pdfDoc('Resumo — ' + _fmtCompetenciaBR(c), corpo), 'resumo_' + c);
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar PDF do mês' };
+  }
+}
+
+// Gera, pro mês informado, as instâncias das cobranças recorrentes que ainda não
+// existem. Dedupe por (membroId|origemId|descricao). Idempotente.
+function gerarCobrancasRecorrentes(competencia: string): ServerResult {
+  try {
+    const agora = new Date();
+    const comp = competencia || `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
+    const todas = dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>;
+    const recorrentes = todas.filter((c) => String(c['recorrente'] || 'nao') === 'sim');
+    // Agrupa por chave e pega a mais recente de cada grupo como modelo.
+    const grupos: Record<string, Record<string, unknown>> = {};
+    for (const c of recorrentes) {
+      const key = `${c['membroId']}|${c['origemId']}|${String(c['descricao']).toLowerCase()}`;
+      const atual = grupos[key];
+      if (!atual || String(c['competencia']) > String(atual['competencia'])) grupos[key] = c;
+    }
+    let criados = 0;
+    for (const key in grupos) {
+      const modelo = grupos[key];
+      const jaTem = todas.some((c) =>
+        String(c['membroId']) === String(modelo['membroId']) &&
+        String(c['origemId']) === String(modelo['origemId']) &&
+        String(c['descricao']).toLowerCase() === String(modelo['descricao']).toLowerCase() &&
+        String(c['competencia']) === comp);
+      if (jaTem) continue;
+      dbCreate('FinPessoalCobrancas', {
+        membroId: String(modelo['membroId']),
+        descricao: String(modelo['descricao']),
+        valor: Math.abs(Number(modelo['valor'] || 0)),
+        competencia: comp,
+        status: 'pendente',
+        origem: String(modelo['origem'] || 'manual'),
+        origemId: String(modelo['origemId'] || ''),
+        recorrente: 'sim',
+        dataPagamento: '',
+        notas: String(modelo['notas'] || ''),
+        criadoEm: new Date().toISOString(),
+        atualizadoEm: new Date().toISOString(),
+      });
+      criados++;
+    }
+    return { ok: true, data: { criados } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar cobranças recorrentes' };
+  }
+}
+
+// Resumo da família no mês: agregados por membro + totais + despesas no cartão
+// que ainda não foram atribuídas a ninguém (o "veio na fatura e não cobrei").
+function getResumoFamilia(competencia?: string): ServerResult {
+  try {
+    const agora = new Date();
+    const comp = competencia || `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
+    const membros = (dbGetAll('FinPessoalMembros') as Array<Record<string, unknown>>)
+      .filter((m) => String(m['ativo'] || 'sim') !== 'nao');
+    const todasCobr = dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>;
+    // Recebido é por mês (o que entrou neste mês); o "a receber" é CUMULATIVO —
+    // o que o membro deve em QUALQUER mês ainda não pago. Antes filtrávamos tudo
+    // por competência e uma atribuição lançada em outro mês "sumia" do card.
+    const cobrMes = todasCobr.filter((c) => String(c['competencia']) === comp);
+
+    let totalAReceber = 0;
+    let totalRecebido = 0;
+    const porMembro = membros.map((m) => {
+      const doMembro = todasCobr.filter((c) => String(c['membroId']) === String(m['id']));
+      const naoPagas = doMembro.filter((c) => String(c['status']) !== 'pago');
+      const pendente = naoPagas.reduce((s, c) => s + Number(c['valor'] || 0), 0);
+      const pago = cobrMes.filter((c) => String(c['membroId']) === String(m['id']) && String(c['status']) === 'pago').reduce((s, c) => s + Number(c['valor'] || 0), 0);
+      totalAReceber += pendente;
+      totalRecebido += pago;
+      return {
+        membro: m,
+        totalPendente: pendente,
+        totalPago: pago,
+        qtdCobrancas: doMembro.length,
+        qtdPendentes: naoPagas.length,
+      };
+    });
+
+    // Despesas no cartão desse mês ainda não vinculadas a nenhuma cobrança.
+    const origemIds: Record<string, boolean> = {};
+    for (const c of dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>) {
+      if (String(c['origem']) === 'lancamento' && c['origemId']) origemIds[String(c['origemId'])] = true;
+    }
+    const lancs = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    const naoAtribuidos = lancs
+      .filter((l) =>
+        String(l['tipo'] || 'despesa') === 'despesa' &&
+        String(l['metodo']) === 'cartao' &&
+        String(l['data'] || '').substring(0, 7) === comp &&
+        !origemIds[String(l['id'])])
+      .map((l) => ({
+        id: String(l['id']),
+        descricao: String(l['descricao'] || ''),
+        valor: Math.abs(Number(l['valor'] || 0)),
+        data: String(l['data'] || ''),
+        categoria: String(l['categoria'] || ''),
+        cartaoId: String(l['cartaoId'] || ''),
+      }))
+      .sort((a, b) => b.valor - a.valor)
+      .slice(0, 80);
+
+    return {
+      ok: true,
+      data: {
+        competencia: comp,
+        membros: porMembro,
+        totalAReceber,
+        totalRecebido,
+        qtdMembros: membros.length,
+        naoAtribuidos,
+        totalNaoAtribuido: naoAtribuidos.reduce((s, n) => s + n.valor, 0),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao calcular resumo da família' };
+  }
+}
+
+// ─── Agregados ─────────────────────────────────────────────────────────────────
+// Resumo mensal: totais, por categoria, por método, comparativo com mês anterior.
+// `mes` no formato 'YYYY-MM'. Se omitido, usa o mês corrente.
+function getResumoFinPessoal(mes?: string): ServerResult {
+  try {
+    const agora = new Date();
+    const mesAtual = mes || `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
+    // Calcula mês anterior pra delta
+    const [yyyy, mm] = mesAtual.split('-').map(Number);
+    const dataAnt = new Date(yyyy, mm - 2, 1);
+    const mesAnterior = `${dataAnt.getFullYear()}-${String(dataAnt.getMonth() + 1).padStart(2, '0')}`;
+
+    const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    const cartoesMap = _cartoesMap();
+    // Despesa de cartão conta no mês da FATURA (competência), não no mês da
+    // compra. Entrada (salário etc.) conta no mês da data de recebimento.
+    const compDe = (l: Record<string, unknown>) => _competenciaLancamento(l, cartoesMap);
+    const despesasDoMes = todos.filter((l) => String(l['tipo']) === 'despesa' && compDe(l) === mesAtual);
+    const despesasDoMesAnt = todos.filter((l) => String(l['tipo']) === 'despesa' && compDe(l) === mesAnterior);
+    const entradasDoMes = todos.filter((l) => String(l['tipo']) === 'entrada' && _toYYYYMM(l['data']) === mesAtual);
+    const doMes = [...despesasDoMes, ...entradasDoMes];
+
+    const totalDespesas = despesasDoMes.reduce((s, l) => s + Number(l['valor'] || 0), 0);
+    const totalEntradas = entradasDoMes.reduce((s, l) => s + Number(l['valor'] || 0), 0);
+    const totalDespesasAnt = despesasDoMesAnt.reduce((s, l) => s + Number(l['valor'] || 0), 0);
+
+    // Pendentes a pagar GLOBAL (qualquer mês) — inclui parcelas futuras. Mantido
+    // pra usos que precisam do total comprometido.
+    const pendentes = todos.filter((l) =>
+      String(l['tipo']) === 'despesa' &&
+      (String(l['status']) === 'pendente' || String(l['status']) === 'agendado')
+    );
+    const totalPendente = pendentes.reduce((s, l) => s + Number(l['valor'] || 0), 0);
+
+    // A pagar / pago DO MÊS selecionado (competência) — o widget "A pagar" mostra
+    // só o que falta pagar NESTE mês, não o saldo parcelado inteiro. E separamos
+    // o que já foi pago no mês num widget próprio. Vale: GASTO DO MÊS = pago +
+    // a pagar do mês.
+    const aPagarMesItens = despesasDoMes.filter((l) => {
+      const st = String(l['status']);
+      return st === 'pendente' || st === 'agendado';
+    });
+    const aPagarMes = aPagarMesItens.reduce((s, l) => s + Number(l['valor'] || 0), 0);
+    const pagoMesItens = despesasDoMes.filter((l) => String(l['status']) === 'pago');
+    const pagoMes = pagoMesItens.reduce((s, l) => s + Number(l['valor'] || 0), 0);
+
+    // Próximos 7 dias com vencimento
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+    const limite7d = new Date(hoje); limite7d.setDate(limite7d.getDate() + 7);
+    const proximos7d = pendentes.filter((l) => {
+      // _valorJsonSafe normaliza Date (que o Sheets cria ao gravar) ou string
+      // pra "YYYY-MM-DD" — sem isso, vencimento Date quebrava o new Date(...).
+      const venc = String(_valorJsonSafe(l['vencimento'] || l['data'] || ''));
+      if (!venc || venc.length < 10) return false;
+      const d = new Date(venc.substring(0, 10) + 'T00:00:00');
+      return d >= hoje && d <= limite7d;
+    });
+    const totalProximos7d = proximos7d.reduce((s, l) => s + Number(l['valor'] || 0), 0);
+
+    // Por categoria (só despesas)
+    const porCategoria: Record<string, number> = {};
+    for (const l of doMes) {
+      if (String(l['tipo']) !== 'despesa') continue;
+      const cat = String(l['categoria'] || 'outros');
+      porCategoria[cat] = (porCategoria[cat] || 0) + Number(l['valor'] || 0);
+    }
+
+    // Por método de pagamento
+    const porMetodo: Record<string, number> = {};
+    for (const l of doMes) {
+      if (String(l['tipo']) !== 'despesa') continue;
+      const met = String(l['metodo'] || 'pix');
+      porMetodo[met] = (porMetodo[met] || 0) + Number(l['valor'] || 0);
+    }
+
+    // Delta vs mês anterior (em % e absoluto)
+    const deltaPct = totalDespesasAnt > 0
+      ? ((totalDespesas - totalDespesasAnt) / totalDespesasAnt) * 100
+      : 0;
+
+    return {
+      ok: true,
+      data: {
+        mes: mesAtual,
+        mesAnterior,
+        totalDespesas,
+        totalEntradas,
+        saldo: totalEntradas - totalDespesas,
+        totalDespesasAnt,
+        deltaPct,
+        deltaAbs: totalDespesas - totalDespesasAnt,
+        totalPendente,
+        qtdPendentes: pendentes.length,
+        // A pagar / pago DO MÊS (competência selecionada).
+        aPagarMes,
+        qtdAPagarMes: aPagarMesItens.length,
+        pagoMes,
+        qtdPagoMes: pagoMesItens.length,
+        // Fonte única de verdade: o resumo JÁ calcula os pendentes aqui, então
+        // devolve a lista (sanitizada) junto. O client usa isto pra "A pagar",
+        // garantindo que contador e lista NUNCA divirjam — antes a lista vinha
+        // de uma 2ª chamada que podia falhar/voltar vazia.
+        pendentesLista: pendentes.map(_sanitizarLinha),
+        totalProximos7d,
+        qtdProximos7d: proximos7d.length,
+        porCategoria,
+        porMetodo,
+        totalLancamentos: doMes.length,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao calcular resumo' };
+  }
+}
+
+// Fatura aberta de um cartão pro mês informado.
+// Lógica: pega lançamentos do cartão entre (fechamento_mes_anterior + 1) e
+// fechamento_do_mes. Ex: cartão fecha dia 25 → fatura de junho contém compras
+// de 26/maio até 25/junho.
+function getFaturaAberta(cartaoId: string, mes?: string): ServerResult {
+  try {
+    const cartao = dbGetById('FinPessoalCartoes', cartaoId);
+    if (!cartao) return { ok: false, error: 'Cartão não encontrado' };
+
+    const agora = new Date();
+    const mesAtual = mes || `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
+    const [yyyy, mm] = mesAtual.split('-').map(Number);
+    const diaFech = Number(cartao['diaFechamento'] || 1);
+    const diaVenc = Number(cartao['diaVencimento'] || 0);
+
+    // "Fatura atual" = a fatura que VENCE no mês selecionado (competência), igual
+    // ao resto do app (painel, lançamentos, a pagar). Antes filtrava pela DATA da
+    // COMPRA dentro da janela do ciclo — então itens importados (data de compra
+    // antiga + vencimento explícito no mês) ficavam de fora e a "Fatura atual"
+    // aparecia R$ 0, mesmo com tudo certo em "Total em aberto".
+    //
+    // Janela de compras dessa fatura (só pra rótulo): a fatura que vence no mês
+    // fechou no ciclo anterior quando o vencimento cai antes/no fechamento.
+    const offsetFech = (diaVenc > 0 && diaVenc <= diaFech) ? 1 : 0;
+    const inicio = new Date(yyyy, mm - 2 - offsetFech, diaFech + 1);
+    const fim = new Date(yyyy, mm - 1 - offsetFech, diaFech);
+
+    const cartoesMap = _cartoesMap();
+    const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    const naFatura = todos.filter((l) => {
+      if (String(l['cartaoId']) !== cartaoId) return false;
+      if (String(l['metodo']) !== 'cartao') return false;
+      return _competenciaLancamento(l, cartoesMap) === mesAtual;
+    });
+
+    const total = naFatura.reduce((s, l) => s + Number(l['valor'] || 0), 0);
+    const limite = Number(cartao['limite'] || 0);
+    const pctLimite = limite > 0 ? (total / limite) * 100 : 0;
+
+    naFatura.sort((a, b) => String(b['data'] || '').localeCompare(String(a['data'] || '')));
+
+    return {
+      ok: true,
+      data: {
+        cartao: _sanitizarLinha(cartao),
+        mes: mesAtual,
+        inicio: inicio.toISOString().substring(0, 10),
+        fim: fim.toISOString().substring(0, 10),
+        diaVencimento: Number(cartao['diaVencimento'] || 10),
+        total,
+        limite,
+        pctLimite,
+        disponivel: limite - total,
+        lancamentos: naFatura.map(_sanitizarLinha),
+        qtdLancamentos: naFatura.length,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao calcular fatura' };
+  }
+}
+
+// Todos os lançamentos vinculados a um cartão — qualquer mês e qualquer status.
+// Usado na gaveta de fatura pra ENCONTRAR e REMOVER itens, inclusive os que
+// caíram fora da janela da fatura atual ou que foram importados no cartão errado
+// (a "fatura aberta" só mostra a janela do mês corrente).
+function getLancamentosPorCartao(cartaoId: string): ServerResult {
+  try {
+    const alvo = String(cartaoId || '').trim();
+    if (!alvo) return { ok: false, error: 'Cartão não informado.' };
+    const itens = (dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>)
+      .filter((l) => String(l['cartaoId'] || '').trim() === alvo && String(l['metodo'] || '') === 'cartao');
+    itens.sort((a, b) => String(b['data'] || '').localeCompare(String(a['data'] || '')));
+    const total = itens.reduce((s, l) => s + Number(l['valor'] || 0), 0);
+    const qtdImportados = itens.filter((l) => String(l['tags'] || '').indexOf('fatura-importada') >= 0).length;
+    // Sanitiza as linhas (ver `_sanitizarLinha`) — sem isso uma célula
+    // não-serializável faria o google.script.run devolver null e o drawer do
+    // cartão mostraria "0 lançamentos" mesmo com itens existindo.
+    return { ok: true, data: { lancamentos: itens.map(_sanitizarLinha), total, qtd: itens.length, qtdImportados } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar lançamentos do cartão' };
+  }
+}
+
+// Remove de uma vez todos os lançamentos IMPORTADOS (tag fatura-importada) de um
+// cartão. Atalho pra desfazer uma importação feita no cartão errado. Como toda a
+// app deriva da tabela de lançamentos, apagar aqui já "baixa" de tudo (fatura,
+// a pagar, resumo, lançamentos do mês).
+function deletarLancamentosImportadosCartao(cartaoId: string): ServerResult {
+  try {
+    const alvo = String(cartaoId || '').trim();
+    if (!alvo) return { ok: false, error: 'Cartão não informado.' };
+    const alvos = (dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>)
+      .filter((l) => String(l['cartaoId'] || '').trim() === alvo && String(l['tags'] || '').indexOf('fatura-importada') >= 0);
+    const removidos = dbDeleteMany('FinPessoalLancamentos', alvos.map((a) => String(a['id'])));
+    return { ok: true, data: { removidos } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover importados' };
+  }
+}
+
+// ─── Recorrências automáticas (v1.3.1) ────────────────────────────────────────
+// Filosofia: o usuário marca um lançamento como `recorrencia: 'mensal'` (ou
+// 'semanal' / 'anual'). Sempre que o cliente chama esse gerador (ao carregar
+// o resumo do mês corrente, por exemplo), o servidor verifica quais recorrências
+// ativas ainda não têm clone pra esse mês e cria.
+//
+// Cada clone aponta pro original via `recorrenciaOrigemId` — assim você consegue
+// pausar/cancelar a recorrência sem afetar histórico. Editar a origem não
+// retroage; só afeta os próximos clones gerados.
+//
+// Idempotente: rodar 2x no mesmo dia gera no máximo um clone por origem.
+function gerarRecorrenciasPendentes(): ServerResult {
+  try {
+    const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    // Origens ativas: tem recorrencia != 'unica' E recorrenciaAtiva = 'sim' E
+    // não é um clone (recorrenciaOrigemId vazio).
+    const origens = todos.filter((l) =>
+      String(l['recorrencia'] || 'unica') !== 'unica' &&
+      String(l['recorrenciaAtiva'] || 'sim') === 'sim' &&
+      !String(l['recorrenciaOrigemId'] || '')
+    );
+
+    const agora = new Date();
+    const hoje = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate());
+    let criados = 0;
+    const novos: Array<Record<string, unknown>> = [];
+
+    for (const origem of origens) {
+      const periodicidade = String(origem['recorrencia']);
+      // Quais datas já temos pra essa origem (incluindo a própria)
+      const dataOrig = String(origem['data']);
+      if (!dataOrig) continue;
+
+      // Clones que apontam pra essa origem
+      const clones = todos.filter((l) => String(l['recorrenciaOrigemId']) === String(origem['id']));
+      const datasExistentes = new Set([dataOrig, ...clones.map((c) => String(c['data']))]);
+
+      // Próxima data candidata: a partir da última existente, soma 1 período
+      // até alcançar/passar a data de hoje (gera todos os intermediários
+      // perdidos pra não deixar buracos).
+      const ultimaData = [...datasExistentes].sort().pop() || dataOrig;
+      let proxima = ultimaData;
+      let safety = 0; // anti loop infinito (max 100 períodos)
+      while (safety++ < 100) {
+        proxima = periodicidade === 'semanal'
+          ? _addDays(proxima, 7)
+          : periodicidade === 'anual'
+          ? _addMonths(proxima, 12)
+          : _addMonths(proxima, 1); // mensal default
+        const dProx = new Date(proxima + 'T00:00:00');
+        if (dProx > hoje) break;
+        if (datasExistentes.has(proxima)) continue;
+
+        // Cria clone com mesma estrutura do original, mas data nova
+        const clone: Record<string, unknown> = {
+          data: proxima,
+          descricao: String(origem['descricao']),
+          valor: Number(origem['valor']),
+          tipo: String(origem['tipo']),
+          categoria: String(origem['categoria']),
+          metodo: String(origem['metodo']),
+          cartaoId: String(origem['cartaoId'] || ''),
+          // Status do clone começa pendente — assim aparece em "A pagar" pro
+          // user decidir se já pagou ou não.
+          status: 'pendente',
+          vencimento: proxima,
+          parcelas: 1,
+          parcelaAtual: 1,
+          recorrencia: 'unica', // clone não recorre — só a origem
+          tags: String(origem['tags'] || ''),
+          notas: `Recorrência mensal automática (origem: ${String(origem['descricao'])})`,
+          parcelaGrupoId: '',
+          recorrenciaOrigemId: String(origem['id']),
+          recorrenciaAtiva: 'nao',
+          criadoEm: new Date().toISOString(),
+          atualizadoEm: new Date().toISOString(),
+        };
+        novos.push(dbCreate('FinPessoalLancamentos', clone) as Record<string, unknown>);
+        datasExistentes.add(proxima);
+        criados++;
+      }
+    }
+
+    return { ok: true, data: { criados, origens: origens.length, novos } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar recorrências' };
+  }
+}
+
+// Helper: soma N dias a uma data 'YYYY-MM-DD'.
+function _addDays(dataStr: string, dias: number): string {
+  const [y, m, d] = dataStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + dias);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+// Pausa/reativa uma recorrência. `acao`: 'pausar' | 'reativar' | 'cancelar'.
+// Cancelar mata a recorrência (não gera mais clones nem volta a gerar).
+function alternarRecorrencia(id: string, acao: 'pausar' | 'reativar' | 'cancelar'): ServerResult {
+  try {
+    const novo = acao === 'reativar' ? 'sim' : 'nao';
+    const upd = dbUpdate('FinPessoalLancamentos', id, {
+      recorrenciaAtiva: novo,
+      recorrencia: acao === 'cancelar' ? 'unica' : undefined,
+      atualizadoEm: new Date().toISOString(),
+    });
+    return upd ? { ok: true, data: upd } : { ok: false, error: 'Lançamento não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao alternar recorrência' };
+  }
+}
+
+// Lista todas as recorrências ativas (origens) com info agregada.
+function getRecorrenciasAtivas(): ServerResult {
+  try {
+    const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    const origens = todos.filter((l) =>
+      String(l['recorrencia'] || 'unica') !== 'unica' &&
+      !String(l['recorrenciaOrigemId'] || '')
+    );
+    const enriquecidas = origens.map((o) => {
+      const clones = todos.filter((l) => String(l['recorrenciaOrigemId']) === String(o['id']));
+      // _sanitizarLinha é obrigatório: o campo `data` vem do Sheets como Date e
+      // o google.script.run devolvia null silencioso — a aba Receitas (que filtra
+      // recorrências tipo=entrada) ficava vazia mesmo com salário cadastrado.
+      return {
+        ..._sanitizarLinha(o),
+        totalGerados: clones.length,
+        ultimoGeradoEm: clones.length > 0
+          ? clones.map((c) => String(c['data'])).sort().pop()
+          : null,
+      };
+    });
+    return { ok: true, data: enriquecidas };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar recorrências' };
+  }
+}
+
+// ─── Orçamentos por categoria (v1.3.1) ────────────────────────────────────────
+function getOrcamentos(): ServerResult {
+  try {
+    return { ok: true, data: dbGetAll('FinPessoalOrcamentos') };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar orçamentos' };
+  }
+}
+
+function salvarOrcamento(payload: Record<string, unknown>): ServerResult {
+  try {
+    const id = payload['id'] ? String(payload['id']) : '';
+    const data: Record<string, unknown> = {
+      categoria: String(payload['categoria'] || '').trim(),
+      limiteMensal: Math.max(0, Number(payload['limiteMensal'] || 0)),
+      cor: String(payload['cor'] || ''),
+      ativo: String(payload['ativo'] || 'sim'),
+      atualizadoEm: new Date().toISOString(),
+    };
+    if (!data['categoria']) return { ok: false, error: 'Categoria obrigatória' };
+    if (id) {
+      const upd = dbUpdate('FinPessoalOrcamentos', id, data);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Orçamento não encontrado' };
+    }
+    // Se já existe orçamento pra essa categoria, atualiza ao invés de criar duplicata
+    const existente = (dbGetAll('FinPessoalOrcamentos') as Array<Record<string, unknown>>)
+      .find((o) => String(o['categoria']).toLowerCase() === String(data['categoria']).toLowerCase());
+    if (existente) {
+      const upd = dbUpdate('FinPessoalOrcamentos', String(existente['id']), data);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Erro ao atualizar' };
+    }
+    data['criadoEm'] = new Date().toISOString();
+    return { ok: true, data: dbCreate('FinPessoalOrcamentos', data) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar orçamento' };
+  }
+}
+
+function deletarOrcamento(id: string): ServerResult {
+  try {
+    return dbDelete('FinPessoalOrcamentos', id)
+      ? { ok: true }
+      : { ok: false, error: 'Orçamento não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar orçamento' };
+  }
+}
+
+// Progresso dos orçamentos no mês corrente (ou outro mês informado).
+// Retorna pra cada orçamento: categoria, limite, gasto no mês, % usado, status
+// (ok | atencao | estouro). Útil pra renderizar barras de progresso.
+function getProgressoOrcamentos(mes?: string): ServerResult {
+  try {
+    const agora = new Date();
+    const mesAtual = mes || `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
+    const orcamentos = dbGetAll('FinPessoalOrcamentos') as Array<Record<string, unknown>>;
+    const ativos = orcamentos.filter((o) => String(o['ativo'] || 'sim') === 'sim');
+    const lancamentos = (dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>)
+      .filter((l) => _toYYYYMM(l['data']) === mesAtual && String(l['tipo']) === 'despesa');
+
+    const itens = ativos.map((o) => {
+      const cat = String(o['categoria']);
+      const limite = Number(o['limiteMensal'] || 0);
+      const gasto = lancamentos
+        .filter((l) => String(l['categoria']) === cat)
+        .reduce((s, l) => s + Number(l['valor'] || 0), 0);
+      const pct = limite > 0 ? (gasto / limite) * 100 : 0;
+      const status = pct >= 100 ? 'estouro' : pct >= 80 ? 'atencao' : 'ok';
+      return {
+        id: String(o['id']),
+        categoria: cat,
+        limite,
+        cor: String(o['cor'] || ''),
+        gasto,
+        restante: Math.max(0, limite - gasto),
+        pct,
+        status,
+      };
+    });
+
+    // Ordena por % decrescente (mais críticos primeiro)
+    itens.sort((a, b) => b.pct - a.pct);
+    return { ok: true, data: { mes: mesAtual, itens } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao calcular progresso' };
+  }
+}
+
+// ─── Categorias gerenciadas (v1.3.2) ──────────────────────────────────────────
+// Tira as 16 categorias hardcoded do frontend e leva pro Sheet, permitindo o
+// usuário criar/renomear/mesclar/excluir. Lançamentos guardam só o `nome` da
+// categoria (string lowercase) — quando o usuário renomeia, atualiza tudo
+// que aponta pro nome antigo.
+
+// Catálogo padrão das 16 categorias de bootstrap.
+// `icone` aponta pra um nome de ícone lucide-react que a UI resolve.
+// Pra adicionar categorias novas ao seed, basta inserir aqui — o lookup é por
+// `nome` (chave única), então não há duplicação.
+const _CATEGORIAS_PADRAO = [
+  { nome: 'mercado', label: 'Mercado', emoji: '🛒', icone: 'shopping-cart', cor: '#10b981', ordem: 1 },
+  { nome: 'transporte', label: 'Transporte', emoji: '🚗', icone: 'car', cor: '#3b82f6', ordem: 2 },
+  { nome: 'alimentacao', label: 'Alimentação', emoji: '🍔', icone: 'utensils', cor: '#f59e0b', ordem: 3 },
+  { nome: 'lazer', label: 'Lazer', emoji: '🎮', icone: 'gamepad-2', cor: '#a855f7', ordem: 4 },
+  { nome: 'saude', label: 'Saúde', emoji: '💊', icone: 'pill', cor: '#ef4444', ordem: 5 },
+  { nome: 'casa', label: 'Casa', emoji: '🏠', icone: 'home', cor: '#84cc16', ordem: 6 },
+  { nome: 'contas', label: 'Contas (luz/água/net)', emoji: '💡', icone: 'lightbulb', cor: '#06b6d4', ordem: 7 },
+  { nome: 'assinaturas', label: 'Assinaturas', emoji: '📺', icone: 'tv', cor: '#8b5cf6', ordem: 8 },
+  { nome: 'educacao', label: 'Educação', emoji: '📚', icone: 'book-open', cor: '#0ea5e9', ordem: 9 },
+  { nome: 'roupas', label: 'Roupas', emoji: '👕', icone: 'shirt', cor: '#ec4899', ordem: 10 },
+  { nome: 'pets', label: 'Pets', emoji: '🐾', icone: 'paw-print', cor: '#d97706', ordem: 11 },
+  { nome: 'viagem', label: 'Viagem', emoji: '✈️', icone: 'plane', cor: '#0891b2', ordem: 12 },
+  { nome: 'investimento', label: 'Investimento', emoji: '📈', icone: 'trending-up', cor: '#16a34a', ordem: 13 },
+  { nome: 'salario', label: 'Salário', emoji: '💼', icone: 'briefcase', cor: '#22c55e', ordem: 14 },
+  { nome: 'freelance', label: 'Freelance', emoji: '💻', icone: 'laptop', cor: '#0d9488', ordem: 15 },
+  { nome: 'mercado_livre', label: 'Mercado Livre', emoji: '🛒', icone: 'package', cor: '#eab308', ordem: 16 },
+  { nome: 'outros', label: 'Outros', emoji: '📦', icone: 'package', cor: '#6b7280', ordem: 99 },
+];
+
+// Seed idempotente: pra cada categoria padrão, só insere se nome ainda não
+// existir. Roda toda vez que o cliente chama getCategoriasPessoais — é seguro.
+// Também limpa duplicatas pré-existentes (legado de races antigos).
+function _seedCategoriasPadrao(): void {
+  // Primeiro limpa duplicatas (importante pra usuários que sofreram race
+  // antes desse fix). Mantém o registro mais antigo de cada nome.
+  _limparCategoriasDuplicadas();
+
+  const existentes = dbGetAll('FinPessoalCategorias') as Array<Record<string, unknown>>;
+  const nomesExistentes = new Set(existentes.map((c) => String(c['nome'])));
+  const agora = new Date().toISOString();
+  for (const c of _CATEGORIAS_PADRAO) {
+    if (nomesExistentes.has(c.nome)) {
+      // Migra: se faltar `icone` no registro existente (legacy), atualiza
+      const reg = existentes.find((r) => String(r['nome']) === c.nome);
+      if (reg && !reg['icone']) {
+        dbUpdate('FinPessoalCategorias', String(reg['id']), { icone: c.icone, atualizadoEm: agora });
+      }
+      continue;
+    }
+    dbCreate('FinPessoalCategorias', { ...c, ativo: 'sim', criadoEm: agora, atualizadoEm: agora });
+  }
+}
+
+// Remove categorias duplicadas (mesmo `nome`). Mantém o registro com `id` que
+// vem primeiro (mais antigo). Roda como parte do seed pra auto-corrigir bases
+// poluídas. Retorna quantas foram removidas.
+function _limparCategoriasDuplicadas(): number {
+  const todas = dbGetAll('FinPessoalCategorias') as Array<Record<string, unknown>>;
+  // Agrupa por nome (lowercase pra ser tolerante)
+  const grupos: Record<string, Array<Record<string, unknown>>> = {};
+  for (const c of todas) {
+    const nome = String(c['nome'] || '').toLowerCase();
+    if (!nome) continue;
+    if (!grupos[nome]) grupos[nome] = [];
+    grupos[nome].push(c);
+  }
+  let removidas = 0;
+  for (const nome of Object.keys(grupos)) {
+    const lista = grupos[nome];
+    if (lista.length <= 1) continue;
+    // Ordena por criadoEm ASC (mais antigo primeiro). Se faltar criadoEm,
+    // ordena por id (geralmente segue ordem de inserção).
+    lista.sort((a, b) => {
+      const da = String(a['criadoEm'] || '');
+      const db = String(b['criadoEm'] || '');
+      if (da && db) return da.localeCompare(db);
+      return String(a['id']).localeCompare(String(b['id']));
+    });
+    // Mantém o primeiro, remove o resto
+    for (let i = 1; i < lista.length; i++) {
+      dbDelete('FinPessoalCategorias', String(lista[i]['id']));
+      removidas++;
+    }
+  }
+  return removidas;
+}
+
+// Exposto pro cliente caso o user queira rodar manualmente (segurança extra).
+function limparCategoriasDuplicadas(): ServerResult {
+  try {
+    const n = _limparCategoriasDuplicadas();
+    return { ok: true, data: { removidas: n } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao limpar' };
+  }
+}
+
+// Normaliza string pra chave: lowercase, sem acentos, espaços → underscore.
+function _normalizarNomeCategoria(s: string): string {
+  return String(s || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove acentos
+    .replace(/[^a-z0-9\s]/g, '') // remove pontuação
+    .replace(/\s+/g, '_');
+}
+
+// Lista categorias com stats agregadas (qtd lançamentos no mês + total gasto).
+// `mes` opcional pra filtrar stats; default = mês corrente.
+function getCategoriasPessoais(mes?: string): ServerResult {
+  try {
+    // Garante que o header da sheet esteja alinhado com o schema atual antes
+    // de qualquer leitura. Crítico depois da migração v1.3.3 que reordenou
+    // colunas — sem isso, dados antigos vêm desalinhados.
+    initDatabase();
+    _seedCategoriasPadrao();
+    const agora = new Date();
+    const mesAtual = mes || `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
+    const categorias = dbGetAll('FinPessoalCategorias') as Array<Record<string, unknown>>;
+    const lancamentos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    const doMes = lancamentos.filter((l) => _toYYYYMM(l['data']) === mesAtual);
+
+    // Agrupa stats por nome de categoria
+    const statsMap: Record<string, { qtdMes: number; totalMes: number; qtdTotal: number }> = {};
+    for (const l of doMes) {
+      const cat = String(l['categoria'] || 'outros');
+      if (!statsMap[cat]) statsMap[cat] = { qtdMes: 0, totalMes: 0, qtdTotal: 0 };
+      statsMap[cat].qtdMes++;
+      if (String(l['tipo']) === 'despesa') statsMap[cat].totalMes += Number(l['valor'] || 0);
+    }
+    // Conta total geral por categoria (todos os meses)
+    for (const l of lancamentos) {
+      const cat = String(l['categoria'] || 'outros');
+      if (!statsMap[cat]) statsMap[cat] = { qtdMes: 0, totalMes: 0, qtdTotal: 0 };
+      statsMap[cat].qtdTotal++;
+    }
+
+    const enriquecidas = categorias.map((c) => {
+      const nome = String(c['nome']);
+      const stats = statsMap[nome] || { qtdMes: 0, totalMes: 0, qtdTotal: 0 };
+      return { ...c, ...stats };
+    });
+
+    // Ordena por ordem manual ASC
+    enriquecidas.sort((a, b) => Number(a['ordem'] || 99) - Number(b['ordem'] || 99));
+    return { ok: true, data: enriquecidas };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar categorias' };
+  }
+}
+
+// ─── Reclassificação de categoria (regras aprendidas + IA) ───────────────────
+
+// Assinatura de comércio: chave estável pra casar lançamentos do mesmo lugar.
+// Remove parcela x/y, acentos, pontuação e números soltos; pega os 2 primeiros
+// tokens significativos. Ex.: "MERCADOLIVRE*PRODUTOS 03/04" → "mercadolivre produtos".
+function _assinaturaComercio(desc: string): string {
+  let s = _descSemParcela(String(desc || '')).toLowerCase();
+  try { s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch { /* runtime sem normalize */ }
+  s = s.replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const tokens = s.split(' ').filter((tk) => tk.length >= 3 && !/^\d+$/.test(tk));
+  if (tokens.length === 0) return s.slice(0, 24);
+  return tokens.slice(0, 2).join(' ');
+}
+
+function _carregarRegrasCategoria(): Record<string, string> {
+  const regras = dbGetAll('FinPessoalRegrasCategoria') as Array<Record<string, unknown>>;
+  const map: Record<string, string> = {};
+  for (const r of regras) {
+    const a = String(r['assinatura'] || '').trim();
+    const c = String(r['categoria'] || '').trim();
+    if (a && c) map[a] = c;
+  }
+  return map;
+}
+
+// Aprende/atualiza uma regra: assinatura do comércio → categoria.
+function salvarRegraCategoria(descricao: string, categoria: string, origem?: string): ServerResult {
+  try {
+    initDatabase();
+    const assinatura = _assinaturaComercio(descricao);
+    const cat = String(categoria || '').trim();
+    if (!assinatura || !cat) return { ok: false, error: 'Descrição ou categoria inválida' };
+    const existentes = dbGetAll('FinPessoalRegrasCategoria') as Array<Record<string, unknown>>;
+    const achou = existentes.find((r) => String(r['assinatura'] || '') === assinatura);
+    const agora = new Date().toISOString();
+    if (achou) {
+      dbUpdate('FinPessoalRegrasCategoria', String(achou['id']), { categoria: cat, origem: origem || String(achou['origem'] || 'manual'), atualizadoEm: agora });
+    } else {
+      dbCreate('FinPessoalRegrasCategoria', { assinatura, categoria: cat, origem: origem || 'manual', criadoEm: agora, atualizadoEm: agora });
+    }
+    return { ok: true, data: { assinatura, categoria: cat } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar regra de categoria' };
+  }
+}
+
+// Aplica as regras aprendidas aos lançamentos. Por padrão só mexe nos 'outros'
+// (não sobrescreve o que o usuário já classificou). `mes` limita à competência.
+function aplicarRegrasCategoria(mes?: string, soOutros = true): ServerResult {
+  try {
+    initDatabase();
+    const regras = _carregarRegrasCategoria();
+    if (Object.keys(regras).length === 0) return { ok: true, data: { alterados: 0 } };
+    const cartoesMap = _cartoesMap();
+    const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    const idsPorCategoria: Record<string, string[]> = {};
+    for (const l of todos) {
+      if (String(l['tipo']) !== 'despesa') continue;
+      const catAtual = String(l['categoria'] || 'outros');
+      if (soOutros && catAtual !== 'outros') continue;
+      if (mes && _competenciaLancamento(l, cartoesMap) !== mes) continue;
+      const assinatura = _assinaturaComercio(String(l['descricao'] || ''));
+      const novaCat = regras[assinatura];
+      if (novaCat && novaCat !== catAtual) {
+        (idsPorCategoria[novaCat] = idsPorCategoria[novaCat] || []).push(String(l['id']));
+      }
+    }
+    let alterados = 0;
+    for (const cat in idsPorCategoria) {
+      alterados += dbUpdateMany('FinPessoalLancamentos', idsPorCategoria[cat], { categoria: cat, atualizadoEm: new Date().toISOString() });
+    }
+    return { ok: true, data: { alterados } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao aplicar regras de categoria' };
+  }
+}
+
+// Reclassifica os 'Outros' do mês: 1º aplica regras aprendidas, 2º manda o que
+// sobrou pra IA classificar dentro das categorias existentes, aplica as
+// sugestões confiáveis e APRENDE cada uma (vira regra pro futuro).
+function reclassificarCategoriasIA(mes: string): ServerResult {
+  try {
+    initDatabase();
+    const porRegra = ((aplicarRegrasCategoria(mes, true).data as { alterados: number } | undefined)?.alterados) || 0;
+
+    const cartoesMap = _cartoesMap();
+    const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    const outros = todos.filter((l) => String(l['tipo']) === 'despesa'
+      && String(l['categoria'] || 'outros') === 'outros'
+      && _competenciaLancamento(l, cartoesMap) === mes);
+    if (outros.length === 0) return { ok: true, data: { porRegra, porIA: 0, restantes: 0 } };
+
+    const cats = (dbGetAll('FinPessoalCategorias') as Array<Record<string, unknown>>)
+      .filter((c) => String(c['ativo']) !== 'nao')
+      .map((c) => ({ nome: String(c['nome']), label: String(c['label'] || c['nome']) }));
+    const nomesValidos = cats.map((c) => c.nome).filter((n) => n && n !== 'outros');
+    if (nomesValidos.length === 0) return { ok: true, data: { porRegra, porIA: 0, restantes: outros.length } };
+
+    // Agrupa por assinatura pra mandar cada comércio só uma vez (economiza tokens).
+    const porAssinatura: Record<string, { desc: string; ids: string[] }> = {};
+    for (const l of outros) {
+      const k = _assinaturaComercio(String(l['descricao'] || '')) || String(l['descricao'] || '');
+      if (!porAssinatura[k]) porAssinatura[k] = { desc: _descSemParcela(String(l['descricao'] || '')), ids: [] };
+      porAssinatura[k].ids.push(String(l['id']));
+    }
+    const chaves = Object.keys(porAssinatura);
+    const listaParaIA = chaves.map((k, i) => ({ i, descricao: porAssinatura[k].desc }));
+
+    const sys = 'Você classifica compras de cartão/extrato bancário em categorias pessoais. '
+      + 'Categorias válidas (responda EXATAMENTE pelo "nome", em minúsculas): '
+      + cats.map((c) => `${c.nome} (${c.label})`).join(', ') + '. '
+      + 'Para cada item, deduza a categoria mais provável pelo nome do estabelecimento/descrição. '
+      + 'Se não houver confiança razoável, responda "outros". '
+      + 'Responda SOMENTE um JSON no formato {"itens":[{"i":0,"categoria":"alimentacao"}]} — sem texto fora do JSON.';
+    const userMsg = 'Itens para classificar:\n' + JSON.stringify(listaParaIA);
+
+    let texto = '';
+    let modelo = '';
+    if (geminiTemChave()) {
+      const g = geminiGenerateContent([{ text: userMsg }], { system: sys, json: true, maxTokens: 4000, temperature: 0 });
+      texto = g.texto; modelo = g.modelo;
+    } else {
+      const r = forjaCallLLMDetalhado([{ role: 'system', content: sys }, { role: 'user', content: userMsg }], 4000);
+      texto = r.texto; modelo = r.modelo;
+    }
+
+    let parsed: Record<string, unknown>;
+    try { parsed = extrairJsonFatura(texto) as Record<string, unknown>; }
+    catch { return { ok: false, error: 'A IA não retornou um JSON válido na reclassificação. Tente de novo.' }; }
+    const sugest = Array.isArray(parsed['itens']) ? parsed['itens'] as Array<Record<string, unknown>> : [];
+
+    const idsPorCategoria: Record<string, string[]> = {};
+    for (const s of sugest) {
+      const i = Number(s['i']);
+      const cat = String(s['categoria'] || '').toLowerCase().trim();
+      if (!(i >= 0 && i < chaves.length)) continue;
+      if (!cat || cat === 'outros' || nomesValidos.indexOf(cat) < 0) continue;
+      const grupo = porAssinatura[chaves[i]];
+      (idsPorCategoria[cat] = idsPorCategoria[cat] || []).push(...grupo.ids);
+      try { salvarRegraCategoria(grupo.desc, cat, 'ia'); } catch { /* segue baile */ }
+    }
+    let porIA = 0;
+    for (const cat in idsPorCategoria) {
+      porIA += dbUpdateMany('FinPessoalLancamentos', idsPorCategoria[cat], { categoria: cat, atualizadoEm: new Date().toISOString() });
+    }
+    return { ok: true, data: { porRegra, porIA, restantes: outros.length - porIA, modelo } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao reclassificar com IA' };
+  }
+}
+
+// Lista as regras de categoria aprendidas (pra tela de gerenciamento).
+function getRegrasCategoria(): ServerResult {
+  try {
+    initDatabase();
+    const regras = (dbGetAll('FinPessoalRegrasCategoria') as Array<Record<string, unknown>>).map(_sanitizarLinha);
+    regras.sort((a, b) => String(a['assinatura'] || '').localeCompare(String(b['assinatura'] || '')));
+    return { ok: true, data: regras };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar regras' };
+  }
+}
+
+function atualizarRegraCategoria(id: string, categoria: string): ServerResult {
+  try {
+    const cat = String(categoria || '').trim();
+    if (!id || !cat) return { ok: false, error: 'Dados inválidos' };
+    const upd = dbUpdate('FinPessoalRegrasCategoria', String(id), { categoria: cat, atualizadoEm: new Date().toISOString() });
+    return upd ? { ok: true, data: upd } : { ok: false, error: 'Regra não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atualizar regra' };
+  }
+}
+
+function deletarRegraCategoria(id: string): ServerResult {
+  try {
+    const ok = dbDelete('FinPessoalRegrasCategoria', String(id));
+    return ok ? { ok: true } : { ok: false, error: 'Regra não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover regra' };
+  }
+}
+
+// Cria ou atualiza categoria. Se renomear (mudar `nome`), atualiza todos os
+// lançamentos e orçamentos que apontam pro nome antigo — mantém integridade.
+function salvarCategoriaPessoal(payload: Record<string, unknown>): ServerResult {
+  try {
+    const id = payload['id'] ? String(payload['id']) : '';
+    const novoNome = _normalizarNomeCategoria(String(payload['nome'] || payload['label'] || ''));
+    if (!novoNome) return { ok: false, error: 'Nome da categoria é obrigatório' };
+
+    const data: Record<string, unknown> = {
+      nome: novoNome,
+      label: String(payload['label'] || novoNome).trim(),
+      emoji: String(payload['emoji'] || '📦'),
+      icone: String(payload['icone'] || 'tag'),
+      cor: String(payload['cor'] || '#6b7280'),
+      ordem: Number(payload['ordem'] || 50),
+      ativo: String(payload['ativo'] || 'sim'),
+      atualizadoEm: new Date().toISOString(),
+    };
+
+    if (id) {
+      // Update: se o nome mudou, propaga em lançamentos e orçamentos
+      const atual = dbGetById('FinPessoalCategorias', id);
+      if (!atual) return { ok: false, error: 'Categoria não encontrada' };
+      const nomeAntigo = String(atual['nome']);
+      if (nomeAntigo !== novoNome) {
+        // Verifica conflito de nome
+        const conflito = (dbGetAll('FinPessoalCategorias') as Array<Record<string, unknown>>)
+          .find((c) => String(c['nome']) === novoNome && String(c['id']) !== id);
+        if (conflito) return { ok: false, error: `Já existe uma categoria com o nome "${novoNome}". Use a função de mesclar.` };
+        _renomearNoSheet('FinPessoalLancamentos', 'categoria', nomeAntigo, novoNome);
+        _renomearNoSheet('FinPessoalOrcamentos', 'categoria', nomeAntigo, novoNome);
+      }
+      const upd = dbUpdate('FinPessoalCategorias', id, data);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Erro ao atualizar' };
+    }
+
+    // Create: verifica duplicata por nome
+    const existente = (dbGetAll('FinPessoalCategorias') as Array<Record<string, unknown>>)
+      .find((c) => String(c['nome']) === novoNome);
+    if (existente) return { ok: false, error: `Já existe uma categoria com o nome "${novoNome}"` };
+    data['criadoEm'] = new Date().toISOString();
+    return { ok: true, data: dbCreate('FinPessoalCategorias', data) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar categoria' };
+  }
+}
+
+// Helper: atualiza todos os registros de uma sheet onde `coluna` == nomeAntigo
+// pra `coluna` == nomeNovo. Usado pra propagar renome/mescla.
+function _renomearNoSheet(sheetName: string, coluna: string, nomeAntigo: string, nomeNovo: string): number {
+  const todos = dbGetAll(sheetName) as Array<Record<string, unknown>>;
+  let count = 0;
+  for (const reg of todos) {
+    if (String(reg[coluna]) === nomeAntigo) {
+      dbUpdate(sheetName, String(reg['id']), { [coluna]: nomeNovo });
+      count++;
+    }
+  }
+  return count;
+}
+
+// Mescla a categoria origem na destino: re-vincula todos os lançamentos/orçamentos
+// e remove a origem. Tipicamente usado pra consertar duplicatas tipo
+// "gasolina" vs "Gasolina".
+function mesclarCategorias(idOrigem: string, idDestino: string): ServerResult {
+  try {
+    if (idOrigem === idDestino) return { ok: false, error: 'Origem e destino devem ser diferentes' };
+    const origem = dbGetById('FinPessoalCategorias', idOrigem);
+    const destino = dbGetById('FinPessoalCategorias', idDestino);
+    if (!origem || !destino) return { ok: false, error: 'Categoria não encontrada' };
+    const nomeOrigem = String(origem['nome']);
+    const nomeDestino = String(destino['nome']);
+    const movidos = _renomearNoSheet('FinPessoalLancamentos', 'categoria', nomeOrigem, nomeDestino);
+    const orcMovidos = _renomearNoSheet('FinPessoalOrcamentos', 'categoria', nomeOrigem, nomeDestino);
+    // Se já existia orçamento pra destino, o renomear cria duplicata — limpa
+    _limparOrcamentosDuplicados();
+    dbDelete('FinPessoalCategorias', idOrigem);
+    return { ok: true, data: { lancamentosMovidos: movidos, orcamentosMovidos: orcMovidos } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao mesclar categorias' };
+  }
+}
+
+// Remove orçamentos duplicados (mesma categoria) — mantém o mais antigo.
+function _limparOrcamentosDuplicados(): void {
+  const todos = dbGetAll('FinPessoalOrcamentos') as Array<Record<string, unknown>>;
+  const vistos = new Set<string>();
+  for (const o of todos) {
+    const cat = String(o['categoria']);
+    if (vistos.has(cat)) {
+      dbDelete('FinPessoalOrcamentos', String(o['id']));
+    } else {
+      vistos.add(cat);
+    }
+  }
+}
+
+// Deleta categoria. Se `migrarParaNome` for informado, re-vincula lançamentos
+// pra essa categoria antes. Se não, manda pra 'outros' (que sempre existe).
+function deletarCategoriaPessoal(id: string, migrarParaNome?: string): ServerResult {
+  try {
+    const cat = dbGetById('FinPessoalCategorias', id);
+    if (!cat) return { ok: false, error: 'Categoria não encontrada' };
+    const nomeOrigem = String(cat['nome']);
+    if (nomeOrigem === 'outros') return { ok: false, error: 'A categoria "outros" não pode ser removida (é fallback)' };
+    const destino = migrarParaNome || 'outros';
+    const movidos = _renomearNoSheet('FinPessoalLancamentos', 'categoria', nomeOrigem, destino);
+    const orcMovidos = _renomearNoSheet('FinPessoalOrcamentos', 'categoria', nomeOrigem, destino);
+    _limparOrcamentosDuplicados();
+    dbDelete('FinPessoalCategorias', id);
+    return { ok: true, data: { lancamentosMovidos: movidos, orcamentosMovidos: orcMovidos } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar categoria' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CÓDEX (v1.4) — DNA de desenvolvimento do usuário
+// ═══════════════════════════════════════════════════════════════════════════════
+// Padrões reutilizáveis que servem como referência rápida E como contexto vivo
+// pra Forja IA (toggle "Incluir Códex" ao gerar prompts/blueprints/diagramas).
+// Modelo: SEÇÕES (agrupadores temáticos) → CARDS (padrões concretos).
+
+// Seções padrão que viram seed na primeira leitura. Pra adicionar uma nova
+// padrão, basta acrescentar aqui — o seed é idempotente (verifica por `key`).
+const _CODEX_SECOES_PADRAO = [
+  { key: 'design', label: 'Design', icone: 'palette', descricao: 'Tipografia, paleta, ícones, spacing — o vocabulário visual da sua marca.', ordem: 1 },
+  { key: 'stack', label: 'Stack', icone: 'layers', descricao: 'Linguagens, frameworks, banco, auth, state management — sua caixa de ferramentas.', ordem: 2 },
+  { key: 'codigo', label: 'Código', icone: 'code-2', descricao: 'Style guide, lint, naming, estrutura de pastas — como você escreve.', ordem: 3 },
+  { key: 'qualidade', label: 'Qualidade', icone: 'check-circle-2', descricao: 'Testes, cobertura, code review, observabilidade — sua barra de qualidade.', ordem: 4 },
+  { key: 'deploy', label: 'Deploy', icone: 'rocket', descricao: 'Hosting, CI/CD, versionamento, rollback — como você entrega.', ordem: 5 },
+  { key: 'git', label: 'Git', icone: 'git-branch', descricao: 'Branch naming, commits, PR template — como você colabora.', ordem: 6 },
+  { key: 'produto', label: 'Produto', icone: 'compass', descricao: 'Tom de voz, README, roadmap, naming de features — sua voz de produto.', ordem: 7 },
+  { key: 'prompts', label: 'Prompts', icone: 'sparkles', descricao: 'Templates favoritos, abertura, voice — como você fala com a IA.', ordem: 8 },
+];
+
+// Cards padrão (importados via "Importar padrões da Forja"). Refletem as
+// escolhas REAIS deste app — vibe code minimalista, lucide, GAS, etc.
+const _CODEX_CARDS_FORJA = [
+  { secaoKey: 'design', titulo: 'Tipografia', valor: 'Inter (UI) + Fraunces (display) + JetBrains Mono (mono/código).', referencia: 'https://fonts.google.com/specimen/Inter', tags: 'fonte,tipografia' },
+  { secaoKey: 'design', titulo: 'Paleta', valor: 'Tons pastéis (peach, sage, lavender, blue) sobre base creme/grafite. Sem cores berrantes.', referencia: '', tags: 'cor,paleta' },
+  { secaoKey: 'design', titulo: 'Ícones', valor: 'lucide-react outline, strokeWidth 1.6, size 18 default. Nunca emoji em UI rica.', referencia: 'https://lucide.dev', tags: 'icone,design-system' },
+  { secaoKey: 'design', titulo: 'Spacing', valor: 'Escala base-4: 4, 8, 12, 16, 20, 24, 32, 40, 56. Padding mais generoso > apertado.', referencia: '', tags: 'spacing,layout' },
+  { secaoKey: 'design', titulo: 'Radius', valor: 'Cards 14px, botões 10px, pills 999px, micro 6-8px. Curva sutil, nunca quadrado.', referencia: '', tags: 'radius,layout' },
+  { secaoKey: 'stack', titulo: 'Frontend', valor: 'React 18 + TypeScript + Ant Design + esbuild. Sem Tailwind — CSS-in-JS via style props.', referencia: '', tags: 'frontend,react,typescript' },
+  { secaoKey: 'stack', titulo: 'Backend', valor: 'Google Apps Script (V8). Trade-off: zero infra, mas chunking obrigatório no bundle JS.', referencia: 'https://developers.google.com/apps-script', tags: 'backend,gas' },
+  { secaoKey: 'stack', titulo: 'Banco', valor: 'Google Sheets como DB via SheetDB caseiro (CRUD com schema). Migração append-only.', referencia: '', tags: 'banco,sheets' },
+  { secaoKey: 'stack', titulo: 'IA', valor: 'Anthropic Claude via proxy. Modelo configurável em Script Properties (FORJA_LLM_MODEL).', referencia: '', tags: 'ia,llm,anthropic' },
+  { secaoKey: 'codigo', titulo: 'Style', valor: 'Aspas simples, sem ponto-e-vírgula em JSX, max line 110, trailing comma sempre.', referencia: '', tags: 'lint,format' },
+  { secaoKey: 'codigo', titulo: 'Naming', valor: 'camelCase (vars/fns), PascalCase (componentes), kebab-case (arquivos quando possível), UPPER_SNAKE (constantes).', referencia: '', tags: 'naming' },
+  { secaoKey: 'codigo', titulo: 'Comentários', valor: 'Comentar PORQUÊ, não o quê. Comentários explicam intenção, trade-off, contexto.', referencia: '', tags: 'comentarios' },
+  { secaoKey: 'qualidade', titulo: 'Audits', valor: 'Forja IA roda auditoria estruturada (Problema → Solução → Prompt) por sistema. Health score determinístico baseado em sinais reais.', referencia: '', tags: 'audit,quality' },
+  { secaoKey: 'deploy', titulo: 'Stable URL', valor: 'clasp deploy -i <DEPLOYMENT_ID> sempre. Nunca cria deployment novo — preserva a URL pública.', referencia: '', tags: 'deploy,clasp' },
+  { secaoKey: 'deploy', titulo: 'Chunking JS', valor: 'Bundle dividido em fatias <=195KB pra evitar corrupção do GAS. Esbuild + script de split caseiro.', referencia: '', tags: 'deploy,build' },
+  { secaoKey: 'git', titulo: 'Commits', valor: 'Conventional commits em PT: "feat:", "fix:", "refactor:". Versão semver no final.', referencia: '', tags: 'git,commits' },
+  { secaoKey: 'produto', titulo: 'Tom de voz', valor: 'Vibe code: informal, direto, premium. "Bora", "fechou", "no jeito". Sem corporatês.', referencia: '', tags: 'tom-de-voz,produto' },
+  { secaoKey: 'produto', titulo: 'Versionamento', valor: 'Semver flexível: v1.X.Y. Polish releases são .Y, novas features são .X, breaking são major.', referencia: '', tags: 'versionamento' },
+  { secaoKey: 'prompts', titulo: 'Voice', valor: 'Sempre PT-BR. Respostas estruturadas com headers. Cita arquivos como `path/file.tsx`. Sem emojis em código.', referencia: '', tags: 'prompt,voice' },
+  { secaoKey: 'prompts', titulo: 'Estrutura', valor: 'Plano breve → execução → resumo do delta. Nunca diluir com promessa, sempre entregar.', referencia: '', tags: 'prompt,estrutura' },
+];
+
+// Seed idempotente das seções padrão (só insere as que faltam).
+function _seedCodexSecoes(): void {
+  const existentes = dbGetAll('CodexSecoes') as Array<Record<string, unknown>>;
+  const keysExistentes = new Set(existentes.map((s) => String(s['key'])));
+  const agora = new Date().toISOString();
+  for (const s of _CODEX_SECOES_PADRAO) {
+    if (keysExistentes.has(s.key)) continue;
+    dbCreate('CodexSecoes', { ...s, criadoEm: agora });
+  }
+}
+
+// Retorna toda a estrutura do Códex enriquecida com os cards de cada seção.
+// Único endpoint que a UI precisa pra hidratar o painel inteiro.
+function getCodex(): ServerResult {
+  try {
+    initDatabase();
+    _seedCodexSecoes();
+    const secoes = (dbGetAll('CodexSecoes') as Array<Record<string, unknown>>)
+      .sort((a, b) => Number(a['ordem'] || 99) - Number(b['ordem'] || 99));
+    const cards = dbGetAll('CodexCards') as Array<Record<string, unknown>>;
+
+    const enriquecidas = secoes.map((s) => {
+      const cardsDaSecao = cards
+        .filter((c) => String(c['secaoId']) === String(s['id']))
+        .sort((a, b) => Number(a['ordem'] || 99) - Number(b['ordem'] || 99));
+      return { ...s, cards: cardsDaSecao, qtdCards: cardsDaSecao.length };
+    });
+    return { ok: true, data: enriquecidas };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar Códex' };
+  }
+}
+
+function salvarCodexSecao(payload: Record<string, unknown>): ServerResult {
+  try {
+    const id = payload['id'] ? String(payload['id']) : '';
+    const key = String(payload['key'] || payload['label'] || '').toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+    if (!key) return { ok: false, error: 'Nome/key obrigatório' };
+
+    const data: Record<string, unknown> = {
+      key,
+      label: String(payload['label'] || key).trim(),
+      icone: String(payload['icone'] || 'tag'),
+      descricao: String(payload['descricao'] || ''),
+      ordem: Number(payload['ordem'] || 50),
+    };
+
+    if (id) {
+      const upd = dbUpdate('CodexSecoes', id, data);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Seção não encontrada' };
+    }
+    // Verifica duplicata de key na criação
+    const existe = (dbGetAll('CodexSecoes') as Array<Record<string, unknown>>).find((s) => s['key'] === key);
+    if (existe) return { ok: false, error: `Já existe uma seção com key "${key}"` };
+    data['criadoEm'] = new Date().toISOString();
+    return { ok: true, data: dbCreate('CodexSecoes', data) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar seção' };
+  }
+}
+
+// Remove uma seção e TODOS os cards dentro dela. Confirmação fica na UI.
+function deletarCodexSecao(id: string): ServerResult {
+  try {
+    const cardsDaSecao = (dbGetAll('CodexCards') as Array<Record<string, unknown>>)
+      .filter((c) => String(c['secaoId']) === id);
+    for (const c of cardsDaSecao) dbDelete('CodexCards', String(c['id']));
+    dbDelete('CodexSecoes', id);
+    return { ok: true, data: { cardsRemovidos: cardsDaSecao.length } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar seção' };
+  }
+}
+
+function salvarCodexCard(payload: Record<string, unknown>): ServerResult {
+  try {
+    const id = payload['id'] ? String(payload['id']) : '';
+    if (!payload['secaoId']) return { ok: false, error: 'secaoId obrigatório' };
+    if (!String(payload['titulo'] || '').trim()) return { ok: false, error: 'Título obrigatório' };
+
+    const data: Record<string, unknown> = {
+      secaoId: String(payload['secaoId']),
+      titulo: String(payload['titulo']).trim(),
+      valor: String(payload['valor'] || ''),
+      referencia: String(payload['referencia'] || ''),
+      tags: String(payload['tags'] || ''),
+      // Padrão: incluir na IA. Pra opt-out o user marca explicitamente.
+      incluirEmIa: String(payload['incluirEmIa'] || 'sim'),
+      ordem: Number(payload['ordem'] || 50),
+      atualizadoEm: new Date().toISOString(),
+    };
+
+    if (id) {
+      const upd = dbUpdate('CodexCards', id, data);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Card não encontrado' };
+    }
+    data['criadoEm'] = new Date().toISOString();
+    return { ok: true, data: dbCreate('CodexCards', data) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar card' };
+  }
+}
+
+function deletarCodexCard(id: string): ServerResult {
+  try {
+    return dbDelete('CodexCards', id) ? { ok: true } : { ok: false, error: 'Card não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar card' };
+  }
+}
+
+// Importa o "perfil Forja" — cards opinados que refletem este próprio app.
+// Idempotente: só insere os que faltam (verifica por título + secaoId).
+function importarPadroesForja(): ServerResult {
+  try {
+    _seedCodexSecoes();
+    const secoes = dbGetAll('CodexSecoes') as Array<Record<string, unknown>>;
+    const secaoPorKey: Record<string, string> = {};
+    for (const s of secoes) secaoPorKey[String(s['key'])] = String(s['id']);
+
+    const cardsExistentes = dbGetAll('CodexCards') as Array<Record<string, unknown>>;
+    const jaTem = new Set(cardsExistentes.map((c) => `${c['secaoId']}::${String(c['titulo']).toLowerCase()}`));
+
+    let inseridos = 0;
+    const agora = new Date().toISOString();
+    for (let i = 0; i < _CODEX_CARDS_FORJA.length; i++) {
+      const c = _CODEX_CARDS_FORJA[i];
+      const secaoId = secaoPorKey[c.secaoKey];
+      if (!secaoId) continue;
+      const chave = `${secaoId}::${c.titulo.toLowerCase()}`;
+      if (jaTem.has(chave)) continue;
+      dbCreate('CodexCards', {
+        secaoId, titulo: c.titulo, valor: c.valor, referencia: c.referencia,
+        tags: c.tags, incluirEmIa: 'sim', ordem: i + 1,
+        criadoEm: agora, atualizadoEm: agora,
+      });
+      inseridos++;
+    }
+    return { ok: true, data: { inseridos, total: _CODEX_CARDS_FORJA.length } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao importar padrões' };
+  }
+}
+
+// Constrói um trecho de prompt com os cards do Códex marcados pra IA.
+// Devolve string vazia se não houver cards ativos — assim é seguro chamar
+// sempre, sem `if`. Formato compacto pensado pra economizar tokens.
+function _buildCodexContext(): string {
+  try {
+    const secoes = (dbGetAll('CodexSecoes') as Array<Record<string, unknown>>)
+      .sort((a, b) => Number(a['ordem'] || 99) - Number(b['ordem'] || 99));
+    const cards = (dbGetAll('CodexCards') as Array<Record<string, unknown>>)
+      .filter((c) => String(c['incluirEmIa'] || 'sim') !== 'nao');
+    if (cards.length === 0) return '';
+
+    const cardsPorSecao: Record<string, Array<Record<string, unknown>>> = {};
+    for (const c of cards) {
+      const sid = String(c['secaoId']);
+      if (!cardsPorSecao[sid]) cardsPorSecao[sid] = [];
+      cardsPorSecao[sid].push(c);
+    }
+
+    const linhas: string[] = ['', '## CÓDEX DO USUÁRIO (padrões pessoais a respeitar)'];
+    for (const s of secoes) {
+      const lista = cardsPorSecao[String(s['id'])];
+      if (!lista || lista.length === 0) continue;
+      linhas.push(`\n### ${s['label']}`);
+      for (const c of lista) {
+        linhas.push(`- **${c['titulo']}**: ${c['valor']}`);
+      }
+    }
+    linhas.push('\nUse esses padrões como guia ao gerar qualquer conteúdo. Eles são preferências reais do usuário.');
+    return linhas.join('\n');
+  } catch {
+    return '';
+  }
+}
+
+// Exposto pra UI poder mostrar preview de quanto do Códex vai pro prompt.
+function previewCodexContext(): ServerResult {
+  try {
+    const ctx = _buildCodexContext();
+    return { ok: true, data: { texto: ctx, caracteres: ctx.length, tokens: Math.ceil(ctx.length / 4) } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar preview' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RECEITUÁRIO (v1.4.2) — catálogo de features reutilizáveis
+// ═══════════════════════════════════════════════════════════════════════════════
+// Coleção das features que o user já construiu e pode replicar em outros
+// projetos. Pré-populado com ~18 features REAIS do Forja, mas o user pode
+// adicionar/editar/remover livremente. Pensado pra ser o "atalho pra escala"
+// — quando começar um projeto novo, abrir aqui e pegar as receitas prontas.
+
+const _RECEITAS_FORJA = [
+  {
+    nome: 'SheetDB Engine',
+    descricao: 'Banco de dados em Google Sheets com schema declarativo, CRUD tipado e migração append-only.',
+    categoria: 'data',
+    icone: 'database',
+    complexidade: 'media',
+    tempoEstimado: '4-6h',
+    stack: 'gas,typescript',
+    tags: 'banco,gas,sheets,crud',
+    arquivos: 'src/server.ts (SCHEMA + getOrCreateSheet + dbCreate/dbUpdate/dbDelete/dbGetAll)',
+    conteudo: `## Como funciona\n\nUm SCHEMA declarativo (array de \`{ name, columns }\`) descreve todas as sheets. Cada operação CRUD (\`dbCreate\`, \`dbUpdate\`, \`dbGetAll\`, \`dbDelete\`) usa o schema pra serializar/deserializar linhas.\n\n## Princípios\n\n1. **Append-only migration**: novas colunas SEMPRE no fim do array. Nunca reordene — quebra dados existentes.\n2. **Header self-heal**: \`getOrCreateSheet\` compara header atual vs schema e reescreve se divergir.\n3. **Versioned init cache**: \`SCHEMA_VERSION\` evita re-checar headers em toda chamada (ganho de ~5s no cold start).\n\n## Pegadinhas\n\n- IDs são UUID via \`Utilities.getUuid()\`\n- Reads são full-scan (sem índice) — não escala >5k linhas/sheet\n- \`setValues\` é atomic mas \`appendRow\` pode ter race em alta concorrência`,
+  },
+  {
+    nome: 'Códex (DNA Bridge IA)',
+    descricao: 'Padrões pessoais do dev como contexto vivo em prompts. A IA respeita seu DNA.',
+    categoria: 'ai',
+    icone: 'book-open',
+    complexidade: 'baixa',
+    tempoEstimado: '2-3h',
+    stack: 'react,typescript,llm',
+    tags: 'ai,prompts,contexto,codex',
+    arquivos: 'src/components/CodexPanel.tsx, CodexToggle.tsx, server._buildCodexContext()',
+    conteudo: `## Como funciona\n\nDuas sheets (\`CodexSecoes\`, \`CodexCards\`). Função server \`_buildCodexContext()\` monta um markdown compacto com os cards marcados \`incluirEmIa=sim\`. Esse trecho é concatenado no system prompt de qualquer gerador de IA.\n\n## Onde injetar\n\n- \`gerarBlueprint\` — adiciona após \`{{stack}}\`\n- \`gerarDiagrama\` — adiciona após \`{{tipo}}\`\n- \`chatLLMComTools\` — adiciona após \`instrucoesTools\`\n- Qualquer outro \`forjaCallLLM\` que valha personalização\n\n## Componente UX\n\n\`CodexToggle\` é uma pill reutilizável com Switch + contador de cards/tokens. Padrão: ON, opt-out explícito.\n\n## Tokens\n\nFórmula prática: \`tokens ≈ chars/4\`. Códex de 20 cards = ~1500 tokens. Cabe num system prompt sem inflar custo.`,
+  },
+  {
+    nome: 'Vault Zero-Knowledge',
+    descricao: 'Cofre criptografado client-side com AES-GCM. Servidor nunca vê plaintext.',
+    categoria: 'security',
+    icone: 'shield',
+    complexidade: 'alta',
+    tempoEstimado: '6-8h',
+    stack: 'react,webcrypto',
+    tags: 'security,crypto,vault',
+    arquivos: 'src/components/CofrePanel.tsx',
+    conteudo: `## Como funciona\n\nO user define uma master password no primeiro acesso. Derivamos uma chave AES-GCM via PBKDF2 (100k iters). Senhas são encriptadas no browser ANTES de ir pro server — server só guarda blobs.\n\n## API mínima\n\n\`\`\`ts\nasync function encrypt(plain: string, key: CryptoKey): Promise<string>\nasync function decrypt(cipher: string, key: CryptoKey): Promise<string>\nasync function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey>\n\`\`\`\n\n## Pegadinhas\n\n- Salt único por user, guardado em PropertiesService\n- IV (12 bytes) único por entry, anexado ao cipher\n- Master password nunca é gravada — perdeu, perdeu tudo (by design)\n- Memória limpa após X min de inatividade pra reduzir surface`,
+  },
+  {
+    nome: 'Health Score Determinístico',
+    descricao: 'Score 0-100 por sistema baseado em sinais reais (não inventado pela IA).',
+    categoria: 'monitoring',
+    icone: 'activity',
+    complexidade: 'media',
+    tempoEstimado: '3-4h',
+    stack: 'typescript',
+    tags: 'monitoring,score,health',
+    arquivos: 'src/server.ts (calcularHealthScore)',
+    conteudo: `## Sinais usados\n\n- Último deploy (<7d, <30d, >30d)\n- CI status (verde, amarelo, vermelho)\n- Auditoria recente (<30d?)\n- Findings open vs total\n- URL prod responde 200?\n- Custo mensal vs receita (positivo?)\n\n## Fórmula\n\nCada sinal vira pontos (0-25). Soma direta, clamp em 100. **Não usa LLM** — determinístico, reproduzível, auditável.\n\n## Trade-off\n\nDeterminismo > inteligência. Em vez de "AI diz que está saudável", mostra "100/100 porque deploy hoje + CI verde + auditoria ontem".`,
+  },
+  {
+    nome: 'Kanban Drawer Full-Width',
+    descricao: 'Tabuleiro Kanban que abre em drawer 96vw — espaço pra trabalhar sem perder contexto.',
+    categoria: 'ui',
+    icone: 'columns',
+    complexidade: 'baixa',
+    tempoEstimado: '1-2h',
+    stack: 'react,antd',
+    tags: 'ui,kanban,drawer',
+    arquivos: 'src/components/BacklogDrawer.tsx, BacklogPanel.tsx',
+    conteudo: `## Padrão\n\nNão tente caber Kanban num tab apertado. Abra em \`Drawer width="96vw" placement="right"\`. Mantém o contexto da página mas dá espaço de sobra.\n\n## Estrutura\n\n- Drawer wrapper passa props pro Panel interno\n- Panel renderiza colunas em \`display: grid; grid-template-columns: repeat(N, 1fr)\`\n- Cards têm \`drag handle\` no top + click pra abrir detail modal\n\n## Modal de detalhe\n\nAbrir tudo numa modal interna 1100px de largura — não tente apertar num drawer secundário. Dá ar pra ler o conteúdo.`,
+  },
+  {
+    nome: 'Chat LLM com Tool Calling',
+    descricao: 'Chat onde a IA propõe ações via JSON; usuário aprova antes da execução.',
+    categoria: 'ai',
+    icone: 'message-square',
+    complexidade: 'alta',
+    tempoEstimado: '6-10h',
+    stack: 'react,typescript,llm',
+    tags: 'ai,chat,tools,llm',
+    arquivos: 'src/views/IAChat.tsx, src/server.ts (chatLLMComTools, _parseToolCalls, _toolsParaPromptLLM)',
+    conteudo: `## Protocolo\n\nSystem prompt lista tools disponíveis. IA escreve no final da resposta:\n\n\`\`\`\n<TOOL_CALLS>\n[{"tool":"criar_ideia","params":{"titulo":"..."}}]\n</TOOL_CALLS>\n\`\`\`\n\n## Fluxo\n\n1. IA responde com texto + bloco TOOL_CALLS\n2. Parser extrai o JSON, retorna pro client\n3. Client mostra ToolProposalCard com botões Executar/Recusar\n4. Se executado, server roda as tools e devolve resumo\n5. Resumo vira mensagem assistant pra contexto da próxima rodada\n\n## Segurança\n\n**Nunca execute automaticamente.** O user SEMPRE aprova. Isso evita: ações destrutivas por engano, prompt injection criar coisas, perda de controle.`,
+  },
+  {
+    nome: 'Atelier Sub-Nav Vertical',
+    descricao: 'Sub-navegação interna escalável (padrão list-detail) — vence tabs horizontais que estouram/cortam. Componente reutilizável <SubNav/>.',
+    categoria: 'ui',
+    icone: 'sidebar',
+    complexidade: 'baixa',
+    tempoEstimado: '1h',
+    stack: 'react,typescript',
+    tags: 'ui,nav,sidebar,list-detail,master-detail',
+    arquivos: 'src/components/SubNav.tsx, src/views/Atelier.tsx, src/views/Financeiro.tsx, src/views/FinPessoal.tsx',
+    conteudo: `## Nome do padrão\n\nChama-se **list-detail** (ou *master-detail*) — também conhecido como **sidebar navigation**. A lista de seções fica numa coluna lateral fixa (sticky) e o conteúdo da seção ativa ocupa o resto. É o padrão das telas de configurações do **Linear, Notion e Vercel**.\n\n## Por que, e não tabs\n\nTabs horizontais quebram com >5 itens ou rótulos longos: estouram a largura, cortam o último item ou pulam pra 2 linhas (feio, perde o minimalismo). A sub-nav vertical:\n\n- Escala sem limite prático (testado de 3 a 12 itens)\n- Cada item tem ícone + rótulo + contador + cor de destaque + tooltip\n- Sticky no topo do scroll\n- Cabeçalho contextual (nome + descrição da área) dá respiro\n- Mesmo visual da sidebar principal → coesão\n\n## Quando NÃO usar 2 níveis\n\nSe a seção já tem sub-seções próprias (ex: Códex), aí sim faz sentido **nested navigation** (2 níveis). Caso contrário, 1 nível só — não aninhe à toa.\n\n## Componente reutilizável\n\nExtraído em \`<SubNav items value onChange>\` que renderiza a coluna + o cabeçalho contextual + os \`children\` (conteúdo da área ativa). Usado no Atelier e nos dois lados do Financeiro (Empresa e Pessoal).`,
+    exemplo: `### Definir os itens e usar o componente\n\n\`\`\`tsx\nimport SubNav, { type SubNavItem } from '../components/SubNav';\nimport { LayoutDashboard, ArrowUpRight, ArrowDownRight } from 'lucide-react';\n\ntype View = 'resumo' | 'receber' | 'pagar';\n\nfunction FinEmpresa() {\n  const [view, setView] = useState<View>('resumo');\n  const NAV: SubNavItem<View>[] = [\n    { key: 'resumo',  icon: LayoutDashboard, label: 'Visão geral', accent: 'peach', desc: 'Lucro por app.' },\n    { key: 'receber', icon: ArrowUpRight,    label: 'A receber',   accent: 'sage',  desc: 'A receber dos clientes.' },\n    { key: 'pagar',   icon: ArrowDownRight,  label: 'A pagar',     accent: 'rose',  desc: 'Custos a pagar.' },\n  ];\n  return (\n    <SubNav items={NAV} value={view} onChange={setView}>\n      {view === 'resumo'  && <FinResumo />}\n      {view === 'receber' && <FinReceitas />}\n      {view === 'pagar'   && <FinCustos />}\n    </SubNav>\n  );\n}\n\`\`\`\n\n**Resultado:** uma coluna lateral fixa de ~212px com os 3 itens e, à direita, o cabeçalho da área ativa + o conteúdo. Itens extras? Só adicionar no array \`NAV\` — nada estoura. Contadores aparecem com \`count\`, badge "novo" com \`badge\`, e o ✦ de IA com \`ia: true\`.`,
+  },
+  {
+    nome: 'Status Monitor com Cache',
+    descricao: 'Multi-endpoint monitor com CacheService (60s TTL) e pings paralelos via UrlFetchApp.fetchAll.',
+    categoria: 'monitoring',
+    icone: 'activity',
+    complexidade: 'media',
+    tempoEstimado: '2-3h',
+    stack: 'gas,typescript',
+    tags: 'monitoring,cache,performance',
+    arquivos: 'src/server.ts (getStatusGeral, _pingApisParalelo)',
+    conteudo: `## Problema original\n\nPings sequenciais (N APIs = N segundos) sem cache. Dashboard demora 10s a cada open.\n\n## Solução\n\n1. **CacheService TTL 60s**: \`cache.put('FORJA_STATUS', JSON.stringify(payload), 60)\`\n2. **fetchAll paralelo**: \`UrlFetchApp.fetchAll(requests)\` dispara tudo de uma vez\n3. **Sem writeback no hot path**: latência só persistida em rota dedicada\n\n## Ganho\n\nDashboard de 10s → 400ms (cache hit) ou 2s (cache miss).\n\n## Truque\n\n\`opts.forceRefresh\` permite o user forçar revalidação (botão "atualizar").`,
+  },
+  {
+    nome: 'Tema Persistente Light/Dark',
+    descricao: 'Theme tokens + Context API + persist no localStorage. SSR-safe.',
+    categoria: 'ui',
+    icone: 'sun-moon',
+    complexidade: 'baixa',
+    tempoEstimado: '2h',
+    stack: 'react,typescript',
+    tags: 'ui,theme,darkmode',
+    arquivos: 'src/theme.ts, themeContext.tsx',
+    conteudo: `## Estrutura\n\n- \`theme.ts\` exporta \`PALETTE = { luz: {...}, noturno: {...} }\`\n- Context provê \`{ mode, toggle, tokens }\`\n- \`useTokens()\` hook acessa tokens da paleta atual\n- localStorage key \`forja-theme\` persiste escolha\n\n## Defaults\n\n- First-visit: respeita \`prefers-color-scheme\`\n- Toggle no rodapé da sidebar com ícone Sun/Moon\n\n## Tokens mínimos\n\n\`\`\`ts\n{ appBg, sidebarBg, surface, surfaceMuted, text, textSecondary, textTertiary, border, borderSoft, accents: { peach, sage, lavender, blue } }\n\`\`\`\n\nNão usa CSS variables — passa tokens via prop \`style={{}}\`. Simples, sem build extra.`,
+  },
+  {
+    nome: 'Stable Deploy Strategy',
+    descricao: 'clasp deploy -i <STABLE_ID> pra preservar URL pública entre deploys.',
+    categoria: 'deploy',
+    icone: 'rocket',
+    complexidade: 'baixa',
+    tempoEstimado: '30min',
+    stack: 'gas,clasp',
+    tags: 'deploy,clasp,gas',
+    arquivos: '.clasp.json, DEPLOY.md',
+    conteudo: `## Problema\n\nCada \`clasp deploy\` (sem -i) cria deployment NOVO com URL nova. Quem bookmarkou ou compartilhou o link perde acesso.\n\n## Solução\n\n1. Faça o primeiro \`clasp deploy -d "v1.0"\` — guarda o deploymentId\n2. Próximos deploys: \`clasp deploy -i <DEPLOYMENT_ID> -d "v1.1"\`\n3. URL pública permanece a mesma, só versão incrementa\n\n## Workflow\n\n\`\`\`bash\nnpm run build\nnpx clasp push -f\nnpx clasp deploy -i AKfycb... -d "v1.2 - feature X"\n\`\`\`\n\nGuarda o DEPLOYMENT_ID em DEPLOY.md ou .env (não comita em scripts versionados).`,
+  },
+  {
+    nome: 'JS Chunking pra GAS',
+    descricao: 'Bundle dividido em fatias <=195KB pra evitar corrupção do esbuild + GAS.',
+    categoria: 'build',
+    icone: 'package',
+    complexidade: 'media',
+    tempoEstimado: '2-3h',
+    stack: 'esbuild,gas',
+    tags: 'build,bundle,gas',
+    arquivos: 'esbuild.mjs (split-into-chunks logic)',
+    conteudo: `## Problema\n\nGAS HTML inline tem limite prático ~200KB. Bundles maiores ficam corrompidos.\n\n## Solução\n\nPós-processamento: pega o bundle JS final, divide em chunks <=195KB, injeta como N tags \`<script>\` separadas dentro de \`App.html\`.\n\n## Esqueleto\n\n\`\`\`js\nconst MAX_CHUNK = 195 * 1024;\nconst jsContent = fs.readFileSync('dist/app.js', 'utf8');\nconst chunks = [];\nlet pos = 0;\nwhile (pos < jsContent.length) {\n  chunks.push(jsContent.slice(pos, pos + MAX_CHUNK));\n  pos += MAX_CHUNK;\n}\nconst scriptTags = chunks.map(c => \`<script>\${c}</script>\`).join('\\n');\n// injeta scriptTags no App.html\n\`\`\`\n\n## Cuidado\n\nNão divida no meio de uma string literal — o esbuild já minifica e a quebra em qualquer caractere funciona porque tudo é um IIFE final.`,
+  },
+  {
+    nome: 'AI Audit Estruturada',
+    descricao: 'IA gera findings no formato Problema → Solução → Prompt (não texto livre).',
+    categoria: 'ai',
+    icone: 'search-check',
+    complexidade: 'media',
+    tempoEstimado: '3-4h',
+    stack: 'typescript,llm',
+    tags: 'ai,audit,findings',
+    arquivos: 'src/server.ts (auditarSistemaComIA), src/types.ts (AuditFinding)',
+    conteudo: `## Schema do output\n\n\`\`\`ts\ninterface AuditFinding {\n  problema: string;       // O QUE está errado\n  diagnostico: string;    // POR QUE é problema\n  solucao: string;        // COMO resolver\n  prompt: string;         // Prompt pronto pra colar no Cursor/Claude\n  severidade: 'baixa'|'media'|'alta';\n  esforco: 'baixo'|'medio'|'alto';\n}\n\`\`\`\n\n## System prompt\n\nForce JSON estrito: "Retorne APENAS array JSON. Cada finding deve ter campos X Y Z. Severidade alta quando..."\n\n## UX\n\nCard expandível com 3 abas (problema, solução, prompt). Botão "Registrar como decisão" cria entrada no Backlog Kanban automaticamente.`,
+  },
+  {
+    nome: 'Personal Finance Engine',
+    descricao: 'Cartões + Pix + Contas + Parcelas auto + Recorrências + Orçamentos + Categorias gerenciadas.',
+    categoria: 'finance',
+    icone: 'wallet',
+    complexidade: 'alta',
+    tempoEstimado: '12-16h',
+    stack: 'react,typescript,gas',
+    tags: 'finance,pessoal,fintech',
+    arquivos: 'src/views/FinPessoal.tsx, src/server.ts (FinPessoal* funcs)',
+    conteudo: `## Módulos\n\n1. **Lançamentos** com filtros, inline edit, status (pago/pendente/agendado)\n2. **Cartões** com fatura aberta calculada\n3. **Contas a pagar** agrupadas por vencimento (overdue/7d/futuro)\n4. **Parcelas automáticas**: salvar 1 lançamento com \`parcelas=12\` cria os 12 com \`parcelaGrupoId\` compartilhado\n5. **Recorrências**: \`gerarRecorrenciasPendentes()\` idempotente clona origem em cada mês ativo\n6. **Orçamentos**: limite por categoria + barra de progresso visual\n7. **Categorias gerenciadas**: CRUD + merge + renomear (propaga pros lançamentos)\n\n## Princípios\n\n- **Idempotência**: gerador de recorrências pode rodar 100x e gera 0 duplicatas\n- **Categoria como string** (não foreign key) — flexibilidade > integridade rígida\n- **Resumo no server** — \`getResumoFinPessoal\` agrega antes de mandar pro client`,
+  },
+  {
+    nome: 'Categoria Management',
+    descricao: 'CRUD de categorias com ícone lucide + cor + merge + renomear + stats agregadas.',
+    categoria: 'data',
+    icone: 'tag',
+    complexidade: 'media',
+    tempoEstimado: '4-5h',
+    stack: 'react,typescript',
+    tags: 'data,categoria,crud',
+    arquivos: 'src/views/FinPessoal.tsx (PainelCategorias), src/server.ts (CategoriaPessoal*)',
+    conteudo: `## Features\n\n- **Seed idempotente**: padrões inseridos só se nome não existe (zero duplicata)\n- **Renomear propaga**: muda nome da categoria → atualiza linked lançamentos/orçamentos\n- **Merge**: combine 2 categorias, source desaparece e suas refs viram destination\n- **Stats agregadas no server**: \`qtdMes\`, \`totalMes\`, \`qtdTotal\` vêm pré-calculadas\n- **Icon Resolver**: nome kebab-case (\`'shopping-cart'\`) → componente lucide via mapa\n\n## Padrão "Icon Resolver"\n\nGuarde só o nome como string, mapeie pra componente no client. Permite editar/serializar sem React.`,
+  },
+  {
+    nome: 'GAS Import Wizard',
+    descricao: 'Wizard pra importar Google Apps Scripts existentes como sistemas no Forja.',
+    categoria: 'integration',
+    icone: 'download',
+    complexidade: 'media',
+    tempoEstimado: '4-6h',
+    stack: 'react,gas',
+    tags: 'integration,gas,import',
+    arquivos: 'src/components/GASImportWizard.tsx, src/server.ts (importarGASProject)',
+    conteudo: `## Fluxo\n\n1. User cola URL do GAS project\n2. Server extrai scriptId, valida acesso\n3. Mostra preview: nome, último deploy, número de arquivos\n4. User confirma → cria entrada em \`Sistemas\` com tipo=gas\n5. Cria estágios padrão, score inicial neutro\n\n## Reuso\n\nO padrão "Import Wizard" serve pra qualquer integração — GitHub repo, Vercel project, Render service. Sempre: URL → validate → preview → confirm → register.`,
+  },
+  {
+    nome: 'Mermaid Studio Híbrido',
+    descricao: 'IA gera código Mermaid + editor live com preview lado-a-lado.',
+    categoria: 'ai',
+    icone: 'workflow',
+    complexidade: 'baixa',
+    tempoEstimado: '2-3h',
+    stack: 'react,mermaid',
+    tags: 'ai,diagram,mermaid',
+    arquivos: 'src/views/IADiagramas.tsx, src/components/MermaidView.tsx',
+    conteudo: `## Layout\n\nRow gutter com 2 cols: esquerda \`<Input.TextArea>\` com o código, direita \`<MermaidView code={code} />\` rendering.\n\n## MermaidView\n\nUsa \`mermaid.render()\` do pacote npm. Re-renderiza em cada change com \`useEffect\` + debounce 200ms (evita lag com edits rápidos).\n\n## Tipos suportados\n\nflowchart, sequenceDiagram, erDiagram, classDiagram, mindmap.\n\n## Truque pro IA\n\nPedir "retorne APENAS o código Mermaid sem cercas \\\`\\\`\\\`mermaid\\\`\\\`\\\`" — limpa um regex pós-processamento depois.`,
+  },
+  {
+    nome: 'Forja sobre Forja (Dogfooding)',
+    descricao: 'Atalho que usa o próprio app como input pros geradores de IA — valida pipeline.',
+    categoria: 'ai',
+    icone: 'flame',
+    complexidade: 'baixa',
+    tempoEstimado: '2h',
+    stack: 'react,typescript',
+    tags: 'ai,dogfooding,demo',
+    arquivos: 'src/components/ForjaSobreForja.tsx, src/server.ts (_buildForjaSelfContext)',
+    conteudo: `## Por que\n\nValidar saída de IA com algo que você CONHECE de cor é o jeito mais rápido de detectar problemas. Se a IA produz blueprint genérico do Forja, o problema está no system prompt OU no Códex — e você ajusta.\n\n## Implementação\n\n1. Função server \`_buildForjaSelfContext()\` retorna metadata estruturada do app\n2. \`gerarBlueprintDoForja()\` chama \`gerarBlueprint\` com esse contexto\n3. Marca \`origem='forja-self'\` no save pra discriminar no histórico\n4. Componente \`ForjaSobreForja\` é um hero card peach com 1 botão grande\n\n## Padrão replicável\n\nPra cada sistema registrado, você pode fazer "X sobre X" usando o passaporte (\`gerarPassaporte(sistemaId)\`) em vez do contexto hardcoded.`,
+  },
+  {
+    nome: 'Icon Resolver Pattern',
+    descricao: 'Guarde nomes kebab-case (\'shopping-cart\') no DB, resolva pra componentes lucide no client.',
+    categoria: 'ui',
+    icone: 'image',
+    complexidade: 'baixa',
+    tempoEstimado: '30min',
+    stack: 'react,lucide',
+    tags: 'ui,icon,pattern',
+    arquivos: 'src/views/FinPessoal.tsx (ICONE_REGISTRY), src/components/CodexPanel.tsx (SECAO_ICONES)',
+    conteudo: `## Por que não JSX direto\n\nGuardar \`<ShoppingCart />\` no banco é impossível (não serializa). Guardar emoji limita escolha. Guardar nome resolve tudo.\n\n## Padrão\n\n\`\`\`ts\nconst ICONE_REGISTRY: Record<string, LucideIcon> = {\n  'shopping-cart': ShoppingCart,\n  'car': Car,\n  // ...\n};\n\nfunction getIcone(nome?: string): LucideIcon {\n  return nome ? (ICONE_REGISTRY[nome] || Tag) : Tag;\n}\n\`\`\`\n\n## Bonus\n\nIcon picker no modal: grid de botões que renderiza cada ícone do REGISTRY. Click salva o nome no DB. Funciona pra Codex, Categorias, Receituário, Receitas — qualquer entity que tenha ícone customizável.`,
+  },
+];
+
+// Seed idempotente das receitas padrão. Só insere as que ainda não existem
+// (verifica por `nome`). Bom pra novos installs e pra usuários que limparam.
+function _seedReceitasForja(): void {
+  const existentes = dbGetAll('Receituario') as Array<Record<string, unknown>>;
+  const nomesExistentes = new Set(existentes.map((r) => String(r['nome'])));
+  const agora = new Date().toISOString();
+  let ordem = 1;
+  for (const r of _RECEITAS_FORJA) {
+    if (nomesExistentes.has(r.nome)) { ordem++; continue; }
+    dbCreate('Receituario', {
+      ...r, ordem, destaque: 'nao',
+      criadoEm: agora, atualizadoEm: agora,
+    });
+    ordem++;
+  }
+}
+
+function getReceituario(): ServerResult {
+  try {
+    initDatabase();
+    _seedReceitasForja();
+    const todas = (dbGetAll('Receituario') as Array<Record<string, unknown>>);
+    // Ordena: destaques primeiro, depois por ordem ASC, depois por nome
+    todas.sort((a, b) => {
+      const aDest = a['destaque'] === 'sim' ? 0 : 1;
+      const bDest = b['destaque'] === 'sim' ? 0 : 1;
+      if (aDest !== bDest) return aDest - bDest;
+      const oa = Number(a['ordem'] || 99);
+      const ob = Number(b['ordem'] || 99);
+      if (oa !== ob) return oa - ob;
+      return String(a['nome']).localeCompare(String(b['nome']));
+    });
+    return { ok: true, data: todas };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar receituário' };
+  }
+}
+
+function salvarReceita(payload: Record<string, unknown>): ServerResult {
+  try {
+    const id = payload['id'] ? String(payload['id']) : '';
+    const nome = String(payload['nome'] || '').trim();
+    if (!nome) return { ok: false, error: 'Nome é obrigatório' };
+
+    const data: Record<string, unknown> = {
+      nome,
+      descricao: String(payload['descricao'] || ''),
+      categoria: String(payload['categoria'] || 'outros'),
+      conteudo: String(payload['conteudo'] || ''),
+      tags: String(payload['tags'] || ''),
+      complexidade: String(payload['complexidade'] || 'media'),
+      tempoEstimado: String(payload['tempoEstimado'] || ''),
+      arquivos: String(payload['arquivos'] || ''),
+      stack: String(payload['stack'] || ''),
+      icone: String(payload['icone'] || 'box'),
+      ordem: Number(payload['ordem'] || 50),
+      destaque: String(payload['destaque'] || 'nao'),
+      exemplo: String(payload['exemplo'] || ''),
+      atualizadoEm: new Date().toISOString(),
+    };
+
+    if (id) {
+      const upd = dbUpdate('Receituario', id, data);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Receita não encontrada' };
+    }
+    data['criadoEm'] = new Date().toISOString();
+    return { ok: true, data: dbCreate('Receituario', data) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar receita' };
+  }
+}
+
+function deletarReceita(id: string): ServerResult {
+  try {
+    return dbDelete('Receituario', id) ? { ok: true } : { ok: false, error: 'Receita não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar receita' };
+  }
+}
+
+function alternarDestaqueReceita(id: string): ServerResult {
+  try {
+    const reg = dbGetById('Receituario', id);
+    if (!reg) return { ok: false, error: 'Receita não encontrada' };
+    const novo = String(reg['destaque'] || 'nao') === 'sim' ? 'nao' : 'sim';
+    const upd = dbUpdate('Receituario', id, { destaque: novo, atualizadoEm: new Date().toISOString() });
+    return { ok: true, data: { destaque: novo, item: upd } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao alternar destaque' };
+  }
+}
+
+// Force re-seed (apaga e popula tudo do zero). Útil pra restaurar quando o
+// user quiser as receitas atualizadas após uma versão nova do Forja.
+function reimportarReceitasForja(): ServerResult {
+  try {
+    // Sincronizar = upsert: cria as que faltam e ATUALIZA o conteúdo canônico das
+    // receitas-padrão já existentes (descrição, conteúdo, exemplo, etc.), pra que
+    // melhorias de versões novas do Forja cheguem em quem já tem. Preserva o que é
+    // do usuário: `destaque`, `ordem`, `id` e `criadoEm`. Receitas criadas pelo
+    // usuário (nome fora do catálogo) nunca são tocadas.
+    const existentes = dbGetAll('Receituario') as Array<Record<string, unknown>>;
+    const porNome = new Map<string, Record<string, unknown>>();
+    for (const r of existentes) porNome.set(String(r['nome']), r);
+    const agora = new Date().toISOString();
+    let criadas = 0;
+    let atualizadas = 0;
+    let ordem = 1;
+    for (const r of _RECEITAS_FORJA) {
+      const exist = porNome.get(r.nome);
+      if (exist) {
+        dbUpdate('Receituario', String(exist['id']), {
+          descricao: r.descricao,
+          categoria: r.categoria,
+          conteudo: r.conteudo,
+          exemplo: (r as { exemplo?: string }).exemplo || '',
+          tags: r.tags,
+          complexidade: r.complexidade,
+          tempoEstimado: r.tempoEstimado,
+          arquivos: r.arquivos,
+          stack: r.stack,
+          icone: r.icone,
+          atualizadoEm: agora,
+        });
+        atualizadas++;
+      } else {
+        dbCreate('Receituario', { ...r, ordem, destaque: 'nao', criadoEm: agora, atualizadoEm: agora });
+        criadas++;
+      }
+      ordem++;
+    }
+    const total = (dbGetAll('Receituario') as unknown[]).length;
+    return { ok: true, data: { total, criadas, atualizadas, importadas: _RECEITAS_FORJA.length } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao reimportar' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// APIs — registro de endpoints (Anthropic, OpenAI, proxies)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function getApis(): ServerResult {
+  try {
+    return { ok: true, data: dbGetAll('Apis') };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar APIs' };
+  }
+}
+
+function createApi(data: Record<string, unknown>): ServerResult {
+  try {
+    return { ok: true, data: dbCreate('Apis', data) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao criar API' };
+  }
+}
+
+function updateApi(id: string, data: Record<string, unknown>): ServerResult {
+  try {
+    const updated = dbUpdate('Apis', id, data);
+    return updated ? { ok: true, data: updated } : { ok: false, error: 'API não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atualizar API' };
+  }
+}
+
+function deleteApi(id: string): ServerResult {
+  try {
+    return dbDelete('Apis', id) ? { ok: true } : { ok: false, error: 'API não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar API' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FORJA IA — motor de chamadas LLM via proxy (compatível OpenAI / Anthropic)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface LlmMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+function getLlmConfig(): { baseUrl: string; modelo: string; apiKey: string; provider: string } {
+  const props = PropertiesService.getScriptProperties();
+  return {
+    baseUrl: (props.getProperty('LLM_BASE_URL') || '').replace(/\/+$/, ''),
+    modelo: props.getProperty('LLM_MODEL') || '',
+    apiKey: props.getProperty('LLM_API_KEY') || '',
+    provider: props.getProperty('LLM_PROVIDER') || 'proxy',
+  };
+}
+
+// ═══ Modelo widget (v1.4.3) ═════════════════════════════════════════════════
+// Suporta o ModeloBadge na UI: devolve o modelo atual + classificação por
+// tier + sugestão de upgrade quando aplicável. Pensado pra dar ao user
+// visibilidade clara de QUAL LLM está gerando os artefatos.
+
+type ModeloTier = 'premium' | 'balanceado' | 'rapido' | 'economico' | 'desconhecido';
+
+function _classificarModelo(modeloId: string): { tier: ModeloTier; familia: string; rotulo: string } {
+  const s = modeloId.toLowerCase();
+  // Anthropic
+  if (s.indexOf('opus') >= 0) return { tier: 'premium', familia: 'anthropic', rotulo: 'Opus' };
+  if (s.indexOf('sonnet') >= 0) {
+    if (s.indexOf('3-5') >= 0 || s.indexOf('3.5') >= 0 || s.indexOf('4') >= 0 || s.indexOf('latest') >= 0) {
+      return { tier: 'premium', familia: 'anthropic', rotulo: 'Sonnet' };
+    }
+    return { tier: 'balanceado', familia: 'anthropic', rotulo: 'Sonnet' };
+  }
+  if (s.indexOf('haiku') >= 0) return { tier: 'rapido', familia: 'anthropic', rotulo: 'Haiku' };
+  // OpenAI
+  if (s.indexOf('gpt-4o-mini') >= 0 || s.indexOf('o1-mini') >= 0 || s.indexOf('o3-mini') >= 0) return { tier: 'rapido', familia: 'openai', rotulo: 'GPT-4o mini' };
+  if (s.indexOf('gpt-4o') >= 0) return { tier: 'premium', familia: 'openai', rotulo: 'GPT-4o' };
+  if (s.indexOf('o1') >= 0 || s.indexOf('o3') >= 0 || s.indexOf('o4') >= 0) return { tier: 'premium', familia: 'openai', rotulo: 'GPT Reasoning' };
+  if (s.indexOf('gpt-4-turbo') >= 0) return { tier: 'premium', familia: 'openai', rotulo: 'GPT-4 Turbo' };
+  if (s.indexOf('gpt-4') >= 0) return { tier: 'balanceado', familia: 'openai', rotulo: 'GPT-4' };
+  if (s.indexOf('gpt-3.5') >= 0) return { tier: 'economico', familia: 'openai', rotulo: 'GPT-3.5' };
+  // Google
+  if (s.indexOf('gemini') >= 0) {
+    if (s.indexOf('flash') >= 0) return { tier: 'rapido', familia: 'google', rotulo: 'Gemini Flash' };
+    if (s.indexOf('ultra') >= 0 || s.indexOf('pro') >= 0) return { tier: 'premium', familia: 'google', rotulo: 'Gemini Pro' };
+    return { tier: 'balanceado', familia: 'google', rotulo: 'Gemini' };
+  }
+  return { tier: 'desconhecido', familia: 'outros', rotulo: modeloId };
+}
+
+// Devolve o status do modelo ATUAL configurado pra UI mostrar no badge.
+// Inclui sugestão contextual baseada no uso (chat/blueprint/diagrama/audit).
+function getModeloAtual(input?: { uso?: 'chat' | 'blueprint' | 'diagrama' | 'audit' }): ServerResult {
+  try {
+    const cfg = getLlmConfig();
+    if (!cfg.modelo) return { ok: true, data: { configurado: false, modelo: '', tier: 'desconhecido', familia: 'outros', rotulo: '—' } };
+
+    const meta = _classificarModelo(cfg.modelo);
+    const uso = input?.uso || 'chat';
+
+    // Sugestão contextual: pra blueprint/diagrama (geração longa) recomendamos
+    // modelos rápidos; pra chat geral, mantém premium se já é premium.
+    let sugestao: { motivo: string; modeloSugerido?: string } | undefined;
+    if (meta.tier === 'premium' && (uso === 'diagrama' || uso === 'audit')) {
+      // Diagrama mermaid não precisa de premium — sonnet/haiku fazem igual rápido
+      if (meta.familia === 'anthropic') {
+        sugestao = { motivo: 'Pra diagramas/auditorias rápidas, Haiku é 3x mais barato e ~2x mais rápido com qualidade equivalente.', modeloSugerido: 'claude-haiku-4-5-20251001' };
+      } else if (meta.familia === 'openai') {
+        sugestao = { motivo: 'Pra diagramas/auditorias rápidas, gpt-4o-mini é mais econômico com qualidade boa.', modeloSugerido: 'gpt-4o-mini' };
+      }
+    } else if (meta.tier === 'rapido' && uso === 'blueprint') {
+      // Blueprint precisa de capacidade — modelos rápidos podem entregar JSON ruim
+      sugestao = { motivo: 'Pra blueprints longos com formatação rica, modelos premium (Sonnet/Opus) entregam JSON mais consistente.', modeloSugerido: meta.familia === 'anthropic' ? 'claude-sonnet-4-5-20250929' : 'gpt-4o' };
+    } else if (meta.tier === 'desconhecido') {
+      sugestao = { motivo: 'Modelo não reconhecido. Verifique se o nome está correto em Configurações.' };
+    }
+
+    // Status da última chamada — sustenta o farol verde/vermelho do badge
+    const ultimo = _lerStatusLLM();
+    let saude: 'verde' | 'vermelho' | 'desconhecido' = 'desconhecido';
+    if (ultimo) {
+      const minutosDesde = (Date.now() - ultimo.ts) / 60000;
+      // Status "fresco" se < 30min — caso contrário trata como desconhecido
+      if (minutosDesde < 30) saude = ultimo.ok ? 'verde' : 'vermelho';
+    }
+
+    return {
+      ok: true,
+      data: {
+        configurado: true,
+        modelo: cfg.modelo,
+        tier: meta.tier,
+        familia: meta.familia,
+        rotulo: meta.rotulo,
+        provider: cfg.provider,
+        sugestao,
+        saude,
+        ultimaChamada: ultimo ? {
+          ts: ultimo.ts,
+          ok: ultimo.ok,
+          modelo: ultimo.modelo,
+          latenciaMs: ultimo.latenciaMs,
+          erro: ultimo.erro,
+        } : null,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao obter modelo' };
+  }
+}
+
+// Faz um ping leve no LLM (1 token) e atualiza o farol. Usado pelo botão
+// "Testar agora" do ModeloBadge.
+function pingModelo(): ServerResult {
+  try {
+    const t0 = Date.now();
+    forjaCallLLM([
+      { role: 'system', content: 'Responda apenas "ok".' },
+      { role: 'user', content: 'ping' },
+    ], 5);
+    return { ok: true, data: { ok: true, latenciaMs: Date.now() - t0 } };
+  } catch (e: unknown) {
+    return { ok: true, data: { ok: false, erro: e instanceof Error ? e.message : 'Falha no ping' } };
+  }
+}
+
+// Helper exposto pra UI classificar um modelo arbitrário (ex: o modeloUsado
+// guardado num artefato antigo). Não faz I/O — pura.
+function classificarModelo(modeloId: string): ServerResult {
+  return { ok: true, data: _classificarModelo(modeloId || '') };
+}
+
+// Monta a lista de URLs candidatas para um endpoint, lidando com a presença
+// (ou ausência) do segmento de versão (/v1) na Base URL informada.
+function llmUrlCandidates(base: string, endpoint: string): string[] {
+  const b = base.replace(/\/+$/, '');
+  if (b.indexOf(endpoint) >= 0) return [b]; // já é a URL completa
+  if (/\/v\d+$/.test(b)) return [b + endpoint]; // já tem /v1, /v2...
+  // Sem versão: tenta com /v1 primeiro (mais comum), depois sem.
+  return [b + '/v1' + endpoint, b + endpoint];
+}
+
+// Faz o POST tentando cada URL candidata; pula apenas em 404 (caminho errado).
+// Em códigos transitórios (429/500/502/503/529 — ex.: "overloaded_error" da
+// Anthropic), tenta de novo a MESMA url com backoff exponencial antes de
+// desistir. Resolve falhas passageiras do provedor sem o usuário ter que
+// reenviar a fatura manualmente.
+function llmFetch(
+  candidates: string[],
+  headers: Record<string, string>,
+  payload: string,
+): { code: number; body: string; url: string } {
+  const TRANSIENTES = [429, 500, 502, 503, 529];
+  const MAX_TENTATIVAS = 3;
+  let last = { code: 0, body: '', url: candidates[0] || '' };
+  for (const url of candidates) {
+    for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
+      const res = UrlFetchApp.fetch(url, {
+        method: 'post',
+        contentType: 'application/json',
+        muteHttpExceptions: true,
+        headers,
+        payload,
+      });
+      const code = res.getResponseCode();
+      last = { code, body: res.getContentText(), url };
+      if (code === 404) break; // 404 = caminho errado: tenta a próxima url
+      if (TRANSIENTES.indexOf(code) >= 0 && tentativa < MAX_TENTATIVAS) {
+        Utilities.sleep(2000 * tentativa); // backoff: 2s, 4s
+        continue; // tenta de novo a mesma url
+      }
+      return last; // sucesso ou erro definitivo
+    }
+  }
+  return last;
+}
+
+// Núcleo: envia mensagens ao LLM e devolve o texto da resposta.
+// modeloOverride permite forçar um modelo específico (ex.: Haiku pra auditoria
+// rápida) sem alterar o modelo global do chat.
+// Rastreio do último modelo usado nesta sessão de execução. Permite que
+// callers leves recuperem qual modelo foi efetivamente acionado sem precisar
+// reler o config (que pode ter mudado entre chamadas). Reset a cada request.
+let _ultimoModeloUsado = '';
+
+function getUltimoModeloUsado(): string { return _ultimoModeloUsado; }
+
+// ─── Tracking de saúde da última chamada LLM ─────────────────────────────────
+// Atualizado em todo forjaCallLLMDetalhado (sucesso/erro). Persistido em
+// PropertiesService pra sobreviver entre requests do mesmo deploy.
+// Usado pelo ModeloBadge pra mostrar o "farol" verde/vermelho/cinza.
+interface UltimoStatusLLM {
+  ok: boolean;
+  ts: number;            // epoch ms
+  modelo: string;
+  latenciaMs?: number;
+  erro?: string;         // mensagem curta quando ok=false
+  codigo?: number;       // HTTP code quando aplicável
+}
+
+function _salvarStatusLLM(s: UltimoStatusLLM): void {
+  try {
+    PropertiesService.getScriptProperties().setProperty('FORJA_ULTIMO_STATUS_LLM', JSON.stringify(s));
+  } catch { /* ignore */ }
+}
+
+function _lerStatusLLM(): UltimoStatusLLM | null {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty('FORJA_ULTIMO_STATUS_LLM');
+    if (!raw) return null;
+    return JSON.parse(raw) as UltimoStatusLLM;
+  } catch { return null; }
+}
+
+function forjaCallLLM(messages: LlmMessage[], maxTokens?: number, modeloOverride?: string): string {
+  // Wrapper retro-compatível — só devolve o texto. Atualiza _ultimoModeloUsado
+  // pra quem precisar resgatar via getUltimoModeloUsado().
+  const r = forjaCallLLMDetalhado(messages, maxTokens, modeloOverride);
+  return r.texto;
+}
+
+// Versão detalhada: devolve modelo usado + latência além do texto. Útil pra
+// quem precisa stampar o modelo num artefato (Blueprints/Diagramas).
+function forjaCallLLMDetalhado(
+  messages: LlmMessage[],
+  maxTokens?: number,
+  modeloOverride?: string,
+): { texto: string; modelo: string; latenciaMs: number } {
+  const cfg = getLlmConfig();
+  if (!cfg.baseUrl) throw new Error('Configure a Base URL do proxy em Configurações.');
+  if (!cfg.apiKey) throw new Error('Configure a chave da API em Configurações.');
+  const modelo = (modeloOverride && modeloOverride.trim()) || cfg.modelo || 'gpt-4o-mini';
+  _ultimoModeloUsado = modelo;
+  const t0 = Date.now();
+
+  let texto = '';
+  if (cfg.provider === 'anthropic') {
+    // Formato Anthropic Messages API
+    const systemMsg = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
+    const convo = messages.filter(m => m.role !== 'system').map(m => ({ role: m.role, content: m.content }));
+    const r = llmFetch(
+      llmUrlCandidates(cfg.baseUrl, '/messages'),
+      { 'x-api-key': cfg.apiKey, 'anthropic-version': '2023-06-01' },
+      JSON.stringify({ model: modelo, max_tokens: maxTokens || 1500, system: systemMsg, messages: convo }),
+    );
+    if (r.code < 200 || r.code >= 300) {
+      const elapsed = Math.round((Date.now() - t0) / 1000);
+      let hint = '';
+      if (elapsed >= 55) hint = ` — sugestão: o modelo "${modelo}" está demorando demais. Tente reduzir o escopo ou trocar pro Haiku/Sonnet rápido.`;
+      else if (r.code === 529 || r.code === 503) hint = ' — o provedor do LLM está sobrecarregado no momento (já tentamos algumas vezes). Aguarde 1-2 min e tente de novo, ou conecte o Gemini em Configurações pra leitura mais estável.';
+      else if (r.code === 429) hint = ' — sugestão: limite de rate atingido. Aguarde 1min ou troque de modelo.';
+      else if (r.code === 401 || r.code === 403) hint = ' — sugestão: chave da API inválida. Cheque em Configurações.';
+      _salvarStatusLLM({ ok: false, ts: Date.now(), modelo, latenciaMs: Date.now() - t0, codigo: r.code, erro: `HTTP ${r.code}${hint}` });
+      throw new Error(`LLM ${r.code} (${elapsed}s) em ${r.url} — ${r.body.slice(0, 300)}${hint}`);
+    }
+    const json = JSON.parse(r.body);
+    texto = (json.content && json.content[0] && json.content[0].text) || '';
+  } else {
+    // Formato OpenAI Chat Completions (padrão para proxies e OpenAI)
+    const r = llmFetch(
+      llmUrlCandidates(cfg.baseUrl, '/chat/completions'),
+      { Authorization: `Bearer ${cfg.apiKey}` },
+      JSON.stringify({ model: modelo, messages, temperature: 0.7, max_tokens: maxTokens || 1500 }),
+    );
+    if (r.code < 200 || r.code >= 300) {
+      const elapsed = Math.round((Date.now() - t0) / 1000);
+      let hint = '';
+      if (elapsed >= 55) hint = ` — sugestão: o modelo "${modelo}" está demorando demais. Tente reduzir o escopo ou trocar pro mini/haiku.`;
+      else if (r.code === 529 || r.code === 503) hint = ' — o provedor do LLM está sobrecarregado no momento (já tentamos algumas vezes). Aguarde 1-2 min e tente de novo, ou conecte o Gemini em Configurações pra leitura mais estável.';
+      else if (r.code === 429) hint = ' — sugestão: limite de rate atingido. Aguarde 1min ou troque de modelo.';
+      else if (r.code === 401 || r.code === 403) hint = ' — sugestão: chave da API inválida. Cheque em Configurações.';
+      _salvarStatusLLM({ ok: false, ts: Date.now(), modelo, latenciaMs: Date.now() - t0, codigo: r.code, erro: `HTTP ${r.code}${hint}` });
+      throw new Error(`LLM ${r.code} (${elapsed}s) em ${r.url} — ${r.body.slice(0, 300)}${hint}`);
+    }
+    const json = JSON.parse(r.body);
+    texto = (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '';
+  }
+  const latenciaMs = Date.now() - t0;
+  _salvarStatusLLM({ ok: true, ts: Date.now(), modelo, latenciaMs });
+  return { texto, modelo, latenciaMs };
+}
+
+function testLLMConnection(): ServerResult {
+  try {
+    const inicio = Date.now();
+    const texto = forjaCallLLM([
+      { role: 'system', content: 'Você é um verificador de conexão. Responda apenas com "ok".' },
+      { role: 'user', content: 'ping' },
+    ], 20);
+    const ms = Date.now() - inicio;
+    return { ok: true, data: { resposta: texto.trim().slice(0, 60), latenciaMs: ms } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Falha na conexão' };
+  }
+}
+
+// ─── Gemini nativo (API direta do Google, free tier) ──────────────────────────
+// Chama generativelanguage.googleapis.com direto com a chave da conta Google do
+// usuário. Suporta multimodal (PDF/imagem via inline_data) — é o motor primário
+// pra leitura de fatura e geração do plano de contas. Independente do proxy.
+
+interface GeminiParte {
+  text?: string;
+  inline_data?: { mime_type: string; data: string };
+}
+
+function _geminiApiKey(): string {
+  return PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY') || '';
+}
+
+// Modelos desligados pelo Google → mapeia pro substituto atual. Assim quem já
+// salvou um modelo antigo (ex.: gemini-2.0-flash, shut down em 01/06/2026) não
+// precisa reconfigurar: a chamada usa automaticamente o sucessor.
+const GEMINI_MODELO_PADRAO = 'gemini-3.5-flash';
+const GEMINI_MIGRACAO: Record<string, string> = {
+  'gemini-2.0-flash': 'gemini-3.5-flash',
+  'gemini-2.0-flash-001': 'gemini-3.5-flash',
+  'gemini-2.0-flash-lite': 'gemini-3.1-flash-lite',
+  'gemini-2.0-flash-lite-001': 'gemini-3.1-flash-lite',
+  'gemini-1.5-flash': 'gemini-3.5-flash',
+  'gemini-1.5-pro': 'gemini-2.5-pro',
+  'gemini-2.5-flash-lite': 'gemini-3.1-flash-lite',
+};
+
+function _geminiModelo(): string {
+  const m = PropertiesService.getScriptProperties().getProperty('GEMINI_MODEL') || '';
+  if (!m) return GEMINI_MODELO_PADRAO;
+  return GEMINI_MIGRACAO[m] || m;
+}
+
+function geminiTemChave(): boolean {
+  return !!_geminiApiKey();
+}
+
+function geminiGenerateContent(
+  partes: GeminiParte[],
+  opts?: { system?: string; modelo?: string; json?: boolean; maxTokens?: number; temperature?: number },
+): { texto: string; modelo: string; latenciaMs: number } {
+  const key = _geminiApiKey();
+  if (!key) throw new Error('Configure a chave do Gemini em Configurações.');
+  const modelo = (opts && opts.modelo) || _geminiModelo();
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${encodeURIComponent(key)}`;
+  const body: Record<string, unknown> = {
+    contents: [{ role: 'user', parts: partes }],
+    generationConfig: {
+      temperature: (opts && opts.temperature !== undefined) ? opts.temperature : 0.2,
+      maxOutputTokens: (opts && opts.maxTokens) || 8192,
+      responseMimeType: (opts && opts.json) ? 'application/json' : 'text/plain',
+    },
+  };
+  if (opts && opts.system) body['systemInstruction'] = { parts: [{ text: opts.system }] };
+
+  const t0 = Date.now();
+  // Retry com backoff em códigos transitórios (sobrecarga/instabilidade do
+  // Gemini) — evita falhar e cair pro proxy por um soluço passageiro.
+  const TRANSIENTES = [429, 500, 502, 503, 529];
+  const MAX_TENTATIVAS = 3;
+  let code = 0;
+  let raw = '';
+  for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
+    const resp = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(body),
+      muteHttpExceptions: true,
+    });
+    code = resp.getResponseCode();
+    raw = resp.getContentText();
+    if (code >= 200 && code < 300) break;
+    if (TRANSIENTES.indexOf(code) >= 0 && tentativa < MAX_TENTATIVAS) {
+      Utilities.sleep(2000 * tentativa); // 2s, 4s
+      continue;
+    }
+    break;
+  }
+  if (code < 200 || code >= 300) {
+    let hint = '';
+    if (code === 400 && raw.indexOf('API_KEY_INVALID') >= 0) hint = ' — chave do Gemini inválida. Gere uma nova em aistudio.google.com/app/apikey.';
+    else if (code === 429) hint = ' — cota do free tier atingida. Soluções: (1) aguarde 1-2 min se for limite por minuto; (2) ative o faturamento no projeto da chave (Google Cloud → Billing) pra subir os limites; ou (3) importe pelo proxy por enquanto (o app já cai nele automaticamente).';
+    else if (code === 503 || code === 500 || code === 529) hint = ' — Gemini sobrecarregado no momento (já tentamos algumas vezes). Tente de novo em instantes.';
+    else if (code === 403) hint = ' — chave sem permissão pra Generative Language API.';
+    throw new Error(`Gemini ${code}${hint} — ${raw.slice(0, 300)}`);
+  }
+  const json = JSON.parse(raw);
+  const cand = json.candidates && json.candidates[0];
+  const partsOut = (cand && cand.content && cand.content.parts) || [];
+  const texto = partsOut.map((p: { text?: string }) => p.text || '').join('');
+  return { texto, modelo, latenciaMs: Date.now() - t0 };
+}
+
+function testGeminiConnection(): ServerResult {
+  try {
+    const inicio = Date.now();
+    const r = geminiGenerateContent([{ text: 'Responda apenas: ok' }], { maxTokens: 20, temperature: 0 });
+    return { ok: true, data: { resposta: r.texto.trim().slice(0, 60), latenciaMs: Date.now() - inicio, modelo: r.modelo } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Falha na conexão com o Gemini' };
+  }
+}
+
+// Constrói o contexto (system prompt) com base no Passaporte de um sistema.
+function buildContextoSistema(sistemaId: string): string {
+  if (!sistemaId) return '';
+  const pass = gerarPassaporte(sistemaId);
+  if (pass.ok && typeof pass.data === 'string') {
+    return `\n\nContexto do sistema selecionado (use como base):\n\n${pass.data}`;
+  }
+  return '';
+}
+
+// ─── Gestão de prompts (editáveis pelo usuário) ──────────────────────────────
+
+const PROMPTS_META = [
+  { key: 'chat', label: 'Assistente (chat)', descricao: 'Persona base do chat. O contexto do sistema selecionado é anexado automaticamente.', placeholders: [] as string[] },
+  { key: 'conselho', label: 'Conselho de especialistas', descricao: 'Instrui a análise por papéis e o formato JSON da resposta. Mantenha o JSON.', placeholders: ['{{personas}}'] },
+  { key: 'blueprint', label: 'Blueprint + Prompts', descricao: 'Gera o blueprint em Markdown e os prompts para Cursor/Claude/ChatGPT (JSON). Mantenha o JSON.', placeholders: ['{{stack}}'] },
+  { key: 'diagrama', label: 'Estúdio de diagramas', descricao: 'Gera o código Mermaid (JSON com titulo e mermaid). Mantenha o JSON.', placeholders: ['{{tipo}}'] },
+  { key: 'entrevista', label: 'Análise de entrevista', descricao: 'Resume a entrevista e extrai dores e requisitos (JSON). Mantenha o JSON.', placeholders: [] },
+  { key: 'perguntas', label: 'Perguntas de discovery', descricao: 'Sugere perguntas para a entrevista de discovery (JSON). Mantenha o JSON.', placeholders: ['{{segmento}}'] },
+];
+
+const PROMPTS_PADRAO: Record<string, string> = {
+  chat: 'Você é o assistente da FORJA, o QG de um construtor de apps com IA (vibe coding). '
+    + 'O usuário é um Business Analyst que entende de processos, mas não é desenvolvedor. '
+    + 'Seja claro, prático e direto. Explique decisões técnicas em linguagem acessível, '
+    + 'sugira caminhos que evitem retrabalho e, quando útil, gere prompts prontos para colar no Cursor, Claude ou ChatGPT. '
+    + 'Responda sempre em português do Brasil, usando Markdown quando ajudar a clareza.',
+  conselho: 'Você é um conselho de especialistas de produto digital da FORJA. '
+    + 'Analise o contexto e responda ESTRITAMENTE em JSON válido (sem texto fora do JSON), no formato:\n'
+    + '{"pareceres":[{"persona":"...","resumo":"...","pontosFortes":["..."],"riscos":["..."],"recomendacoes":["..."]}],'
+    + '"sintese":{"decisaoRecomendada":"...","proximosPassos":["..."],"alertas":["..."]}}\n'
+    + 'Gere um parecer para cada uma destas personas: {{personas}}. '
+    + 'Seja específico, evite generalidades e foque em evitar retrabalho. Português do Brasil.',
+  blueprint: 'Você é um arquiteto de produto da FORJA que prepara o terreno para "vibe coding". '
+    + 'O usuário é um BA (não-dev). Gere um blueprint completo e acionável e prompts prontos para colar em ferramentas de IA. '
+    + 'Responda ESTRITAMENTE em JSON válido no formato:\n'
+    + '{"titulo":"...","conteudoMd":"# Markdown completo...","prompts":{"cursor":"...","claude":"...","chatgpt":"..."}}\n'
+    + 'O conteudoMd deve conter: Visão, Problema/Objetivo, Público, Escopo (MVP e fora do MVP), '
+    + 'Requisitos funcionais, Modelo de dados (entidades e campos), Fluxos principais, Stack sugerida com justificativa, '
+    + 'Integrações/APIs, Riscos e mitigação, e Critérios de aceite. '
+    + 'Os prompts devem ser autossuficientes (incluir contexto) e específicos para cada ferramenta: '
+    + 'cursor = prompt de kickoff para criar o projeto; claude = prompt para refinar arquitetura; chatgpt = prompt para gerar plano de tarefas. '
+    + 'Português do Brasil.{{stack}}',
+  diagrama: 'Você gera diagramas em sintaxe Mermaid. '
+    + 'Responda ESTRITAMENTE em JSON válido no formato: {"titulo":"...","mermaid":"..."}. '
+    + 'O campo mermaid deve conter APENAS código Mermaid válido do tipo "{{tipo}}" (ex.: flowchart TD, sequenceDiagram, erDiagram, classDiagram), sem cercas de markdown. '
+    + 'Use rótulos em português, mantenha o diagrama claro e não exagere no número de nós.',
+  entrevista: 'Você é um analista de discovery da FORJA. A partir da transcrição/notas de uma entrevista com um cliente, '
+    + 'extraia o essencial para iniciar um produto. Responda ESTRITAMENTE em JSON válido (sem texto fora do JSON) no formato:\n'
+    + '{"resumo":"...","dores":["..."],"objetivos":["..."],"requisitos":["..."],"perguntasAbertas":["..."],"oportunidade":"..."}\n'
+    + 'O campo resumo deve ter 2-4 frases. requisitos devem ser claros e acionáveis. '
+    + 'perguntasAbertas são dúvidas que ainda precisam ser respondidas em uma próxima conversa. Português do Brasil.',
+  perguntas: 'Você é um especialista em discovery de produto da FORJA. '
+    + 'Gere um roteiro de perguntas para uma entrevista de descoberta com um cliente. '
+    + 'Responda ESTRITAMENTE em JSON válido no formato: {"blocos":[{"tema":"...","perguntas":["..."]}]}. '
+    + 'Cubra: contexto/negócio, problema/dor, processo atual, expectativas/sucesso, restrições (orçamento, prazo, técnicas) e próximos passos. '
+    + 'Adapte ao segmento informado: {{segmento}}. Perguntas abertas, sem jargão técnico. Português do Brasil.',
+};
+
+function getPromptEfetivo(key: string): string {
+  try {
+    const custom = PropertiesService.getScriptProperties().getProperty('PROMPT_' + key);
+    if (custom && custom.trim()) return custom;
+  } catch { /* usa padrão */ }
+  return PROMPTS_PADRAO[key] || '';
+}
+
+function getPrompts(): ServerResult {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const data = PROMPTS_META.map((m) => ({
+      key: m.key,
+      label: m.label,
+      descricao: m.descricao,
+      placeholders: m.placeholders,
+      padrao: PROMPTS_PADRAO[m.key] || '',
+      custom: props.getProperty('PROMPT_' + m.key) || '',
+    }));
+    return { ok: true, data };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar prompts' };
+  }
+}
+
+function savePrompt(key: string, valor: string): ServerResult {
+  try {
+    if (!PROMPTS_PADRAO[key]) return { ok: false, error: 'Prompt inválido' };
+    const props = PropertiesService.getScriptProperties();
+    if (!valor || !valor.trim()) props.deleteProperty('PROMPT_' + key);
+    else props.setProperty('PROMPT_' + key, valor);
+    return { ok: true };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar prompt' };
+  }
+}
+
+function resetPrompt(key: string): ServerResult {
+  try {
+    PropertiesService.getScriptProperties().deleteProperty('PROMPT_' + key);
+    return { ok: true, data: PROMPTS_PADRAO[key] || '' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao restaurar prompt' };
+  }
+}
+
+// Pede à IA para melhorar um prompt, preservando formato/placeholders. Não salva.
+function refinarPrompt(input: { key: string; atual?: string; instrucao?: string }): ServerResult {
+  try {
+    const meta = PROMPTS_META.find((m) => m.key === input.key);
+    const base = (input.atual && input.atual.trim()) ? input.atual : getPromptEfetivo(input.key);
+    const ph = meta && meta.placeholders.length ? meta.placeholders.join(', ') : 'nenhum';
+    const sys = 'Você é um engenheiro de prompts sênior. Melhore o PROMPT DE SISTEMA fornecido pelo usuário. '
+      + 'Regras OBRIGATÓRIAS: mantenha o português do Brasil; preserve integralmente qualquer instrução de formato de saída '
+      + '(especialmente estruturas JSON exatas); preserve EXATAMENTE estes placeholders, se existirem: ' + ph + '. '
+      + 'Deixe o prompt mais claro, específico e eficaz, reduzindo ambiguidades. '
+      + 'Retorne APENAS o texto do prompt melhorado, sem comentários e sem cercas de código.'
+      + (input.instrucao ? (' Pedido específico do usuário: ' + input.instrucao) : '');
+    const out = forjaCallLLM([
+      { role: 'system', content: sys },
+      { role: 'user', content: base },
+    ], 2000);
+    return { ok: true, data: String(out || '').replace(/^```[a-z]*\s*/i, '').replace(/\s*```$/i, '').trim() };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao refinar prompt' };
+  }
+}
+
+function chatLLM(history: LlmMessage[], sistemaId: string, opts?: { contexto?: 'portfolio' | 'sistema' | 'nenhum'; usarCodex?: boolean }): ServerResult {
+  try {
+    const modo = opts && opts.contexto ? opts.contexto : (sistemaId ? 'sistema' : 'nenhum');
+    let contexto = '';
+    if (modo === 'sistema') contexto = buildContextoSistema(sistemaId);
+    else if (modo === 'portfolio') contexto = buildContextoPortfolio();
+    // Códex: opt-in pelo cliente (default true). O assistant respeita os
+    // padrões pessoais do user em todas as respostas.
+    const codexTxt = opts?.usarCodex !== false ? _buildCodexContext() : '';
+    const messages: LlmMessage[] = [{ role: 'system', content: getPromptEfetivo('chat') + contexto + codexTxt }];
+    for (const m of (history || [])) {
+      if (m && (m.role === 'user' || m.role === 'assistant') && m.content) {
+        messages.push({ role: m.role, content: String(m.content) });
+      }
+    }
+    const resposta = forjaCallLLM(messages);
+    return { ok: true, data: resposta };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao falar com a IA' };
+  }
+}
+
+// ─── Forja IA contextual (Fase 11) ───────────────────────────────────────────
+
+function buildContextoPortfolio(): string {
+  try {
+    const sistemas = dbGetAll('Sistemas');
+    const clientes = dbGetAll('Clientes');
+    const ideias = dbGetAll('Ideias');
+    const custos = dbGetAll('Custos');
+    const alertas = (dbGetAll('Alertas') as Array<Record<string, unknown>>)
+      .sort((a, b) => String(b.criadoEm || '').localeCompare(String(a.criadoEm || '')))
+      .slice(0, 10);
+
+    const totalSistemas = sistemas.length;
+    const ativos = sistemas.filter((s) => String(s['estagio'] || '').toLowerCase().includes('produc') || String(s['estagio'] || '').toLowerCase().includes('viv')).length;
+    const saudeMedia = totalSistemas > 0 ? Math.round(sistemas.reduce((acc, s) => acc + Number(s['scoreSaude'] || 0), 0) / totalSistemas) : 0;
+    const custoMensal = custos.reduce((acc, c) => {
+      const rec = String(c['recorrencia'] || '').toLowerCase();
+      const val = Number(c['valor'] || 0);
+      if (rec.indexOf('mensal') >= 0 || rec.indexOf('mês') >= 0 || rec.indexOf('mes') >= 0) return acc + val;
+      if (rec.indexOf('anual') >= 0) return acc + val / 12;
+      return acc;
+    }, 0);
+
+    let md = '\n\n--- CONTEXTO DO PORTFÓLIO DO USUÁRIO ---\n';
+    md += '(Use este snapshot para responder com base em DADOS REAIS. Cite nomes específicos quando relevante.)\n\n';
+    md += `KPIs: ${totalSistemas} sistemas (${ativos} no ar), saúde média ${saudeMedia}%, custo mensal estimado R$ ${custoMensal.toFixed(2)}, ${clientes.length} clientes, ${ideias.length} ideias.\n\n`;
+
+    if (sistemas.length > 0) {
+      md += 'SISTEMAS:\n';
+      for (const s of sistemas.slice(0, 20)) {
+        md += `- ${s['nome']} (${s['codinome']}) — estágio: ${s['estagio'] || '?'}, saúde: ${s['scoreSaude'] || 0}%, stack: ${s['stack'] || '?'}` + (s['urlProd'] ? `, prod: ${s['urlProd']}` : '') + '\n';
+        if (s['proposito']) md += `  propósito: ${String(s['proposito']).slice(0, 200)}\n`;
+      }
+      md += '\n';
+    }
+
+    const clientesOnly = clientes.filter((p) => String(p['papel'] || '') === 'cliente');
+    if (clientesOnly.length > 0) {
+      md += 'CLIENTES:\n';
+      for (const c of clientesOnly.slice(0, 20)) {
+        md += `- ${c['nome']}` + (c['contato'] ? ` (${c['contato']})` : '') + (c['notas'] ? ` — ${String(c['notas']).slice(0, 100)}` : '') + '\n';
+      }
+      md += '\n';
+    }
+
+    if (ideias.length > 0) {
+      md += 'IDEIAS:\n';
+      const recentes = ideias.slice(-15);
+      for (const i of recentes) {
+        const impacto = Number(i['notaImpacto'] || 0);
+        const esforco = Number(i['notaEsforco'] || 0);
+        md += `- ${i['titulo']}` + (i['estado'] ? ` [${i['estado']}]` : '') + (impacto > 0 ? ` (impacto ${impacto}, esforço ${esforco})` : '') + '\n';
+      }
+      md += '\n';
+    }
+
+    if (alertas.length > 0) {
+      md += 'ALERTAS RECENTES:\n';
+      for (const a of alertas) {
+        md += `- [${a['severidade']}] ${a['titulo']} — ${a['mensagem']}\n`;
+      }
+      md += '\n';
+    }
+
+    md += '--- FIM DO CONTEXTO ---\n';
+    return md;
+  } catch {
+    return '';
+  }
+}
+
+// ─── Lume — copiloto de IA do app ─────────────────────────────────────────────
+// Assistente global (movida a Claude via proxy configurado) com domínio sobre o
+// app: conhece o mapa das seções E os dados reais do portfólio, responde
+// perguntas (inclusive de conhecimento geral do modelo) e sugere ações
+// pertinentes de forma proativa. É consultiva (read-only): não executa ações no
+// sistema — quem quer ações aprováveis usa a Forja IA. O nome vem de "lume"
+// (luz do fogo da forja).
+
+const LUME_MAPA_APP =
+  '\n\n## MAPA DO APP (Forja)\n'
+  + '- Dashboard: visão geral — KPIs do portfólio, saúde dos sistemas, alertas recentes.\n'
+  + '- Clientes: cadastro de clientes e pessoas.\n'
+  + '- Ideias: backlog de ideias na matriz impacto×esforço; uma ideia vira "Gênese" (wizard de kickoff).\n'
+  + '- Sistemas (Bancada): seus projetos/produtos — estágio, stack, saúde, repositório, URL de produção.\n'
+  + '- Operações: status ao vivo de APIs/endpoints, aplicações no ar, GitHub e monitoramento.\n'
+  + '- Financeiro: pessoal (cartões, importação de fatura PDF por IA, família, painel de 12 meses, categorias) e empresa (custos/despesas).\n'
+  + '- Forja IA: chat com AÇÕES aprováveis (criar ideia/sistema, registrar risco/decisão, gerar backlog .md).\n'
+  + '- Relatórios: relatórios e exportações do portfólio.\n'
+  + '- Atelier: bancada do vibe coder — Skills, Snippets, Templates, Bookmarks, Códex (DNA de dev), Receituário, Hospedagem e Cofre (segredos criptografados).\n'
+  + '- Configurações: conta/acesso, IA (proxy + Gemini), integrações (GitHub), financeiro (regras de categoria), automações/alertas (+ WhatsApp), dados/backup e catálogo de stacks.\n';
+
+function _lumePersona(): string {
+  return 'Você é a Lume — a copiloto de IA dentro do app Forja, o QG de quem cria software com IA. '
+    + 'Seu nome vem da "luz do fogo" da forja: você ilumina o caminho de quem está na bancada. '
+    + 'Personalidade: calorosa, direta e perspicaz; português do Brasil, tom de parceira de bancada (nada corporativo, nada robótico). '
+    + 'Você conhece o app inteiro (veja o MAPA DO APP) e os dados reais do usuário (veja o CONTEXTO). '
+    + 'Responda QUALQUER pergunta — inclusive conhecimento geral do mundo, programação, negócios, design: não se limite ao app. '
+    + 'Quando a pergunta for sobre o app ou os dados do usuário, baseie-se no MAPA e nos DADOS reais (cite nomes e números). Se faltar um dado, diga em qual seção ele fica. '
+    + 'Seja CONCISA por padrão — sua resposta aparece num painel estreito ao lado: vá direto ao ponto, use listas curtas quando ajudar e aprofunde só quando pedirem. '
+    + 'Use markdown leve (negrito e listas). NUNCA invente dados que não estão no contexto. '
+    + 'Quando fizer sentido, termine com UMA sugestão proativa e pertinente (um próximo passo que o usuário talvez não tenha pensado).';
+}
+
+function _lumeContexto(view?: string): string {
+  let ctx = _lumePersona() + LUME_MAPA_APP;
+  const portfolio = buildContextoPortfolio();
+  if (portfolio) ctx += portfolio;
+  const v = String(view || '').trim();
+  if (v) ctx += `\n\nO usuário está AGORA na seção: ${v}. Leve isso em conta ao responder e ao sugerir próximos passos.`;
+  return ctx;
+}
+
+function lumeChat(history: LlmMessage[], view?: string): ServerResult {
+  try {
+    const sistema = _lumeContexto(view);
+    const messages: LlmMessage[] = [{ role: 'system', content: sistema }];
+    for (const m of (history || [])) {
+      if (m && (m.role === 'user' || m.role === 'assistant') && m.content) {
+        messages.push({ role: m.role, content: String(m.content) });
+      }
+    }
+    const texto = forjaCallLLM(messages, 1400);
+    return { ok: true, data: { texto: texto || '(sem resposta)' } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao falar com a Lume' };
+  }
+}
+
+// Uma única sugestão proativa e curta, baseada nos dados reais + seção atual.
+// Usada pra a Lume "puxar assunto" quando o usuário abre o painel.
+function lumeDica(view?: string): ServerResult {
+  try {
+    const sistema = _lumeContexto(view)
+      + '\n\nTAREFA: gere UMA única sugestão proativa, curta (1–2 frases, no máx ~280 caracteres), '
+      + 'baseada nos dados reais e na seção atual. Algo realmente útil que o usuário talvez não tenha notado '
+      + '(um risco, uma oportunidade, um próximo passo ou um padrão nos números). Sem saudação e sem "aqui vai" — '
+      + 'só a dica, direta. Se não houver nada relevante nos dados, sugira uma primeira ação simples pra começar.';
+    const messages: LlmMessage[] = [
+      { role: 'system', content: sistema },
+      { role: 'user', content: 'Me dê uma dica pertinente agora.' },
+    ];
+    const texto = forjaCallLLM(messages, 220);
+    return { ok: true, data: { texto: (texto || '').trim() } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar dica' };
+  }
+}
+
+// Lista commits recentes do GitHub para um repo (URL completa ou owner/repo)
+function getGitHubCommitsRecentes(repoUrlOrFullName: string, dias: number): ServerResult {
+  try {
+    if (!repoUrlOrFullName) return { ok: false, error: 'Informe a URL do repositório' };
+    const settings = getSettings();
+    if (!settings.ok) return settings;
+    const sd = settings.data as { github: { temToken: boolean } };
+    if (!sd.github.temToken) return { ok: false, error: 'Conecte o GitHub em Configurações primeiro' };
+    const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+    if (!token) return { ok: false, error: 'Token do GitHub não encontrado' };
+
+    let fullName = repoUrlOrFullName.trim();
+    const m = fullName.match(/github\.com\/([^/]+\/[^/?#]+)/);
+    if (m) fullName = m[1];
+    fullName = fullName.replace(/\.git$/, '').replace(/^\/+|\/+$/g, '');
+    if (!/^[^/]+\/[^/]+$/.test(fullName)) return { ok: false, error: 'Formato inválido: use https://github.com/owner/repo' };
+
+    const dataLimite = new Date(Date.now() - Math.max(1, Math.min(180, dias || 30)) * 86400000).toISOString();
+    const url = `https://api.github.com/repos/${fullName}/commits?since=${encodeURIComponent(dataLimite)}&per_page=50`;
+    const res = UrlFetchApp.fetch(url, {
+      headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'User-Agent': 'FORJA' },
+      muteHttpExceptions: true,
+    });
+    const code = res.getResponseCode();
+    if (code !== 200) return { ok: false, error: `GitHub respondeu ${code}: ${res.getContentText().slice(0, 200)}` };
+    const commits = JSON.parse(res.getContentText()) as Array<{ sha: string; commit: { message: string; author: { name: string; date: string } }; html_url: string }>;
+    return {
+      ok: true,
+      data: commits.map((c) => ({
+        sha: c.sha.slice(0, 7),
+        message: c.commit.message,
+        author: c.commit.author.name,
+        date: c.commit.author.date,
+        url: c.html_url,
+      })),
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar commits' };
+  }
+}
+
+function acaoIAResumoExecutivo(): ServerResult {
+  try {
+    const ctx = buildContextoPortfolio();
+    const sys = getPromptEfetivo('chat') + ctx + '\n\nVocê acabou de receber um snapshot REAL do portfólio. Faça um RESUMO EXECUTIVO de no máximo 250 palavras com: 1) panorama (1 linha), 2) destaques positivos (2-3 bullets), 3) pontos de atenção (2-3 bullets), 4) próximas ações sugeridas (3 bullets concretos). Use markdown. Cite NOMES específicos do contexto.';
+    const out = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: 'Gere o resumo executivo do meu portfólio.' }], 1200);
+    return { ok: true, data: out };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro' }; }
+}
+
+function acaoIASugerirPreco(sistemaId: string): ServerResult {
+  try {
+    if (!sistemaId) return { ok: false, error: 'Selecione um sistema' };
+    const ctx = buildContextoSistema(sistemaId);
+    const sys = getPromptEfetivo('chat') + ctx + '\n\nCom base no contexto do sistema selecionado (estágio, propósito, stack, custos), SUGIRA 3 modelos de precificação por assinatura (planos sugeridos com nome, preço mensal, o que entrega, perfil de cliente). Use markdown com tabela ou bullets. Justifique cada faixa. Em R$. Conservador, mas que cubra os custos e gere margem mínima de 60%. Máx 350 palavras.';
+    const out = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: 'Sugira preços de assinatura para este sistema.' }], 1500);
+    return { ok: true, data: out };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro' }; }
+}
+
+function acaoIAReleaseNotes(sistemaId: string, dias: number): ServerResult {
+  try {
+    if (!sistemaId) return { ok: false, error: 'Selecione um sistema' };
+    const sistema = dbGetById('Sistemas', sistemaId);
+    if (!sistema) return { ok: false, error: 'Sistema não encontrado' };
+    const repo = String(sistema['repoUrl'] || '');
+    if (!repo) return { ok: false, error: 'Esse sistema não tem repoUrl configurado' };
+    const cm = getGitHubCommitsRecentes(repo, dias || 30);
+    if (!cm.ok) return cm;
+    const commits = cm.data as Array<{ sha: string; message: string; author: string; date: string }>;
+    if (commits.length === 0) return { ok: false, error: 'Nenhum commit no período' };
+    const lista = commits.slice(0, 40).map((c) => `- [${c.sha}] ${c.message.split('\n')[0]} — ${c.author} (${c.date.slice(0, 10)})`).join('\n');
+    const sys = getPromptEfetivo('chat') + `\n\nVocê é encarregado de gerar RELEASE NOTES em markdown para o sistema "${sistema['nome']}" (${sistema['codinome']}). Agrupe por categoria (✨ Novidades, 🛠️ Melhorias, 🐛 Correções, 🧹 Manutenção). Reescreva mensagens técnicas em linguagem de produto para usuários finais. Omita commits triviais (merge, bump). Use tom profissional, em português. No final, inclua "## Detalhes técnicos" com até 5 commits importantes (mensagem original).`;
+    const out = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: `Commits dos últimos ${dias || 30} dias:\n\n${lista}\n\nGere as release notes.` }], 2500);
+    return { ok: true, data: { texto: out, totalCommits: commits.length } };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro' }; }
+}
+
+function acaoIAIdeiasParaCliente(clienteId: string): ServerResult {
+  try {
+    if (!clienteId) return { ok: false, error: 'Selecione um cliente' };
+    const cliente = dbGetById('Pessoas', clienteId);
+    if (!cliente) return { ok: false, error: 'Cliente não encontrado' };
+    let ctx = '\n\n--- CONTEXTO DO CLIENTE ---\n';
+    ctx += `Cliente: ${cliente['nome']}` + (cliente['contato'] ? ` — contato: ${cliente['contato']}` : '') + '\n';
+    if (cliente['notas']) ctx += `Notas/contexto: ${cliente['notas']}\n`;
+    ctx += '\nPortfólio atual (para evitar duplicação):\n';
+    const sistemas = dbGetAll('Sistemas');
+    for (const s of sistemas.slice(0, 15)) ctx += `- ${s['nome']}: ${String(s['proposito'] || '').slice(0, 120)}\n`;
+    ctx += '--- FIM DO CONTEXTO ---\n';
+    const sys = getPromptEfetivo('chat') + ctx + '\n\nGere 5 NOVAS IDEIAS DE PRODUTO/AUTOMAÇÃO sob medida para este cliente, considerando suas notas. Para cada ideia: título, problema que resolve (1 linha), proposta (2 linhas), faixa de complexidade (baixa/média/alta), e por que faz sentido AGORA. Evite ideias que já existam no portfólio acima. Use markdown.';
+    const out = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: `Me dê 5 ideias novas para ${cliente['nome']}.` }], 1800);
+    return { ok: true, data: out };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro' }; }
+}
+
+function acaoIARiscoPortfolio(): ServerResult {
+  try {
+    const ctx = buildContextoPortfolio();
+    const sys = getPromptEfetivo('chat') + ctx + '\n\nFaça uma ANÁLISE DE RISCOS do portfólio: 1) concentração (cliente único, stack única, dependência única), 2) saúde (sistemas críticos), 3) financeira (custos vs receita visível), 4) operacional (alertas recentes). Para cada risco identificado: severidade (baixa/média/alta), impacto, mitigação acionável. Máx 400 palavras, markdown.';
+    const out = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: 'Analise os riscos do meu portfólio.' }], 1500);
+    return { ok: true, data: out };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro' }; }
+}
+
+// ─── Teste de endpoint de API (status + latência) ────────────────────────────
+
+// Faz um ping HTTP simples e devolve status + latência (0 = inalcançável).
+function pingUrl(url: string): { status: number; latenciaMs: number } {
+  const inicio = Date.now();
+  try {
+    const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+    return { status: res.getResponseCode(), latenciaMs: Date.now() - inicio };
+  } catch {
+    return { status: 0, latenciaMs: Date.now() - inicio };
+  }
+}
+
+// "Conectado" = o servidor respondeu (mesmo 401/403/404). Só 0 ou 5xx contam como falha.
+function isConectado(status: number): boolean {
+  return status > 0 && status < 500;
+}
+
+function testApiEndpoint(id: string): ServerResult {
+  try {
+    const api = dbGetById('Apis', id);
+    if (!api) return { ok: false, error: 'API não encontrada' };
+    const url = String(api['healthUrl'] || api['baseUrl'] || '');
+    if (!url) return { ok: false, error: 'Esta API não tem URL de health/base para testar' };
+    const r = pingUrl(url);
+    dbUpdate('Apis', id, { ultimoStatus: r.status, latenciaMs: r.latenciaMs });
+    return { ok: true, data: { ultimoStatus: r.status, latenciaMs: r.latenciaMs, conectado: isConectado(r.status) } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao testar API' };
+  }
+}
+
+// Valida o token do GitHub chamando a API /user.
+function pingGitHub(token: string): { conectado: boolean; status: number; login: string; latenciaMs: number } {
+  const inicio = Date.now();
+  try {
+    const res = UrlFetchApp.fetch('https://api.github.com/user', {
+      muteHttpExceptions: true,
+      headers: { Authorization: 'token ' + token, 'User-Agent': 'Forja' },
+    });
+    const code = res.getResponseCode();
+    let login = '';
+    if (code === 200) { try { login = JSON.parse(res.getContentText()).login || ''; } catch { login = ''; } }
+    return { conectado: code === 200, status: code, login, latenciaMs: Date.now() - inicio };
+  } catch {
+    return { conectado: false, status: 0, login: '', latenciaMs: Date.now() - inicio };
+  }
+}
+
+// Valida TUDO de uma vez: proxy de IA principal, GitHub e cada endpoint cadastrado.
+//
+// PERFORMANCE: essa função era chamada toda vez que o user abria o Dashboard
+// e fazia HTTP pings sequenciais (LLM + GitHub + 1 por API = 4-10s totais).
+// v1.4.2: cache de 60s via CacheService + writeback assíncrono (não bloqueia
+// o response). Dashboard agora responde em ~400ms quando o cache está quente.
+const STATUS_CACHE_TTL_SEG = 60;
+
+function getStatusGeral(opts?: { forceRefresh?: boolean }): ServerResult {
+  try {
+    // 1) Cache hit: devolve direto sem ping nenhum (ideal: 99% dos opens)
+    const cache = CacheService.getScriptCache();
+    if (!opts?.forceRefresh) {
+      const cached = cache.get('FORJA_STATUS_GERAL');
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          return { ok: true, data: { ...parsed, _cached: true } };
+        } catch { /* cache corrompido, segue pro recompute */ }
+      }
+    }
+
+    // 2) Cache miss: faz pings de verdade
+    const props = PropertiesService.getScriptProperties();
+
+    // IA (proxy principal configurado no Vault)
+    let llm: Record<string, unknown>;
+    if (!props.getProperty('LLM_BASE_URL') || !props.getProperty('LLM_API_KEY')) {
+      llm = { configurado: false, conectado: false, detalhe: 'Não configurado' };
+    } else {
+      const t = testLLMConnection();
+      llm = t.ok
+        ? { configurado: true, conectado: true, latenciaMs: (t.data as { latenciaMs: number }).latenciaMs, detalhe: 'Respondendo' }
+        : { configurado: true, conectado: false, latenciaMs: 0, detalhe: String(t.error || 'Falha') };
+    }
+
+    // GitHub
+    const ghTok = props.getProperty('GITHUB_TOKEN');
+    let github: Record<string, unknown>;
+    if (!ghTok) {
+      github = { configurado: false, conectado: false, detalhe: 'Sem token' };
+    } else {
+      const g = pingGitHub(ghTok);
+      github = { configurado: true, conectado: g.conectado, latenciaMs: g.latenciaMs, detalhe: g.conectado ? ('@' + g.login) : ('HTTP ' + g.status) };
+    }
+
+    // Endpoints de API cadastrados — pings PARALELOS via UrlFetchApp.fetchAll
+    // (era sequencial antes — N APIs cadastradas = N segundos). Agora todos
+    // os pings vão juntos, total = latência do mais lento.
+    const apis = dbGetAll('Apis');
+    const apiStatus = apis.length > 0 ? _pingApisParalelo(apis) : [];
+
+    // Writeback de latência foi removido do hot path — era custoso (1 sheet
+    // write por API). Quem quiser persistir pode chamar uma rota dedicada.
+
+    const totalConfig = (llm.configurado ? 1 : 0) + (github.configurado ? 1 : 0) + apiStatus.length;
+    const online = (llm.conectado ? 1 : 0) + (github.conectado ? 1 : 0) + apiStatus.filter((r) => r.conectado).length;
+
+    const payload = { llm, github, apis: apiStatus, resumo: { online, total: totalConfig } };
+
+    // Grava no cache (best-effort)
+    try {
+      cache.put('FORJA_STATUS_GERAL', JSON.stringify(payload), STATUS_CACHE_TTL_SEG);
+    } catch { /* cache cheio ou indisponível, não é crítico */ }
+
+    return { ok: true, data: payload };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao validar status' };
+  }
+}
+
+// Pings paralelos via UrlFetchApp.fetchAll — segue rate-limit do GAS mas
+// dispara TUDO de uma vez ao invés de aguardar cada um.
+function _pingApisParalelo(apis: Array<Record<string, unknown>>): Array<{ id: unknown; status: number; latenciaMs: number; conectado: boolean }> {
+  const requests = apis.map((a) => {
+    const url = String(a['healthUrl'] || a['baseUrl'] || '');
+    return url
+      ? { url, muteHttpExceptions: true, method: 'get' as const, followRedirects: true, validateHttpsCertificates: true }
+      : null;
+  });
+
+  // Só dispara as válidas
+  const validIdxs: number[] = [];
+  const validRequests: Array<NonNullable<typeof requests[0]>> = [];
+  requests.forEach((r, i) => {
+    if (r) { validIdxs.push(i); validRequests.push(r); }
+  });
+
+  const t0 = Date.now();
+  let responses: GoogleAppsScript.URL_Fetch.HTTPResponse[] = [];
+  try {
+    responses = validRequests.length > 0
+      ? UrlFetchApp.fetchAll(validRequests as unknown as GoogleAppsScript.URL_Fetch.URLFetchRequest[])
+      : [];
+  } catch {
+    responses = [];
+  }
+  const elapsed = Date.now() - t0;
+
+  // Latência por request é aproximada como elapsed/N (parallel — todos
+  // gastaram ~o mesmo tempo). Pra precisão real precisaríamos medir 1 a 1.
+  const latPorReq = validRequests.length > 0 ? Math.round(elapsed / validRequests.length) : 0;
+
+  return apis.map((a, idx) => {
+    const validPos = validIdxs.indexOf(idx);
+    if (validPos === -1) return { id: a['id'], status: 0, latenciaMs: 0, conectado: false };
+    const r = responses[validPos];
+    const status = r ? r.getResponseCode() : 0;
+    return { id: a['id'], status, latenciaMs: latPorReq, conectado: isConectado(status) };
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// OPERAÇÕES (Fase 5) — GitHub ao vivo, status de apps e monitoramento agendado
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function ghHeaders(token: string): Record<string, string> {
+  return { Authorization: 'token ' + token, 'User-Agent': 'Forja', Accept: 'application/vnd.github+json' };
+}
+
+// Lista os repositórios do GitHub do usuário configurado, com último push e vínculo a sistemas.
+function getGitHubRepos(): ServerResult {
+  try {
+    const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+    if (!token) return { ok: false, error: 'Configure o GitHub em Configurações.' };
+    const res = UrlFetchApp.fetch('https://api.github.com/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member', {
+      muteHttpExceptions: true,
+      headers: ghHeaders(token),
+    });
+    const code = res.getResponseCode();
+    if (code !== 200) return { ok: false, error: `GitHub respondeu ${code}. Verifique o token.` };
+    const repos = JSON.parse(res.getContentText()) as Array<Record<string, unknown>>;
+    const sistemas = dbGetAll('Sistemas');
+    const data = repos.map((r) => {
+      const htmlUrl = String(r['html_url'] || '');
+      const fullName = String(r['full_name'] || '');
+      const sis = sistemas.find(s => {
+        const ru = String(s['repoUrl'] || '').toLowerCase();
+        return ru && (ru === htmlUrl.toLowerCase() || ru.indexOf(fullName.toLowerCase()) >= 0);
+      });
+      return {
+        nome: String(r['name'] || ''),
+        fullName,
+        descricao: String(r['description'] || ''),
+        url: htmlUrl,
+        linguagem: String(r['language'] || ''),
+        pushedAt: String(r['pushed_at'] || ''),
+        stars: Number(r['stargazers_count'] || 0),
+        issues: Number(r['open_issues_count'] || 0),
+        privado: !!r['private'],
+        sistemaId: sis ? String(sis['id']) : '',
+        sistemaNome: sis ? String(sis['nome']) : '',
+      };
+    });
+    return { ok: true, data };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar repositórios' };
+  }
+}
+
+// Status ao vivo de cada aplicação: ping da urlProd + endpoints de API vinculados.
+function getAppStatus(): ServerResult {
+  try {
+    const sistemas = dbGetAll('Sistemas');
+    const apis = dbGetAll('Apis');
+    const data = sistemas.map((s) => {
+      const url = String(s['urlProd'] || '');
+      const ping = url ? pingUrl(url) : { status: 0, latenciaMs: 0 };
+      const endpoints = apis.filter(a => String(a['sistemaId'] || '') === String(s['id'])).map((a) => {
+        const u = String(a['healthUrl'] || a['baseUrl'] || '');
+        const p = u ? pingUrl(u) : { status: 0, latenciaMs: 0 };
+        return { id: a['id'], nome: a['nome'], status: p.status, latenciaMs: p.latenciaMs, conectado: isConectado(p.status) };
+      });
+      return {
+        id: s['id'], nome: s['nome'], estagio: s['estagio'], urlProd: url,
+        temUrl: !!url,
+        status: ping.status, latenciaMs: ping.latenciaMs, conectado: url ? isConectado(ping.status) : false,
+        endpoints,
+      };
+    });
+    return { ok: true, data };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao verificar aplicações' };
+  }
+}
+
+// ─── Monitoramento agendado (abrangente) ──────────────────────────────────────
+
+// Handler do trigger: verifica urlProd dos sistemas e endpoints das APIs; alerta por e-mail.
+function runMonitoramento(): void {
+  initDatabase();
+  const sistemas = dbGetAll('Sistemas');
+  const apis = dbGetAll('Apis');
+  const quedas: string[] = [];
+  const alvos: Array<{ tipo: string; nome: string; conectado: boolean; status: number }> = [];
+
+  for (const s of sistemas) {
+    const url = String(s['urlProd'] || '');
+    if (!url) continue;
+    const p = pingUrl(url);
+    const ok = isConectado(p.status);
+    alvos.push({ tipo: 'app', nome: String(s['nome']), conectado: ok, status: p.status });
+    if (!ok) {
+      quedas.push(`• App "${s['nome']}" (${url}) — ${p.status || 'sem resposta'}`);
+      const sistemaId = String(s['id']);
+      const score = Math.max(0, Number(s['scoreSaude'] || 0) - 10);
+      dbUpdate('Sistemas', sistemaId, { scoreSaude: score });
+      dbCreate('Timeline', { sistemaId, data: new Date().toISOString().split('T')[0], tipo: 'incidente', texto: `urlProd ${url} retornou ${p.status || 'sem resposta'}` });
+    }
+  }
+  for (const a of apis) {
+    const url = String(a['healthUrl'] || a['baseUrl'] || '');
+    if (!url) continue;
+    const p = pingUrl(url);
+    dbUpdate('Apis', String(a['id']), { ultimoStatus: p.status, latenciaMs: p.latenciaMs });
+    const ok = isConectado(p.status);
+    alvos.push({ tipo: 'api', nome: String(a['nome']), conectado: ok, status: p.status });
+    if (!ok) quedas.push(`• API "${a['nome']}" (${url}) — ${p.status || 'sem resposta'}`);
+  }
+
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('FORJA_MONITOR_RUN', new Date().toISOString());
+  props.setProperty('FORJA_MONITOR_SNAPSHOT', JSON.stringify(alvos));
+
+  if (quedas.length > 0) {
+    try {
+      const email = Session.getActiveUser().getEmail();
+      if (email) MailApp.sendEmail(email, '⚠️ FORJA: instabilidade detectada', `Foram detectadas quedas no monitoramento:\n\n${quedas.join('\n')}\n\n---\nFORJA — monitoramento automático.`);
+    } catch { /* sem permissão de e-mail */ }
+  }
+}
+
+function ativarMonitoramento(intervaloMin: number): ServerResult {
+  try {
+    const intervalo = [5, 10, 15, 30, 60].indexOf(Number(intervaloMin)) >= 0 ? Number(intervaloMin) : 15;
+    ScriptApp.getProjectTriggers().forEach((tr) => { if (tr.getHandlerFunction() === 'runMonitoramento') ScriptApp.deleteTrigger(tr); });
+    ScriptApp.newTrigger('runMonitoramento').timeBased().everyMinutes(intervalo).create();
+    PropertiesService.getScriptProperties().setProperty('FORJA_MONITOR_INTERVAL', String(intervalo));
+    return { ok: true, data: { ativo: true, intervaloMin: intervalo } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ativar monitoramento' };
+  }
+}
+
+function desativarMonitoramento(): ServerResult {
+  try {
+    ScriptApp.getProjectTriggers().forEach((tr) => { if (tr.getHandlerFunction() === 'runMonitoramento') ScriptApp.deleteTrigger(tr); });
+    return { ok: true, data: { ativo: false } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao desativar monitoramento' };
+  }
+}
+
+function getMonitorStatus(): ServerResult {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const ativo = ScriptApp.getProjectTriggers().some((tr) => tr.getHandlerFunction() === 'runMonitoramento');
+    let snapshot: unknown = [];
+    try { snapshot = JSON.parse(props.getProperty('FORJA_MONITOR_SNAPSHOT') || '[]'); } catch { snapshot = []; }
+    return {
+      ok: true,
+      data: {
+        ativo,
+        intervaloMin: Number(props.getProperty('FORJA_MONITOR_INTERVAL') || 15),
+        ultimaExec: props.getProperty('FORJA_MONITOR_RUN') || '',
+        snapshot,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ler monitoramento' };
+  }
+}
+
+function rodarMonitoramentoAgora(): ServerResult {
+  try {
+    runMonitoramento();
+    return getMonitorStatus();
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao rodar monitoramento' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PREFERÊNCIAS DE UI (por usuário) — ex.: tema
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function saveThemeMode(mode: string): ServerResult {
+  try {
+    PropertiesService.getUserProperties().setProperty('FORJA_THEME', String(mode || 'luz'));
+    return { ok: true };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar tema' };
+  }
+}
+
+function getThemeMode(): ServerResult {
+  try {
+    return { ok: true, data: PropertiesService.getUserProperties().getProperty('FORJA_THEME') || '' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ler tema' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FORJA IA — Conselho de especialistas, Blueprint e Diagramas (Fase 3)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Extrai JSON de uma resposta do LLM (tolera ```json e texto ao redor).
+function extrairJson(texto: string): unknown {
+  let s = String(texto || '').trim();
+  s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  try { return JSON.parse(s); } catch { /* tenta recortar */ }
+  const ini = Math.min(...[s.indexOf('{'), s.indexOf('[')].filter(i => i >= 0).concat([Infinity]));
+  const fim = Math.max(s.lastIndexOf('}'), s.lastIndexOf(']'));
+  if (ini !== Infinity && fim > ini) {
+    try { return JSON.parse(s.slice(ini, fim + 1)); } catch { /* falhou */ }
+  }
+  throw new Error('A IA não retornou um JSON válido.');
+}
+
+// A IA às vezes escreve valores no formato BR (ex.: 1.285,90) dentro dos campos
+// numéricos da fatura — o que quebra o JSON.parse (vírgula no meio do número).
+// Normaliza SÓ os campos conhecidos (valor/total) pra ponto decimal e remove
+// separador de milhar; também converte de string ("1285,90") pra número.
+function _repararNumerosFaturaJson(s: string): string {
+  return String(s || '').replace(
+    /("(?:valor|total)"\s*:\s*)"?(-?\d[\d.]*(?:,\d+)?)"?/g,
+    (_m, pre: string, num: string) => {
+      let n = num;
+      if (n.indexOf(',') >= 0) n = n.replace(/\./g, '').replace(',', '.');
+      return `${pre}${n}`;
+    },
+  );
+}
+
+// Parser de JSON de fatura tolerante: tenta o normal e, se falhar, repara os
+// números BR e tenta de novo. Centraliza o tratamento usado pelos extratores.
+function extrairJsonFatura(texto: string): unknown {
+  try { return extrairJson(texto); }
+  catch {
+    return extrairJson(_repararNumerosFaturaJson(String(texto || '')));
+  }
+}
+
+// Tenta extrair um bloco Mermaid válido de uma resposta crua da IA.
+// A IA frequentemente devolve uma de:
+//   1) JSON limpo:  {"mermaid":"flowchart TD\n A-->B"}
+//   2) Markdown:    ```mermaid\nflowchart TD\n A-->B\n```
+//   3) Texto solto: flowchart TD\n A-->B
+//   4) JSON quebrado (aspas mal escapadas) com Mermaid lá dentro
+// Esta função tenta as 4 ordens — retorna string vazia se não achar nada plausível.
+function _extrairMermaidBruto(texto: string): string {
+  const raw = String(texto || '');
+  if (!raw.trim()) return '';
+
+  // 1) Procura bloco ```mermaid ... ``` explícito (mais confiável)
+  const blocoMermaid = raw.match(/```\s*mermaid\s*\n([\s\S]+?)```/i);
+  if (blocoMermaid && blocoMermaid[1].trim()) return blocoMermaid[1].trim();
+
+  // 2) Procura qualquer ``` ... ``` que comece com palavra-chave Mermaid
+  const blocosCode = raw.match(/```\s*\n?([\s\S]+?)```/g) || [];
+  for (const b of blocosCode) {
+    const conteudo = b.replace(/^```[^\n]*\n?/, '').replace(/```$/, '').trim();
+    if (_pareceMermaid(conteudo)) return conteudo;
+  }
+
+  // 3) Procura campo "mermaid":"..." dentro de JSON quebrado, com regex tolerante.
+  //    Pega entre as primeiras aspas e o último } anterior ao fim do bloco.
+  const matchCampo = raw.match(/"mermaid"\s*:\s*"([\s\S]*?)"\s*[,}]/);
+  if (matchCampo && matchCampo[1]) {
+    // Desescapa \n e \" mais comuns
+    const decoded = matchCampo[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\t/g, '  ');
+    if (_pareceMermaid(decoded)) return decoded.trim();
+  }
+
+  // 4) Procura a primeira linha que tem palavra-chave Mermaid e pega dali até o fim
+  const linhas = raw.split('\n');
+  let inicio = -1;
+  for (let i = 0; i < linhas.length; i++) {
+    if (_pareceMermaid(linhas[i])) { inicio = i; break; }
+  }
+  if (inicio >= 0) {
+    // Tira lixo de fechamento que sobra
+    let bloco = linhas.slice(inicio).join('\n').trim();
+    bloco = bloco.replace(/```[\s\S]*$/, '').trim();
+    // Cortar JSON closing "}" no fim
+    bloco = bloco.replace(/"\s*}\s*$/, '').replace(/\\n/g, '\n').replace(/\\"/g, '"');
+    if (_pareceMermaid(bloco)) return bloco;
+  }
+
+  return '';
+}
+
+// Detecta se uma string parece código Mermaid pela palavra-chave inicial.
+function _pareceMermaid(s: string): boolean {
+  if (!s) return false;
+  return /^\s*(flowchart|graph|sequenceDiagram|classDiagram|erDiagram|stateDiagram(?:-v2)?|mindmap|gantt|pie|journey|gitGraph|timeline|quadrantChart|requirementDiagram|c4Context)\b/i
+    .test(s);
+}
+
+// Resolve o texto de contexto a partir de um id de ideia/sistema ou texto livre.
+function resolverContexto(input: { ideiaId?: string; sistemaId?: string; texto?: string }): string {
+  const partes: string[] = [];
+  if (input.texto) partes.push(input.texto);
+  if (input.ideiaId) {
+    const ideia = dbGetById('Ideias', input.ideiaId);
+    if (ideia) partes.push(`Ideia: ${ideia['titulo']}\nDescrição: ${ideia['descricao']}`);
+  }
+  if (input.sistemaId) {
+    const pass = gerarPassaporte(input.sistemaId);
+    if (pass.ok && typeof pass.data === 'string') partes.push(pass.data);
+  }
+  return partes.join('\n\n');
+}
+
+const PERSONAS_PADRAO = ['Product/BA', 'UX', 'UI', 'Arquitetura', 'Engenharia'];
+
+// Conselho de especialistas: cada persona dá um parecer + síntese com recomendação.
+function conselhoEspecialistas(input: { ideiaId?: string; sistemaId?: string; texto?: string; personas?: string[]; usarCodex?: boolean }): ServerResult {
+  try {
+    const contexto = resolverContexto(input);
+    if (!contexto.trim()) return { ok: false, error: 'Descreva a ideia ou selecione um contexto.' };
+    const personas = (input.personas && input.personas.length) ? input.personas : PERSONAS_PADRAO;
+
+    const codexTxt = input.usarCodex !== false ? _buildCodexContext() : '';
+    const system = getPromptEfetivo('conselho').replace(/\{\{personas\}\}/g, personas.join(', ')) + codexTxt;
+
+    const resposta = forjaCallLLM([
+      { role: 'system', content: system },
+      { role: 'user', content: contexto },
+    ], 2500);
+    const json = extrairJson(resposta);
+
+    dbCreate('Conselho', { contexto: contexto.slice(0, 4000), persona: personas.join(','), parecer: JSON.stringify(json), sintese: '', data: new Date().toISOString() });
+    return { ok: true, data: json };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro no conselho' };
+  }
+}
+
+// Gera um Blueprint (Markdown) + prompts prontos para Cursor, Claude e ChatGPT.
+//
+// GRACEFUL DEGRADATION (v1.4.3): se a IA não retornar JSON válido, NÃO joga
+// fora o trabalho — salva o conteúdo bruto com `parseAviso='sim'` pra UI
+// indicar. Antes desse fix, qualquer resposta sem JSON era perdida.
+function gerarBlueprint(input: { ideiaId?: string; sistemaId?: string; texto?: string; stack?: string; usarCodex?: boolean }): ServerResult {
+  try {
+    const contexto = resolverContexto(input);
+    if (!contexto.trim()) return { ok: false, error: 'Descreva a ideia ou selecione um contexto.' };
+    const stackTxt = input.stack ? `\nStack preferida pelo usuário: ${input.stack}.` : '';
+    const codexTxt = input.usarCodex !== false ? _buildCodexContext() : '';
+    const system = getPromptEfetivo('blueprint').replace(/\{\{stack\}\}/g, stackTxt) + codexTxt;
+
+    // maxTokens 3000 (era 3500) pra caber melhor no timeout de UrlFetchApp.
+    // Pode subir de novo se trocar pra modelo rápido (haiku/mini).
+    const llm = forjaCallLLMDetalhado([
+      { role: 'system', content: system },
+      { role: 'user', content: contexto },
+    ], 3000);
+
+    // Parse com fallback: se falhar, preserva resposta bruta.
+    let json: { titulo?: string; conteudoMd?: string; prompts?: unknown } = {};
+    let parseAviso = 'nao';
+    try {
+      json = extrairJson(llm.texto) as { titulo?: string; conteudoMd?: string; prompts?: unknown };
+    } catch {
+      parseAviso = 'sim';
+      json = { titulo: 'Blueprint (sem formatação)', conteudoMd: llm.texto };
+    }
+
+    const saved = dbCreate('Blueprints', {
+      ideiaId: input.ideiaId || '',
+      sistemaId: input.sistemaId || '',
+      titulo: json.titulo || 'Blueprint',
+      conteudoMd: json.conteudoMd || '',
+      promptsJson: JSON.stringify(json.prompts || {}),
+      data: new Date().toISOString(),
+      origem: 'normal',
+      referencia: 'nao',
+      modeloUsado: llm.modelo,
+      parseAviso,
+    });
+    return { ok: true, data: { ...json, id: saved['id'], modeloUsado: llm.modelo, parseAviso } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar blueprint' };
+  }
+}
+
+function getBlueprints(): ServerResult {
+  try {
+    const all = dbGetAll('Blueprints').map((b) => ({
+      ...b,
+      prompts: (() => { try { return JSON.parse(String(b['promptsJson'] || '{}')); } catch { return {}; } })(),
+    }));
+    return { ok: true, data: all.reverse() };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar blueprints' };
+  }
+}
+
+function deleteBlueprint(id: string): ServerResult {
+  try {
+    return dbDelete('Blueprints', id) ? { ok: true } : { ok: false, error: 'Blueprint não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar blueprint' };
+  }
+}
+
+// Gera código Mermaid a partir de uma descrição (estúdio de diagramas híbrido).
+// Não persiste — o save é feito separado pelo frontend via `saveDiagrama`.
+function gerarDiagrama(input: { texto?: string; ideiaId?: string; sistemaId?: string; tipo?: string; usarCodex?: boolean }): ServerResult {
+  try {
+    const contexto = resolverContexto({ texto: input.texto, ideiaId: input.ideiaId, sistemaId: input.sistemaId });
+    if (!contexto.trim()) return { ok: false, error: 'Descreva o que deseja diagramar.' };
+    const tipo = input.tipo || 'flowchart';
+    const codexTxt = input.usarCodex !== false ? _buildCodexContext() : '';
+    const system = getPromptEfetivo('diagrama').replace(/\{\{tipo\}\}/g, tipo) + codexTxt;
+
+    const llm = forjaCallLLMDetalhado([
+      { role: 'system', content: system },
+      { role: 'user', content: contexto },
+    ], 1500);
+
+    // Parse com fallback em camadas:
+    //   1) JSON limpo → ideal
+    //   2) extrair Mermaid bruto do texto (lida com ```mermaid, JSON quebrado, etc)
+    //   3) último recurso: devolve texto cru com aviso
+    let titulo = 'Diagrama';
+    let mermaid = '';
+    let parseAviso: 'nao' | 'sim' | 'recuperado' = 'nao';
+    try {
+      const json = extrairJson(llm.texto) as { titulo?: string; mermaid?: string };
+      titulo = json.titulo || titulo;
+      mermaid = String(json.mermaid || '').replace(/^```(?:mermaid)?\s*/i, '').replace(/\s*```$/i, '').trim();
+      if (!mermaid || !_pareceMermaid(mermaid)) {
+        // JSON parseou mas o conteúdo não é Mermaid — tenta extrair do texto cru
+        const recuperado = _extrairMermaidBruto(llm.texto);
+        if (recuperado) { mermaid = recuperado; parseAviso = 'recuperado'; }
+        else { parseAviso = 'sim'; mermaid = String(json.mermaid || llm.texto); }
+      }
+    } catch {
+      // JSON inválido — tenta extrair Mermaid direto do texto
+      const recuperado = _extrairMermaidBruto(llm.texto);
+      if (recuperado) { mermaid = recuperado; parseAviso = 'recuperado'; }
+      else { parseAviso = 'sim'; titulo = 'Diagrama (sem formatação)'; mermaid = llm.texto; }
+    }
+    return { ok: true, data: { titulo, mermaid, tipo, modeloUsado: llm.modelo, parseAviso } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar diagrama' };
+  }
+}
+
+function saveDiagrama(data: Record<string, unknown>): ServerResult {
+  try {
+    if (data['id']) {
+      const upd = dbUpdate('Diagramas', String(data['id']), data);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Diagrama não encontrado' };
+    }
+    const saved = dbCreate('Diagramas', {
+      sistemaId: data['sistemaId'] || '',
+      ideiaId: data['ideiaId'] || '',
+      tipo: data['tipo'] || 'flowchart',
+      titulo: data['titulo'] || 'Diagrama',
+      mermaid: data['mermaid'] || '',
+      data: new Date().toISOString(),
+      origem: data['origem'] || 'normal',
+      referencia: 'nao',
+      // Passa modeloUsado se o gerador devolveu (já vem no result do gerarDiagrama)
+      modeloUsado: data['modeloUsado'] || '',
+      parseAviso: data['parseAviso'] || 'nao',
+    });
+    return { ok: true, data: saved };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar diagrama' };
+  }
+}
+
+function getDiagramas(): ServerResult {
+  try {
+    return { ok: true, data: dbGetAll('Diagramas').reverse() };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar diagramas' };
+  }
+}
+
+function deleteDiagrama(id: string): ServerResult {
+  try {
+    return dbDelete('Diagramas', id) ? { ok: true } : { ok: false, error: 'Diagrama não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar diagrama' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FORJA SOBRE FORJA (v1.4.1) — dogfooding com nome bonito
+// ═══════════════════════════════════════════════════════════════════════════════
+// Permite que o usuário gere blueprints/diagramas usando o PRÓPRIO Forja como
+// entrada — assim ele valida o pipeline com algo que conhece de cor antes de
+// aplicar a outros sistemas. Reusa Blueprint/Diagrama storage, só adiciona a
+// flag `origem='forja-self'` pra discriminar no histórico.
+
+// Snapshot estruturado do app atual. Mantém atualizado quando uma feature nova
+// for adicionada (ou refatorar pra ler de package.json + version automatic).
+// Cuidadosamente curtido pra caber bem no prompt sem inflar tokens.
+function _buildForjaSelfContext(): string {
+  const v = '1.4.1';
+  return `## SISTEMA: Forja (v${v})
+
+Headquarters pessoal pra gestão de projetos de desenvolvimento assistido por IA.
+Filosofia: vibe code minimalista — premium, leve, intuitivo, fácil de usar.
+
+### Módulos
+- **Dashboard**: visão consolidada de saúde, custos e alertas dos sistemas
+- **Clientes**: CRM leve (pessoas + empresas)
+- **Ideias**: captura de oportunidades + roteiros de discovery
+- **Sistemas**: catálogo de projetos com auditoria de saúde (Forja IA + estrutural)
+- **Operações**: integração GitHub + status monitor multi-app
+- **Financeiro**: contas a receber/pagar + módulo pessoal completo (cartões, pix, contas, parcelas automáticas, recorrências, orçamentos por categoria, gestão de categorias)
+- **Forja IA**: chat com tools, blueprints, diagramas Mermaid, conselho de especialistas, perguntas de discovery
+- **Atelier**: skills, snippets, templates, bookmarks, **Códex** (DNA de dev), hospedagem, cofre criptografado
+- **Relatórios**: dashboards mensais + export PDF/JSON
+
+### Stack real
+- Frontend: React 18 + TypeScript + Ant Design + lucide-react
+- Build: esbuild (chunking obrigatório <=195KB/fatia por limite do GAS)
+- Backend: Google Apps Script V8 (zero infra, gratuito)
+- Banco: Google Sheets via SheetDB caseiro com schema append-only
+- IA: Anthropic Claude via proxy configurável em ScriptProperties
+- Deploy: clasp deploy -i <STABLE_ID> pra URL pública preservada
+
+### Integrações
+- GitHub API (operações)
+- Google Apps Script (importação de scripts existentes do user)
+- Anthropic API via proxy customizável (modelo configurável: claude-3.5-sonnet, etc.)
+
+### Pontos fortes
+- 100% serverless, gratuito (rodando em GAS sob conta Google)
+- Mobile-friendly via web app
+- Tema claro/noturno persistente
+- Cold start sub-segundo (após primeira)
+- Vault zero-knowledge no client (chaves nunca saem do browser)
+- Códex injeta padrões pessoais como contexto vivo em qualquer geração de IA
+
+### Limitações conhecidas
+- GAS tem timeout de 6min por execução (impede operações longas)
+- SheetDB não suporta queries complexas (full scan) — degrada com >5k linhas/sheet
+- Sem realtime — UI re-fetch on action
+- Sem multi-usuário nativo (cada user tem sua planilha)
+
+### Entidades (Sheets)
+Pessoas, Sistemas, Custos, Ideias, Diagramas, Blueprints, Entrevistas, Skills, Snippets, Templates, Bookmarks, Hospedagem, Vault, Decisoes, Riscos, Oportunidades, Apis, AuditFindings, FinPessoal* (5 sheets), Codex* (2 sheets), Config.
+
+### Estágios do ciclo de uma Ideia
+Faísca (captura) → Forja (em desenvolvimento) → Têmpera (refinamento) → Prateleira (em produção)`;
+}
+
+// Atalho que gera um blueprint usando Forja como input. Marca origem=forja-self
+// pra discriminar no histórico. usarCodex default true.
+//
+// SEMPRE SALVA (v1.4.3): se a IA não devolver JSON, salva o texto bruto com
+// parseAviso='sim'. Antes desse fix, blueprint sem JSON era jogado fora —
+// causava o bug "gerei e não tem registro".
+function gerarBlueprintDoForja(input?: { usarCodex?: boolean }): ServerResult {
+  try {
+    const usarCodex = input?.usarCodex !== false;
+    const contexto = _buildForjaSelfContext();
+    const codexTxt = usarCodex ? _buildCodexContext() : '';
+    const system = getPromptEfetivo('blueprint').replace(/\{\{stack\}\}/g, '') + codexTxt;
+
+    // maxTokens 3000 (era 4000): com Sonnet a 50-80 tok/s, 4000 tokens = 60-90s,
+    // que estoura o timeout default do UrlFetchApp (~60s). 3000 cabe em ~40-60s.
+    const llm = forjaCallLLMDetalhado([
+      { role: 'system', content: system },
+      { role: 'user', content: contexto + '\n\nGere um BLUEPRINT completo desta aplicação ("Forja"). Estruture como se fosse documentar pra outro dev assumir o projeto. Inclua: arquitetura, decisões-chave, próximos passos sugeridos, e prompts úteis pra evoluir o produto.' },
+    ], 3000);
+
+    let json: { titulo?: string; conteudoMd?: string; prompts?: unknown } = {};
+    let parseAviso = 'nao';
+    try {
+      json = extrairJson(llm.texto) as { titulo?: string; conteudoMd?: string; prompts?: unknown };
+    } catch {
+      parseAviso = 'sim';
+      json = { titulo: 'Forja sobre Forja (sem formatação)', conteudoMd: llm.texto };
+    }
+
+    const saved = dbCreate('Blueprints', {
+      ideiaId: '',
+      sistemaId: '',
+      titulo: json.titulo || 'Blueprint: Forja sobre Forja',
+      conteudoMd: json.conteudoMd || '',
+      promptsJson: JSON.stringify(json.prompts || {}),
+      data: new Date().toISOString(),
+      origem: 'forja-self',
+      referencia: 'nao',
+      modeloUsado: llm.modelo,
+      parseAviso,
+    });
+    return { ok: true, data: { ...json, id: saved['id'], origem: 'forja-self', modeloUsado: llm.modelo, parseAviso } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar blueprint do Forja' };
+  }
+}
+
+// Atalho que gera um diagrama usando Forja como input. Por padrão sugere
+// flowchart, mas user pode passar outro tipo (sequence/er/class/mindmap).
+function gerarDiagramaDoForja(input?: { tipo?: string; usarCodex?: boolean }): ServerResult {
+  try {
+    const tipo = input?.tipo || 'flowchart';
+    const usarCodex = input?.usarCodex !== false;
+    const contexto = _buildForjaSelfContext();
+    const codexTxt = usarCodex ? _buildCodexContext() : '';
+    const system = getPromptEfetivo('diagrama').replace(/\{\{tipo\}\}/g, tipo) + codexTxt;
+
+    // Instrução adicional por tipo pra direcionar melhor a IA
+    const instrucao = tipo === 'flowchart'
+      ? 'Crie um fluxograma mostrando a jornada principal do usuário no Forja: do cadastro de uma ideia até o sistema em produção monitorado, passando por blueprint, deploy, auditoria e códex.'
+      : tipo === 'erDiagram'
+      ? 'Crie um diagrama ER mostrando as entidades principais e relacionamentos: Sistema, Cliente, Ideia, Custo, Decisão, Risco, Oportunidade, Diagrama, Blueprint, CodexSecao, CodexCard.'
+      : tipo === 'sequenceDiagram'
+      ? 'Crie um diagrama de sequência mostrando: User → Frontend → google.script.run → SheetDB → Resposta. Para uma ação típica como salvar um lançamento financeiro pessoal.'
+      : tipo === 'classDiagram'
+      ? 'Modele as principais entidades do Forja como classes com atributos chave (Sistema, Codex, Lancamento, etc.)'
+      : 'Mapa mental dos módulos do Forja: Dashboard, Clientes, Ideias, Sistemas, Operações, Financeiro, Forja IA, Atelier, Relatórios. Para cada módulo, sub-itens das features.';
+
+    const llm = forjaCallLLMDetalhado([
+      { role: 'system', content: system },
+      { role: 'user', content: contexto + '\n\n' + instrucao },
+    ], 2000);
+
+    // Mesmo pipeline em camadas do gerarDiagrama (ver comentário lá)
+    let titulo = `Forja sobre Forja — ${tipo}`;
+    let mermaid = '';
+    let parseAviso: 'nao' | 'sim' | 'recuperado' = 'nao';
+    try {
+      const json = extrairJson(llm.texto) as { titulo?: string; mermaid?: string };
+      if (json.titulo) titulo = json.titulo;
+      mermaid = String(json.mermaid || '').replace(/^```(?:mermaid)?\s*/i, '').replace(/\s*```$/i, '').trim();
+      if (!mermaid || !_pareceMermaid(mermaid)) {
+        const recuperado = _extrairMermaidBruto(llm.texto);
+        if (recuperado) { mermaid = recuperado; parseAviso = 'recuperado'; }
+        else { parseAviso = 'sim'; mermaid = String(json.mermaid || llm.texto); }
+      }
+    } catch {
+      const recuperado = _extrairMermaidBruto(llm.texto);
+      if (recuperado) { mermaid = recuperado; parseAviso = 'recuperado'; }
+      else { parseAviso = 'sim'; titulo = `Forja sobre Forja — ${tipo} (sem formatação)`; mermaid = llm.texto; }
+    }
+
+    const saved = dbCreate('Diagramas', {
+      sistemaId: '',
+      ideiaId: '',
+      tipo,
+      titulo,
+      mermaid,
+      data: new Date().toISOString(),
+      origem: 'forja-self',
+      referencia: 'nao',
+      modeloUsado: llm.modelo,
+      parseAviso,
+    });
+    return { ok: true, data: { id: saved['id'], titulo: saved['titulo'], mermaid, tipo, origem: 'forja-self', modeloUsado: llm.modelo, parseAviso } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar diagrama do Forja' };
+  }
+}
+
+// ─── Galeria completa do Forja (multi-gen dogfooding) ───────────────────────
+// Gera as 5 visões do Forja em sequência (flowchart, sequence, ER, class,
+// mindmap). Pra cada uma:
+//   - chama gerarDiagramaDoForja({ tipo, usarCodex: true })
+//   - se ok, marca referencia='sim' (vai pro topo da lista como biblioteca)
+//   - se falha, segue em frente acumulando o erro — não aborta o lote
+//
+// Custo: 5 chamadas IA × ~15-30s cada = 75-150s total. Cabe no limite de 6min
+// do GAS com folga. Sem paralelização porque (a) UrlFetchApp.fetchAll não
+// funciona pra POSTs com bodies diferentes em todas as APIs LLM, e (b) o user
+// já espera ~1-2min sem regenerar — paralelizar dispararia rate limit.
+//
+// Retorno: { gerados: Diagrama[], erros: Array<{tipo, error}> }
+//
+// O frontend pode usar isso pra:
+//   - mostrar progresso (quantos deram certo / quantos faltam)
+//   - listar os tipos que falharam pra o user clicar e re-tentar individual
+function gerarTodasAsVisoesDoForja(): ServerResult {
+  const TIPOS = ['flowchart', 'sequenceDiagram', 'erDiagram', 'classDiagram', 'mindmap'];
+  const gerados: Array<Record<string, unknown>> = [];
+  const erros: Array<{ tipo: string; error: string }> = [];
+
+  for (const tipo of TIPOS) {
+    try {
+      const r = gerarDiagramaDoForja({ tipo, usarCodex: true });
+      if (r.ok && r.data) {
+        const d = r.data as { id: string };
+        // Marca como referência (pinned) — toda visão da galeria entra como
+        // material de referência. User pode desfixar individualmente depois.
+        try { dbUpdate('Diagramas', d.id, { referencia: 'sim' }); } catch { /* não bloqueia */ }
+        gerados.push(r.data as Record<string, unknown>);
+      } else {
+        erros.push({ tipo, error: r.error || 'Erro desconhecido' });
+      }
+    } catch (e: unknown) {
+      erros.push({ tipo, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  return {
+    ok: gerados.length > 0,
+    data: { gerados, erros, total: TIPOS.length },
+    error: gerados.length === 0 ? `Nenhuma visão gerada — ${erros.length} falhas` : undefined,
+  };
+}
+
+// Alterna o flag `referencia` de um item. Pinned items aparecem no topo.
+// Suporta as duas tabelas — passa qual no parâmetro.
+function alternarReferencia(tipo: 'blueprint' | 'diagrama', id: string): ServerResult {
+  try {
+    const sheetName = tipo === 'blueprint' ? 'Blueprints' : 'Diagramas';
+    const reg = dbGetById(sheetName, id);
+    if (!reg) return { ok: false, error: 'Item não encontrado' };
+    const novoValor = String(reg['referencia'] || 'nao') === 'sim' ? 'nao' : 'sim';
+    const updated = dbUpdate(sheetName, id, { referencia: novoValor });
+    return { ok: true, data: { referencia: novoValor, item: updated } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao alternar referência' };
+  }
+}
+
+// ─── Discovery & Entrevistas (Fase 6) ────────────────────────────────────────
+
+function getEntrevistas(): ServerResult {
+  try {
+    const pessoas = dbGetAll('Pessoas');
+    const nomePorId: Record<string, string> = {};
+    pessoas.forEach((p) => { nomePorId[String(p['id'])] = String(p['nome'] || ''); });
+    const data = dbGetAll('Entrevistas').map((e) => {
+      let analise: unknown = null;
+      try { if (e['requisitos']) analise = JSON.parse(String(e['requisitos'])); } catch { analise = null; }
+      return { ...e, pessoaNome: nomePorId[String(e['pessoaId'])] || '', analise };
+    }).reverse();
+    return { ok: true, data };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar entrevistas' };
+  }
+}
+
+function createEntrevista(data: Record<string, unknown>): ServerResult {
+  try {
+    const saved = dbCreate('Entrevistas', {
+      pessoaId: data['pessoaId'] || '',
+      data: data['data'] || new Date().toISOString().slice(0, 10),
+      tipo: data['tipo'] || 'Discovery',
+      transcricao: data['transcricao'] || '',
+      resumoIA: data['resumoIA'] || '',
+      requisitos: data['requisitos'] || '',
+    });
+    return { ok: true, data: saved };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar entrevista' };
+  }
+}
+
+function updateEntrevista(id: string, data: Record<string, unknown>): ServerResult {
+  try {
+    const upd = dbUpdate('Entrevistas', id, data);
+    return upd ? { ok: true, data: upd } : { ok: false, error: 'Entrevista não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atualizar entrevista' };
+  }
+}
+
+function deleteEntrevista(id: string): ServerResult {
+  try {
+    return dbDelete('Entrevistas', id) ? { ok: true } : { ok: false, error: 'Entrevista não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar entrevista' };
+  }
+}
+
+function analisarEntrevista(input: { id?: string; transcricao?: string }): ServerResult {
+  try {
+    let texto = input.transcricao || '';
+    if (!texto && input.id) {
+      const e = dbGetAll('Entrevistas').find((r) => String(r['id']) === String(input.id));
+      if (e) texto = String(e['transcricao'] || '');
+    }
+    if (!texto.trim()) return { ok: false, error: 'Sem transcrição para analisar.' };
+
+    const resposta = forjaCallLLM([
+      { role: 'system', content: getPromptEfetivo('entrevista') },
+      { role: 'user', content: texto },
+    ], 1500);
+    const json = extrairJson(resposta) as {
+      resumo?: string; dores?: string[]; objetivos?: string[];
+      requisitos?: string[]; perguntasAbertas?: string[]; oportunidade?: string;
+    };
+    const analise = {
+      resumo: json.resumo || '',
+      dores: json.dores || [],
+      objetivos: json.objetivos || [],
+      requisitos: json.requisitos || [],
+      perguntasAbertas: json.perguntasAbertas || [],
+      oportunidade: json.oportunidade || '',
+    };
+
+    if (input.id) {
+      dbUpdate('Entrevistas', String(input.id), {
+        resumoIA: analise.resumo,
+        requisitos: JSON.stringify(analise),
+      });
+    }
+    return { ok: true, data: analise };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao analisar entrevista' };
+  }
+}
+
+function gerarPerguntasDiscovery(input: { segmento?: string; contexto?: string }): ServerResult {
+  try {
+    const segmento = (input.segmento || '').trim() || 'não informado';
+    const system = getPromptEfetivo('perguntas').replace(/\{\{segmento\}\}/g, segmento);
+    const userMsg = input.contexto && input.contexto.trim()
+      ? input.contexto
+      : `Segmento/contexto do cliente: ${segmento}. Gere o roteiro de discovery.`;
+    const resposta = forjaCallLLM([
+      { role: 'system', content: system },
+      { role: 'user', content: userMsg },
+    ], 1400);
+    const json = extrairJson(resposta) as { blocos?: Array<{ tema?: string; perguntas?: string[] }> };
+    return { ok: true, data: { blocos: json.blocos || [] } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar perguntas' };
+  }
+}
+
+function criarIdeiaDeEntrevista(input: { id?: string; titulo?: string }): ServerResult {
+  try {
+    const e = dbGetAll('Entrevistas').find((r) => String(r['id']) === String(input.id));
+    if (!e) return { ok: false, error: 'Entrevista não encontrada' };
+    let analise: { resumo?: string; dores?: string[]; objetivos?: string[]; requisitos?: string[] } = {};
+    try { if (e['requisitos']) analise = JSON.parse(String(e['requisitos'])); } catch { /* ignora */ }
+
+    const partes: string[] = [];
+    if (analise.resumo) partes.push(analise.resumo);
+    if (analise.dores && analise.dores.length) partes.push('Dores: ' + analise.dores.join('; '));
+    if (analise.objetivos && analise.objetivos.length) partes.push('Objetivos: ' + analise.objetivos.join('; '));
+    if (analise.requisitos && analise.requisitos.length) partes.push('Requisitos: ' + analise.requisitos.join('; '));
+    const descricao = partes.join('\n\n') || String(e['transcricao'] || '').slice(0, 500);
+
+    const saved = dbCreate('Ideias', {
+      titulo: input.titulo || ('Ideia de entrevista ' + (e['data'] || '')),
+      descricao,
+      notaImpacto: 5,
+      notaEsforco: 5,
+      estado: 'nova',
+    });
+    return { ok: true, data: saved };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao criar ideia' };
+  }
+}
+
+// ─── Automações & Alertas (Fase 10) ───────────────────────────────────────────
+
+const AUTOM_KEY = 'FORJA_AUTOMATIONS_CONFIG';
+
+interface WhatsappConfigInternal {
+  provider: 'meta' | 'twilio';
+  destinos: string[];
+  metaToken: string;
+  metaPhoneNumberId: string;
+  metaTemplate: string;
+  metaTemplateLang: string;
+  twilioSid: string;
+  twilioToken: string;
+  twilioFrom: string;
+}
+
+interface AutomationConfigInternal {
+  ativo: boolean;
+  intervaloMin: number;
+  canais: { email: boolean; webhook: boolean; whatsapp: boolean };
+  webhookUrl: string;
+  whatsapp: WhatsappConfigInternal;
+  regras: {
+    appOffline: { ativo: boolean };
+    apiOffline: { ativo: boolean };
+    contaVence: { ativo: boolean; diasAntes: number };
+    saudeBaixa: { ativo: boolean; minimo: number };
+    custoSubiu: { ativo: boolean; pctLimite: number };
+    mrrCaiu: { ativo: boolean; pctLimite: number };
+    // Auditoria agendada: roda a Forja AI em sistemas "envelhecidos" de tempos em
+    // tempos, sem precisar do usuário clicar. Processa NO MÁXIMO maxPorCiclo
+    // sistemas por execução pra não estourar o timeout de 6min do GAS.
+    auditoriaAgendada: {
+      ativo: boolean;
+      frequenciaDias: number;  // re-auditar sistemas que tenham mais de N dias sem auditoria
+      maxPorCiclo: number;     // máximo de sistemas auditados por execução (default 2)
+      alertarSeAlta: boolean;  // criar alerta se achar finding de severidade alta
+      pularAposentados: boolean;
+    };
+  };
+  ultimaExec?: string;
+}
+
+const WHATSAPP_DEFAULT: WhatsappConfigInternal = {
+  provider: 'meta',
+  destinos: [],
+  metaToken: '',
+  metaPhoneNumberId: '',
+  metaTemplate: '',
+  metaTemplateLang: 'pt_BR',
+  twilioSid: '',
+  twilioToken: '',
+  twilioFrom: '',
+};
+
+const AUTOM_DEFAULT: AutomationConfigInternal = {
+  ativo: false,
+  intervaloMin: 30,
+  canais: { email: true, webhook: false, whatsapp: false },
+  webhookUrl: '',
+  whatsapp: WHATSAPP_DEFAULT,
+  regras: {
+    appOffline: { ativo: true },
+    apiOffline: { ativo: true },
+    contaVence: { ativo: true, diasAntes: 7 },
+    saudeBaixa: { ativo: true, minimo: 50 },
+    custoSubiu: { ativo: false, pctLimite: 20 },
+    mrrCaiu: { ativo: false, pctLimite: 15 },
+    auditoriaAgendada: {
+      ativo: false,
+      frequenciaDias: 7,
+      maxPorCiclo: 2,
+      alertarSeAlta: true,
+      pularAposentados: true,
+    },
+  },
+};
+
+function getAutomationConfig(): AutomationConfigInternal {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty(AUTOM_KEY);
+    if (!raw) return AUTOM_DEFAULT;
+    const parsed = JSON.parse(raw) as Partial<AutomationConfigInternal>;
+    return {
+      ...AUTOM_DEFAULT,
+      ...parsed,
+      canais: { ...AUTOM_DEFAULT.canais, ...(parsed.canais || {}) },
+      whatsapp: { ...WHATSAPP_DEFAULT, ...(parsed.whatsapp || {}) },
+      regras: {
+        ...AUTOM_DEFAULT.regras,
+        ...(parsed.regras || {}),
+      },
+    };
+  } catch { return AUTOM_DEFAULT; }
+}
+
+function setAutomationConfig(cfg: AutomationConfigInternal): void {
+  PropertiesService.getScriptProperties().setProperty(AUTOM_KEY, JSON.stringify(cfg));
+}
+
+function getAutomationsSettings(): ServerResult {
+  const cfg = getAutomationConfig();
+  // Nunca devolve os tokens pro client — só flags indicando que estão salvos.
+  const safe = {
+    ...cfg,
+    whatsapp: {
+      ...cfg.whatsapp,
+      metaToken: '',
+      twilioToken: '',
+      metaTokenSet: !!cfg.whatsapp.metaToken,
+      twilioTokenSet: !!cfg.whatsapp.twilioToken,
+    },
+  };
+  return { ok: true, data: safe };
+}
+
+function saveAutomationsSettings(cfg: Partial<AutomationConfigInternal>): ServerResult {
+  try {
+    const atual = getAutomationConfig();
+    // WhatsApp: campos de segredo (tokens) só são sobrescritos quando vierem
+    // preenchidos — string vazia mantém o que já está salvo (padrão "preencha
+    // só pra substituir"). O resto sobrescreve normalmente.
+    const waIn = cfg.whatsapp || {};
+    const whatsapp: WhatsappConfigInternal = {
+      ...atual.whatsapp,
+      ...waIn,
+      metaToken: (waIn.metaToken && String(waIn.metaToken).trim()) ? String(waIn.metaToken).trim() : atual.whatsapp.metaToken,
+      twilioToken: (waIn.twilioToken && String(waIn.twilioToken).trim()) ? String(waIn.twilioToken).trim() : atual.whatsapp.twilioToken,
+      destinos: Array.isArray(waIn.destinos) ? waIn.destinos.map((d) => String(d).trim()).filter(Boolean) : atual.whatsapp.destinos,
+    };
+    const novo: AutomationConfigInternal = {
+      ...atual,
+      ...cfg,
+      canais: { ...atual.canais, ...(cfg.canais || {}) },
+      whatsapp,
+      regras: { ...atual.regras, ...(cfg.regras || {}) },
+    };
+    setAutomationConfig(novo);
+    return getAutomationsSettings();
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar' };
+  }
+}
+
+function ativarAutomacoes(intervaloMin: number): ServerResult {
+  try {
+    const intervalo = [10, 15, 30, 60].indexOf(Number(intervaloMin)) >= 0 ? Number(intervaloMin) : 30;
+    ScriptApp.getProjectTriggers().forEach((tr) => { if (tr.getHandlerFunction() === 'runAutomacoes') ScriptApp.deleteTrigger(tr); });
+    ScriptApp.newTrigger('runAutomacoes').timeBased().everyMinutes(intervalo).create();
+    const cfg = getAutomationConfig();
+    cfg.ativo = true;
+    cfg.intervaloMin = intervalo;
+    setAutomationConfig(cfg);
+    return { ok: true, data: cfg };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ativar automações' };
+  }
+}
+
+function desativarAutomacoes(): ServerResult {
+  try {
+    ScriptApp.getProjectTriggers().forEach((tr) => { if (tr.getHandlerFunction() === 'runAutomacoes') ScriptApp.deleteTrigger(tr); });
+    const cfg = getAutomationConfig();
+    cfg.ativo = false;
+    setAutomationConfig(cfg);
+    return { ok: true, data: cfg };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao desativar automações' };
+  }
+}
+
+interface AlertaInternal {
+  id: string;
+  tipo: string;
+  severidade: 'info' | 'aviso' | 'critico';
+  titulo: string;
+  mensagem: string;
+  sistemaId: string;
+  criadoEm: string;
+  lidoEm: string;
+  dedupeKey: string;
+  link: string;
+}
+
+function getAlertasRecentes(limit: number = 50): AlertaInternal[] {
+  const todos = (dbGetAll('Alertas') as unknown as AlertaInternal[]).slice();
+  todos.sort((a, b) => (b.criadoEm || '').localeCompare(a.criadoEm || ''));
+  return todos.slice(0, limit);
+}
+
+function alertaJaExisteRecente(dedupeKey: string, janelaHoras: number): boolean {
+  if (!dedupeKey) return false;
+  const limite = Date.now() - janelaHoras * 3600 * 1000;
+  const alertas = dbGetAll('Alertas') as Array<Record<string, unknown>>;
+  for (const a of alertas) {
+    if (String(a.dedupeKey || '') !== dedupeKey) continue;
+    const criado = new Date(String(a.criadoEm || '')).getTime();
+    if (!Number.isNaN(criado) && criado >= limite) return true;
+  }
+  return false;
+}
+
+function criarAlerta(input: { tipo: string; severidade: 'info' | 'aviso' | 'critico'; titulo: string; mensagem: string; sistemaId?: string; dedupeKey: string; link?: string; janelaDedupeHoras?: number }): AlertaInternal | null {
+  const janela = input.janelaDedupeHoras ?? 24;
+  if (alertaJaExisteRecente(input.dedupeKey, janela)) return null;
+  const novo = dbCreate('Alertas', {
+    tipo: input.tipo,
+    severidade: input.severidade,
+    titulo: input.titulo,
+    mensagem: input.mensagem,
+    sistemaId: input.sistemaId || '',
+    criadoEm: new Date().toISOString(),
+    lidoEm: '',
+    dedupeKey: input.dedupeKey,
+    link: input.link || '',
+  }) as unknown as AlertaInternal;
+  return novo;
+}
+
+// Normaliza um telefone pra E.164 só-dígitos (com código de país). Remove
+// espaços, traços, parênteses e o '+'. Ex.: "+55 (71) 99999-9999" → "5571999999999".
+function _normalizarTelefone(s: string): string {
+  return String(s || '').replace(/\D/g, '');
+}
+
+// Envia uma mensagem WhatsApp via Meta Cloud API. Retorna code/body pra quem
+// quiser inspecionar (teste). Em alertas, o erro é ignorado pra não derrubar
+// os outros canais.
+function _enviarWhatsappMeta(w: WhatsappConfigInternal, toDigits: string, titulo: string, mensagem: string, texto: string): { code: number; body: string } {
+  const versao = 'v21.0';
+  const url = `https://graph.facebook.com/${versao}/${encodeURIComponent(w.metaPhoneNumberId)}/messages`;
+  let payload: Record<string, unknown>;
+  if (w.metaTemplate) {
+    // Mensagem proativa precisa de template aprovado. Manda título e mensagem
+    // como os 2 primeiros parâmetros do corpo do template.
+    payload = {
+      messaging_product: 'whatsapp',
+      to: toDigits,
+      type: 'template',
+      template: {
+        name: w.metaTemplate,
+        language: { code: w.metaTemplateLang || 'pt_BR' },
+        components: [{ type: 'body', parameters: [{ type: 'text', text: titulo }, { type: 'text', text: mensagem }] }],
+      },
+    };
+  } else {
+    // Sem template: texto livre (funciona com número de teste e dentro da
+    // janela de 24h após o destinatário ter falado com você).
+    payload = { messaging_product: 'whatsapp', to: toDigits, type: 'text', text: { body: texto } };
+  }
+  const resp = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + w.metaToken },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  });
+  return { code: resp.getResponseCode(), body: resp.getContentText() };
+}
+
+// Envia via Twilio WhatsApp (Sandbox ou número aprovado).
+function _enviarWhatsappTwilio(w: WhatsappConfigInternal, toDigits: string, texto: string): { code: number; body: string } {
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(w.twilioSid)}/Messages.json`;
+  const from = w.twilioFrom.indexOf('whatsapp:') === 0 ? w.twilioFrom : 'whatsapp:+' + _normalizarTelefone(w.twilioFrom);
+  const to = 'whatsapp:+' + toDigits;
+  const auth = Utilities.base64Encode(w.twilioSid + ':' + w.twilioToken);
+  const resp = UrlFetchApp.fetch(url, {
+    method: 'post',
+    headers: { Authorization: 'Basic ' + auth },
+    payload: { From: from, To: to, Body: texto },
+    muteHttpExceptions: true,
+  });
+  return { code: resp.getResponseCode(), body: resp.getContentText() };
+}
+
+// Dispara um alerta por WhatsApp pra todos os destinos configurados. Tolerante
+// a falha por destino (um número inválido não impede os outros).
+function _enviarWhatsapp(cfg: AutomationConfigInternal, titulo: string, mensagem: string): void {
+  const w = cfg.whatsapp;
+  if (!w || !Array.isArray(w.destinos) || w.destinos.length === 0) return;
+  const texto = `*${titulo}*\n${mensagem}\n\n— FORJA`;
+  for (const numRaw of w.destinos) {
+    const num = _normalizarTelefone(numRaw);
+    if (!num) continue;
+    try {
+      if (w.provider === 'twilio') _enviarWhatsappTwilio(w, num, texto);
+      else _enviarWhatsappMeta(w, num, titulo, mensagem, texto);
+    } catch { /* esse destino falhou; segue os outros */ }
+  }
+}
+
+function despacharAlertaCanais(alerta: AlertaInternal, cfg: AutomationConfigInternal): void {
+  const sev = alerta.severidade === 'critico' ? '🔴' : alerta.severidade === 'aviso' ? '🟡' : '🔵';
+  const linha = `${sev} ${alerta.titulo}`;
+  const corpo = `${linha}\n\n${alerta.mensagem}${alerta.link ? '\n\n' + alerta.link : ''}\n\n— FORJA, automaticamente.`;
+  if (cfg.canais.email) {
+    try {
+      const email = Session.getActiveUser().getEmail();
+      if (email) MailApp.sendEmail(email, `[FORJA] ${alerta.titulo}`, corpo);
+    } catch { /* sem permissão */ }
+  }
+  if (cfg.canais.webhook && cfg.webhookUrl) {
+    try {
+      // Formato compatível Slack/Discord (campo "text"/"content")
+      const payload = { text: linha + '\n' + alerta.mensagem, content: linha + '\n' + alerta.mensagem, username: 'FORJA' };
+      UrlFetchApp.fetch(cfg.webhookUrl, {
+        method: 'post',
+        contentType: 'application/json',
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true,
+      });
+    } catch { /* webhook fora do ar */ }
+  }
+  if (cfg.canais.whatsapp) {
+    try { _enviarWhatsapp(cfg, alerta.titulo, alerta.mensagem); } catch { /* whatsapp falhou */ }
+  }
+}
+
+function runAutomacoes(): void {
+  initDatabase();
+  const cfg = getAutomationConfig();
+  const hojeISO = new Date().toISOString().split('T')[0];
+  const novosAlertas: AlertaInternal[] = [];
+
+  const tryEmit = (input: Parameters<typeof criarAlerta>[0]) => {
+    const a = criarAlerta(input);
+    if (a) { novosAlertas.push(a); despacharAlertaCanais(a, cfg); }
+  };
+
+  // Regra 1 + 2: app/api offline (reusa o monitor existente, mas com dedup)
+  const sistemas = dbGetAll('Sistemas');
+  const apis = dbGetAll('Apis');
+  const snapshot: Array<{ tipo: string; nome: string; conectado: boolean; status: number }> = [];
+
+  if (cfg.regras.appOffline.ativo) {
+    for (const s of sistemas) {
+      const url = String(s['urlProd'] || '');
+      if (!url) continue;
+      const p = pingUrl(url);
+      const ok = isConectado(p.status);
+      snapshot.push({ tipo: 'app', nome: String(s['nome']), conectado: ok, status: p.status });
+      if (!ok) {
+        tryEmit({
+          tipo: 'app_offline', severidade: 'critico',
+          titulo: `App fora do ar: ${s['nome']}`,
+          mensagem: `${url} respondeu ${p.status || 'sem resposta'}.`,
+          sistemaId: String(s['id']),
+          dedupeKey: `app_offline:${s['id']}`,
+          link: url,
+        });
+      }
+    }
+  }
+  if (cfg.regras.apiOffline.ativo) {
+    for (const a of apis) {
+      const url = String(a['healthUrl'] || a['baseUrl'] || '');
+      if (!url) continue;
+      const p = pingUrl(url);
+      dbUpdate('Apis', String(a['id']), { ultimoStatus: p.status, latenciaMs: p.latenciaMs });
+      const ok = isConectado(p.status);
+      snapshot.push({ tipo: 'api', nome: String(a['nome']), conectado: ok, status: p.status });
+      if (!ok) {
+        tryEmit({
+          tipo: 'api_offline', severidade: 'aviso',
+          titulo: `API fora do ar: ${a['nome']}`,
+          mensagem: `${url} respondeu ${p.status || 'sem resposta'}.`,
+          sistemaId: String(a['sistemaId'] || ''),
+          dedupeKey: `api_offline:${a['id']}`,
+          link: url,
+        });
+      }
+    }
+  }
+
+  // Regra 3: contas vencendo nos próximos N dias
+  if (cfg.regras.contaVence.ativo) {
+    const dias = Math.max(1, Math.min(60, cfg.regras.contaVence.diasAntes || 7));
+    const limite = new Date(Date.now() + dias * 86400000);
+    const custos = dbGetAll('Custos');
+    for (const c of custos) {
+      const prox = String(c['proximaCobranca'] || '');
+      if (!prox) continue;
+      const dataCob = new Date(prox);
+      if (Number.isNaN(dataCob.getTime())) continue;
+      if (dataCob >= new Date() && dataCob <= limite) {
+        const valor = Number(c['valor'] || 0);
+        tryEmit({
+          tipo: 'conta_vence', severidade: 'aviso',
+          titulo: `Conta a vencer: ${c['fornecedor']}`,
+          mensagem: `R$ ${valor.toFixed(2)} vence em ${prox} (${c['recorrencia'] || 'única'}).`,
+          sistemaId: String(c['sistemaId'] || ''),
+          dedupeKey: `conta_vence:${c['id']}:${prox}`,
+          janelaDedupeHoras: 24 * 7,
+        });
+      }
+    }
+  }
+
+  // Regra 4: saúde baixa
+  if (cfg.regras.saudeBaixa.ativo) {
+    const minimo = Math.max(0, Math.min(100, cfg.regras.saudeBaixa.minimo || 50));
+    for (const s of sistemas) {
+      const score = Number(s['scoreSaude'] || 0);
+      if (score > 0 && score < minimo) {
+        tryEmit({
+          tipo: 'saude_baixa', severidade: 'aviso',
+          titulo: `Saúde baixa: ${s['nome']}`,
+          mensagem: `Score atual: ${score} (limite ${minimo}).`,
+          sistemaId: String(s['id']),
+          dedupeKey: `saude_baixa:${s['id']}`,
+          janelaDedupeHoras: 24 * 3,
+        });
+      }
+    }
+  }
+
+  // Regra 5/6: variações MRR/custo (comparando snapshot do mês passado em Properties)
+  try {
+    const dash = getDashboardData();
+    if (dash.ok && dash.data) {
+      const d = dash.data as { kpis: { mrr: number; custoMensal: number }; mrrSeries?: Array<{ valor: number }> };
+      const props = PropertiesService.getScriptProperties();
+      const snapMes = String(new Date().getMonth());
+      const snapAtual = JSON.stringify({ mes: snapMes, mrr: d.kpis.mrr, custo: d.kpis.custoMensal });
+      const snapAnterior = props.getProperty('FORJA_AUTOM_KPI_SNAPSHOT') || '';
+      if (snapAnterior && snapAnterior !== snapAtual) {
+        try {
+          const sa = JSON.parse(snapAnterior) as { mes: string; mrr: number; custo: number };
+          if (sa.mes !== snapMes) {
+            if (cfg.regras.mrrCaiu.ativo && sa.mrr > 0) {
+              const pct = Math.round(((d.kpis.mrr - sa.mrr) / sa.mrr) * 100);
+              if (pct < 0 && Math.abs(pct) >= cfg.regras.mrrCaiu.pctLimite) {
+                tryEmit({
+                  tipo: 'mrr_caiu', severidade: 'aviso',
+                  titulo: `MRR caiu ${pct}% no mês`,
+                  mensagem: `MRR anterior: R$ ${sa.mrr.toFixed(2)} → atual: R$ ${d.kpis.mrr.toFixed(2)}.`,
+                  dedupeKey: `mrr_caiu:${snapMes}`,
+                  janelaDedupeHoras: 24 * 30,
+                });
+              }
+            }
+            if (cfg.regras.custoSubiu.ativo && sa.custo > 0) {
+              const pct = Math.round(((d.kpis.custoMensal - sa.custo) / sa.custo) * 100);
+              if (pct > 0 && pct >= cfg.regras.custoSubiu.pctLimite) {
+                tryEmit({
+                  tipo: 'custo_subiu', severidade: 'info',
+                  titulo: `Custos subiram ${pct}% no mês`,
+                  mensagem: `Custos anteriores: R$ ${sa.custo.toFixed(2)} → atual: R$ ${d.kpis.custoMensal.toFixed(2)}.`,
+                  dedupeKey: `custo_subiu:${snapMes}`,
+                  janelaDedupeHoras: 24 * 30,
+                });
+              }
+            }
+          }
+        } catch { /* snapshot malformado */ }
+      }
+      props.setProperty('FORJA_AUTOM_KPI_SNAPSHOT', snapAtual);
+    }
+  } catch { /* não derruba o engine por causa de KPI */ }
+
+  // Snapshot operacional p/ a tela de Operações
+  const propsOps = PropertiesService.getScriptProperties();
+  propsOps.setProperty('FORJA_MONITOR_RUN', new Date().toISOString());
+  propsOps.setProperty('FORJA_MONITOR_SNAPSHOT', JSON.stringify(snapshot));
+
+  // Regra 7: auditoria agendada (Forja AI em background)
+  // Rate-limit: ciclo dura no máximo 1x por dia. Cada ciclo processa até
+  // maxPorCiclo sistemas. Ao longo da semana/mês, todos vão sendo auditados.
+  if (cfg.regras.auditoriaAgendada?.ativo) {
+    try {
+      const auditRes = _executarAuditoriaAgendada(cfg, sistemas, tryEmit);
+      if (auditRes.processados > 0) {
+        Logger.log(`runAutomacoes: auditoria agendada processou ${auditRes.processados} sistema(s).`);
+      }
+    } catch (e) {
+      Logger.log('runAutomacoes: erro na auditoria agendada → ' + (e instanceof Error ? e.message : e));
+    }
+  }
+
+  cfg.ultimaExec = new Date().toISOString();
+  setAutomationConfig(cfg);
+
+  // Limpa alertas com mais de 60 dias pra não inchar a planilha
+  try {
+    const limite = Date.now() - 60 * 86400000;
+    const todos = dbGetAll('Alertas') as Array<Record<string, unknown>>;
+    for (const a of todos) {
+      const criado = new Date(String(a.criadoEm || '')).getTime();
+      if (!Number.isNaN(criado) && criado < limite) dbDelete('Alertas', String(a.id));
+    }
+  } catch { /* ignora limpeza */ }
+
+  // Logging mínimo do trigger
+  if (novosAlertas.length === 0) {
+    Logger.log('runAutomacoes: nenhum novo alerta (' + hojeISO + ')');
+  } else {
+    Logger.log('runAutomacoes: ' + novosAlertas.length + ' novo(s) alerta(s) em ' + hojeISO);
+  }
+}
+
+// ─── Auditoria agendada (background) ─────────────────────────────────────────
+// Processa até `maxPorCiclo` sistemas por execução, escolhendo os mais "envelhecidos"
+// (nunca auditados ou auditados há mais que frequenciaDias). Cria alertas se
+// encontrar findings de severidade alta. Sem essa rate-limit, atropelaria o
+// timeout de 6min do GAS.
+function _executarAuditoriaAgendada(
+  cfg: AutomationConfigInternal,
+  sistemas: Array<Record<string, unknown>>,
+  tryEmit: (input: Parameters<typeof criarAlerta>[0]) => void,
+): { processados: number; ignorados: number; criticosNovos: number } {
+  const regra = cfg.regras.auditoriaAgendada;
+  const props = PropertiesService.getScriptProperties();
+  const PROP_ULTIMO_CICLO = 'FORJA_AUDIT_AGENDADA_LAST_CYCLE';
+
+  // Rate-limit: 1 ciclo por dia no máximo
+  const ultimoCicloRaw = props.getProperty(PROP_ULTIMO_CICLO);
+  if (ultimoCicloRaw) {
+    const horasDesde = (Date.now() - new Date(ultimoCicloRaw).getTime()) / 3600000;
+    if (horasDesde < 24) return { processados: 0, ignorados: sistemas.length, criticosNovos: 0 };
+  }
+
+  const auditorias = dbGetAll('Auditorias') as Array<Record<string, unknown>>;
+  // Mapa sistemaId → ISO da última auditoria
+  const ultimaPorSistema: Record<string, string> = {};
+  for (const a of auditorias) {
+    const sid = String(a.sistemaId || '');
+    const dt = String(a.criadoEm || '');
+    if (!ultimaPorSistema[sid] || dt > ultimaPorSistema[sid]) ultimaPorSistema[sid] = dt;
+  }
+
+  const limiteStale = Date.now() - (regra.frequenciaDias || 7) * 86400000;
+  const candidatos: Array<Record<string, unknown>> = [];
+
+  for (const s of sistemas) {
+    if (regra.pularAposentados && String(s.estagio || '').toLowerCase() === 'aposentado') continue;
+    const sid = String(s.id || '');
+    const ultISO = ultimaPorSistema[sid];
+    if (!ultISO) {
+      // Nunca auditado → prioridade máxima
+      candidatos.unshift(s);
+    } else if (new Date(ultISO).getTime() < limiteStale) {
+      candidatos.push(s);
+    }
+  }
+
+  if (candidatos.length === 0) {
+    // Atualiza ciclo mesmo assim pra evitar checar de novo no mesmo dia
+    props.setProperty(PROP_ULTIMO_CICLO, new Date().toISOString());
+    return { processados: 0, ignorados: sistemas.length, criticosNovos: 0 };
+  }
+
+  const maxPorCiclo = Math.max(1, Math.min(5, regra.maxPorCiclo || 2));
+  const lote = candidatos.slice(0, maxPorCiclo);
+  let criticosNovos = 0;
+
+  for (const s of lote) {
+    const sid = String(s.id || '');
+    try {
+      const r = acaoIAAuditarSistema(sid);
+      if (r.ok && r.data) {
+        const d = r.data as { payload?: { findings?: Array<{ severidade?: string }> } };
+        const findings = d.payload?.findings || [];
+        const altos = findings.filter((f) => String(f.severidade || '').toLowerCase() === 'alta').length;
+        criticosNovos += altos;
+
+        if (regra.alertarSeAlta && altos > 0) {
+          const hoje = new Date().toISOString().split('T')[0];
+          tryEmit({
+            tipo: 'auditoria_findings_alta',
+            severidade: 'aviso',
+            titulo: `Auditoria IA: ${altos} finding${altos > 1 ? 's' : ''} de severidade alta em "${s.nome}"`,
+            mensagem: `A Forja AI re-auditou e encontrou ${altos} ponto${altos > 1 ? 's' : ''} de atenção. Veja em Sistemas → ${s.nome} → Forja AI.`,
+            sistemaId: sid,
+            dedupeKey: `auditoria_agendada:${sid}:${hoje}`,
+            janelaDedupeHoras: 24 * 3,
+          });
+        }
+      }
+    } catch (e) {
+      Logger.log(`auditoria agendada: falha em "${s.nome}" → ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  props.setProperty(PROP_ULTIMO_CICLO, new Date().toISOString());
+  return { processados: lote.length, ignorados: candidatos.length - lote.length, criticosNovos };
+}
+
+// Permite ao usuário disparar o ciclo manualmente sem esperar o cron (e ignorando
+// o rate-limit diário, pra teste).
+function rodarAuditoriaAgendadaAgora(): ServerResult {
+  try {
+    initDatabase();
+    const cfg = getAutomationConfig();
+    if (!cfg.regras.auditoriaAgendada?.ativo) {
+      return { ok: false, error: 'Auditoria agendada não está ativa. Ative em Configurações > Automações.' };
+    }
+    // Limpa rate-limit pra rodar agora
+    PropertiesService.getScriptProperties().deleteProperty('FORJA_AUDIT_AGENDADA_LAST_CYCLE');
+
+    const sistemas = dbGetAll('Sistemas') as Array<Record<string, unknown>>;
+    const novosAlertas: AlertaInternal[] = [];
+    const tryEmit = (input: Parameters<typeof criarAlerta>[0]) => {
+      const a = criarAlerta(input);
+      if (a) { novosAlertas.push(a); despacharAlertaCanais(a, cfg); }
+    };
+    const res = _executarAuditoriaAgendada(cfg, sistemas, tryEmit);
+    return {
+      ok: true,
+      data: {
+        ...res,
+        novosAlertas: novosAlertas.length,
+        totalSistemas: sistemas.length,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Retorna estatísticas do estado da auditoria agendada pra UI mostrar progresso.
+function getAuditoriaAgendadaStatus(): ServerResult {
+  try {
+    const cfg = getAutomationConfig();
+    const regra = cfg.regras.auditoriaAgendada;
+    const props = PropertiesService.getScriptProperties();
+    const ultimoCiclo = props.getProperty('FORJA_AUDIT_AGENDADA_LAST_CYCLE') || '';
+
+    const sistemas = dbGetAll('Sistemas') as Array<Record<string, unknown>>;
+    const auditorias = dbGetAll('Auditorias') as Array<Record<string, unknown>>;
+
+    const ultimaPorSistema: Record<string, string> = {};
+    for (const a of auditorias) {
+      const sid = String(a.sistemaId || '');
+      const dt = String(a.criadoEm || '');
+      if (!ultimaPorSistema[sid] || dt > ultimaPorSistema[sid]) ultimaPorSistema[sid] = dt;
+    }
+
+    const limiteStale = Date.now() - ((regra?.frequenciaDias || 7) * 86400000);
+    let nuncaAuditados = 0;
+    let staleCount = 0;
+    let recentes = 0;
+    let aposentadosPulados = 0;
+
+    for (const s of sistemas) {
+      if (regra?.pularAposentados && String(s.estagio || '').toLowerCase() === 'aposentado') {
+        aposentadosPulados++;
+        continue;
+      }
+      const sid = String(s.id || '');
+      const ultISO = ultimaPorSistema[sid];
+      if (!ultISO) nuncaAuditados++;
+      else if (new Date(ultISO).getTime() < limiteStale) staleCount++;
+      else recentes++;
+    }
+
+    return {
+      ok: true,
+      data: {
+        ativo: !!regra?.ativo,
+        frequenciaDias: regra?.frequenciaDias || 7,
+        maxPorCiclo: regra?.maxPorCiclo || 2,
+        ultimoCiclo,
+        proximoCicloEm: ultimoCiclo ? new Date(new Date(ultimoCiclo).getTime() + 86400000).toISOString() : '',
+        sistemas: {
+          total: sistemas.length,
+          nuncaAuditados,
+          stale: staleCount,
+          recentes,
+          aposentadosPulados,
+        },
+        elegiveis: nuncaAuditados + staleCount,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function rodarAutomacoesAgora(): ServerResult {
+  try {
+    const antes = (dbGetAll('Alertas') as Array<Record<string, unknown>>).length;
+    runAutomacoes();
+    const depois = (dbGetAll('Alertas') as Array<Record<string, unknown>>).length;
+    const cfg = getAutomationConfig();
+    const sistemas = dbGetAll('Sistemas');
+    const apis = dbGetAll('Apis');
+    const custos = dbGetAll('Custos');
+    const comUrl = sistemas.filter((s) => !!s['urlProd']).length;
+    const comProx = custos.filter((c) => !!c['proximaCobranca']).length;
+    const regrasAtivas = Object.entries(cfg.regras).filter(([, v]) => v.ativo).length;
+    return {
+      ok: true,
+      data: {
+        criados: depois - antes,
+        regrasAtivas,
+        avaliados: {
+          sistemasComUrl: comUrl,
+          totalSistemas: sistemas.length,
+          apis: apis.length,
+          custosComProximaCobranca: comProx,
+        },
+      },
+    };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao rodar' }; }
+}
+
+function gerarAlertaTeste(): ServerResult {
+  try {
+    const cfg = getAutomationConfig();
+    const a = dbCreate('Alertas', {
+      tipo: 'teste',
+      severidade: 'info',
+      titulo: 'Alerta de teste',
+      mensagem: 'Tudo certo: seus canais e o engine de automações estão funcionando. Você pode descartar este alerta.',
+      sistemaId: '',
+      criadoEm: new Date().toISOString(),
+      lidoEm: '',
+      dedupeKey: 'teste:' + Date.now(),
+      link: '',
+    }) as unknown as AlertaInternal;
+    despacharAlertaCanais(a, cfg);
+    return { ok: true, data: a };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro' }; }
+}
+
+function gasGetEditorUrl(): ServerResult {
+  try {
+    return { ok: true, data: `https://script.google.com/home/projects/${ScriptApp.getScriptId()}/edit` };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro' }; }
+}
+
+// ─── Relatórios e exportação (Fase 13) ───────────────────────────────────────
+
+function _monthBounds(mes: number, ano: number): { inicio: Date; fim: Date } {
+  const inicio = new Date(ano, mes - 1, 1, 0, 0, 0);
+  const fim = new Date(ano, mes, 0, 23, 59, 59);
+  return { inicio, fim };
+}
+
+function _mesNome(mes: number): string {
+  return ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][Math.max(0, Math.min(11, mes - 1))];
+}
+
+// Retorna um objeto estruturado pronto pra renderizar no front (sem HTML).
+// O front transforma em layout de relatório com CSS de impressão.
+function gerarRelatorioMensal(mes?: number, ano?: number, incluirIA?: boolean): ServerResult {
+  try {
+    initDatabase();
+    const hoje = new Date();
+    const m = mes && mes >= 1 && mes <= 12 ? mes : (hoje.getMonth() + 1);
+    const y = ano && ano > 2000 ? ano : hoje.getFullYear();
+    const { inicio, fim } = _monthBounds(m, y);
+
+    const sistemas = dbGetAll('Sistemas');
+    const clientes = (dbGetAll('Pessoas') as Array<Record<string, unknown>>).filter((p) => String(p.papel) === 'cliente');
+    const ideias = dbGetAll('Ideias');
+    const custos = dbGetAll('Custos');
+    const alertas = (dbGetAll('Alertas') as Array<Record<string, unknown>>).filter((a) => {
+      const t = new Date(String(a.criadoEm || '')).getTime();
+      return !Number.isNaN(t) && t >= inicio.getTime() && t <= fim.getTime();
+    });
+    const timeline = (dbGetAll('Timeline') as Array<Record<string, unknown>>).filter((t) => {
+      const d = new Date(String(t.data || '')).getTime();
+      return !Number.isNaN(d) && d >= inicio.getTime() && d <= fim.getTime();
+    });
+
+    // KPIs
+    const totalSistemas = sistemas.length;
+    const saudeMedia = totalSistemas > 0 ? Math.round(sistemas.reduce((acc, s) => acc + Number(s.scoreSaude || 0), 0) / totalSistemas) : 0;
+    const custoMensal = custos.reduce((acc, c) => {
+      const rec = String(c.recorrencia || '').toLowerCase();
+      const v = Number(c.valor || 0);
+      if (rec.indexOf('mensal') >= 0 || rec.indexOf('mes') >= 0 || rec.indexOf('mês') >= 0) return acc + v;
+      if (rec.indexOf('anual') >= 0) return acc + v / 12;
+      return acc;
+    }, 0);
+    const mrr = (dbGetAll('Receitas') as Array<Record<string, unknown>>).reduce((acc, r) => {
+      const rec = String(r.recorrencia || '').toLowerCase();
+      const status = String(r.status || '').toLowerCase();
+      if (status === 'cancelada' || status === 'cancelado') return acc;
+      const v = Number(r.valor || 0);
+      if (rec.indexOf('mensal') >= 0 || rec.indexOf('mes') >= 0 || rec.indexOf('mês') >= 0) return acc + v;
+      if (rec.indexOf('anual') >= 0) return acc + v / 12;
+      return acc;
+    }, 0);
+
+    // Sistemas com detalhe enxuto pro relatório
+    const sistemasOut = sistemas.map((s) => {
+      const sCustos = custos.filter((c) => String(c.sistemaId || '') === String(s.id || ''));
+      const custoMensalS = sCustos.reduce((acc, c) => {
+        const rec = String(c.recorrencia || '').toLowerCase();
+        const v = Number(c.valor || 0);
+        if (rec.indexOf('mensal') >= 0 || rec.indexOf('mes') >= 0) return acc + v;
+        if (rec.indexOf('anual') >= 0) return acc + v / 12;
+        return acc;
+      }, 0);
+      const incidentes = timeline.filter((t) => String(t.sistemaId || '') === String(s.id || '') && String(t.tipo) === 'incidente').length;
+      return {
+        id: s.id,
+        nome: s.nome,
+        codinome: s.codinome,
+        estagio: s.estagio,
+        stack: s.stack,
+        scoreSaude: Number(s.scoreSaude || 0),
+        urlProd: s.urlProd || '',
+        custoMensal: Math.round(custoMensalS * 100) / 100,
+        incidentes,
+      };
+    });
+
+    // Próximas cobranças nos próximos 30 dias
+    const limite30 = new Date(Date.now() + 30 * 86400000);
+    const proximasContas = custos
+      .filter((c) => !!c.proximaCobranca)
+      .map((c) => ({ ...c, _data: new Date(String(c.proximaCobranca)) }))
+      .filter((c) => !Number.isNaN(c._data.getTime()) && c._data >= new Date() && c._data <= limite30)
+      .map((c) => ({
+        fornecedor: c.fornecedor,
+        valor: Number(c.valor || 0),
+        proximaCobranca: c.proximaCobranca,
+        sistemaId: c.sistemaId || '',
+      }));
+
+    // Resumo IA (opcional — caro, só se pedirem)
+    let resumoIA = '';
+    if (incluirIA) {
+      const r = acaoIAResumoExecutivo();
+      if (r.ok && typeof r.data === 'string') resumoIA = r.data;
+    }
+
+    return {
+      ok: true,
+      data: {
+        periodo: { mes: m, ano: y, mesNome: _mesNome(m), inicio: inicio.toISOString(), fim: fim.toISOString() },
+        kpis: {
+          totalSistemas,
+          totalClientes: clientes.length,
+          totalIdeias: ideias.length,
+          saudeMedia,
+          custoMensal: Math.round(custoMensal * 100) / 100,
+          mrr: Math.round(mrr * 100) / 100,
+          lucro: Math.round((mrr - custoMensal) * 100) / 100,
+        },
+        sistemas: sistemasOut,
+        clientes: clientes.map((c) => ({ id: c.id, nome: c.nome, contato: c.contato })),
+        alertas: alertas.map((a) => ({
+          tipo: a.tipo, severidade: a.severidade, titulo: a.titulo, mensagem: a.mensagem, criadoEm: a.criadoEm,
+        })),
+        proximasContas,
+        timelineRecente: timeline.slice(-20).map((t) => ({
+          data: t.data, tipo: t.tipo, texto: t.texto, sistemaId: t.sistemaId,
+        })),
+        resumoIA,
+        geradoEm: new Date().toISOString(),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar relatório' };
+  }
+}
+
+function _toCSV(rows: Array<Record<string, unknown>>): string {
+  if (rows.length === 0) return '';
+  const headers = Object.keys(rows[0]);
+  const escape = (v: unknown) => {
+    if (v === null || v === undefined) return '';
+    const s = String(v);
+    if (s.indexOf(',') >= 0 || s.indexOf('"') >= 0 || s.indexOf('\n') >= 0) return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  };
+  const linhas = [headers.join(',')];
+  for (const r of rows) linhas.push(headers.map((h) => escape(r[h])).join(','));
+  return linhas.join('\n');
+}
+
+const EXPORTAVEIS = ['Sistemas', 'Pessoas', 'Ideias', 'Custos', 'Receitas', 'Apis', 'Alertas', 'Stacks', 'Timeline', 'Decisoes', 'Riscos', 'Oportunidades'] as const;
+
+function exportarCSV(entidade: string): ServerResult {
+  try {
+    if (!(EXPORTAVEIS as readonly string[]).includes(entidade)) return { ok: false, error: 'Entidade não exportável: ' + entidade };
+    const rows = dbGetAll(entidade) as Array<Record<string, unknown>>;
+    const csv = _toCSV(rows);
+    return { ok: true, data: { entidade, rows: rows.length, csv } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao exportar' };
+  }
+}
+
+function exportarBackupJSON(): ServerResult {
+  try {
+    const out: Record<string, unknown> = {
+      _meta: {
+        geradoEm: new Date().toISOString(),
+        scriptId: ScriptApp.getScriptId(),
+        usuario: Session.getActiveUser().getEmail(),
+        versao: 'forja-13',
+      },
+    };
+    for (const ent of EXPORTAVEIS) {
+      try { out[ent] = dbGetAll(ent); } catch { out[ent] = []; }
+    }
+    return { ok: true, data: { json: JSON.stringify(out, null, 2), entidades: EXPORTAVEIS.length } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao exportar backup' };
+  }
+}
+
+function listarEntidadesExportaveis(): ServerResult {
+  return { ok: true, data: EXPORTAVEIS };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Relatórios financeiros pessoais (Fase 1) — Extrato mensal, Por categoria e
+// Fluxo de caixa. Cada relatório gera: (a) dataset estruturado pro preview na
+// tela, (b) PDF (HTML→pdf), (c) planilha CSV e XLSX. O XLSX é montado direto
+// como pacote OOXML via Utilities.zip — sem Drive, sem arquivo temporário.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const _MESES_BR_REL = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+
+function _finMetodoLabel(m: string): string {
+  const map: Record<string, string> = { cartao: 'Cartão', pix: 'Pix', debito: 'Débito', dinheiro: 'Dinheiro', boleto: 'Boleto', transferencia: 'Transferência' };
+  const s = String(m || '');
+  return map[s] || (s ? s.charAt(0).toUpperCase() + s.slice(1) : '—');
+}
+
+function _finCatLabelMap(): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const c of dbGetAll('FinPessoalCategorias') as Array<Record<string, unknown>>) {
+    const nome = String(c['nome'] || '').toLowerCase();
+    if (nome) map[nome] = String(c['label'] || '') || (nome.charAt(0).toUpperCase() + nome.slice(1));
+  }
+  return map;
+}
+
+function _finCatLabel(slug: string, map: Record<string, string>): string {
+  const s = String(slug || 'outros').toLowerCase();
+  return map[s] || (s.charAt(0).toUpperCase() + s.slice(1));
+}
+
+function _compLabelRel(comp: string): string {
+  const m = /^(\d{4})-(\d{2})/.exec(String(comp || ''));
+  if (!m) return String(comp || '');
+  return `${_MESES_BR_REL[Number(m[2]) - 1] || m[2]}/${m[1]}`;
+}
+
+// Monta o dataset de um relatório financeiro. `mes` = 'YYYY-MM' (default: atual);
+// `meses` = janela do fluxo de caixa (default 12). Usa a MESMA competência da
+// tela (despesa de cartão cai no mês da fatura).
+function _dadosRelatorioFinanceiro(tipo: string, mes?: string, meses?: number): Record<string, unknown> {
+  const cartoesMap = _cartoesMap();
+  const catMap = _finCatLabelMap();
+  const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+  const mesRef = /^\d{4}-\d{2}$/.test(String(mes || '')) ? String(mes) : _toYYYYMM(new Date().toISOString());
+  const compDe = (l: Record<string, unknown>) => String(l['tipo']) === 'despesa' ? _competenciaLancamento(l, cartoesMap) : _toYYYYMM(l['data']);
+
+  if (tipo === 'extrato') {
+    const itens = todos.filter((l) => compDe(l) === mesRef);
+    itens.sort((a, b) => String(a['data'] || '').localeCompare(String(b['data'] || '')));
+    const linhas = itens.map((l) => {
+      const cMeta = l['cartaoId'] && cartoesMap[String(l['cartaoId'])] ? cartoesMap[String(l['cartaoId'])] : null;
+      const cartao = cMeta ? (String(cMeta['apelido'] || '') || String(cMeta['nome'] || '')) : '';
+      const parc = Number(l['parcelas'] || 0) > 1 ? `${l['parcelaAtual']}/${l['parcelas']}` : '';
+      return {
+        data: _valorJsonSafe(l['data']),
+        descricao: String(l['descricao'] || ''),
+        categoria: _finCatLabel(String(l['categoria'] || 'outros'), catMap),
+        metodo: _finMetodoLabel(String(l['metodo'] || '')),
+        cartao,
+        parcela: parc,
+        status: String(l['status'] || ''),
+        tipo: String(l['tipo'] || 'despesa'),
+        valor: Number(l['valor'] || 0),
+      };
+    });
+    const despesas = linhas.filter((x) => x.tipo === 'despesa').reduce((s, x) => s + x.valor, 0);
+    const entradas = linhas.filter((x) => x.tipo === 'entrada').reduce((s, x) => s + x.valor, 0);
+    return { tipo, mes: mesRef, periodoLabel: _compLabelRel(mesRef), linhas, totais: { despesas, entradas, saldo: entradas - despesas, qtd: linhas.length } };
+  }
+
+  if (tipo === 'categorias') {
+    const mesAnterior = _addMesesComp(mesRef, -1);
+    const acc: Record<string, { valor: number; qtd: number }> = {};
+    const accAnt: Record<string, number> = {};
+    for (const l of todos) {
+      if (String(l['tipo']) !== 'despesa') continue;
+      const c = compDe(l);
+      const cat = String(l['categoria'] || 'outros').toLowerCase();
+      const v = Number(l['valor'] || 0);
+      if (c === mesRef) { if (!acc[cat]) acc[cat] = { valor: 0, qtd: 0 }; acc[cat].valor += v; acc[cat].qtd += 1; }
+      else if (c === mesAnterior) { accAnt[cat] = (accAnt[cat] || 0) + v; }
+    }
+    const total = Object.keys(acc).reduce((s, k) => s + acc[k].valor, 0);
+    const linhas = Object.keys(acc).map((slug) => ({
+      slug, categoria: _finCatLabel(slug, catMap), valor: acc[slug].valor, qtd: acc[slug].qtd,
+      pct: total > 0 ? (acc[slug].valor / total) * 100 : 0,
+      anterior: accAnt[slug] || 0, variacao: acc[slug].valor - (accAnt[slug] || 0),
+    })).sort((a, b) => b.valor - a.valor);
+    return { tipo, mes: mesRef, periodoLabel: _compLabelRel(mesRef), mesAnteriorLabel: _compLabelRel(mesAnterior), linhas, total };
+  }
+
+  if (tipo === 'cartoes') return _dadosCartoesRel(mesRef, cartoesMap, todos);
+  if (tipo === 'parcelas') return _dadosParcelasRel(mesRef, cartoesMap, todos);
+  if (tipo === 'anual') return _dadosAnualRel(mesRef, cartoesMap, catMap, todos);
+  if (tipo === 'dre') return _dadosDreRel(mesRef);
+  if (tipo === 'livro') return _dadosLivroRel(mesRef);
+  if (tipo === 'mrr') return _dadosMrrRel();
+
+  // fluxo de caixa: N meses terminando em mesRef
+  const n = Math.max(2, Math.min(24, Number(meses || 12)));
+  const comps: string[] = [];
+  for (let i = n - 1; i >= 0; i--) comps.push(_addMesesComp(mesRef, -i));
+  const porMes: Record<string, { entradas: number; despesas: number }> = {};
+  for (const c of comps) porMes[c] = { entradas: 0, despesas: 0 };
+  for (const l of todos) {
+    const c = compDe(l);
+    if (!porMes[c]) continue;
+    const v = Number(l['valor'] || 0);
+    if (String(l['tipo']) === 'entrada') porMes[c].entradas += v; else porMes[c].despesas += v;
+  }
+  let acumulado = 0;
+  const linhasFluxo = comps.map((c) => {
+    const e = porMes[c].entradas; const d = porMes[c].despesas; const saldo = e - d; acumulado += saldo;
+    return { comp: c, label: _compLabelRel(c), entradas: e, despesas: d, saldo, acumulado };
+  });
+  const totE = linhasFluxo.reduce((s, x) => s + x.entradas, 0);
+  const totD = linhasFluxo.reduce((s, x) => s + x.despesas, 0);
+  return { tipo: 'fluxo', mes: mesRef, meses: linhasFluxo, periodoLabel: `${linhasFluxo[0].label} – ${linhasFluxo[linhasFluxo.length - 1].label}`, totais: { entradas: totE, despesas: totD, saldo: totE - totD } };
+}
+
+const _RELATORIOS_VALIDOS = ['extrato', 'categorias', 'fluxo', 'cartoes', 'parcelas', 'anual', 'dre', 'livro', 'mrr'];
+
+function getRelatorioFinanceiro(tipo: string, mes?: string, meses?: number): ServerResult {
+  try {
+    const t = String(tipo || 'extrato');
+    if (_RELATORIOS_VALIDOS.indexOf(t) < 0) return { ok: false, error: 'Relatório inválido' };
+    return { ok: true, data: _dadosRelatorioFinanceiro(t, mes, meses) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar relatório' };
+  }
+}
+
+// ─── Fase 2: cartões, parcelas e fechamento anual ──────────────────────────────
+
+function _dadosCartoesRel(mesRef: string, cartoesMap: Record<string, Record<string, unknown>>, todos: Array<Record<string, unknown>>): Record<string, unknown> {
+  const cartoes = (dbGetAll('FinPessoalCartoes') as Array<Record<string, unknown>>).filter((c) => String(c['ativo'] || 'sim') !== 'nao');
+  const N = 5;
+  const futuros: Array<{ comp: string; label: string }> = [];
+  for (let i = 1; i <= N; i++) { const c = _addMesesComp(mesRef, i); futuros.push({ comp: c, label: _compLabelRel(c) }); }
+  const compDe = (l: Record<string, unknown>) => _competenciaLancamento(l, cartoesMap);
+  const somaCartaoComp = (cid: string, comp: string) => todos
+    .filter((l) => String(l['tipo']) === 'despesa' && String(l['cartaoId']) === cid && compDe(l) === comp)
+    .reduce((s, l) => s + Number(l['valor'] || 0), 0);
+
+  const linhas = cartoes.map((cartao) => {
+    const cid = String(cartao['id']);
+    const nome = String(cartao['apelido'] || '') || String(cartao['nome'] || '');
+    const doMes = todos.filter((l) => String(l['tipo']) === 'despesa' && String(l['cartaoId']) === cid && compDe(l) === mesRef);
+    const faturaMes = doMes.reduce((s, l) => s + Number(l['valor'] || 0), 0);
+    const qtd = doMes.length;
+    const paga = qtd > 0 && doMes.every((l) => String(l['status']) === 'pago');
+    const status = qtd === 0 ? '—' : (paga ? 'Paga' : 'Aberta');
+    const venc = _vencimentoNoMes(mesRef, Number(cartao['diaVencimento'] || 0));
+    const futs = futuros.map((f) => somaCartaoComp(cid, f.comp));
+    return { cartao: nome, vencimento: venc, faturaMes, qtd, status, futuros: futs };
+  }).filter((x) => x.faturaMes !== 0 || x.qtd > 0 || x.futuros.some((v) => v !== 0));
+
+  const totFaturaMes = linhas.reduce((s, l) => s + l.faturaMes, 0);
+  const totFuturos = futuros.map((_, i) => linhas.reduce((s, l) => s + (l.futuros[i] || 0), 0));
+  return {
+    tipo: 'cartoes', mes: mesRef, periodoLabel: _compLabelRel(mesRef),
+    futurosLabels: futuros.map((f) => f.label),
+    linhas, totais: { faturaMes: totFaturaMes, futuros: totFuturos },
+  };
+}
+
+function _dadosParcelasRel(mesRef: string, cartoesMap: Record<string, Record<string, unknown>>, todos: Array<Record<string, unknown>>): Record<string, unknown> {
+  const compDe = (l: Record<string, unknown>) => _competenciaLancamento(l, cartoesMap);
+  const parceladas = todos.filter((l) => String(l['tipo']) === 'despesa' && Number(l['parcelas'] || 0) > 1);
+  const grupos: Record<string, { descricao: string; cartaoId: string; parcelas: number; items: Array<Record<string, unknown>> }> = {};
+  for (const l of parceladas) {
+    const key = String(l['parcelaGrupoId'] || '') || (String(l['descricao'] || '') + '|' + String(l['cartaoId'] || '') + '|' + String(l['parcelas']));
+    if (!grupos[key]) grupos[key] = { descricao: _descSemParcela(String(l['descricao'] || '')) || String(l['descricao'] || ''), cartaoId: String(l['cartaoId'] || ''), parcelas: Number(l['parcelas'] || 0), items: [] };
+    grupos[key].parcelas = Math.max(grupos[key].parcelas, Number(l['parcelas'] || 0));
+    grupos[key].items.push(l);
+  }
+  const linhas = Object.keys(grupos).map((k) => {
+    const g = grupos[k];
+    // Em aberto = parcelas com competência >= mês de referência e ainda não pagas.
+    const restantesItems = g.items.filter((l) => compDe(l) >= mesRef && String(l['status']) !== 'pago');
+    const valorRestante = restantesItems.reduce((s, l) => s + Number(l['valor'] || 0), 0);
+    const valorParcela = Number((restantesItems[0] || g.items[0])['valor'] || 0);
+    const cMeta = cartoesMap[g.cartaoId];
+    const cartao = cMeta ? (String(cMeta['apelido'] || '') || String(cMeta['nome'] || '')) : '';
+    const comps = restantesItems.map((l) => compDe(l)).sort();
+    const proxima = comps.length ? _compLabelRel(comps[0]) : '';
+    const nums = g.items.map((l) => Number(l['parcelaAtual'] || 0)).filter((x) => x > 0);
+    const atualMax = nums.length ? Math.max.apply(null, nums) : 0;
+    return {
+      descricao: g.descricao, cartao, parcelas: g.parcelas, atual: atualMax,
+      restantes: restantesItems.length, valorParcela, valorRestante, proxima,
+    };
+  }).filter((x) => x.restantes > 0).sort((a, b) => b.valorRestante - a.valorRestante);
+
+  const totalRestante = linhas.reduce((s, l) => s + l.valorRestante, 0);
+  const proxMes = linhas.reduce((s, l) => s + (l.proxima === _compLabelRel(_addMesesComp(mesRef, 1)) ? l.valorParcela : 0), 0);
+  return {
+    tipo: 'parcelas', mes: mesRef, periodoLabel: _compLabelRel(mesRef),
+    linhas, totais: { valorRestante: totalRestante, qtdGrupos: linhas.length, proxMes },
+  };
+}
+
+function _dadosAnualRel(mesRef: string, cartoesMap: Record<string, Record<string, unknown>>, catMap: Record<string, string>, todos: Array<Record<string, unknown>>): Record<string, unknown> {
+  const ano = mesRef.split('-')[0];
+  const MES3 = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+  const compDe = (l: Record<string, unknown>) => String(l['tipo']) === 'despesa' ? _competenciaLancamento(l, cartoesMap) : _toYYYYMM(l['data']);
+  const porMes: Record<string, { entradas: number; despesas: number }> = {};
+  for (let m = 1; m <= 12; m++) porMes[`${ano}-${String(m).padStart(2, '0')}`] = { entradas: 0, despesas: 0 };
+  const catAcc: Record<string, number> = {};
+  for (const l of todos) {
+    const c = compDe(l);
+    if (!porMes[c]) continue;
+    const v = Number(l['valor'] || 0);
+    if (String(l['tipo']) === 'entrada') porMes[c].entradas += v;
+    else { porMes[c].despesas += v; const cat = String(l['categoria'] || 'outros').toLowerCase(); catAcc[cat] = (catAcc[cat] || 0) + v; }
+  }
+  let acumulado = 0;
+  const meses = [];
+  for (let m = 1; m <= 12; m++) {
+    const comp = `${ano}-${String(m).padStart(2, '0')}`;
+    const e = porMes[comp].entradas; const d = porMes[comp].despesas; const saldo = e - d; acumulado += saldo;
+    meses.push({ comp, label: MES3[m - 1], entradas: e, despesas: d, saldo, acumulado });
+  }
+  const totD = meses.reduce((s, x) => s + x.despesas, 0);
+  const totE = meses.reduce((s, x) => s + x.entradas, 0);
+  const categorias = Object.keys(catAcc).map((slug) => ({ categoria: _finCatLabel(slug, catMap), valor: catAcc[slug], pct: totD > 0 ? (catAcc[slug] / totD) * 100 : 0 }))
+    .sort((a, b) => b.valor - a.valor).slice(0, 12);
+  return { tipo: 'anual', mes: mesRef, ano, periodoLabel: String(ano), meses, categorias, totais: { entradas: totE, despesas: totD, saldo: totE - totD } };
+}
+
+// ─── Fase 3: empresa (DRE, livro-caixa, MRR) ───────────────────────────────────
+
+function _sistemaNomeMap(): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const s of dbGetAll('Sistemas') as Array<Record<string, unknown>>) map[String(s['id'])] = String(s['nome'] || '');
+  return map;
+}
+
+function _dadosDreRel(mesRef: string): Record<string, unknown> {
+  const sis = _sistemaNomeMap();
+  const custos = dbGetAll('Custos') as Array<Record<string, unknown>>;
+  const receitas = dbGetAll('Receitas') as Array<Record<string, unknown>>;
+  const despesas = dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>;
+  const ativas = receitas.filter((r) => String(r['status'] || 'ativa').toLowerCase() !== 'cancelada');
+  const receitaRec = ativas.reduce((s, r) => s + toMonthly(Number(r['valor'] || 0), String(r['recorrencia'] || 'mensal')), 0);
+  const custoRec = custos.reduce((s, c) => s + toMonthly(Number(c['valor'] || 0), String(c['recorrencia'] || 'mensal')), 0);
+  const despesasMes = despesas.filter((d) => String(d['competencia']) === mesRef);
+  const despesaVar = despesasMes.reduce((s, d) => s + Number(d['valor'] || 0), 0);
+  const lucro = receitaRec - custoRec - despesaVar;
+  const margem = receitaRec > 0 ? (lucro / receitaRec) * 100 : 0;
+
+  const linhas = [
+    { label: 'Receita recorrente (MRR)', valor: receitaRec, tipo: 'receita' },
+    { label: 'Custos recorrentes', valor: -custoRec, tipo: 'custo' },
+    { label: 'Despesas variáveis (' + _compLabelRel(mesRef) + ')', valor: -despesaVar, tipo: 'despesa' },
+    { label: 'Resultado do mês', valor: lucro, tipo: 'resultado' },
+  ];
+
+  const mapa: Record<string, { nome: string; mrr: number; custo: number; despesa: number }> = {};
+  const g = (id: string) => { if (!mapa[id]) mapa[id] = { nome: id ? (sis[id] || 'Sem app') : 'Sem app', mrr: 0, custo: 0, despesa: 0 }; return mapa[id]; };
+  ativas.forEach((r) => { g(String(r['sistemaId'] || '')).mrr += toMonthly(Number(r['valor'] || 0), String(r['recorrencia'] || 'mensal')); });
+  custos.forEach((c) => { g(String(c['sistemaId'] || '')).custo += toMonthly(Number(c['valor'] || 0), String(c['recorrencia'] || 'mensal')); });
+  despesasMes.forEach((d) => { g(String(d['sistemaId'] || '')).despesa += Number(d['valor'] || 0); });
+  const porApp = Object.keys(mapa).map((id) => { const x = mapa[id]; return { nome: x.nome, mrr: x.mrr, custo: x.custo, despesa: x.despesa, lucro: x.mrr - x.custo - x.despesa }; })
+    .filter((x) => x.mrr > 0 || x.custo > 0 || x.despesa > 0).sort((a, b) => b.lucro - a.lucro);
+
+  return { tipo: 'dre', mes: mesRef, periodoLabel: _compLabelRel(mesRef), linhas, porApp, totais: { receita: receitaRec, custo: custoRec, despesa: despesaVar, lucro, margem } };
+}
+
+function _dadosLivroRel(mesRef: string): Record<string, unknown> {
+  const sis = _sistemaNomeMap();
+  const despesas = (dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>)
+    .filter((d) => String(d['competencia']) === mesRef)
+    .sort((a, b) => String(a['data'] || '').localeCompare(String(b['data'] || '')));
+  const linhas = despesas.map((d) => ({
+    data: _valorJsonSafe(d['data']),
+    fornecedor: String(d['fornecedor'] || ''),
+    descricao: String(d['descricao'] || ''),
+    categoria: String(d['categoria'] || 'Outro'),
+    sistema: d['sistemaId'] ? (sis[String(d['sistemaId'])] || '') : '',
+    status: String(d['status'] || ''),
+    valor: Number(d['valor'] || 0),
+  }));
+  const total = linhas.reduce((s, l) => s + l.valor, 0);
+  const pago = linhas.filter((l) => l.status === 'pago').reduce((s, l) => s + l.valor, 0);
+  return { tipo: 'livro', mes: mesRef, periodoLabel: _compLabelRel(mesRef), linhas, totais: { total, pago, pendente: total - pago, qtd: linhas.length } };
+}
+
+function _dadosMrrRel(): Record<string, unknown> {
+  const sis = _sistemaNomeMap();
+  const receitas = dbGetAll('Receitas') as Array<Record<string, unknown>>;
+  const ativas = receitas.filter((r) => String(r['status'] || 'ativa').toLowerCase() !== 'cancelada');
+  const linhas = ativas.map((r) => ({
+    app: r['sistemaId'] ? (sis[String(r['sistemaId'])] || 'Sem app') : 'Sem app',
+    plano: String(r['plano'] || ''),
+    recorrencia: String(r['recorrencia'] || 'mensal'),
+    proxima: _valorJsonSafe(r['proximaCobranca']),
+    valorMensal: toMonthly(Number(r['valor'] || 0), String(r['recorrencia'] || 'mensal')),
+  })).sort((a, b) => b.valorMensal - a.valorMensal);
+  const mrr = linhas.reduce((s, l) => s + l.valorMensal, 0);
+  const canceladas = receitas.length - ativas.length;
+  return { tipo: 'mrr', mes: '', periodoLabel: 'Assinaturas ativas', linhas, totais: { mrr, assinaturas: ativas.length, canceladas } };
+}
+
+// ─── Tabela neutra (usada por CSV, XLSX e PDF) ─────────────────────────────────
+// `num` = numérico (alinhado à direita); `money` = moeda (numérico + formato R$).
+interface RelCelula { v: string | number; num?: boolean; money?: boolean }
+interface RelTabela { nome: string; header: string[]; rows: RelCelula[][] }
+
+function _relTabela(ds: Record<string, unknown>): RelTabela {
+  const tipo = String(ds['tipo']);
+  if (tipo === 'extrato') {
+    const rows = (ds['linhas'] as Array<Record<string, unknown>>).map((l) => [
+      { v: _fmtDataBR(String(l['data'])) },
+      { v: String(l['descricao']) },
+      { v: String(l['categoria']) },
+      { v: String(l['metodo']) },
+      { v: String(l['cartao'] || '') },
+      { v: String(l['parcela'] || '') },
+      { v: String(l['status'] || '') },
+      { v: l['tipo'] === 'entrada' ? 'Entrada' : 'Despesa' },
+      { v: Number(l['valor'] || 0), money: true },
+    ]);
+    return { nome: 'Extrato', header: ['Data', 'Descrição', 'Categoria', 'Método', 'Cartão', 'Parcela', 'Status', 'Tipo', 'Valor'], rows };
+  }
+  if (tipo === 'categorias') {
+    const rows = (ds['linhas'] as Array<Record<string, unknown>>).map((l) => [
+      { v: String(l['categoria']) },
+      { v: Number(l['valor'] || 0), money: true },
+      { v: Number(Number(l['pct'] || 0).toFixed(1)), num: true },
+      { v: Number(l['qtd'] || 0), num: true },
+      { v: Number(l['anterior'] || 0), money: true },
+      { v: Number(l['variacao'] || 0), money: true },
+    ]);
+    return { nome: 'Por categoria', header: ['Categoria', 'Valor', '% do mês', 'Lançamentos', 'Mês anterior', 'Variação'], rows };
+  }
+  if (tipo === 'cartoes') {
+    const futLabels = (ds['futurosLabels'] as string[]) || [];
+    const rows = (ds['linhas'] as Array<Record<string, unknown>>).map((l) => [
+      { v: String(l['cartao']) },
+      { v: l['vencimento'] ? _fmtDataBR(String(l['vencimento'])) : '—' },
+      { v: String(l['status']) },
+      { v: Number(l['qtd'] || 0), num: true },
+      { v: Number(l['faturaMes'] || 0), money: true },
+      ...(l['futuros'] as number[]).map((v) => ({ v: Number(v || 0), money: true })),
+    ]);
+    return { nome: 'Faturas de cartão', header: ['Cartão', 'Vencimento', 'Status', 'Lançamentos', 'Fatura do mês', ...futLabels], rows };
+  }
+  if (tipo === 'parcelas') {
+    const rows = (ds['linhas'] as Array<Record<string, unknown>>).map((l) => [
+      { v: String(l['descricao']) },
+      { v: String(l['cartao'] || '') },
+      { v: `${l['atual']}/${l['parcelas']}` },
+      { v: Number(l['restantes'] || 0), num: true },
+      { v: Number(l['valorParcela'] || 0), money: true },
+      { v: Number(l['valorRestante'] || 0), money: true },
+      { v: String(l['proxima'] || '') },
+    ]);
+    return { nome: 'Parcelas em aberto', header: ['Compra', 'Cartão', 'Parcela', 'Restantes', 'Valor parcela', 'Falta pagar', 'Próxima'], rows };
+  }
+  if (tipo === 'anual') {
+    const rows = (ds['meses'] as Array<Record<string, unknown>>).map((m) => [
+      { v: String(m['label']) },
+      { v: Number(m['entradas'] || 0), money: true },
+      { v: Number(m['despesas'] || 0), money: true },
+      { v: Number(m['saldo'] || 0), money: true },
+      { v: Number(m['acumulado'] || 0), money: true },
+    ]);
+    return { nome: 'Fechamento anual', header: ['Mês', 'Entradas', 'Despesas', 'Saldo', 'Acumulado'], rows };
+  }
+  if (tipo === 'dre') {
+    const rows = (ds['linhas'] as Array<Record<string, unknown>>).map((l) => [
+      { v: String(l['label']) },
+      { v: Number(l['valor'] || 0), money: true },
+    ]);
+    return { nome: 'DRE', header: ['Linha', 'Valor'], rows };
+  }
+  if (tipo === 'livro') {
+    const rows = (ds['linhas'] as Array<Record<string, unknown>>).map((l) => [
+      { v: _fmtDataBR(String(l['data'])) },
+      { v: String(l['fornecedor'] || '') },
+      { v: String(l['descricao'] || '') },
+      { v: String(l['categoria'] || '') },
+      { v: String(l['sistema'] || '') },
+      { v: String(l['status'] || '') },
+      { v: Number(l['valor'] || 0), money: true },
+    ]);
+    return { nome: 'Livro-caixa', header: ['Data', 'Fornecedor', 'Descrição', 'Categoria', 'App', 'Status', 'Valor'], rows };
+  }
+  if (tipo === 'mrr') {
+    const rows = (ds['linhas'] as Array<Record<string, unknown>>).map((l) => [
+      { v: String(l['app'] || '') },
+      { v: String(l['plano'] || '') },
+      { v: String(l['recorrencia'] || '') },
+      { v: l['proxima'] ? _fmtDataBR(String(l['proxima'])) : '—' },
+      { v: Number(l['valorMensal'] || 0), money: true },
+    ]);
+    return { nome: 'MRR', header: ['App', 'Plano', 'Recorrência', 'Próx. cobrança', 'Valor mensal'], rows };
+  }
+  const rows = (ds['meses'] as Array<Record<string, unknown>>).map((m) => [
+    { v: String(m['label']) },
+    { v: Number(m['entradas'] || 0), money: true },
+    { v: Number(m['despesas'] || 0), money: true },
+    { v: Number(m['saldo'] || 0), money: true },
+    { v: Number(m['acumulado'] || 0), money: true },
+  ]);
+  return { nome: 'Fluxo de caixa', header: ['Mês', 'Entradas', 'Despesas', 'Saldo', 'Acumulado'], rows };
+}
+
+// Renderiza uma RelTabela como tabela HTML pro PDF (moeda em R$, demais à direita).
+function _relTabelaHtml(tab: RelTabela): string {
+  const th = tab.header.map((h, i) => {
+    const algo = tab.rows.length > 0 && tab.rows[0][i] && (tab.rows[0][i].num || tab.rows[0][i].money);
+    return '<th' + (algo ? ' class="right"' : '') + '>' + _escHtml(h) + '</th>';
+  }).join('');
+  const body = tab.rows.length === 0
+    ? '<tr><td colspan="' + tab.header.length + '" class="muted">Sem dados.</td></tr>'
+    : tab.rows.map((row) => '<tr>' + row.map((c) => {
+      if (c.money) return '<td class="right mono">' + _fmtBRLpdf(Number(c.v)) + '</td>';
+      if (c.num) return '<td class="right">' + _escHtml(c.v) + '</td>';
+      return '<td>' + _escHtml(c.v) + '</td>';
+    }).join('') + '</tr>').join('');
+  return '<table><thead><tr>' + th + '</tr></thead><tbody>' + body + '</tbody></table>';
+}
+
+function _relNomeArquivo(ds: Record<string, unknown>): string {
+  const nomes: Record<string, string> = {
+    extrato: 'extrato', categorias: 'por-categoria', fluxo: 'fluxo-de-caixa',
+    cartoes: 'faturas-cartao', parcelas: 'parcelas-em-aberto', anual: 'fechamento-anual',
+    dre: 'dre-empresa', livro: 'livro-caixa-empresa', mrr: 'mrr-assinaturas',
+  };
+  const base = nomes[String(ds['tipo'])] || 'relatorio';
+  const sufixo = String(ds['tipo']) === 'anual' ? String(ds['ano'] || '') : String(ds['mes'] || '').replace(/[^\d-]/g, '');
+  return `forja-${base}${sufixo ? '-' + sufixo : ''}`;
+}
+
+// ─── CSV (pt-BR: separador ';', decimal ',', BOM pro Excel) ─────────────────────
+function _numBR2(n: number): string { return Number(n || 0).toFixed(2).replace('.', ','); }
+
+function _relCsv(tab: RelTabela): string {
+  const esc = (s: string) => (/[;"\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s);
+  const linhas = [tab.header.map(esc).join(';')];
+  for (const row of tab.rows) linhas.push(row.map((c) => esc(c.money ? _numBR2(Number(c.v)) : String(c.v))).join(';'));
+  return '\uFEFF' + linhas.join('\r\n');
+}
+
+// ─── XLSX mínimo (OOXML) montado via Utilities.zip — uma aba ───────────────────
+function _xlsxColLetra(n: number): string {
+  let s = '';
+  while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+
+function _xlsxEsc(s: unknown): string {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function _xlsxSheetXml(tab: RelTabela): string {
+  const todas: RelCelula[][] = [tab.header.map((h) => ({ v: h })), ...tab.rows];
+  const rowsXml = todas.map((row, ri) => {
+    const celulas = row.map((c, ci) => {
+      const ref = _xlsxColLetra(ci + 1) + (ri + 1);
+      if (ri > 0 && (c.num || c.money) && typeof c.v === 'number' && isFinite(c.v)) {
+        return `<c r="${ref}"><v>${c.v}</v></c>`;
+      }
+      return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${_xlsxEsc(c.v)}</t></is></c>`;
+    }).join('');
+    return `<row r="${ri + 1}">${celulas}</row>`;
+  }).join('');
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+    + `<sheetData>${rowsXml}</sheetData></worksheet>`;
+}
+
+function _xlsxBase64(tab: RelTabela): string {
+  const nomeAba = tab.nome.replace(/[\\/?*[\]:]/g, ' ').slice(0, 31) || 'Planilha';
+  const contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+    + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+    + '<Default Extension="xml" ContentType="application/xml"/>'
+    + '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+    + '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+    + '</Types>';
+  const rels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+    + '</Relationships>';
+  const workbook = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+    + `<sheets><sheet name="${_xlsxEsc(nomeAba)}" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+  const workbookRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+    + '</Relationships>';
+  const blobs = [
+    Utilities.newBlob(contentTypes, 'application/xml', '[Content_Types].xml'),
+    Utilities.newBlob(rels, 'application/xml', '_rels/.rels'),
+    Utilities.newBlob(workbook, 'application/xml', 'xl/workbook.xml'),
+    Utilities.newBlob(workbookRels, 'application/xml', 'xl/_rels/workbook.xml.rels'),
+    Utilities.newBlob(_xlsxSheetXml(tab), 'application/xml', 'xl/worksheets/sheet1.xml'),
+  ];
+  const zip = Utilities.zip(blobs, 'planilha.xlsx');
+  return Utilities.base64Encode(zip.getBytes());
+}
+
+// Exporta um relatório financeiro em CSV ou XLSX.
+function exportarRelatorioFinanceiro(tipo: string, mes?: string, meses?: number, formato?: string): ServerResult {
+  try {
+    const t = String(tipo || 'extrato');
+    if (_RELATORIOS_VALIDOS.indexOf(t) < 0) return { ok: false, error: 'Relatório inválido' };
+    const ds = _dadosRelatorioFinanceiro(t, mes, meses);
+    const tab = _relTabela(ds);
+    const nomeBase = _relNomeArquivo(ds);
+    if (String(formato || 'csv') === 'xlsx') {
+      return { ok: true, data: { filename: `${nomeBase}.xlsx`, mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', base64: _xlsxBase64(tab) } };
+    }
+    return { ok: true, data: { filename: `${nomeBase}.csv`, mime: 'text/csv', csv: _relCsv(tab) } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao exportar relatório' };
+  }
+}
+
+// ─── PDF dos relatórios financeiros ────────────────────────────────────────────
+function _relKpiBox(label: string, valor: string, cor?: string): string {
+  return '<div style="background:#F6F3EE;border:1px solid #E7E1D8;border-radius:10px;padding:12px 14px;">'
+    + '<div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;">' + _escHtml(label) + '</div>'
+    + '<div style="font-size:19px;font-weight:600;margin-top:4px;' + (cor ? 'color:' + cor + ';' : '') + '">' + _escHtml(valor) + '</div></div>';
+}
+
+function _relCabecalhoHtml(titulo: string, periodo: string): string {
+  return '<div style="border-bottom:2px solid #D99B73;padding-bottom:16px;margin-bottom:22px;">'
+    + '<div class="muted" style="font-size:10px;letter-spacing:0.16em;text-transform:uppercase;">FORJA — Relatório financeiro</div>'
+    + '<h1 style="font-size:28px;margin-top:6px;">' + _escHtml(titulo) + ' <span class="muted" style="font-weight:400;">' + _escHtml(periodo) + '</span></h1>'
+    + '<div class="muted" style="font-size:11px;margin-top:4px;">Gerado em ' + _escHtml(new Date().toLocaleString('pt-BR')) + '</div></div>';
+}
+
+function gerarRelatorioFinanceiroPdf(tipo: string, mes?: string, meses?: number): ServerResult {
+  try {
+    const t = String(tipo || 'extrato');
+    if (_RELATORIOS_VALIDOS.indexOf(t) < 0) return { ok: false, error: 'Relatório inválido' };
+    const ds = _dadosRelatorioFinanceiro(t, mes, meses);
+    let corpo = '';
+    let titulo = '';
+
+    if (t === 'extrato') {
+      const tot = ds['totais'] as Record<string, number>;
+      const linhas = ds['linhas'] as Array<Record<string, unknown>>;
+      titulo = 'Extrato mensal';
+      const rows = linhas.length === 0
+        ? '<tr><td colspan="7" class="muted">Nenhum lançamento neste mês.</td></tr>'
+        : linhas.map((l) => {
+          const ent = l['tipo'] === 'entrada';
+          return '<tr><td>' + _escHtml(_fmtDataBR(String(l['data']))) + '</td>'
+            + '<td>' + _escHtml(l['descricao']) + (l['parcela'] ? ' <span class="muted">(' + _escHtml(l['parcela']) + ')</span>' : '') + '</td>'
+            + '<td>' + _escHtml(l['categoria']) + '</td>'
+            + '<td>' + _escHtml(l['metodo']) + (l['cartao'] ? ' · ' + _escHtml(l['cartao']) : '') + '</td>'
+            + '<td style="text-transform:capitalize;">' + _escHtml(l['status']) + '</td>'
+            + '<td class="right mono" style="color:' + (ent ? '#5C8A5A' : '#2A2724') + ';">' + (ent ? '+' : '') + _fmtBRLpdf(Number(l['valor'] || 0)) + '</td></tr>';
+        }).join('');
+      corpo = _relCabecalhoHtml(titulo, String(ds['periodoLabel'] || ''))
+        + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:22px;">'
+        + _relKpiBox('Despesas', _fmtBRLpdf(tot.despesas), '#B5544E')
+        + _relKpiBox('Entradas', _fmtBRLpdf(tot.entradas), '#5C8A5A')
+        + _relKpiBox('Saldo', _fmtBRLpdf(tot.saldo), tot.saldo >= 0 ? '#5C8A5A' : '#B5544E')
+        + _relKpiBox('Lançamentos', String(tot.qtd)) + '</div>'
+        + '<table><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Pagamento</th><th>Status</th><th class="right">Valor</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    } else if (t === 'categorias') {
+      const linhas = ds['linhas'] as Array<Record<string, unknown>>;
+      const total = Number(ds['total'] || 0);
+      titulo = 'Gastos por categoria · ' + String(ds['periodoLabel']);
+      const rows = linhas.length === 0
+        ? '<tr><td colspan="5" class="muted">Sem despesas neste mês.</td></tr>'
+        : linhas.map((l) => {
+          const varv = Number(l['variacao'] || 0);
+          const corVar = varv > 0 ? '#B5544E' : varv < 0 ? '#5C8A5A' : '#8C8378';
+          return '<tr><td><strong>' + _escHtml(l['categoria']) + '</strong></td>'
+            + '<td class="right mono">' + _fmtBRLpdf(Number(l['valor'] || 0)) + '</td>'
+            + '<td class="right">' + Number(l['pct'] || 0).toFixed(0) + '%</td>'
+            + '<td class="right">' + _escHtml(l['qtd']) + '</td>'
+            + '<td class="right mono">' + _fmtBRLpdf(Number(l['anterior'] || 0)) + '</td>'
+            + '<td class="right mono" style="color:' + corVar + ';">' + (varv > 0 ? '+' : '') + _fmtBRLpdf(varv) + '</td></tr>';
+        }).join('');
+      corpo = _relCabecalhoHtml('Gastos por categoria', String(ds['periodoLabel']))
+        + '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:22px;">'
+        + _relKpiBox('Total do mês', _fmtBRLpdf(total))
+        + _relKpiBox('Categorias', String(linhas.length)) + '</div>'
+        + '<table><thead><tr><th>Categoria</th><th class="right">Valor</th><th class="right">%</th><th class="right">Lanç.</th><th class="right">' + _escHtml(ds['mesAnteriorLabel']) + '</th><th class="right">Variação</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    } else if (t === 'fluxo') {
+      const linhas = ds['meses'] as Array<Record<string, unknown>>;
+      const tot = ds['totais'] as Record<string, number>;
+      titulo = 'Fluxo de caixa';
+      const rows = linhas.map((m) => {
+        const saldo = Number(m['saldo'] || 0);
+        return '<tr><td><strong>' + _escHtml(m['label']) + '</strong></td>'
+          + '<td class="right mono" style="color:#5C8A5A;">' + _fmtBRLpdf(Number(m['entradas'] || 0)) + '</td>'
+          + '<td class="right mono" style="color:#B5544E;">' + _fmtBRLpdf(Number(m['despesas'] || 0)) + '</td>'
+          + '<td class="right mono" style="color:' + (saldo >= 0 ? '#5C8A5A' : '#B5544E') + ';">' + _fmtBRLpdf(saldo) + '</td>'
+          + '<td class="right mono">' + _fmtBRLpdf(Number(m['acumulado'] || 0)) + '</td></tr>';
+      }).join('');
+      corpo = _relCabecalhoHtml('Fluxo de caixa', String(ds['periodoLabel']))
+        + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:22px;">'
+        + _relKpiBox('Entradas', _fmtBRLpdf(tot.entradas), '#5C8A5A')
+        + _relKpiBox('Despesas', _fmtBRLpdf(tot.despesas), '#B5544E')
+        + _relKpiBox('Saldo do período', _fmtBRLpdf(tot.saldo), tot.saldo >= 0 ? '#5C8A5A' : '#B5544E') + '</div>'
+        + '<table><thead><tr><th>Mês</th><th class="right">Entradas</th><th class="right">Despesas</th><th class="right">Saldo</th><th class="right">Acumulado</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    } else if (t === 'cartoes') {
+      const tot = ds['totais'] as { faturaMes: number; futuros: number[] };
+      titulo = 'Faturas de cartão';
+      corpo = _relCabecalhoHtml('Faturas de cartão', String(ds['periodoLabel']))
+        + '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:22px;">'
+        + _relKpiBox('Fatura do mês', _fmtBRLpdf(tot.faturaMes))
+        + _relKpiBox('Próximas (provisão)', _fmtBRLpdf((tot.futuros || []).reduce((s, v) => s + v, 0))) + '</div>'
+        + _relTabelaHtml(_relTabela(ds))
+        + '<p class="muted" style="font-size:11px;margin-top:10px;">As colunas dos meses futuros são a provisão das parcelas já lançadas.</p>';
+    } else if (t === 'parcelas') {
+      const tot = ds['totais'] as { valorRestante: number; qtdGrupos: number; proxMes: number };
+      titulo = 'Parcelas em aberto';
+      corpo = _relCabecalhoHtml('Parcelas em aberto', String(ds['periodoLabel']))
+        + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:22px;">'
+        + _relKpiBox('Falta pagar (total)', _fmtBRLpdf(tot.valorRestante))
+        + _relKpiBox('Compras parceladas', String(tot.qtdGrupos))
+        + _relKpiBox('Próximo mês', _fmtBRLpdf(tot.proxMes)) + '</div>'
+        + _relTabelaHtml(_relTabela(ds));
+    } else if (t === 'anual') {
+      const tot = ds['totais'] as Record<string, number>;
+      const cats = (ds['categorias'] as Array<Record<string, unknown>>) || [];
+      titulo = 'Fechamento anual ' + String(ds['ano']);
+      const catRows = cats.map((c) => '<tr><td>' + _escHtml(c['categoria']) + '</td><td class="right mono">' + _fmtBRLpdf(Number(c['valor'] || 0)) + '</td><td class="right">' + Number(c['pct'] || 0).toFixed(0) + '%</td></tr>').join('');
+      corpo = _relCabecalhoHtml('Fechamento anual', String(ds['ano']))
+        + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:22px;">'
+        + _relKpiBox('Entradas no ano', _fmtBRLpdf(tot.entradas), '#5C8A5A')
+        + _relKpiBox('Despesas no ano', _fmtBRLpdf(tot.despesas), '#B5544E')
+        + _relKpiBox('Saldo do ano', _fmtBRLpdf(tot.saldo), tot.saldo >= 0 ? '#5C8A5A' : '#B5544E') + '</div>'
+        + _relTabelaHtml(_relTabela(ds))
+        + (catRows ? '<h2 style="font-size:16px;margin:22px 0 10px;">Categorias do ano</h2><table><thead><tr><th>Categoria</th><th class="right">Valor</th><th class="right">%</th></tr></thead><tbody>' + catRows + '</tbody></table>' : '');
+    } else if (t === 'dre') {
+      const tot = ds['totais'] as Record<string, number>;
+      const porApp = (ds['porApp'] as Array<Record<string, unknown>>) || [];
+      titulo = 'DRE — ' + String(ds['periodoLabel']);
+      const dreRows = (ds['linhas'] as Array<Record<string, unknown>>).map((l) => {
+        const v = Number(l['valor'] || 0);
+        const forte = l['tipo'] === 'resultado';
+        return '<tr style="' + (forte ? 'border-top:2px solid #E7E1D8;font-weight:600;' : '') + '"><td>' + _escHtml(l['label']) + '</td>'
+          + '<td class="right mono" style="color:' + (v >= 0 ? '#5C8A5A' : '#B5544E') + ';">' + _fmtBRLpdf(v) + '</td></tr>';
+      }).join('');
+      const appRows = porApp.map((a) => '<tr><td>' + _escHtml(a['nome']) + '</td>'
+        + '<td class="right mono">' + _fmtBRLpdf(Number(a['mrr'] || 0)) + '</td>'
+        + '<td class="right mono">' + _fmtBRLpdf(Number(a['custo'] || 0)) + '</td>'
+        + '<td class="right mono">' + _fmtBRLpdf(Number(a['despesa'] || 0)) + '</td>'
+        + '<td class="right mono" style="color:' + (Number(a['lucro'] || 0) >= 0 ? '#5C8A5A' : '#B5544E') + ';">' + _fmtBRLpdf(Number(a['lucro'] || 0)) + '</td></tr>').join('');
+      corpo = _relCabecalhoHtml('DRE', String(ds['periodoLabel']))
+        + '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:22px;">'
+        + _relKpiBox('Resultado', _fmtBRLpdf(tot.lucro), tot.lucro >= 0 ? '#5C8A5A' : '#B5544E')
+        + _relKpiBox('Margem', Math.round(tot.margem) + '%') + '</div>'
+        + '<table style="margin-bottom:24px;"><thead><tr><th>Linha</th><th class="right">Valor</th></tr></thead><tbody>' + dreRows + '</tbody></table>'
+        + (appRows ? '<h2 style="font-size:16px;margin:0 0 10px;">Por app</h2><table><thead><tr><th>App</th><th class="right">MRR</th><th class="right">Custo</th><th class="right">Despesa</th><th class="right">Lucro</th></tr></thead><tbody>' + appRows + '</tbody></table>' : '');
+    } else if (t === 'livro') {
+      const tot = ds['totais'] as Record<string, number>;
+      titulo = 'Livro-caixa — ' + String(ds['periodoLabel']);
+      corpo = _relCabecalhoHtml('Livro-caixa', String(ds['periodoLabel']))
+        + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:22px;">'
+        + _relKpiBox('Total', _fmtBRLpdf(tot.total))
+        + _relKpiBox('Pago', _fmtBRLpdf(tot.pago), '#5C8A5A')
+        + _relKpiBox('Pendente', _fmtBRLpdf(tot.pendente), '#B5544E') + '</div>'
+        + _relTabelaHtml(_relTabela(ds));
+    } else {
+      const tot = ds['totais'] as Record<string, number>;
+      titulo = 'MRR — assinaturas';
+      corpo = _relCabecalhoHtml('MRR', 'Assinaturas ativas')
+        + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:22px;">'
+        + _relKpiBox('MRR', _fmtBRLpdf(tot.mrr), '#5C8A5A')
+        + _relKpiBox('Assinaturas ativas', String(tot.assinaturas))
+        + _relKpiBox('Canceladas', String(tot.canceladas)) + '</div>'
+        + _relTabelaHtml(_relTabela(ds));
+    }
+
+    const html = _pdfDoc(titulo, corpo);
+    return _htmlToPdfResult(html, _relNomeArquivo(ds));
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar PDF do relatório' };
+  }
+}
+
+// ─── Fase 14: IA com ações reais (tool calling) ──────────────────────────────
+//
+// A Forja IA pode propor ações estruturadas (criar ideia, registrar risco, gerar
+// backlog .md etc.) que o usuário aprova/recusa antes da execução. Não usamos a
+// função nativa de "tool use" das APIs de LLM porque queremos portabilidade
+// entre proxies — em vez disso, ensinamos o LLM a emitir JSON num bloco
+// <TOOL_CALLS>…</TOOL_CALLS> e parseamos no servidor.
+
+interface ToolParamSpec {
+  tipo: 'string' | 'number' | 'sistemaId' | 'pessoaId' | 'bool';
+  obrigatorio?: boolean;
+  descricao?: string;
+}
+
+interface ToolDef {
+  name: string;
+  descricao: string;
+  exemplo: string;
+  parametros: Record<string, ToolParamSpec>;
+}
+
+const TOOLS_CATALOG: ToolDef[] = [
+  {
+    name: 'criar_ideia',
+    descricao: 'Registra uma nova faísca/ideia no banco de ideias.',
+    exemplo: '{"titulo":"App de gestão de leads para óticas","descricao":"...","notaImpacto":4,"notaEsforco":3}',
+    parametros: {
+      titulo: { tipo: 'string', obrigatorio: true, descricao: 'Título curto da ideia.' },
+      descricao: { tipo: 'string', descricao: 'Detalhamento opcional.' },
+      notaImpacto: { tipo: 'number', descricao: '1 a 5 (impacto esperado).' },
+      notaEsforco: { tipo: 'number', descricao: '1 a 5 (esforço pra construir).' },
+    },
+  },
+  {
+    name: 'criar_sistema',
+    descricao: 'Adiciona um novo sistema/app na bancada (Forja).',
+    exemplo: '{"nome":"Otica 360","codinome":"otica-360","estagio":"forja","proposito":"Gestão completa de óticas","stack":"Apps Script, Sheets"}',
+    parametros: {
+      nome: { tipo: 'string', obrigatorio: true },
+      codinome: { tipo: 'string', descricao: 'Slug. Se omitido, é gerado a partir do nome.' },
+      estagio: { tipo: 'string', descricao: 'faisca | forja | tempera | prateleira' },
+      proposito: { tipo: 'string' },
+      stack: { tipo: 'string', descricao: 'Tecnologias separadas por vírgula.' },
+      urlProd: { tipo: 'string', descricao: 'URL de produção, se já existir.' },
+    },
+  },
+  {
+    name: 'registrar_decisao',
+    descricao: 'Adiciona uma decisão arquitetural/de produto à timeline de um sistema.',
+    exemplo: '{"sistemaId":"<ID>","titulo":"Adotar OAuth Google","decisao":"...","justificativa":"..."}',
+    parametros: {
+      sistemaId: { tipo: 'sistemaId', obrigatorio: true },
+      titulo: { tipo: 'string', obrigatorio: true },
+      decisao: { tipo: 'string', obrigatorio: true, descricao: 'O que foi decidido (1-3 frases).' },
+      justificativa: { tipo: 'string', descricao: 'Por quê.' },
+    },
+  },
+  {
+    name: 'registrar_risco',
+    descricao: 'Lança um risco identificado para um sistema (técnico, operacional, financeiro etc.).',
+    exemplo: '{"sistemaId":"<ID>","area":"segurança","descricao":"Sem rate-limit em endpoints de login","gravidade":"alta"}',
+    parametros: {
+      sistemaId: { tipo: 'sistemaId', obrigatorio: true },
+      area: { tipo: 'string', obrigatorio: true, descricao: 'Ex.: segurança, custo, dependência, UX.' },
+      descricao: { tipo: 'string', obrigatorio: true },
+      gravidade: { tipo: 'string', descricao: 'baixa | media | alta' },
+    },
+  },
+  {
+    name: 'registrar_oportunidade',
+    descricao: 'Adiciona uma oportunidade comercial à pipeline.',
+    exemplo: '{"titulo":"Vender Otica 360 para rede X","pessoaId":"<ID>","valorEstimado":1500,"proximoPasso":"Marcar demo"}',
+    parametros: {
+      titulo: { tipo: 'string', obrigatorio: true },
+      pessoaId: { tipo: 'pessoaId' },
+      valorEstimado: { tipo: 'number' },
+      proximoPasso: { tipo: 'string' },
+    },
+  },
+  {
+    name: 'criar_cobranca',
+    descricao: 'Registra um custo recorrente (hospedagem, API, domínio etc.).',
+    exemplo: '{"sistemaId":"<ID>","fornecedor":"OpenAI","valor":35,"recorrencia":"mensal","categoria":"api"}',
+    parametros: {
+      sistemaId: { tipo: 'sistemaId' },
+      fornecedor: { tipo: 'string', obrigatorio: true },
+      valor: { tipo: 'number', obrigatorio: true },
+      recorrencia: { tipo: 'string', descricao: 'mensal | anual | unico' },
+      proximaCobranca: { tipo: 'string', descricao: 'Data ISO YYYY-MM-DD.' },
+      categoria: { tipo: 'string' },
+    },
+  },
+  {
+    name: 'marcar_alertas_lidos',
+    descricao: 'Marca todos os alertas pendentes como lidos.',
+    exemplo: '{"todos":true}',
+    parametros: {
+      todos: { tipo: 'bool', descricao: 'Se true, marca todos como lidos.' },
+    },
+  },
+  {
+    name: 'gerar_arquivo_md',
+    descricao: 'Cria um arquivo .md que o usuário pode baixar e colar no Cursor/Claude/ChatGPT. Use pra entregar backlogs, blueprints, ou instruções de implementação.',
+    exemplo: '{"titulo":"backlog-otica360","conteudo":"# Backlog\\n\\n## Próximas tarefas\\n- ..."}',
+    parametros: {
+      titulo: { tipo: 'string', obrigatorio: true, descricao: 'Nome do arquivo (sem .md, em kebab-case).' },
+      conteudo: { tipo: 'string', obrigatorio: true, descricao: 'Conteúdo Markdown completo.' },
+    },
+  },
+];
+
+function listarToolsIA(): ServerResult {
+  return { ok: true, data: TOOLS_CATALOG };
+}
+
+function _toolsParaPromptLLM(): string {
+  const linhas = TOOLS_CATALOG.map((t) => {
+    const params = Object.entries(t.parametros).map(([k, v]) => `${k}${v.obrigatorio ? '*' : ''}: ${v.tipo}${v.descricao ? ' — ' + v.descricao : ''}`).join('; ');
+    return `- ${t.name}: ${t.descricao}\n  parâmetros: ${params}\n  exemplo: ${t.exemplo}`;
+  }).join('\n');
+  return linhas;
+}
+
+interface ToolCall {
+  tool: string;
+  params: Record<string, unknown>;
+}
+
+function _parseToolCalls(resposta: string): { texto: string; toolCalls: ToolCall[] } {
+  const matchOpen = resposta.indexOf('<TOOL_CALLS>');
+  if (matchOpen < 0) return { texto: resposta, toolCalls: [] };
+  const matchClose = resposta.indexOf('</TOOL_CALLS>', matchOpen);
+  if (matchClose < 0) return { texto: resposta, toolCalls: [] };
+  const texto = resposta.slice(0, matchOpen).trim();
+  const jsonStr = resposta.slice(matchOpen + '<TOOL_CALLS>'.length, matchClose).trim();
+  try {
+    let parsed: unknown;
+    try { parsed = JSON.parse(jsonStr); }
+    catch {
+      // tenta extrair primeiro [ ... ] do bloco caso o LLM tenha vindo com cercas markdown
+      const m = jsonStr.match(/\[[\s\S]*\]/);
+      if (!m) return { texto, toolCalls: [] };
+      parsed = JSON.parse(m[0]);
+    }
+    if (!Array.isArray(parsed)) return { texto, toolCalls: [] };
+    const calls: ToolCall[] = [];
+    for (const item of parsed) {
+      if (item && typeof item === 'object' && 'tool' in (item as Record<string, unknown>)) {
+        const c = item as Record<string, unknown>;
+        calls.push({ tool: String(c.tool), params: (c.params && typeof c.params === 'object') ? c.params as Record<string, unknown> : {} });
+      }
+    }
+    return { texto, toolCalls: calls };
+  } catch {
+    return { texto, toolCalls: [] };
+  }
+}
+
+function chatLLMComTools(history: LlmMessage[], sistemaId: string, opts?: { contexto?: 'portfolio' | 'sistema' | 'nenhum'; permitirTools?: boolean; skillIds?: string[]; usarCodex?: boolean }): ServerResult {
+  try {
+    const modo = opts && opts.contexto ? opts.contexto : (sistemaId ? 'sistema' : 'nenhum');
+    let contexto = '';
+    if (modo === 'sistema') contexto = buildContextoSistema(sistemaId);
+    else if (modo === 'portfolio') contexto = buildContextoPortfolio();
+
+    // Skills aplicadas: carrega o conteúdo de cada skill da biblioteca do user
+    // e injeta como bloco "## SKILLS ATIVAS" no system prompt.
+    let blocoSkills = '';
+    if (opts && opts.skillIds && opts.skillIds.length > 0) {
+      const linhas = dbGetAll('Skills') as Array<Record<string, unknown>>;
+      const aplicadas = opts.skillIds
+        .map((sid) => linhas.find((l) => String(l.id || '') === sid))
+        .filter((x): x is Record<string, unknown> => !!x);
+      if (aplicadas.length > 0) {
+        const partes = aplicadas.map((sk) => {
+          const nome = String(sk.nome || 'Skill');
+          const conteudo = String(sk.conteudo || '').trim();
+          return `### Skill: ${nome}\n\n${conteudo}`;
+        });
+        blocoSkills =
+          '\n\n## SKILLS ATIVAS\n'
+          + 'Estas são instruções/playbooks que o usuário ativou pra esta conversa. '
+          + 'Siga-as como diretrizes adicionais ao responder.\n\n'
+          + partes.join('\n\n---\n\n');
+      }
+    }
+
+    const permitirTools = opts ? opts.permitirTools !== false : true;
+    const instrucoesTools = permitirTools ? (
+      '\n\n## AÇÕES QUE VOCÊ PODE EXECUTAR\n'
+      + 'Você pode propor ações reais no sistema. O usuário sempre aprova antes da execução. '
+      + 'Use ações SOMENTE quando o pedido do usuário implicar criar/registrar algo concreto, '
+      + 'ou quando você claramente identificou um item de backlog/risco que vale a pena salvar. '
+      + 'Nunca proponha ações sem o usuário pedir explicitamente, OU sem que você tenha avisado no texto da resposta o que vai propor. '
+      + '\n\nFerramentas disponíveis:\n' + _toolsParaPromptLLM()
+      + '\n\nQuando quiser propor ações, escreva no FINAL da sua resposta um bloco assim (e somente assim):\n'
+      + '<TOOL_CALLS>\n[{"tool":"nome_da_tool","params":{...}}, {"tool":"...","params":{...}}]\n</TOOL_CALLS>\n'
+      + 'Regras: (1) o bloco vai SEMPRE no final, (2) JSON válido sem comentários, (3) só inclua tools que existem na lista acima, '
+      + '(4) preencha sistemaId/pessoaId com IDs reais do contexto (se disponíveis), (5) NÃO inclua o bloco se não houver ações a propor. '
+      + '(6) Use criar_ideia/registrar_risco/registrar_decisao várias vezes num único bloco quando fizer sentido.'
+    ) : '';
+
+    // Códex: injeta padrões pessoais como diretrizes adicionais. Default true.
+    const codexTxt = opts?.usarCodex !== false ? _buildCodexContext() : '';
+
+    const sistema = getPromptEfetivo('chat') + contexto + blocoSkills + instrucoesTools + codexTxt;
+    const messages: LlmMessage[] = [{ role: 'system', content: sistema }];
+    for (const m of (history || [])) {
+      if (m && (m.role === 'user' || m.role === 'assistant') && m.content) {
+        messages.push({ role: m.role, content: String(m.content) });
+      }
+    }
+    const resposta = forjaCallLLM(messages, 3500);
+    const parsed = _parseToolCalls(resposta);
+    return { ok: true, data: { texto: parsed.texto || resposta, toolCalls: parsed.toolCalls } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao falar com a IA' };
+  }
+}
+
+// Validação básica de parâmetros contra o schema da tool
+function _validarParams(tool: ToolDef, params: Record<string, unknown>): string | null {
+  for (const [chave, spec] of Object.entries(tool.parametros)) {
+    const v = params[chave];
+    if (spec.obrigatorio && (v === undefined || v === null || v === '')) {
+      return `Parâmetro obrigatório ausente: ${chave}`;
+    }
+    if (v !== undefined && v !== null && v !== '') {
+      if ((spec.tipo === 'number') && typeof v !== 'number' && isNaN(Number(v))) return `${chave} deve ser número`;
+      if ((spec.tipo === 'string' || spec.tipo === 'sistemaId' || spec.tipo === 'pessoaId') && typeof v !== 'string') return `${chave} deve ser texto`;
+    }
+  }
+  return null;
+}
+
+function _executarUmaTool(call: ToolCall): { tool: string; ok: boolean; data?: unknown; error?: string; preview: string } {
+  const tool = TOOLS_CATALOG.find((t) => t.name === call.tool);
+  if (!tool) return { tool: call.tool, ok: false, error: 'Tool desconhecida', preview: '?' };
+  const params = call.params || {};
+  const erro = _validarParams(tool, params);
+  if (erro) return { tool: tool.name, ok: false, error: erro, preview: tool.descricao };
+
+  try {
+    switch (tool.name) {
+      case 'criar_ideia': {
+        const r = dbCreate('Ideias', {
+          titulo: String(params.titulo),
+          descricao: String(params.descricao || ''),
+          notaImpacto: Number(params.notaImpacto || 3),
+          notaEsforco: Number(params.notaEsforco || 3),
+          estado: 'faisca',
+        });
+        return { tool: tool.name, ok: true, data: r, preview: `Ideia "${params.titulo}" criada` };
+      }
+      case 'criar_sistema': {
+        const nome = String(params.nome);
+        const codinome = String(params.codinome || nome.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
+        const r = dbCreate('Sistemas', {
+          nome, codinome,
+          estagio: String(params.estagio || 'forja'),
+          proposito: String(params.proposito || ''),
+          stack: String(params.stack || ''),
+          urlProd: String(params.urlProd || ''),
+          scoreSaude: 0,
+        });
+        return { tool: tool.name, ok: true, data: r, preview: `Sistema "${nome}" criado` };
+      }
+      case 'registrar_decisao': {
+        // Defesa: rejeita sistemaId placeholder vazio/<ID>/undefined pra evitar
+        // criar decisão órfã. O FindingCard injeta o sistemaId correto, mas
+        // outros chamadores podem não fazer — falhamos loud.
+        const sidRaw = String(params.sistemaId || '').trim();
+        if (!sidRaw || sidRaw === '<ID>' || sidRaw === 'undefined' || sidRaw === 'null') {
+          return { tool: tool.name, ok: false, error: 'sistemaId inválido — não consegui amarrar a decisão a um sistema', preview: '?' };
+        }
+        // Decisões registradas via IA entram como "backlog" — o usuário move
+        // pra "fazendo" / "feito" no Kanban quando trabalhar nelas.
+        const r = dbCreate('Decisoes', {
+          sistemaId: sidRaw,
+          data: new Date().toISOString().slice(0, 10),
+          titulo: String(params.titulo),
+          decisao: String(params.decisao),
+          justificativa: String(params.justificativa || ''),
+          status: 'backlog',
+          prioridade: String(params.prioridade || 'media'),
+          tags: String(params.tags || 'auditoria'),
+          estimativa: String(params.estimativa || ''),
+        });
+        return { tool: tool.name, ok: true, data: r, preview: `Decisão "${params.titulo}" registrada no backlog` };
+      }
+      case 'registrar_risco': {
+        const sidRaw = String(params.sistemaId || '').trim();
+        if (!sidRaw || sidRaw === '<ID>' || sidRaw === 'undefined' || sidRaw === 'null') {
+          return { tool: tool.name, ok: false, error: 'sistemaId inválido — não consegui amarrar o risco a um sistema', preview: '?' };
+        }
+        const r = dbCreate('Riscos', {
+          sistemaId: sidRaw,
+          area: String(params.area),
+          descricao: String(params.descricao),
+          gravidade: String(params.gravidade || 'media'),
+          historicoIncidentes: 0,
+        });
+        return { tool: tool.name, ok: true, data: r, preview: `Risco em "${params.area}" registrado` };
+      }
+      case 'registrar_oportunidade': {
+        const r = dbCreate('Oportunidades', {
+          titulo: String(params.titulo),
+          pessoaId: String(params.pessoaId || ''),
+          valorEstimado: Number(params.valorEstimado || 0),
+          estado: 'lead',
+          proximoPasso: String(params.proximoPasso || ''),
+        });
+        return { tool: tool.name, ok: true, data: r, preview: `Oportunidade "${params.titulo}" criada` };
+      }
+      case 'criar_cobranca': {
+        const r = dbCreate('Custos', {
+          sistemaId: String(params.sistemaId || ''),
+          fornecedor: String(params.fornecedor),
+          valor: Number(params.valor),
+          recorrencia: String(params.recorrencia || 'mensal'),
+          proximaCobranca: String(params.proximaCobranca || ''),
+          categoria: String(params.categoria || ''),
+        });
+        return { tool: tool.name, ok: true, data: r, preview: `Cobrança ${params.fornecedor} R$${params.valor} adicionada` };
+      }
+      case 'marcar_alertas_lidos': {
+        if (params.todos) {
+          const r = marcarTodosAlertasLidos();
+          return { tool: tool.name, ok: !!r.ok, data: r.data, error: r.error, preview: 'Todos os alertas marcados como lidos' };
+        }
+        return { tool: tool.name, ok: false, error: 'Especifique todos=true ou uma lista de ids', preview: '?' };
+      }
+      case 'gerar_arquivo_md': {
+        const titulo = String(params.titulo).replace(/[^a-zA-Z0-9-_]/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'arquivo';
+        const conteudo = String(params.conteudo);
+        return { tool: tool.name, ok: true, data: { filename: titulo + '.md', mime: 'text/markdown', conteudo }, preview: `Arquivo ${titulo}.md gerado (${conteudo.length} caracteres)` };
+      }
+      default:
+        return { tool: tool.name, ok: false, error: 'Execução não implementada', preview: '?' };
+    }
+  } catch (e: unknown) {
+    return { tool: tool.name, ok: false, error: e instanceof Error ? e.message : 'Erro ao executar', preview: '!' };
+  }
+}
+
+function executarToolsIA(calls: ToolCall[]): ServerResult {
+  try {
+    if (!Array.isArray(calls) || calls.length === 0) return { ok: false, error: 'Nenhuma ação informada' };
+    const resultados = calls.map((c) => _executarUmaTool(c));
+    const sucessos = resultados.filter((r) => r.ok).length;
+    return { ok: true, data: { resultados, sucessos, falhas: resultados.length - sucessos } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao executar ações' };
+  }
+}
+
+// ─── Fase 15: Score de Saúde determinístico ──────────────────────────────────
+//
+// Em vez de pedir pra IA chutar um número, o score é calculado a partir de
+// sinais reais e auditáveis. Cada fator contribui um peso e retornamos o
+// breakdown completo pra o usuário entender o "por quê" do número.
+//
+// Fatores (peso = max):
+//   Completude:   20 pts (proposito 5 + stack 3 + url/dominio 7 + repo 5)
+//   Visibilidade: 20 pts (custos cadastrados 10 + atividade recente 10)
+//   Operacional:  30 pts (sem alerta crítico 20 + sem alerta de aviso 10)
+//   Riscos:       30 pts (sem risco alta 20 + custo controlado 10)
+// Total: 100. Se completude < 8 (sistema vazio), o score é definido como 0
+// ("não avaliado") em vez de mostrar um número artificial.
+
+interface FatorSaude {
+  nome: string;
+  pontos: number;
+  max: number;
+  ok: boolean;
+  detalhe: string;
+}
+
+function calcularSaudeReal(sistemaId: string): ServerResult {
+  try {
+    initDatabase();
+    const sistema = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => s.id === sistemaId);
+    if (!sistema) return { ok: false, error: 'Sistema não encontrado' };
+
+    const fatores: FatorSaude[] = [];
+
+    // 1. Completude
+    const temProposito = !!(sistema.proposito && String(sistema.proposito).trim().length > 8);
+    fatores.push({ nome: 'Tem propósito definido', pontos: temProposito ? 5 : 0, max: 5, ok: temProposito, detalhe: temProposito ? 'Propósito preenchido' : 'Sem propósito — define o "porquê" do sistema' });
+
+    const temStack = !!(sistema.stack && String(sistema.stack).trim());
+    fatores.push({ nome: 'Stack catalogada', pontos: temStack ? 3 : 0, max: 3, ok: temStack, detalhe: temStack ? String(sistema.stack) : 'Stack vazia — útil pra filtros e snapshots' });
+
+    const temUrl = !!(sistema.urlProd || sistema.dominioCustomizado || sistema.webAppUrl);
+    fatores.push({ nome: 'Está acessível (URL ou domínio)', pontos: temUrl ? 7 : 0, max: 7, ok: temUrl, detalhe: temUrl ? String(sistema.dominioCustomizado || sistema.urlProd || sistema.webAppUrl) : 'Sem URL de produção nem domínio próprio' });
+
+    const temRepo = !!sistema.repoUrl;
+    fatores.push({ nome: 'Tem repositório versionado', pontos: temRepo ? 5 : 0, max: 5, ok: temRepo, detalhe: temRepo ? String(sistema.repoUrl) : 'Sem repositório — código não rastreável' });
+
+    // 2. Visibilidade financeira/operacional
+    const custos = (dbGetAll('Custos') as Array<Record<string, unknown>>).filter((c) => String(c.sistemaId || '') === sistemaId);
+    const temCustos = custos.length > 0;
+    fatores.push({ nome: 'Custos cadastrados', pontos: temCustos ? 10 : 0, max: 10, ok: temCustos, detalhe: temCustos ? `${custos.length} item(s)` : 'Sem custos — você não sabe quanto este sistema te dá de prejuízo' });
+
+    const trintaDias = Date.now() - 30 * 86400000;
+    const timeline = (dbGetAll('Timeline') as Array<Record<string, unknown>>).filter((t) => String(t.sistemaId || '') === sistemaId);
+    const eventosRecentes = timeline.filter((t) => {
+      const d = new Date(String(t.data || '')).getTime();
+      return !Number.isNaN(d) && d >= trintaDias;
+    }).length;
+    const ativo = eventosRecentes > 0;
+    fatores.push({ nome: 'Atividade nos últimos 30 dias', pontos: ativo ? 10 : 0, max: 10, ok: ativo, detalhe: ativo ? `${eventosRecentes} evento(s) na timeline` : 'Nenhum pulso/decisão/incidente recente — o sistema pode estar parado' });
+
+    // 3. Alertas em aberto
+    const alertas = (dbGetAll('Alertas') as Array<Record<string, unknown>>).filter((a) => {
+      if (String(a.dismissed || '').toLowerCase() === 'true') return false;
+      if (String(a.lido || '').toLowerCase() === 'true') return false;
+      const meta = String(a.metadata || a.mensagem || '');
+      return meta.indexOf(sistemaId) >= 0 || String(a.sistemaId || '') === sistemaId;
+    });
+    const criticos = alertas.filter((a) => String(a.severidade) === 'critico').length;
+    const avisos = alertas.filter((a) => String(a.severidade) === 'aviso').length;
+
+    const semCritico = criticos === 0;
+    fatores.push({ nome: 'Sem alertas críticos abertos', pontos: semCritico ? 20 : Math.max(0, 20 - criticos * 10), max: 20, ok: semCritico, detalhe: semCritico ? 'Tudo certo' : `${criticos} alerta(s) crítico(s) pendente(s)` });
+
+    const semAviso = avisos === 0;
+    fatores.push({ nome: 'Sem alertas de aviso abertos', pontos: semAviso ? 10 : Math.max(0, 10 - avisos * 3), max: 10, ok: semAviso, detalhe: semAviso ? 'Sem avisos' : `${avisos} aviso(s) pendente(s)` });
+
+    // 4. Riscos e financeiro
+    const riscos = (dbGetAll('Riscos') as Array<Record<string, unknown>>).filter((r) => String(r.sistemaId || '') === sistemaId);
+    const riscosAlta = riscos.filter((r) => String(r.gravidade).toLowerCase() === 'alta').length;
+    const semRiscoAlta = riscosAlta === 0;
+    fatores.push({ nome: 'Sem riscos de gravidade alta', pontos: semRiscoAlta ? 20 : Math.max(0, 20 - riscosAlta * 7), max: 20, ok: semRiscoAlta, detalhe: semRiscoAlta ? `${riscos.length} risco(s) total, nenhum alta` : `${riscosAlta} risco(s) de gravidade alta` });
+
+    const custoMensal = custos.reduce((acc, c) => {
+      const rec = String(c.recorrencia || '').toLowerCase();
+      const v = Number(c.valor || 0);
+      if (rec.indexOf('mensal') >= 0 || rec.indexOf('mes') >= 0) return acc + v;
+      if (rec.indexOf('anual') >= 0) return acc + v / 12;
+      return acc;
+    }, 0);
+    const receitas = (dbGetAll('Receitas') as Array<Record<string, unknown>>).filter((r) => String(r.sistemaId || '') === sistemaId);
+    const mrr = receitas.reduce((acc, r) => {
+      const rec = String(r.recorrencia || '').toLowerCase();
+      const status = String(r.status || '').toLowerCase();
+      if (status === 'cancelada' || status === 'cancelado') return acc;
+      const v = Number(r.valor || 0);
+      if (rec.indexOf('mensal') >= 0 || rec.indexOf('mes') >= 0) return acc + v;
+      if (rec.indexOf('anual') >= 0) return acc + v / 12;
+      return acc;
+    }, 0);
+
+    let detalheCusto: string;
+    let pontosCusto: number;
+    let okCusto: boolean;
+    if (custoMensal === 0 && mrr === 0) {
+      detalheCusto = 'Sem custos nem receitas — neutro';
+      pontosCusto = 10; // não penaliza quem não cadastrou nada
+      okCusto = true;
+    } else if (custoMensal === 0) {
+      detalheCusto = `Custo zero · MRR ${_fmtBRL(mrr)}`;
+      pontosCusto = 10;
+      okCusto = true;
+    } else if (mrr >= custoMensal) {
+      detalheCusto = `MRR ${_fmtBRL(mrr)} cobre custo ${_fmtBRL(custoMensal)}`;
+      pontosCusto = 10;
+      okCusto = true;
+    } else if (mrr > 0) {
+      detalheCusto = `MRR ${_fmtBRL(mrr)} insuficiente pro custo ${_fmtBRL(custoMensal)}`;
+      pontosCusto = 5;
+      okCusto = false;
+    } else {
+      detalheCusto = `Custo ${_fmtBRL(custoMensal)}/mês sem receita`;
+      pontosCusto = 0;
+      okCusto = false;
+    }
+    fatores.push({ nome: 'Equilíbrio custo × receita', pontos: pontosCusto, max: 10, ok: okCusto, detalhe: detalheCusto });
+
+    const completude = fatores.slice(0, 4).reduce((acc, f) => acc + f.pontos, 0);
+    const totalPontos = fatores.reduce((acc, f) => acc + f.pontos, 0);
+
+    // Sistemas muito vazios são marcados como "não avaliados" (score=0)
+    const score = completude < 8 ? 0 : Math.round(totalPontos);
+
+    return {
+      ok: true,
+      data: {
+        score,
+        fatores,
+        calculadoEm: new Date().toISOString(),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao calcular saúde' };
+  }
+}
+
+function _fmtBRL(v: number): string {
+  return 'R$' + v.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+
+function atualizarSaudeReal(sistemaId: string): ServerResult {
+  try {
+    const r = calcularSaudeReal(sistemaId);
+    if (!r.ok || !r.data) return r;
+    const breakdown = r.data as { score: number; fatores: FatorSaude[]; calculadoEm: string };
+    dbUpdate('Sistemas', sistemaId, {
+      scoreSaude: breakdown.score,
+      saudeBreakdown: JSON.stringify(breakdown.fatores),
+      saudeCalculadaEm: breakdown.calculadoEm,
+    });
+    return { ok: true, data: breakdown };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atualizar saúde' };
+  }
+}
+
+function recalcularSaudeTodosSistemas(): ServerResult {
+  try {
+    const sistemas = dbGetAll('Sistemas');
+    let avaliados = 0;
+    let naoAvaliados = 0;
+    for (const s of sistemas) {
+      const r = atualizarSaudeReal(String(s.id));
+      if (r.ok && r.data) {
+        const d = r.data as { score: number };
+        if (d.score > 0) avaliados++; else naoAvaliados++;
+      }
+    }
+    return { ok: true, data: { total: sistemas.length, avaliados, naoAvaliados } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ─── Fase 15: Auditoria Forja IA ─────────────────────────────────────────────
+//
+// Reaproveita toda a infra de tool-calling da Fase 14. Monta um contexto
+// profundo do sistema (descrição, stack, custos, decisões prévias, riscos
+// abertos, alertas, atividade) e instrui a IA a propor concretamente:
+// vulnerabilidades (registrar_risco), correções (registrar_decisao),
+// oportunidades de features (registrar_oportunidade) e um arquivo .md de
+// backlog pra colar na IA de desenvolvimento.
+
+function _contextoSistemaProfundo(sistemaId: string): string {
+  const sistema = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => s.id === sistemaId);
+  if (!sistema) return '(sistema não encontrado)';
+  const custos = (dbGetAll('Custos') as Array<Record<string, unknown>>).filter((c) => String(c.sistemaId || '') === sistemaId);
+  const decisoes = (dbGetAll('Decisoes') as Array<Record<string, unknown>>).filter((d) => String(d.sistemaId || '') === sistemaId);
+  const riscos = (dbGetAll('Riscos') as Array<Record<string, unknown>>).filter((r) => String(r.sistemaId || '') === sistemaId);
+  const oportunidades = dbGetAll('Oportunidades') as Array<Record<string, unknown>>;
+  const timeline = (dbGetAll('Timeline') as Array<Record<string, unknown>>).filter((t) => String(t.sistemaId || '') === sistemaId).slice(-15);
+  const alertas = (dbGetAll('Alertas') as Array<Record<string, unknown>>).filter((a) => String(a.sistemaId || '') === sistemaId || String(a.metadata || '').indexOf(sistemaId) >= 0);
+
+  const linhas: string[] = [];
+  linhas.push('## SISTEMA');
+  linhas.push(`- id: ${sistema.id}`);
+  linhas.push(`- nome: ${sistema.nome}`);
+  linhas.push(`- codinome: ${sistema.codinome}`);
+  linhas.push(`- estagio: ${sistema.estagio}`);
+  linhas.push(`- proposito: ${sistema.proposito || '(vazio)'}`);
+  linhas.push(`- stack: ${sistema.stack || '(vazio)'}`);
+  linhas.push(`- urlProd: ${sistema.urlProd || '(vazio)'}`);
+  linhas.push(`- dominioCustomizado: ${sistema.dominioCustomizado || '(vazio)'}`);
+  linhas.push(`- repoUrl: ${sistema.repoUrl || '(vazio)'}`);
+  linhas.push(`- scriptId: ${sistema.scriptId || '(vazio)'}`);
+  linhas.push(`- scoreSaude atual: ${sistema.scoreSaude || 0}`);
+
+  linhas.push('\n## CUSTOS (' + custos.length + ')');
+  for (const c of custos.slice(0, 15)) linhas.push(`- ${c.fornecedor}: R$${c.valor} ${c.recorrencia || ''}`);
+
+  linhas.push('\n## DECISÕES PRÉVIAS (' + decisoes.length + ')');
+  for (const d of decisoes.slice(-10)) linhas.push(`- [${d.data}] ${d.titulo}: ${d.decisao}`);
+
+  linhas.push('\n## RISCOS ABERTOS (' + riscos.length + ')');
+  for (const r of riscos) linhas.push(`- (${r.gravidade}) ${r.area}: ${r.descricao}`);
+
+  linhas.push('\n## ALERTAS RECENTES (' + alertas.length + ')');
+  for (const a of alertas.slice(-10)) linhas.push(`- [${a.severidade}] ${a.titulo}: ${a.mensagem}`);
+
+  linhas.push('\n## TIMELINE (últimos eventos)');
+  for (const t of timeline) linhas.push(`- [${t.data}] (${t.tipo}) ${t.texto}`);
+
+  linhas.push('\n## OPORTUNIDADES EXISTENTES NO PORTFÓLIO (' + oportunidades.length + ')');
+  for (const o of oportunidades.slice(-8)) linhas.push(`- ${o.titulo}`);
+
+  return linhas.join('\n');
+}
+
+// ─── Auditoria refinada (Fase 15.1) ──────────────────────────────────────────
+//
+// A IA agora retorna achados ESTRUTURADOS em JSON, cada um com:
+// - problema (sintoma)
+// - evidência (referência exata ao dado do contexto, pra rastreabilidade)
+// - solução (passos práticos)
+// - prompt (texto pronto pra colar no Cursor/Claude)
+// - tool sugerida (registrar_risco/decisao/oportunidade) que o usuário aprova
+// individualmente
+//
+// Também retornamos as "fontes consultadas" — contagem real de cada tabela
+// que foi enviada à IA, pra o usuário saber sobre o que ela tem visibilidade.
+
+interface AuditFontes {
+  custos: number;
+  decisoes: number;
+  riscos: number;
+  alertas: number;
+  timeline: number;
+  oportunidades: number;
+  temProposito: boolean;
+  temStack: boolean;
+  temUrl: boolean;
+  temRepo: boolean;
+}
+
+function _coletarFontesAuditoria(sistemaId: string): AuditFontes {
+  const sistema = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => s.id === sistemaId) || {};
+  const custos = (dbGetAll('Custos') as Array<Record<string, unknown>>).filter((c) => String(c.sistemaId || '') === sistemaId);
+  const decisoes = (dbGetAll('Decisoes') as Array<Record<string, unknown>>).filter((d) => String(d.sistemaId || '') === sistemaId);
+  const riscos = (dbGetAll('Riscos') as Array<Record<string, unknown>>).filter((r) => String(r.sistemaId || '') === sistemaId);
+  const alertas = (dbGetAll('Alertas') as Array<Record<string, unknown>>).filter((a) => String(a.sistemaId || '') === sistemaId || String(a.metadata || '').indexOf(sistemaId) >= 0);
+  const timeline = (dbGetAll('Timeline') as Array<Record<string, unknown>>).filter((t) => String(t.sistemaId || '') === sistemaId);
+  const oportunidades = dbGetAll('Oportunidades') as Array<Record<string, unknown>>;
+  return {
+    custos: custos.length,
+    decisoes: decisoes.length,
+    riscos: riscos.length,
+    alertas: alertas.length,
+    timeline: timeline.length,
+    oportunidades: oportunidades.length,
+    temProposito: !!(sistema.proposito && String(sistema.proposito).trim().length > 8),
+    temStack: !!(sistema.stack && String(sistema.stack).trim()),
+    temUrl: !!(sistema.urlProd || sistema.dominioCustomizado || sistema.webAppUrl),
+    temRepo: !!sistema.repoUrl,
+  };
+}
+
+// Tenta extrair um bloco <AUDIT>...</AUDIT> com JSON estruturado.
+// Se falhar, devolve apenas o texto bruto da IA pra o front renderizar como fallback.
+interface AuditFinding {
+  id: string;
+  titulo: string;
+  severidade: 'alta' | 'media' | 'baixa';
+  area: string;
+  problema: string;
+  evidencia: string;
+  solucao: string;
+  prompt: string;
+  toolSugerida?: string;
+  toolParams?: Record<string, unknown>;
+}
+
+interface AuditPayload {
+  estadoGeral: string;
+  oQueEmpolga: string[];
+  proximosPassos: string;
+  findings: AuditFinding[];
+}
+
+function _parseAuditPayload(resposta: string): { texto: string; payload: AuditPayload | null } {
+  const openTag = resposta.indexOf('<AUDIT>');
+  const closeTag = resposta.indexOf('</AUDIT>');
+  if (openTag < 0 || closeTag < 0) return { texto: resposta, payload: null };
+  const textoAntes = resposta.slice(0, openTag).trim();
+  const jsonStr = resposta.slice(openTag + '<AUDIT>'.length, closeTag).trim();
+  try {
+    let parsed: unknown;
+    try { parsed = JSON.parse(jsonStr); }
+    catch {
+      const m = jsonStr.match(/\{[\s\S]*\}/);
+      if (!m) return { texto: textoAntes || resposta, payload: null };
+      parsed = JSON.parse(m[0]);
+    }
+    if (!parsed || typeof parsed !== 'object') return { texto: textoAntes || resposta, payload: null };
+    const p = parsed as Record<string, unknown>;
+    const findingsRaw = Array.isArray(p.findings) ? p.findings : [];
+    const findings: AuditFinding[] = findingsRaw.map((f: unknown, i: number) => {
+      const item = (f || {}) as Record<string, unknown>;
+      const sev = String(item.severidade || 'media').toLowerCase();
+      const sevTipada: AuditFinding['severidade'] = (sev === 'alta' || sev === 'baixa') ? sev : 'media';
+      return {
+        id: 'finding-' + (i + 1),
+        titulo: String(item.titulo || `Achado #${i + 1}`),
+        severidade: sevTipada,
+        area: String(item.area || 'geral'),
+        problema: String(item.problema || ''),
+        evidencia: String(item.evidencia || ''),
+        solucao: String(item.solucao || ''),
+        prompt: String(item.prompt || ''),
+        toolSugerida: item.toolSugerida ? String(item.toolSugerida) : undefined,
+        toolParams: (item.toolParams && typeof item.toolParams === 'object') ? item.toolParams as Record<string, unknown> : undefined,
+      };
+    });
+    const payload: AuditPayload = {
+      estadoGeral: String(p.estadoGeral || ''),
+      oQueEmpolga: Array.isArray(p.oQueEmpolga) ? p.oQueEmpolga.map((x: unknown) => String(x)) : [],
+      proximosPassos: String(p.proximosPassos || ''),
+      findings,
+    };
+    return { texto: textoAntes, payload };
+  } catch {
+    return { texto: resposta, payload: null };
+  }
+}
+
+// Estado por finding: { tipo: 'risco'|'decisao'|'oportunidade', idCriado: string, registradoEm: string }
+interface RegistroFinding {
+  tipo: string;
+  idCriado: string;
+  registradoEm: string;
+}
+
+interface AuditResultPayloadServer {
+  id: string;
+  texto: string;
+  payload: AuditPayload | null;
+  fontes: AuditFontes;
+  saudeAtual: unknown;
+  modeloUsado: string;
+  duracaoMs: number;
+  criadoEm: string;
+  registros: Record<string, RegistroFinding>;
+}
+
+function acaoIAAuditarSistema(sistemaId: string): ServerResult {
+  try {
+    const sistema = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => s.id === sistemaId);
+    if (!sistema) return { ok: false, error: 'Sistema não encontrado' };
+
+    const fontes = _coletarFontesAuditoria(sistemaId);
+    const contexto = _contextoSistemaProfundo(sistemaId);
+
+    const promptUser = (
+      `Auditoria estruturada do sistema "${sistema.nome}" (id=${sistemaId}).\n\n`
+      + 'Você é um diretor técnico/produto experiente. Sua análise vai ser renderizada como cards individuais, então precisa ser CONCRETA e ACIONÁVEL.\n\n'
+      + 'Responda ESTRITAMENTE neste formato Markdown + bloco JSON ao final:\n\n'
+      + '## Estado geral\n'
+      + '(2-3 frases sobre o "momento" desse sistema. Sem fluff.)\n\n'
+      + '## O que empolga\n'
+      + '(opcional, 0-3 bullets curtos. Pode omitir se não houver nada concreto.)\n\n'
+      + '## Próximos passos estratégicos\n'
+      + '(1 parágrafo curto sobre o que priorizar AGORA. Aponta o achado #N mais importante.)\n\n'
+      + '<AUDIT>\n'
+      + '{\n'
+      + '  "estadoGeral": "<repita o conteúdo de Estado geral>",\n'
+      + '  "oQueEmpolga": ["bullet 1", "bullet 2"],\n'
+      + '  "proximosPassos": "<repita o conteúdo de Próximos passos>",\n'
+      + '  "findings": [\n'
+      + '    {\n'
+      + '      "titulo": "<curto, máx 70 chars, descritivo>",\n'
+      + '      "severidade": "alta|media|baixa",\n'
+      + '      "area": "governanca|arquitetura|seguranca|operacional|financeiro|produto|ux",\n'
+      + '      "problema": "<O QUE está errado. 1-2 frases. Sem repetir o título.>",\n'
+      + '      "evidencia": "<RASTREABILIDADE: cite literalmente o dado do contexto que sustenta o problema. Ex: \\"0 decisões registradas\\", \\"stack vazia\\", \\"sem urlProd nem dominioCustomizado\\". Se você ESTIVER INFERINDO sem dado direto, comece com \\"Inferência:\\".>",\n'
+      + '      "solucao": "<COMO resolver. 2-4 passos concretos. Numera com 1) 2) 3).>",\n'
+      + '      "prompt": "<Texto pronto pra colar no Cursor ou Claude. Inicia com \\"Você é...\\" ou \\"Sua tarefa é...\\". Pode ter 100-400 palavras. Sem cercas markdown internas.>",\n'
+      + '      "toolSugerida": "registrar_risco|registrar_decisao|registrar_oportunidade",\n'
+      + '      "toolParams": { ...parametros corretos da tool, com sistemaId="' + sistemaId + '"... }\n'
+      + '    }\n'
+      + '  ]\n'
+      + '}\n'
+      + '</AUDIT>\n\n'
+      + 'REGRAS DURAS:\n'
+      + '- Mínimo 3, máximo 6 findings. Não invente problemas — se o sistema está bem em algo, não force.\n'
+      + '- NUNCA repita um problema que já está em DECISÕES PRÉVIAS, RISCOS ABERTOS ou ALERTAS RECENTES.\n'
+      + '- Cada finding TEM que ter evidência rastreável ao contexto, ou começar com "Inferência:" e explicar de onde tirou.\n'
+      + '- O JSON dentro de <AUDIT> precisa ser VÁLIDO. Aspas escapadas, sem comentários, sem trailing commas.\n'
+      + '- toolParams precisa estar PERFEITO pro tipo de tool. Ex: registrar_risco quer {sistemaId, area, descricao, gravidade}; registrar_decisao quer {sistemaId, titulo, decisao, justificativa}; registrar_oportunidade quer {titulo, valorEstimado, proximoPasso}.\n\n'
+      + 'IDs reais: sistemaId="' + sistemaId + '". Não invente outros.\n\n'
+      + '--- CONTEXTO COMPLETO DO SISTEMA ---\n' + contexto
+    );
+
+    const messages: LlmMessage[] = [
+      { role: 'system', content: 'Você é um auditor técnico/produto sênior. Seguir o formato exigido é mais importante do que ser eloquente.' },
+      { role: 'user', content: promptUser },
+    ];
+
+    const props = PropertiesService.getScriptProperties();
+    const modeloAuditoria = props.getProperty('LLM_MODEL_AUDITORIA') || '';
+    const modeloEfetivo = modeloAuditoria || props.getProperty('LLM_MODEL') || 'desconhecido';
+
+    const inicio = Date.now();
+    const resposta = forjaCallLLM(messages, 5500, modeloAuditoria);
+    const duracaoMs = Date.now() - inicio;
+    const parsed = _parseAuditPayload(resposta);
+
+    const saudeAtual = calcularSaudeReal(sistemaId);
+    const saudeScore = (saudeAtual.ok && saudeAtual.data) ? Number((saudeAtual.data as { score: number }).score) : 0;
+
+    const resultadoFinal: AuditResultPayloadServer = {
+      id: '',
+      texto: parsed.texto || resposta,
+      payload: parsed.payload,
+      fontes,
+      saudeAtual: saudeAtual.ok ? saudeAtual.data : null,
+      modeloUsado: modeloEfetivo,
+      duracaoMs,
+      criadoEm: new Date().toISOString(),
+      registros: {},
+    };
+
+    // Persiste só se o payload parseou (pra não guardar lixo)
+    try {
+      if (parsed.payload) {
+        const novaLinha = dbCreate('Auditorias', {
+          sistemaId,
+          criadoEm: resultadoFinal.criadoEm,
+          modeloUsado: modeloEfetivo,
+          duracaoMs,
+          scoreNoMomento: saudeScore,
+          numFindings: parsed.payload.findings.length,
+          payloadJson: JSON.stringify(parsed.payload),
+          fontesJson: JSON.stringify(fontes),
+          registrosJson: '{}',
+        }) as Record<string, unknown>;
+        resultadoFinal.id = String(novaLinha.id || '');
+      }
+    } catch { /* persistência é best-effort */ }
+
+    return { ok: true, data: resultadoFinal };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao auditar' };
+  }
+}
+
+// Retorna a auditoria mais recente de um sistema (ou null se nunca foi auditado).
+function getUltimaAuditoria(sistemaId: string): ServerResult {
+  try {
+    const todas = (dbGetAll('Auditorias') as Array<Record<string, unknown>>)
+      .filter((a) => String(a.sistemaId || '') === sistemaId)
+      .sort((a, b) => String(b.criadoEm || '').localeCompare(String(a.criadoEm || '')));
+    if (todas.length === 0) return { ok: true, data: null };
+    const ult = todas[0];
+    let payload: AuditPayload | null = null;
+    let fontes: AuditFontes | null = null;
+    let registros: Record<string, RegistroFinding> = {};
+    try { payload = JSON.parse(String(ult.payloadJson || 'null')); } catch { payload = null; }
+    try { fontes = JSON.parse(String(ult.fontesJson || 'null')); } catch { fontes = null; }
+    try { registros = JSON.parse(String(ult.registrosJson || '{}')) || {}; } catch { registros = {}; }
+    const saude = calcularSaudeReal(sistemaId);
+    return {
+      ok: true,
+      data: {
+        id: ult.id,
+        sistemaId,
+        criadoEm: String(ult.criadoEm || ''),
+        modeloUsado: String(ult.modeloUsado || ''),
+        duracaoMs: Number(ult.duracaoMs || 0),
+        scoreNoMomento: Number(ult.scoreNoMomento || 0),
+        numFindings: Number(ult.numFindings || 0),
+        texto: '',
+        payload,
+        fontes,
+        saudeAtual: saude.ok ? saude.data : null,
+        totalAuditorias: todas.length,
+        registros,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar auditoria' };
+  }
+}
+
+// Marca um finding específico como "já registrado" — atualiza o JSON do registrosJson
+// na linha da Auditorias. Permite que ao reabrir o drawer, o FindingCard mostre
+// "Já registrado" ao invés do botão de ação, evitando duplicações.
+function marcarFindingRegistrado(payload: {
+  auditoriaId: string;
+  findingId: string;
+  tipo: 'risco' | 'decisao' | 'oportunidade' | string;
+  idCriado: string;
+}): ServerResult {
+  try {
+    if (!payload || !payload.auditoriaId || !payload.findingId) {
+      throw new Error('auditoriaId e findingId são obrigatórios');
+    }
+    const linha = dbGetById('Auditorias', payload.auditoriaId);
+    if (!linha) throw new Error('Auditoria não encontrada');
+
+    let registros: Record<string, RegistroFinding> = {};
+    try { registros = JSON.parse(String(linha.registrosJson || '{}')) || {}; } catch { registros = {}; }
+    registros[payload.findingId] = {
+      tipo: String(payload.tipo || ''),
+      idCriado: String(payload.idCriado || ''),
+      registradoEm: new Date().toISOString(),
+    };
+    dbUpdate('Auditorias', payload.auditoriaId, { registrosJson: JSON.stringify(registros) });
+    return { ok: true, data: { findingId: payload.findingId, registros } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Versão "rica" — devolve TODOS os itens do backlog de UM sistema usando
+// exatamente o mesmo critério do sumário (filtro tolerante por trim).
+// Substitui getDecisoesBySistema no painel do Kanban pra garantir que
+// quando o badge mostra N, o painel também mostra N — uma fonte única.
+function getBacklogItensSistema(sistemaIdAlvo: string): ServerResult {
+  try {
+    const alvo = String(sistemaIdAlvo || '').trim();
+    if (!alvo) return { ok: true, data: { itens: [], total: 0 } };
+    const todas = dbGetAll('Decisoes') as Array<Record<string, unknown>>;
+    const itens = todas.filter((d) => String(d.sistemaId || '').trim() === alvo);
+    // Mapeia pra forma esperada pelo frontend, garantindo strings.
+    const itensNormalizados = itens.map((d) => ({
+      id: String(d.id || ''),
+      sistemaId: String(d.sistemaId || '').trim(),
+      data: String(d.data || ''),
+      titulo: String(d.titulo || ''),
+      decisao: String(d.decisao || ''),
+      justificativa: String(d.justificativa || ''),
+      status: String(d.status || 'backlog').toLowerCase().trim(),
+      prioridade: String(d.prioridade || 'media').toLowerCase().trim(),
+      tags: String(d.tags || ''),
+      estimativa: String(d.estimativa || ''),
+    }));
+    return { ok: true, data: { itens: itensNormalizados, total: itensNormalizados.length, sistemaIdConsultado: alvo, totalNaPlanilha: todas.length } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Sumário leve do backlog por sistema (Bancada → card mostra "3 a fazer · 1 fazendo").
+// Conta itens nas colunas ativas (backlog/ativa/fazendo) e marca alta como prio.
+function getBacklogSumario(): ServerResult {
+  try {
+    const todas = dbGetAll('Decisoes') as Array<Record<string, unknown>>;
+    const porSistema: Record<string, { aFazer: number; fazendo: number; alta: number; total: number }> = {};
+    for (const d of todas) {
+      const sid = String(d.sistemaId || '').trim();
+      if (!sid) continue;
+      const status = String(d.status || '').toLowerCase();
+      const prio = String(d.prioridade || 'media').toLowerCase();
+      if (!porSistema[sid]) porSistema[sid] = { aFazer: 0, fazendo: 0, alta: 0, total: 0 };
+      if (status === 'backlog' || status === 'ativa' || status === '') {
+        porSistema[sid].aFazer++;
+        porSistema[sid].total++;
+        if (prio === 'alta') porSistema[sid].alta++;
+      } else if (status === 'fazendo') {
+        porSistema[sid].fazendo++;
+        porSistema[sid].total++;
+        if (prio === 'alta') porSistema[sid].alta++;
+      }
+    }
+    return { ok: true, data: porSistema };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Sumário leve pra batch (Bancada): { sistemaId -> { criadoEm, numFindings } }
+function getAuditoriasSumario(): ServerResult {
+  try {
+    const todas = dbGetAll('Auditorias') as Array<Record<string, unknown>>;
+    const porSistema: Record<string, { criadoEm: string; numFindings: number; modeloUsado: string }> = {};
+    for (const a of todas) {
+      const sid = String(a.sistemaId || '');
+      if (!sid) continue;
+      const criadoEm = String(a.criadoEm || '');
+      if (!porSistema[sid] || criadoEm > porSistema[sid].criadoEm) {
+        porSistema[sid] = {
+          criadoEm,
+          numFindings: Number(a.numFindings || 0),
+          modeloUsado: String(a.modeloUsado || ''),
+        };
+      }
+    }
+    return { ok: true, data: porSistema };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function getModeloAuditoria(): ServerResult {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const scriptId = ScriptApp.getScriptId();
+    return {
+      ok: true,
+      data: {
+        modeloAuditoria: props.getProperty('LLM_MODEL_AUDITORIA') || '',
+        modeloChat: props.getProperty('LLM_MODEL') || '',
+        chaveProperty: 'LLM_MODEL_AUDITORIA',
+        chavePropertyChat: 'LLM_MODEL',
+        // Página de Project Settings (onde fica a UI de Script Properties).
+        settingsUrl: `https://script.google.com/home/projects/${scriptId}/settings`,
+        editorUrl: `https://script.google.com/home/projects/${scriptId}/edit`,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Tenta GET /models no proxy/endpoint configurado e retorna lista normalizada.
+// Funciona com qualquer provider OpenAI-compatible (proxies, LiteLLM, OpenRouter)
+// e com Anthropic nativo (que também expõe /v1/models desde 2024).
+function listModelosDisponiveis(): ServerResult {
+  try {
+    const cfg = getLlmConfig();
+    if (!cfg.baseUrl) throw new Error('Configure a Base URL do proxy em Configurações de IA.');
+    if (!cfg.apiKey) throw new Error('Configure a chave da API em Configurações de IA.');
+
+    const urls = llmUrlCandidates(cfg.baseUrl, '/models');
+    const headers = cfg.provider === 'anthropic'
+      ? { 'x-api-key': cfg.apiKey, 'anthropic-version': '2023-06-01' }
+      : { Authorization: `Bearer ${cfg.apiKey}` };
+
+    let resposta: { code: number; body: string; url: string } = { code: 0, body: '', url: urls[0] || '' };
+    for (const url of urls) {
+      const res = UrlFetchApp.fetch(url, {
+        method: 'get',
+        muteHttpExceptions: true,
+        headers,
+      });
+      const code = res.getResponseCode();
+      resposta = { code, body: res.getContentText(), url };
+      if (code !== 404) break;
+    }
+
+    if (resposta.code < 200 || resposta.code >= 300) {
+      throw new Error(`${resposta.code} em ${resposta.url} — ${resposta.body.slice(0, 200)}`);
+    }
+
+    const json = JSON.parse(resposta.body);
+    // Formatos esperados:
+    //  - OpenAI / proxies: { data: [{ id, ... }] }
+    //  - Anthropic: { data: [{ id, display_name?, ... }] }
+    //  - alguns retornam array direto
+    let raw: Array<Record<string, unknown>> = [];
+    if (Array.isArray(json)) raw = json;
+    else if (Array.isArray(json.data)) raw = json.data as Array<Record<string, unknown>>;
+    else if (Array.isArray(json.models)) raw = json.models as Array<Record<string, unknown>>;
+    else throw new Error('Formato de resposta não reconhecido (esperava .data[] ou .models[])');
+
+    interface ModeloDisponivel {
+      id: string;
+      label: string;
+      familia: 'anthropic' | 'openai' | 'google' | 'meta' | 'mistral' | 'outros';
+      categoria: 'rápido' | 'balanço' | 'qualidade' | 'embedding' | 'outros';
+    }
+
+    const familiaFromId = (id: string): ModeloDisponivel['familia'] => {
+      const s = id.toLowerCase();
+      if (s.indexOf('claude') >= 0) return 'anthropic';
+      if (s.indexOf('gpt') >= 0 || s.indexOf('o1') === 0 || s.indexOf('o3') === 0 || s.indexOf('o4') === 0) return 'openai';
+      if (s.indexOf('gemini') >= 0 || s.indexOf('palm') >= 0) return 'google';
+      if (s.indexOf('llama') >= 0) return 'meta';
+      if (s.indexOf('mistral') >= 0 || s.indexOf('mixtral') >= 0) return 'mistral';
+      return 'outros';
+    };
+
+    const categoriaFromId = (id: string): ModeloDisponivel['categoria'] => {
+      const s = id.toLowerCase();
+      if (s.indexOf('embed') >= 0) return 'embedding';
+      if (s.indexOf('haiku') >= 0 || s.indexOf('mini') >= 0 || s.indexOf('nano') >= 0 || s.indexOf('flash') >= 0) return 'rápido';
+      if (s.indexOf('opus') >= 0 || s.indexOf('ultra') >= 0) return 'qualidade';
+      if (s.indexOf('sonnet') >= 0 || s.indexOf('gpt-4o') >= 0 || s.indexOf('gpt-4-turbo') >= 0 || s.indexOf('pro') >= 0) return 'balanço';
+      return 'outros';
+    };
+
+    const modelos: ModeloDisponivel[] = raw
+      .map((m): ModeloDisponivel | null => {
+        const id = String(m.id || m.name || '');
+        if (!id) return null;
+        return {
+          id,
+          label: String(m.display_name || m.id || id),
+          familia: familiaFromId(id),
+          categoria: categoriaFromId(id),
+        };
+      })
+      .filter((x): x is ModeloDisponivel => x !== null)
+      .sort((a, b) => a.id.localeCompare(b.id));
+
+    return {
+      ok: true,
+      data: {
+        total: modelos.length,
+        endpoint: resposta.url,
+        modelos,
+        consultadoEm: new Date().toISOString(),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar modelos' };
+  }
+}
+
+function setModeloAuditoria(modelo: string): ServerResult {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    if (!modelo || !modelo.trim()) props.deleteProperty('LLM_MODEL_AUDITORIA');
+    else props.setProperty('LLM_MODEL_AUDITORIA', modelo.trim());
+    return { ok: true, data: { modeloAuditoria: modelo.trim() || '(usando o mesmo modelo do chat)' } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ─── Skills Hub ──────────────────────────────────────────────────────────────
+// Skills são prompts/instruções/playbooks que o usuário coleciona pra usar com
+// LLMs (formato SKILL.md / agent-skill). Guardamos como linhas na sheet "Skills"
+// pra evitar escopos extras de Drive. O conteúdo é texto Markdown completo.
+
+interface SkillParsed {
+  nome: string;
+  descricao: string;
+  categoria: string;
+  tags: string[];
+  // Seções extraídas (headings de nível 2) — só metadado pra preview
+  secoes: string[];
+}
+
+// Parse frontmatter YAML simples (name, description, category, tags) + headings.
+// Suporta formato Anthropic/Cursor skills (--- bloco YAML no topo) e também
+// .md "comum" (extrai do primeiro heading H1 + primeira linha).
+function _parseSkillMd(conteudo: string): SkillParsed {
+  const out: SkillParsed = { nome: '', descricao: '', categoria: '', tags: [], secoes: [] };
+  if (!conteudo) return out;
+
+  const texto = conteudo.replace(/\r\n/g, '\n');
+
+  // 1) Frontmatter YAML (--- ... ---)
+  const m = texto.match(/^---\n([\s\S]*?)\n---\n?/);
+  let corpo = texto;
+  if (m) {
+    corpo = texto.slice(m[0].length);
+    const fm = m[1];
+    const linhas = fm.split('\n');
+    for (const ln of linhas) {
+      const kv = ln.match(/^(\w+)\s*:\s*(.*)$/);
+      if (!kv) continue;
+      const k = kv[1].toLowerCase().trim();
+      let v = kv[2].trim();
+      // remove aspas simples/duplas
+      v = v.replace(/^['"]|['"]$/g, '');
+      if (k === 'name' || k === 'nome' || k === 'title' || k === 'titulo') out.nome = v;
+      else if (k === 'description' || k === 'descricao' || k === 'desc') out.descricao = v;
+      else if (k === 'category' || k === 'categoria') out.categoria = v;
+      else if (k === 'tags') {
+        // suporta "[a, b, c]" ou "a, b, c"
+        v = v.replace(/^\[|\]$/g, '');
+        out.tags = v.split(',').map((x) => x.trim()).filter(Boolean);
+      }
+    }
+  }
+
+  // 2) Fallback: extrair de H1 + primeiro parágrafo
+  if (!out.nome) {
+    const h1 = corpo.match(/^#\s+(.+)$/m);
+    if (h1) out.nome = h1[1].trim();
+  }
+  if (!out.descricao) {
+    // primeiro parágrafo após o H1 (ou após frontmatter)
+    const aposH1 = corpo.replace(/^#\s+.+$/m, '').trim();
+    const par = aposH1.match(/^([^\n#][^\n]+(?:\n[^\n#][^\n]+)*)/);
+    if (par) out.descricao = par[1].trim().slice(0, 240);
+  }
+
+  // 3) Extrair headings H2 como "seções"
+  const h2 = corpo.match(/^##\s+(.+)$/gm) || [];
+  out.secoes = h2.slice(0, 12).map((h) => h.replace(/^##\s+/, '').trim());
+
+  return out;
+}
+
+// Cria/atualiza uma skill a partir do conteúdo Markdown + nome de origem.
+// Se id for fornecido, atualiza; senão cria nova.
+function skillsSave(payload: {
+  id?: string;
+  conteudo: string;
+  fonte?: string; // nome do arquivo original, ex.: "review-bugbot.md"
+  nomeOverride?: string;
+  descricaoOverride?: string;
+  categoriaOverride?: string;
+  tagsOverride?: string;
+}): ServerResult {
+  try {
+    if (!payload.conteudo || !payload.conteudo.trim()) {
+      throw new Error('Conteúdo vazio — cole o markdown da skill ou faça upload de um arquivo.');
+    }
+    const parsed = _parseSkillMd(payload.conteudo);
+    const nome = (payload.nomeOverride || parsed.nome || payload.fonte?.replace(/\.md$/i, '') || 'Skill sem nome').trim();
+    const descricao = (payload.descricaoOverride || parsed.descricao || '').trim();
+    const categoria = (payload.categoriaOverride || parsed.categoria || '').trim();
+    const tags = (payload.tagsOverride !== undefined ? payload.tagsOverride : parsed.tags.join(', ')).trim();
+    const agora = new Date().toISOString();
+    const tamanho = payload.conteudo.length;
+
+    if (payload.id) {
+      const linhas = dbGetAll('Skills') as Array<Record<string, unknown>>;
+      const existe = linhas.find((l) => String(l.id || '') === payload.id);
+      if (!existe) throw new Error('Skill não encontrada pra atualizar.');
+      dbUpdate('Skills', payload.id, {
+        nome, descricao, categoria, tags,
+        conteudo: payload.conteudo,
+        fonte: payload.fonte || String(existe.fonte || ''),
+        tamanhoBytes: tamanho,
+        atualizadoEm: agora,
+      });
+      return { ok: true, data: { id: payload.id, nome, descricao, categoria, tags } };
+    }
+
+    const novo = dbCreate('Skills', {
+      nome,
+      descricao,
+      categoria,
+      tags,
+      conteudo: payload.conteudo,
+      fonte: payload.fonte || '',
+      tamanhoBytes: tamanho,
+      criadoEm: agora,
+      atualizadoEm: agora,
+    });
+    return { ok: true, data: { id: String(novo.id || ''), nome, descricao, categoria, tags } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar skill' };
+  }
+}
+
+// Lista todas as skills com metadados (sem o conteúdo completo, pra ser leve).
+function skillsList(): ServerResult {
+  try {
+    const todas = (dbGetAll('Skills') as Array<Record<string, unknown>>)
+      .map((s) => ({
+        id: String(s.id || ''),
+        nome: String(s.nome || ''),
+        descricao: String(s.descricao || ''),
+        categoria: String(s.categoria || ''),
+        tags: String(s.tags || '').split(',').map((x) => x.trim()).filter(Boolean),
+        fonte: String(s.fonte || ''),
+        tamanhoBytes: Number(s.tamanhoBytes || 0),
+        criadoEm: String(s.criadoEm || ''),
+        atualizadoEm: String(s.atualizadoEm || ''),
+      }))
+      .sort((a, b) => b.atualizadoEm.localeCompare(a.atualizadoEm));
+    return { ok: true, data: todas };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Carrega o conteúdo completo de uma skill (chamado quando o user abre o drawer).
+function skillsGetContent(id: string): ServerResult {
+  try {
+    const linhas = dbGetAll('Skills') as Array<Record<string, unknown>>;
+    const s = linhas.find((l) => String(l.id || '') === id);
+    if (!s) throw new Error('Skill não encontrada.');
+    return {
+      ok: true,
+      data: {
+        id: String(s.id || ''),
+        nome: String(s.nome || ''),
+        descricao: String(s.descricao || ''),
+        categoria: String(s.categoria || ''),
+        tags: String(s.tags || '').split(',').map((x) => x.trim()).filter(Boolean),
+        conteudo: String(s.conteudo || ''),
+        fonte: String(s.fonte || ''),
+        tamanhoBytes: Number(s.tamanhoBytes || 0),
+        criadoEm: String(s.criadoEm || ''),
+        atualizadoEm: String(s.atualizadoEm || ''),
+        parsed: _parseSkillMd(String(s.conteudo || '')),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function skillsDelete(id: string): ServerResult {
+  try {
+    dbDelete('Skills', id);
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Preview do parse — útil pra mostrar metadados antes de salvar (no modal).
+function skillsPreviewParse(conteudo: string): ServerResult {
+  try {
+    return { ok: true, data: _parseSkillMd(conteudo || '') };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ─── Provedores de Hospedagem ────────────────────────────────────────────────
+// Catálogo de provedores que o usuário consulta na hora de publicar um app.
+// Categorias típicas: hospedagem, banco, auth, ia, storage, monitoring, dominio.
+
+interface ProvedorSeed {
+  nome: string;
+  categoria: string;
+  urlSite: string;
+  freeTier: string;
+  precoBase: string;
+  beneficios: string;
+  limitacoes: string;
+  idealPara: string;
+  tags: string;
+}
+
+// Catálogo curado pra primeira inicialização — só inserido se a sheet está vazia.
+// Foco em opções relevantes pro vibe coder/BA que quer publicar rápido.
+const PROVEDORES_SEED: ProvedorSeed[] = [
+  {
+    nome: 'Vercel', categoria: 'hospedagem',
+    urlSite: 'https://vercel.com', freeTier: 'Hobby: 100GB bandwidth, deploys ilimitados',
+    precoBase: 'Pro: USD 20/mês por membro',
+    beneficios: 'Deploy git-push automático; edge functions; preview por PR; Next.js nativo; analytics; ótima DX.',
+    limitacoes: 'Pricing escala com bandwidth/executions; funções têm timeout de 10s no Hobby; sem backend pesado.',
+    idealPara: 'Next.js, React, sites estáticos, MVPs com SSR/edge.',
+    tags: 'frontend, nextjs, edge, serverless',
+  },
+  {
+    nome: 'Netlify', categoria: 'hospedagem',
+    urlSite: 'https://netlify.com', freeTier: '100GB/mês, 300 min build, deploys ilimitados',
+    precoBase: 'Pro: USD 19/mês',
+    beneficios: 'Forms grátis (100/mês), edge functions, identity, split testing, ótimo pra Jamstack.',
+    limitacoes: 'Build minutes contam rápido; Lambda functions com timeout no free.',
+    idealPara: 'Sites Jamstack, blogs estáticos, landings.',
+    tags: 'frontend, jamstack, forms, edge',
+  },
+  {
+    nome: 'Railway', categoria: 'hospedagem',
+    urlSite: 'https://railway.app', freeTier: 'USD 5 grátis no trial',
+    precoBase: 'Hobby: USD 5/mês de uso (pay-as-you-go)',
+    beneficios: 'Deploy de qualquer linguagem; Postgres/Redis em 1 clique; logs decentes; envs por ambiente.',
+    limitacoes: 'Sem free tier permanente; preço cresce com uso real.',
+    idealPara: 'Backends Node/Python/Go, side projects, MVPs com DB.',
+    tags: 'backend, fullstack, postgres, docker',
+  },
+  {
+    nome: 'Render', categoria: 'hospedagem',
+    urlSite: 'https://render.com', freeTier: 'Static sites grátis; backend free hiberna após 15min idle',
+    precoBase: 'USD 7/mês por serviço sem hibernação',
+    beneficios: 'Deploy via Docker ou native; Postgres gerenciado; cron jobs; staging por branch.',
+    limitacoes: 'Free backend hiberna (cold start ruim); preço por serviço soma rápido.',
+    idealPara: 'APIs simples, dashboards internos, cron workers.',
+    tags: 'backend, docker, cron, postgres',
+  },
+  {
+    nome: 'Fly.io', categoria: 'hospedagem',
+    urlSite: 'https://fly.io', freeTier: 'Pequeno: 3 shared-vm grátis + 3GB storage',
+    precoBase: 'Pay-as-you-go a partir de ~USD 2/mês',
+    beneficios: 'Edge global multi-região; volumes persistentes; deploy de qualquer Dockerfile; bom pra apps "always-on".',
+    limitacoes: 'Curva de aprendizado maior (fly.toml, regiões); cobrança por recurso.',
+    idealPara: 'APIs latência-sensível, jogos, apps com WebSocket persistente.',
+    tags: 'backend, edge, docker, multi-region',
+  },
+  {
+    nome: 'Cloudflare Pages + Workers', categoria: 'hospedagem',
+    urlSite: 'https://pages.cloudflare.com', freeTier: 'Pages: bandwidth ilimitado; Workers: 100k req/dia',
+    precoBase: 'Workers Paid: USD 5/mês',
+    beneficios: 'Edge global rapidíssima; KV/D1/R2 nativos; bandwidth ilimitado grátis; ótimo pra static + APIs leves.',
+    limitacoes: 'Workers têm CPU time limitado; menos maduro pra apps complexos full-stack.',
+    idealPara: 'Sites estáticos + APIs edge; apps globais que precisam ser baratos em escala.',
+    tags: 'frontend, edge, workers, kv, r2',
+  },
+  {
+    nome: 'Supabase', categoria: 'banco',
+    urlSite: 'https://supabase.com', freeTier: '2 projetos, 500MB DB, 1GB storage, 50k MAU auth',
+    precoBase: 'Pro: USD 25/mês',
+    beneficios: 'Postgres real + Auth + Storage + Realtime + Edge Functions no mesmo pacote; RLS forte; row-level policies.',
+    limitacoes: 'Free pausa após 7 dias sem atividade; vendor lock-in se usar features proprietárias.',
+    idealPara: 'Apps SaaS, MVPs com auth+DB integrados, projetos com realtime.',
+    tags: 'postgres, auth, realtime, storage, baas',
+  },
+  {
+    nome: 'Neon', categoria: 'banco',
+    urlSite: 'https://neon.tech', freeTier: 'Free: 10 branches, 0.5GB armazenamento, autoscale',
+    precoBase: 'Launch: USD 19/mês',
+    beneficios: 'Postgres serverless com branching (DB por branch git!); cold start rápido; bom pra preview environments.',
+    limitacoes: 'Só Postgres; storage cresce → preço sobe.',
+    idealPara: 'Workflows com preview por PR, MVPs que precisam de Postgres real, projetos que valorizam branching.',
+    tags: 'postgres, serverless, branching, preview',
+  },
+  {
+    nome: 'PlanetScale', categoria: 'banco',
+    urlSite: 'https://planetscale.com', freeTier: 'Encerrado em 2024 — agora começa em USD 39/mês',
+    precoBase: 'Scaler: USD 39/mês',
+    beneficios: 'MySQL serverless; branching tipo git; performance excelente; sem connection pooling chato.',
+    limitacoes: 'Sem free tier; sem foreign keys (decisão do Vitess); MySQL only.',
+    idealPara: 'Apps que escalaram além do hobby e precisam de DB sério com workflow git-like.',
+    tags: 'mysql, serverless, branching, vitess',
+  },
+  {
+    nome: 'Clerk', categoria: 'auth',
+    urlSite: 'https://clerk.com', freeTier: '10k MAU grátis',
+    precoBase: 'USD 25/mês + USD 0.02/MAU acima de 10k',
+    beneficios: 'Componentes React/Next prontos; social login; org/team built-in; webhook bem documentado.',
+    limitacoes: 'Custo escala rápido se app cresce; lock-in nos componentes.',
+    idealPara: 'Apps Next.js que querem auth pronto em 10min; SaaS com organizações.',
+    tags: 'auth, mau, oauth, organizations, react',
+  },
+  {
+    nome: 'Auth0', categoria: 'auth',
+    urlSite: 'https://auth0.com', freeTier: '25k MAU grátis (free tier ampliado em 2024)',
+    precoBase: 'Essentials: USD 35/mês (500 MAU)',
+    beneficios: 'Padrão de indústria; muitas integrações; B2B/B2C; SDKs em todas as linguagens.',
+    limitacoes: 'Pricing fica caro rápido; complexo pra casos simples.',
+    idealPara: 'Apps enterprise, compliance pesado, SSO entre múltiplos sistemas.',
+    tags: 'auth, enterprise, sso, oidc, saml',
+  },
+  {
+    nome: 'Anthropic API', categoria: 'ia',
+    urlSite: 'https://www.anthropic.com/api', freeTier: 'Sem free tier (alguns créditos de teste na console)',
+    precoBase: 'Pay-per-token: Claude Haiku ~USD 0.25/1M in, Sonnet ~USD 3/1M, Opus ~USD 15/1M',
+    beneficios: 'Modelos Claude top de linha; contexto até 200k tokens; ótimo em código/análise; prompt caching.',
+    limitacoes: 'Sem free; precisa de cartão; rate limits no início.',
+    idealPara: 'Aplicações que precisam de qualidade máxima ou contexto longo.',
+    tags: 'llm, claude, anthropic, api',
+  },
+  {
+    nome: 'OpenRouter', categoria: 'ia',
+    urlSite: 'https://openrouter.ai', freeTier: 'Alguns modelos free; resto pay-per-token',
+    precoBase: 'Pay-per-token (mark-up pequeno sobre o provider)',
+    beneficios: 'Acesso a 200+ modelos (OpenAI, Anthropic, Google, Meta, etc.) com 1 API; failover automático.',
+    limitacoes: 'Mark-up sobre o preço original; latência adicional pequena.',
+    idealPara: 'Quem quer trocar de modelo sem reescrever código; testar muitos providers.',
+    tags: 'llm, proxy, multi-provider, gateway',
+  },
+  {
+    nome: 'Resend', categoria: 'email',
+    urlSite: 'https://resend.com', freeTier: '3k emails/mês, 100/dia, 1 domínio',
+    precoBase: 'Pro: USD 20/mês (50k emails)',
+    beneficios: 'API moderna; React Email integration; ótima entregabilidade; DX top.',
+    limitacoes: 'Free limita volume diário.',
+    idealPara: 'Apps que enviam transacionais (signup, password reset, notificações).',
+    tags: 'email, transactional, react-email',
+  },
+  {
+    nome: 'Registro.br', categoria: 'dominio',
+    urlSite: 'https://registro.br', freeTier: 'Não — preço fixo anual',
+    precoBase: '.com.br: BRL 40/ano; .app.br: BRL 70/ano',
+    beneficios: 'Oficial do Brasil; barato; DNSSEC grátis; pode configurar nameservers em qualquer lugar.',
+    limitacoes: 'Painel limitado; suporte burocrático; só TLDs .br.',
+    idealPara: 'Domínios .br pra negócios brasileiros.',
+    tags: 'dominio, br, registro, dns',
+  },
+  {
+    nome: 'Cloudflare Registrar', categoria: 'dominio',
+    urlSite: 'https://www.cloudflare.com/products/registrar/', freeTier: 'Não, mas vende a preço de custo (sem mark-up)',
+    precoBase: '.com: ~USD 9/ano; .dev: ~USD 9/ano; .app: ~USD 11/ano',
+    beneficios: 'Preço de atacado; DNS Cloudflare grátis; sem upsell agressivo; transfer fácil.',
+    limitacoes: 'Sem TLDs .br; precisa migrar domínio existente (não vende novo).',
+    idealPara: 'TLDs globais (.com, .io, .app, .dev) baratos.',
+    tags: 'dominio, com, registrar, dns',
+  },
+  {
+    nome: 'Sentry', categoria: 'monitoring',
+    urlSite: 'https://sentry.io', freeTier: '5k errors/mês, 10k performance, 50 replays',
+    precoBase: 'Team: USD 26/mês',
+    beneficios: 'Error tracking; performance; session replay; alertas; SDKs maduros pra tudo.',
+    limitacoes: 'Free tier consome rápido em produção; preço por evento.',
+    idealPara: 'Qualquer app em produção que precisa saber quando quebra.',
+    tags: 'monitoring, errors, apm, replay',
+  },
+  {
+    nome: 'Stripe', categoria: 'pagamento',
+    urlSite: 'https://stripe.com', freeTier: 'Sem mensalidade; cobra por transação',
+    precoBase: 'BR: 3.99% + R$ 0,39 por cartão de crédito; PIX 0.99%',
+    beneficios: 'Padrão de indústria; checkout pronto; subscriptions; tax handling; portal do cliente.',
+    limitacoes: 'Suporte BR aceita CNPJ desde 2024; PIX só pra empresas; payouts não instantâneos.',
+    idealPara: 'SaaS internacional, marketplaces, qualquer negócio recorrente.',
+    tags: 'pagamento, cartao, pix, subscription, checkout',
+  },
+];
+
+function _seedProvedoresSeNecessario(): void {
+  try {
+    const existentes = dbGetAll('Provedores') as Array<Record<string, unknown>>;
+    if (existentes.length > 0) return; // já tem dados; não duplica
+    const agora = new Date().toISOString();
+    for (const p of PROVEDORES_SEED) {
+      dbCreate('Provedores', {
+        ...p,
+        notas: '', status: 'curado',
+        criadoEm: agora, atualizadoEm: agora,
+      });
+    }
+  } catch { /* sheet pode não existir ainda — initDatabase cria */ }
+}
+
+function provedoresList(): ServerResult {
+  try {
+    _seedProvedoresSeNecessario();
+    const todos = (dbGetAll('Provedores') as Array<Record<string, unknown>>)
+      .map((p) => ({
+        id: String(p.id || ''),
+        nome: String(p.nome || ''),
+        categoria: String(p.categoria || ''),
+        urlSite: String(p.urlSite || ''),
+        freeTier: String(p.freeTier || ''),
+        precoBase: String(p.precoBase || ''),
+        beneficios: String(p.beneficios || ''),
+        limitacoes: String(p.limitacoes || ''),
+        idealPara: String(p.idealPara || ''),
+        notas: String(p.notas || ''),
+        status: String(p.status || 'curado'),
+        tags: String(p.tags || '').split(',').map((x) => x.trim()).filter(Boolean),
+        criadoEm: String(p.criadoEm || ''),
+        atualizadoEm: String(p.atualizadoEm || ''),
+      }))
+      .sort((a, b) => (a.categoria + a.nome).localeCompare(b.categoria + b.nome));
+    return { ok: true, data: todos };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function provedoresSave(payload: {
+  id?: string;
+  nome: string;
+  categoria: string;
+  urlSite?: string;
+  freeTier?: string;
+  precoBase?: string;
+  beneficios?: string;
+  limitacoes?: string;
+  idealPara?: string;
+  notas?: string;
+  status?: string;
+  tags?: string;
+}): ServerResult {
+  try {
+    if (!payload.nome || !payload.nome.trim()) throw new Error('Nome é obrigatório.');
+    if (!payload.categoria || !payload.categoria.trim()) throw new Error('Categoria é obrigatória.');
+    const agora = new Date().toISOString();
+    const dados = {
+      nome: payload.nome.trim(),
+      categoria: payload.categoria.trim(),
+      urlSite: payload.urlSite || '',
+      freeTier: payload.freeTier || '',
+      precoBase: payload.precoBase || '',
+      beneficios: payload.beneficios || '',
+      limitacoes: payload.limitacoes || '',
+      idealPara: payload.idealPara || '',
+      notas: payload.notas || '',
+      status: payload.status || 'curado',
+      tags: payload.tags || '',
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('Provedores', payload.id, dados);
+      return { ok: true, data: { id: payload.id, ...dados } };
+    }
+    const novo = dbCreate('Provedores', { ...dados, criadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function provedoresDelete(id: string): ServerResult {
+  try {
+    dbDelete('Provedores', id);
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ─── Cofre Criptografado ─────────────────────────────────────────────────────
+// IMPORTANTE: o servidor NUNCA vê texto plano. O usuário define uma senha-mestra
+// no browser (Web Crypto API) que deriva uma chave AES-GCM via PBKDF2. Todos os
+// segredos são criptografados client-side e o servidor só armazena ciphertext.
+//
+// Não há recuperação de senha-mestra — se o usuário esquecer, perde os dados.
+// É o trade-off pra ter zero-knowledge real.
+//
+// O servidor guarda:
+//   - Cofre: linhas com label, categoria, iv, cipher (todos cifrados)
+//   - CofreConfig (em Properties): salt global + wrappedKey (a chave aleatória
+//     que cifra os segredos, encriptada com a senha-mestra do user)
+
+function cofreGetConfig(): ServerResult {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    return {
+      ok: true,
+      data: {
+        salt: props.getProperty('COFRE_SALT') || '',
+        wrappedKey: props.getProperty('COFRE_WRAPPED_KEY') || '',
+        wrapIv: props.getProperty('COFRE_WRAP_IV') || '',
+        verificador: props.getProperty('COFRE_VERIFICADOR') || '',
+        // Helpful: contar quantos itens existem (sem revelar nada do conteúdo)
+        totalItens: (dbGetAll('Cofre') as unknown[]).length,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function cofreSetConfig(payload: { salt: string; wrappedKey: string; wrapIv: string; verificador: string }): ServerResult {
+  try {
+    if (!payload.salt || !payload.wrappedKey || !payload.wrapIv || !payload.verificador) {
+      throw new Error('Parâmetros incompletos pra inicializar o cofre.');
+    }
+    const props = PropertiesService.getScriptProperties();
+    props.setProperty('COFRE_SALT', payload.salt);
+    props.setProperty('COFRE_WRAPPED_KEY', payload.wrappedKey);
+    props.setProperty('COFRE_WRAP_IV', payload.wrapIv);
+    props.setProperty('COFRE_VERIFICADOR', payload.verificador);
+    return { ok: true, data: { ok: true } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Lista entradas com metadados não-sensíveis (label, categoria) — o cipher
+// continua cifrado e só é decodificado no browser.
+function cofreList(): ServerResult {
+  try {
+    const todos = (dbGetAll('Cofre') as Array<Record<string, unknown>>)
+      .map((c) => ({
+        id: String(c.id || ''),
+        label: String(c.label || ''),
+        categoria: String(c.categoria || ''),
+        urlRef: String(c.urlRef || ''),
+        usuario: String(c.usuario || ''),
+        iv: String(c.iv || ''),
+        cipher: String(c.cipher || ''),
+        notas: String(c.notas || ''),
+        criadoEm: String(c.criadoEm || ''),
+        atualizadoEm: String(c.atualizadoEm || ''),
+      }))
+      .sort((a, b) => (a.categoria + a.label).localeCompare(b.categoria + b.label));
+    return { ok: true, data: todos };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function cofreSave(payload: {
+  id?: string;
+  label: string;
+  categoria: string;
+  urlRef?: string;
+  usuario?: string;
+  iv: string;
+  cipher: string;
+  notas?: string;
+}): ServerResult {
+  try {
+    if (!payload.label || !payload.iv || !payload.cipher) {
+      throw new Error('Faltam campos obrigatórios (label, iv, cipher).');
+    }
+    const agora = new Date().toISOString();
+    const dados = {
+      label: payload.label,
+      categoria: payload.categoria || '',
+      urlRef: payload.urlRef || '',
+      usuario: payload.usuario || '',
+      iv: payload.iv,
+      cipher: payload.cipher,
+      notas: payload.notas || '',
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('Cofre', payload.id, dados);
+      return { ok: true, data: { id: payload.id, ...dados } };
+    }
+    const novo = dbCreate('Cofre', { ...dados, criadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function cofreDelete(id: string): ServerResult {
+  try {
+    dbDelete('Cofre', id);
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ─── Snippets de Código ──────────────────────────────────────────────────────
+
+function snippetsList(): ServerResult {
+  try {
+    const todos = (dbGetAll('Snippets') as Array<Record<string, unknown>>)
+      .map((s) => ({
+        id: String(s.id || ''),
+        titulo: String(s.titulo || ''),
+        descricao: String(s.descricao || ''),
+        linguagem: String(s.linguagem || 'text'),
+        codigo: String(s.codigo || ''),
+        tags: String(s.tags || '').split(',').map((x) => x.trim()).filter(Boolean),
+        fonte: String(s.fonte || ''),
+        tamanhoBytes: Number(s.tamanhoBytes || 0),
+        criadoEm: String(s.criadoEm || ''),
+        atualizadoEm: String(s.atualizadoEm || ''),
+      }))
+      .sort((a, b) => b.atualizadoEm.localeCompare(a.atualizadoEm));
+    return { ok: true, data: todos };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function snippetsSave(payload: {
+  id?: string;
+  titulo: string;
+  descricao?: string;
+  linguagem: string;
+  codigo: string;
+  tags?: string;
+  fonte?: string;
+}): ServerResult {
+  try {
+    if (!payload.titulo || !payload.titulo.trim()) throw new Error('Título é obrigatório.');
+    if (!payload.codigo || !payload.codigo.trim()) throw new Error('Código é obrigatório.');
+    const agora = new Date().toISOString();
+    const dados = {
+      titulo: payload.titulo.trim(),
+      descricao: payload.descricao || '',
+      linguagem: payload.linguagem || 'text',
+      codigo: payload.codigo,
+      tags: payload.tags || '',
+      fonte: payload.fonte || '',
+      tamanhoBytes: payload.codigo.length,
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('Snippets', payload.id, dados);
+      return { ok: true, data: { id: payload.id, ...dados } };
+    }
+    const novo = dbCreate('Snippets', { ...dados, criadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function snippetsDelete(id: string): ServerResult {
+  try {
+    dbDelete('Snippets', id);
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ─── Templates (com variáveis {{var}}) ───────────────────────────────────────
+
+// Extrai variáveis no formato {{nome}} do conteúdo do template — útil pra UI
+// mostrar quais variáveis o user precisa preencher antes de copiar.
+function _extrairVariaveisTemplate(conteudo: string): string[] {
+  if (!conteudo) return [];
+  const re = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
+  const set = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(conteudo)) !== null) set.add(m[1]);
+  return Array.from(set);
+}
+
+function templatesList(): ServerResult {
+  try {
+    const todos = (dbGetAll('Templates') as Array<Record<string, unknown>>)
+      .map((tpl) => ({
+        id: String(tpl.id || ''),
+        nome: String(tpl.nome || ''),
+        descricao: String(tpl.descricao || ''),
+        categoria: String(tpl.categoria || ''),
+        conteudo: String(tpl.conteudo || ''),
+        variaveis: String(tpl.variaveis || '').split(',').map((x) => x.trim()).filter(Boolean),
+        tags: String(tpl.tags || '').split(',').map((x) => x.trim()).filter(Boolean),
+        criadoEm: String(tpl.criadoEm || ''),
+        atualizadoEm: String(tpl.atualizadoEm || ''),
+      }))
+      .sort((a, b) => b.atualizadoEm.localeCompare(a.atualizadoEm));
+    return { ok: true, data: todos };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function templatesSave(payload: {
+  id?: string;
+  nome: string;
+  descricao?: string;
+  categoria?: string;
+  conteudo: string;
+  tags?: string;
+}): ServerResult {
+  try {
+    if (!payload.nome || !payload.nome.trim()) throw new Error('Nome é obrigatório.');
+    if (!payload.conteudo || !payload.conteudo.trim()) throw new Error('Conteúdo é obrigatório.');
+    const variaveis = _extrairVariaveisTemplate(payload.conteudo);
+    const agora = new Date().toISOString();
+    const dados = {
+      nome: payload.nome.trim(),
+      descricao: payload.descricao || '',
+      categoria: payload.categoria || '',
+      conteudo: payload.conteudo,
+      variaveis: variaveis.join(','),
+      tags: payload.tags || '',
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('Templates', payload.id, dados);
+      return { ok: true, data: { id: payload.id, ...dados, variaveis } };
+    }
+    const novo = dbCreate('Templates', { ...dados, criadoEm: agora });
+    return { ok: true, data: { ...novo, variaveis } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function templatesDelete(id: string): ServerResult {
+  try {
+    dbDelete('Templates', id);
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ─── Bookmarks (links salvos) ────────────────────────────────────────────────
+
+function bookmarksList(): ServerResult {
+  try {
+    const todos = (dbGetAll('Bookmarks') as Array<Record<string, unknown>>)
+      .map((b) => ({
+        id: String(b.id || ''),
+        titulo: String(b.titulo || ''),
+        url: String(b.url || ''),
+        descricao: String(b.descricao || ''),
+        categoria: String(b.categoria || ''),
+        tags: String(b.tags || '').split(',').map((x) => x.trim()).filter(Boolean),
+        destacado: String(b.destacado || '') === 'true',
+        criadoEm: String(b.criadoEm || ''),
+        atualizadoEm: String(b.atualizadoEm || ''),
+      }))
+      .sort((a, b) => {
+        if (a.destacado !== b.destacado) return a.destacado ? -1 : 1;
+        return (a.categoria + a.titulo).localeCompare(b.categoria + b.titulo);
+      });
+    return { ok: true, data: todos };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function bookmarksSave(payload: {
+  id?: string;
+  titulo: string;
+  url: string;
+  descricao?: string;
+  categoria?: string;
+  tags?: string;
+  destacado?: boolean;
+}): ServerResult {
+  try {
+    if (!payload.titulo || !payload.titulo.trim()) throw new Error('Título é obrigatório.');
+    if (!payload.url || !payload.url.trim()) throw new Error('URL é obrigatória.');
+    const agora = new Date().toISOString();
+    const dados = {
+      titulo: payload.titulo.trim(),
+      url: payload.url.trim(),
+      descricao: payload.descricao || '',
+      categoria: payload.categoria || '',
+      tags: payload.tags || '',
+      destacado: payload.destacado ? 'true' : 'false',
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('Bookmarks', payload.id, dados);
+      return { ok: true, data: { id: payload.id, ...dados } };
+    }
+    const novo = dbCreate('Bookmarks', { ...dados, criadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function bookmarksDelete(id: string): ServerResult {
+  try {
+    dbDelete('Bookmarks', id);
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// PERIGO: reset apaga TUDO do cofre. Usado quando o user esquece a senha-mestra.
+function cofreReset(): ServerResult {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    props.deleteProperty('COFRE_SALT');
+    props.deleteProperty('COFRE_WRAPPED_KEY');
+    props.deleteProperty('COFRE_WRAP_IV');
+    props.deleteProperty('COFRE_VERIFICADOR');
+    const todos = dbGetAll('Cofre') as Array<Record<string, unknown>>;
+    for (const c of todos) {
+      if (c.id) dbDelete('Cofre', String(c.id));
+    }
+    return { ok: true, data: { apagados: todos.length } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SNAPSHOT POR CLIENTE
+// ─────────────────────────────────────────────────────────────────────────────
+// Agrega TUDO que se sabe de um cliente específico num único payload, pronto
+// pra ser renderizado como "ficha do cliente" pra reunião, proposta, ou print.
+// Inclui: dados pessoais, entrevistas, oportunidades, receitas (apps que ele
+// paga), sistemas relacionados, custos desses sistemas, MRR/lucro por sistema,
+// e alertas recentes de qualquer sistema dele.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function snapshotCliente(pessoaId: string): ServerResult {
+  try {
+    const pessoa = (dbGetAll('Pessoas') as Array<Record<string, unknown>>).find((p) => p.id === pessoaId);
+    if (!pessoa) return { ok: false, error: 'Cliente não encontrado.' };
+
+    const entrevistas = (dbGetAll('Entrevistas') as Array<Record<string, unknown>>)
+      .filter((e) => String(e.pessoaId || '') === pessoaId)
+      .sort((a, b) => String(b.data || '').localeCompare(String(a.data || '')));
+
+    const oportunidades = (dbGetAll('Oportunidades') as Array<Record<string, unknown>>)
+      .filter((o) => String(o.pessoaId || '') === pessoaId);
+
+    const receitas = (dbGetAll('Receitas') as Array<Record<string, unknown>>)
+      .filter((r) => String(r.pessoaId || '') === pessoaId);
+
+    // Sistemas únicos relacionados às receitas
+    const sistemaIds = new Set<string>();
+    for (const r of receitas) {
+      const sid = String(r.sistemaId || '');
+      if (sid) sistemaIds.add(sid);
+    }
+
+    const todosSistemas = dbGetAll('Sistemas') as Array<Record<string, unknown>>;
+    const sistemas = todosSistemas.filter((s) => sistemaIds.has(String(s.id || '')));
+
+    // Custos por sistema (pra calcular margem por sistema/cliente)
+    const todosCustos = dbGetAll('Custos') as Array<Record<string, unknown>>;
+    const custosDosSistemas = todosCustos.filter((c) => sistemaIds.has(String(c.sistemaId || '')));
+
+    // Pulsos dos sistemas (status atual)
+    const todosPulsos = dbGetAll('Pulsos') as Array<Record<string, unknown>>;
+    const pulsosDosSistemas = todosPulsos.filter((p) => sistemaIds.has(String(p.sistemaId || '')));
+
+    // Alertas dos sistemas (últimos 30 dias)
+    const limiteAlertas = Date.now() - 30 * 86400000;
+    const todosAlertas = dbGetAll('Alertas') as Array<Record<string, unknown>>;
+    const alertas = todosAlertas
+      .filter((a) => {
+        if (!sistemaIds.has(String(a.sistemaId || ''))) return false;
+        const dt = new Date(String(a.criadoEm || '')).getTime();
+        return !Number.isNaN(dt) && dt >= limiteAlertas;
+      })
+      .sort((a, b) => String(b.criadoEm || '').localeCompare(String(a.criadoEm || '')));
+
+    // KPIs financeiros do cliente
+    const mrrCliente = receitas
+      .filter((r) => String(r.status || '').toLowerCase() === 'ativa' && String(r.recorrencia || '').toLowerCase() === 'mensal')
+      .reduce((acc, r) => acc + Number(r.valor || 0), 0);
+
+    const mrrAnualizado = receitas
+      .filter((r) => String(r.status || '').toLowerCase() === 'ativa' && String(r.recorrencia || '').toLowerCase() === 'anual')
+      .reduce((acc, r) => acc + (Number(r.valor || 0) / 12), 0);
+
+    const custoMensalAlocado = custosDosSistemas
+      .filter((c) => String(c.recorrencia || '').toLowerCase() === 'mensal')
+      .reduce((acc, c) => acc + Number(c.valor || 0), 0);
+
+    const mrrTotal = mrrCliente + mrrAnualizado;
+    const lucroMensal = mrrTotal - custoMensalAlocado;
+    const margem = mrrTotal > 0 ? Math.round((lucroMensal / mrrTotal) * 100) : 0;
+
+    // Mapeia por sistema: mrr + custo + lucro
+    const porSistema = sistemas.map((s) => {
+      const sid = String(s.id || '');
+      const mrrSis = receitas
+        .filter((r) => String(r.sistemaId || '') === sid && String(r.status || '').toLowerCase() === 'ativa')
+        .reduce((acc, r) => {
+          const v = Number(r.valor || 0);
+          const isMensal = String(r.recorrencia || '').toLowerCase() === 'mensal';
+          return acc + (isMensal ? v : v / 12);
+        }, 0);
+      const custoSis = todosCustos
+        .filter((c) => String(c.sistemaId || '') === sid && String(c.recorrencia || '').toLowerCase() === 'mensal')
+        .reduce((acc, c) => acc + Number(c.valor || 0), 0);
+      const pulsoSis = pulsosDosSistemas.find((p) => String(p.sistemaId || '') === sid);
+      return {
+        id: sid,
+        nome: String(s.nome || ''),
+        codinome: String(s.codinome || ''),
+        estagio: String(s.estagio || ''),
+        urlProd: String(s.urlProd || ''),
+        scoreSaude: Number(s.scoreSaude || 0),
+        mrr: Math.round(mrrSis * 100) / 100,
+        custo: Math.round(custoSis * 100) / 100,
+        lucro: Math.round((mrrSis - custoSis) * 100) / 100,
+        ultimoStatus: pulsoSis ? Number(pulsoSis.ultimoStatus || 0) : null,
+        latenciaMs: pulsoSis ? Number(pulsoSis.latenciaMs || 0) : null,
+      };
+    }).sort((a, b) => b.mrr - a.mrr);
+
+    // Próximas cobranças (45 dias)
+    const limiteCob = Date.now() + 45 * 86400000;
+    const proximasCobrancas: Array<{ tipo: string; nome: string; valor: number; data: string; dias: number }> = [];
+    for (const r of receitas) {
+      const data = String(r.proximaCobranca || '');
+      if (!data) continue;
+      const dt = new Date(data).getTime();
+      if (Number.isNaN(dt) || dt > limiteCob) continue;
+      proximasCobrancas.push({
+        tipo: 'receita',
+        nome: String(r.plano || 'Assinatura'),
+        valor: Number(r.valor || 0),
+        data,
+        dias: Math.ceil((dt - Date.now()) / 86400000),
+      });
+    }
+    for (const c of custosDosSistemas) {
+      const data = String(c.proximaCobranca || '');
+      if (!data) continue;
+      const dt = new Date(data).getTime();
+      if (Number.isNaN(dt) || dt > limiteCob) continue;
+      proximasCobrancas.push({
+        tipo: 'custo',
+        nome: String(c.fornecedor || 'Custo'),
+        valor: -Number(c.valor || 0),
+        data,
+        dias: Math.ceil((dt - Date.now()) / 86400000),
+      });
+    }
+    proximasCobrancas.sort((a, b) => a.data.localeCompare(b.data));
+
+    return {
+      ok: true,
+      data: {
+        pessoa: {
+          id: String(pessoa.id || ''),
+          nome: String(pessoa.nome || ''),
+          contato: String(pessoa.contato || ''),
+          papel: String(pessoa.papel || ''),
+          notas: String(pessoa.notas || ''),
+        },
+        kpis: {
+          mrrCliente: Math.round(mrrTotal * 100) / 100,
+          custoMensalAlocado: Math.round(custoMensalAlocado * 100) / 100,
+          lucroMensal: Math.round(lucroMensal * 100) / 100,
+          margem,
+          sistemasAtivos: sistemas.length,
+          receitasAtivas: receitas.filter((r) => String(r.status || '').toLowerCase() === 'ativa').length,
+          oportunidadesAbertas: oportunidades.filter((o) => String(o.estado || '').toLowerCase() !== 'ganhou' && String(o.estado || '').toLowerCase() !== 'perdeu').length,
+          entrevistas: entrevistas.length,
+          alertas30d: alertas.length,
+        },
+        sistemas: porSistema,
+        receitas: receitas.map((r) => ({
+          id: r.id, sistemaId: r.sistemaId, plano: r.plano, valor: Number(r.valor || 0),
+          recorrencia: r.recorrencia, status: r.status, inicio: r.inicio, proximaCobranca: r.proximaCobranca,
+        })),
+        entrevistas: entrevistas.slice(0, 10).map((e) => ({
+          id: e.id, data: e.data, tipo: e.tipo, resumoIA: e.resumoIA, requisitos: e.requisitos,
+        })),
+        oportunidades: oportunidades.map((o) => ({
+          id: o.id, titulo: o.titulo, valorEstimado: Number(o.valorEstimado || 0),
+          estado: o.estado, proximoPasso: o.proximoPasso,
+        })),
+        alertas: alertas.slice(0, 20).map((a) => ({
+          id: a.id, tipo: a.tipo, severidade: a.severidade, titulo: a.titulo,
+          mensagem: a.mensagem, criadoEm: a.criadoEm, sistemaId: a.sistemaId,
+        })),
+        proximasCobrancas,
+        geradoEm: new Date().toISOString(),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SNAPSHOT / BACKUP / RESTORE
+// ─────────────────────────────────────────────────────────────────────────────
+// Permite ao usuário exportar/importar TODO o estado da Forja como um único
+// arquivo JSON. Útil pra migração de planilha, recovery, ou simplesmente como
+// snapshot de segurança. NUNCA inclui chaves de API ou wrapping key do Cofre.
+// O Cofre é exportado APENAS na forma cifrada — sem a senha-mestra, ninguém
+// consegue ler o conteúdo.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Quais sheets entram no snapshot. Auditorias e Timeline são opcionais (volumosas).
+const SNAPSHOT_SHEETS_CORE = [
+  'Sistemas', 'Recursos', 'Decisoes', 'Riscos', 'Ideias', 'Oportunidades',
+  'Pessoas', 'Custos', 'Receitas', 'Pulsos', 'Stacks', 'Apis',
+  'Diagramas', 'Blueprints', 'Entrevistas', 'Processos', 'Conselho',
+  'Skills', 'Provedores', 'Cofre', 'Snippets', 'Templates', 'Bookmarks',
+  'Alertas',
+];
+const SNAPSHOT_SHEETS_HISTORICO = ['Timeline', 'Auditorias'];
+
+interface SnapshotPayload {
+  version: string;
+  geradoEm: string;
+  forjaSheetId: string;
+  cofreConfig: {
+    inicializado: boolean;
+    salt: string;
+    wrappedKey: string;
+    wrapIv: string;
+    verificador: string;
+  };
+  dados: Record<string, Array<Record<string, unknown>>>;
+  estatisticas: Record<string, number>;
+}
+
+// Exporta o snapshot completo. O usuário recebe o JSON e baixa pelo navegador.
+// O Cofre é incluído COM os ciphertexts e a config (salt + wrappedKey), pra
+// que o restore funcione com a mesma senha-mestra. SEM a senha-mestra original,
+// o conteúdo continua inacessível.
+function snapshotExport(opts?: { incluirHistorico?: boolean }): ServerResult {
+  try {
+    const incluirHistorico = opts?.incluirHistorico === true;
+    const sheetsParaExportar = incluirHistorico
+      ? [...SNAPSHOT_SHEETS_CORE, ...SNAPSHOT_SHEETS_HISTORICO]
+      : SNAPSHOT_SHEETS_CORE;
+
+    const props = PropertiesService.getScriptProperties();
+    const dados: Record<string, Array<Record<string, unknown>>> = {};
+    const estatisticas: Record<string, number> = {};
+
+    for (const nome of sheetsParaExportar) {
+      try {
+        const linhas = dbGetAll(nome) as Array<Record<string, unknown>>;
+        dados[nome] = linhas;
+        estatisticas[nome] = linhas.length;
+      } catch {
+        dados[nome] = [];
+        estatisticas[nome] = 0;
+      }
+    }
+
+    const payload: SnapshotPayload = {
+      version: '1.0',
+      geradoEm: new Date().toISOString(),
+      forjaSheetId: props.getProperty('FORJA_SHEET_ID') || '',
+      cofreConfig: {
+        inicializado: !!props.getProperty('COFRE_SALT'),
+        salt: props.getProperty('COFRE_SALT') || '',
+        wrappedKey: props.getProperty('COFRE_WRAPPED_KEY') || '',
+        wrapIv: props.getProperty('COFRE_WRAP_IV') || '',
+        verificador: props.getProperty('COFRE_VERIFICADOR') || '',
+      },
+      dados,
+      estatisticas,
+    };
+
+    return { ok: true, data: payload };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Faz dry-run do import: mostra ao usuário quantos registros seriam adicionados
+// por sheet, sem efetivamente modificar nada. Sempre rode antes de snapshotImport().
+function snapshotPreview(payload: SnapshotPayload): ServerResult {
+  try {
+    if (!payload || !payload.version || !payload.dados) {
+      throw new Error('Payload inválido — campo "version" ou "dados" ausente.');
+    }
+    const resumo: Array<{ sheet: string; novos: number; existentes: number }> = [];
+    for (const sheet of Object.keys(payload.dados)) {
+      const novos = payload.dados[sheet] || [];
+      let existentes = 0;
+      try { existentes = (dbGetAll(sheet) as Array<unknown>).length; } catch { existentes = 0; }
+      resumo.push({ sheet, novos: novos.length, existentes });
+    }
+    return {
+      ok: true,
+      data: {
+        versaoSnapshot: payload.version,
+        geradoEm: payload.geradoEm,
+        cofreNoSnapshot: payload.cofreConfig?.inicializado || false,
+        cofreLocal: !!PropertiesService.getScriptProperties().getProperty('COFRE_SALT'),
+        resumo,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Importa o snapshot. Modo "merge" (default): adiciona registros novos sem
+// apagar existentes. Modo "substituir": apaga TUDO e reimporta — perigoso,
+// requer confirmação explícita do usuário.
+function snapshotImport(payload: SnapshotPayload, opts?: {
+  modo?: 'merge' | 'substituir';
+  restaurarCofreConfig?: boolean;
+}): ServerResult {
+  try {
+    if (!payload || !payload.version || !payload.dados) {
+      throw new Error('Payload inválido — campo "version" ou "dados" ausente.');
+    }
+    const modo = opts?.modo === 'substituir' ? 'substituir' : 'merge';
+    const restaurarCofre = opts?.restaurarCofreConfig === true;
+    let totalInseridos = 0;
+    let totalApagados = 0;
+    const detalhes: Array<{ sheet: string; inseridos: number; apagados: number }> = [];
+
+    for (const sheet of Object.keys(payload.dados)) {
+      let apagados = 0;
+      if (modo === 'substituir') {
+        try {
+          const existentes = dbGetAll(sheet) as Array<Record<string, unknown>>;
+          for (const linha of existentes) {
+            if (linha.id) {
+              try { dbDelete(sheet, String(linha.id)); apagados++; } catch { /* skip */ }
+            }
+          }
+        } catch { /* sheet não existe */ }
+      }
+      let inseridos = 0;
+      const novos = payload.dados[sheet] || [];
+      for (const registro of novos) {
+        try {
+          if (modo === 'merge' && registro.id) {
+            const existente = dbGetById(sheet, String(registro.id));
+            if (existente) continue;
+          }
+          const semId = { ...registro };
+          if (modo === 'merge') delete semId.id;
+          dbCreate(sheet, semId);
+          inseridos++;
+        } catch { /* registro inválido, skip */ }
+      }
+      totalInseridos += inseridos;
+      totalApagados += apagados;
+      detalhes.push({ sheet, inseridos, apagados });
+    }
+
+    // Restaurar Cofre config apenas se solicitado E o snapshot tiver config válida.
+    // Isso permite ao usuário "transferir" o cofre cifrado pra outra instância,
+    // continuando a usar a mesma senha-mestra.
+    let cofreRestaurado = false;
+    if (restaurarCofre && payload.cofreConfig?.inicializado) {
+      const props = PropertiesService.getScriptProperties();
+      props.setProperty('COFRE_SALT', payload.cofreConfig.salt);
+      props.setProperty('COFRE_WRAPPED_KEY', payload.cofreConfig.wrappedKey);
+      props.setProperty('COFRE_WRAP_IV', payload.cofreConfig.wrapIv);
+      props.setProperty('COFRE_VERIFICADOR', payload.cofreConfig.verificador);
+      cofreRestaurado = true;
+    }
+
+    return {
+      ok: true,
+      data: {
+        modo,
+        totalInseridos,
+        totalApagados,
+        cofreRestaurado,
+        detalhes,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ─── Fix tático: migração de saúde "fictícia" pra "não avaliado" ─────────────
+// GAS-imported systems recebiam scoreSaude=80 por padrão, o que dava a falsa
+// impressão de que todos eram saudáveis. Zera esses pra mostrar "Não avaliado"
+// até que a Fase 15 (auditoria automática) calcule um score real.
+function migrarSaudeNaoAvaliada(): ServerResult {
+  try {
+    const sistemas = dbGetAll('Sistemas');
+    let zerados = 0;
+    for (const s of sistemas) {
+      const tinhaScript = !!s.scriptId;
+      const scoreEra80 = Number(s.scoreSaude || 0) === 80;
+      if (tinhaScript && scoreEra80) {
+        dbUpdate('Sistemas', String(s.id), { scoreSaude: 0 });
+        zerados++;
+      }
+    }
+    return { ok: true, data: { zerados, total: sistemas.length } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro na migração' };
+  }
+}
+
+// Função pública para o usuário executar no editor manualmente.
+// USA serviços nativos do Apps Script (não REST), porque só assim o Google
+// detecta as scopes necessárias e pede consentimento.
+function forjaForcarReautorizacao(): string {
+  const out: string[] = [];
+  try { out.push('email: ' + Session.getActiveUser().getEmail()); }
+  catch (e) { out.push('email: ERRO ' + (e instanceof Error ? e.message : String(e))); }
+
+  // MailApp → força scope script.send_mail
+  try {
+    MailApp.getRemainingDailyQuota();
+    out.push('mail: ok');
+  } catch (e) { out.push('mail: ERRO ' + (e instanceof Error ? e.message : String(e))); }
+
+  // Drive Advanced Service → força scope drive.readonly
+  try {
+    const r = (Drive as unknown as { Files: { list: (opts: Record<string, unknown>) => { files?: unknown[] } } }).Files.list({ pageSize: 1, fields: 'files(id)' });
+    out.push('drive: ok (' + (r.files || []).length + ' arquivo[s])');
+  } catch (e) { out.push('drive: ERRO ' + (e instanceof Error ? e.message : String(e))); }
+
+  // Apps Script API (script.deployments.readonly) — não tem service nativo, usa REST mesmo
+  try {
+    const token = ScriptApp.getOAuthToken();
+    const r = UrlFetchApp.fetch('https://script.googleapis.com/v1/projects/' + ScriptApp.getScriptId() + '/deployments?pageSize=1', {
+      headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true,
+    });
+    out.push('script-api(' + r.getResponseCode() + ')');
+  } catch (e) { out.push('script-api: ERRO ' + (e instanceof Error ? e.message : String(e))); }
+
+  const msg = out.join(' | ');
+  Logger.log(msg);
+  return msg;
+}
+
+function getAlertas(): ServerResult {
+  try {
+    const alertas = getAlertasRecentes(50);
+    const naoLidos = alertas.filter((a) => !a.lidoEm).length;
+    return { ok: true, data: { alertas, naoLidos } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar alertas' };
+  }
+}
+
+// ═══ Dashboard Operacional (v1.4.4) ═══════════════════════════════════════════
+// Dashboard repaginado pra ser TÉCNICO, não financeiro (lucro/MRR saiu pra
+// Financeiro). Esta função agrega sinais operacionais leves: alertas técnicos,
+// últimas decisões registradas, breakdown de estágios dos apps.
+//
+// Pensado pra carregar em <500ms — só faz reads simples, sem ping HTTP nenhum
+// (status de IA/GitHub fica em getStatusGeral que já tem cache de 60s).
+function getDashboardOperacional(): ServerResult {
+  try {
+    initDatabase();
+
+    // Alertas não lidos, mais recentes primeiro, top 5
+    const alertasAll = getAlertasRecentes(100);
+    const naoLidos = alertasAll.filter((a) => !a.lidoEm);
+    const alertasTop = naoLidos.slice(0, 5);
+
+    // Decisões recentes (todos sistemas), top 5
+    const decisoesAll = (dbGetAll('Decisoes') as Array<Record<string, unknown>>).slice();
+    decisoesAll.sort((a, b) => String(b['data'] || '').localeCompare(String(a['data'] || '')));
+    const decisoesRecentes = decisoesAll.slice(0, 5);
+
+    // Hidrata decisões com nome do sistema (single pass, sem N+1)
+    const sistemas = dbGetAll('Sistemas') as Array<Record<string, unknown>>;
+    const sisNome: Record<string, string> = {};
+    for (const s of sistemas) sisNome[String(s['id'])] = String(s['nome'] || '');
+
+    const decisoesHidratadas = decisoesRecentes.map((d) => ({
+      id: String(d['id'] || ''),
+      sistemaId: String(d['sistemaId'] || ''),
+      sistemaNome: sisNome[String(d['sistemaId'] || '')] || '—',
+      titulo: String(d['titulo'] || ''),
+      status: String(d['status'] || 'novo'),
+      prioridade: String(d['prioridade'] || 'media'),
+      data: String(d['data'] || ''),
+    }));
+
+    // Counts agregados (preview rápido sem listar tudo)
+    const decisoesAbertas = (dbGetAll('Decisoes') as Array<Record<string, unknown>>)
+      .filter((d) => {
+        const st = String(d['status'] || 'novo').toLowerCase();
+        return st !== 'concluido' && st !== 'cancelado' && st !== 'concluído';
+      }).length;
+
+    // AuditFindings open
+    let findingsAbertos = 0;
+    try {
+      const findings = dbGetAll('AuditFindings') as Array<Record<string, unknown>>;
+      findingsAbertos = findings.filter((f) => {
+        const st = String(f['status'] || 'aberto').toLowerCase();
+        return st !== 'resolvido' && st !== 'descartado';
+      }).length;
+    } catch { /* sheet pode não existir em installs antigos */ }
+
+    // Distribuição de estágios + alerta por status
+    const breakdown = { rascunho: 0, forja: 0, tempera: 0, prateleira: 0, atencao: 0 };
+    for (const s of sistemas) {
+      const est = String(s['estagio'] || 'rascunho').toLowerCase();
+      if (est === 'rascunho' || est === 'forja' || est === 'tempera' || est === 'prateleira') {
+        breakdown[est] = (breakdown[est] || 0) + 1;
+      } else {
+        breakdown.rascunho++;
+      }
+      if (String(s['status'] || '').toLowerCase() === 'atencao' || String(s['status'] || '').toLowerCase() === 'atenção') {
+        breakdown.atencao++;
+      }
+    }
+
+    return {
+      ok: true,
+      data: {
+        alertasNaoLidos: naoLidos.length,
+        alertasTop,
+        decisoesAbertas,
+        decisoesRecentes: decisoesHidratadas,
+        findingsAbertos,
+        breakdown,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar operacional' };
+  }
+}
+
+function marcarAlertaLido(id: string): ServerResult {
+  try {
+    const upd = dbUpdate('Alertas', id, { lidoEm: new Date().toISOString() });
+    return upd ? { ok: true, data: upd } : { ok: false, error: 'Alerta não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function marcarTodosAlertasLidos(): ServerResult {
+  try {
+    const agora = new Date().toISOString();
+    const alertas = dbGetAll('Alertas') as Array<Record<string, unknown>>;
+    for (const a of alertas) {
+      if (!a.lidoEm) dbUpdate('Alertas', String(a.id), { lidoEm: agora });
+    }
+    return { ok: true, data: { ok: true } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function dismissAlerta(id: string): ServerResult {
+  try {
+    return { ok: dbDelete('Alertas', id), data: { ok: true } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Manda uma mensagem de teste pelo WhatsApp usando a config JÁ SALVA (o painel
+// salva antes de testar). Valida credenciais e reporta o erro por destino.
+function testarWhatsapp(): ServerResult {
+  try {
+    const w = getAutomationConfig().whatsapp;
+    if (!w || !Array.isArray(w.destinos) || w.destinos.length === 0) {
+      return { ok: false, error: 'Cadastre ao menos um número de destino (formato +55DDDNNNNNNNN).' };
+    }
+    if (w.provider === 'meta' && (!w.metaToken || !w.metaPhoneNumberId)) {
+      return { ok: false, error: 'Configure o Token e o Phone Number ID (Meta) antes de testar.' };
+    }
+    if (w.provider === 'twilio' && (!w.twilioSid || !w.twilioToken || !w.twilioFrom)) {
+      return { ok: false, error: 'Configure SID, Token e número remetente (Twilio) antes de testar.' };
+    }
+    const titulo = 'Teste do FORJA';
+    const msg = 'Se você recebeu isto, o canal WhatsApp está funcionando.';
+    const texto = `*${titulo}*\n${msg}\n\n— FORJA`;
+    const erros: string[] = [];
+    let enviados = 0;
+    for (const numRaw of w.destinos) {
+      const num = _normalizarTelefone(numRaw);
+      if (!num) { erros.push(`${numRaw}: número inválido`); continue; }
+      const r = w.provider === 'twilio'
+        ? _enviarWhatsappTwilio(w, num, texto)
+        : _enviarWhatsappMeta(w, num, titulo, msg, texto);
+      if (r.code >= 200 && r.code < 300) enviados++;
+      else erros.push(`${numRaw}: HTTP ${r.code} — ${r.body.slice(0, 180)}`);
+    }
+    if (enviados > 0 && erros.length === 0) return { ok: true, data: { enviados } };
+    if (enviados > 0) return { ok: true, data: { enviados, avisos: erros } };
+    return { ok: false, error: erros.join(' | ') || 'Nada foi enviado.' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao enviar WhatsApp' };
+  }
+}
+
+function testarWebhook(url: string): ServerResult {
+  try {
+    if (!url) return { ok: false, error: 'Informe a URL do webhook' };
+    const payload = { text: 'FORJA: webhook de teste - se voce esta lendo isso, deu certo.', content: 'FORJA: webhook de teste - se voce esta lendo isso, deu certo.', username: 'FORJA' };
+    const r = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', payload: JSON.stringify(payload), muteHttpExceptions: true });
+    const code = r.getResponseCode();
+    if (code >= 200 && code < 300) return { ok: true, data: { code } };
+    return { ok: false, error: `Webhook retornou ${code}: ${r.getContentText().slice(0, 200)}` };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao chamar webhook' };
+  }
+}
+
+// ─── getAtelierStats — contagens por estação do Atelier ─────────────────────
+//
+// Usado pela landing "Guia do Atelier" pra mostrar quantos itens existem em
+// cada estação (Skills, Snippets, etc.). Permite que o checklist de setup
+// recomendado se auto-marque conforme o user preenche cada área.
+//
+// Cada try/catch isolado: se uma tabela ainda não foi inicializada, retorna 0
+// pra essa estação sem derrubar a chamada inteira.
+function getAtelierStats(): ServerResult {
+  try {
+    initDatabase();
+    const safeCount = (tabela: string): number => {
+      try { return (dbGetAll(tabela) as unknown[]).length; } catch { return 0; }
+    };
+    const codexCards = safeCount('CodexCards');
+    const codexIa = (() => {
+      try {
+        return (dbGetAll('CodexCards') as Array<Record<string, unknown>>)
+          .filter((c) => c['incluirEmIa'] === 'sim').length;
+      } catch { return 0; }
+    })();
+
+    const stats = {
+      skills: safeCount('Skills'),
+      snippets: safeCount('Snippets'),
+      templates: safeCount('Templates'),
+      bookmarks: safeCount('Bookmarks'),
+      codex: codexCards,
+      codexNaIa: codexIa,
+      receituario: safeCount('Receituario'),
+      hospedagem: safeCount('Provedores'),
+      cofre: safeCount('Cofre'),
+    };
+    return { ok: true, data: stats };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar stats' };
   }
 }
 

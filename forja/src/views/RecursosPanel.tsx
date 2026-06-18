@@ -1,6 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Table, Button, Modal, Form, Input, Select, Space, message, Typography, Popconfirm } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, ApiOutlined, DatabaseOutlined, KeyOutlined } from '@ant-design/icons';
+import { Plus, Pencil, Trash2, Plug, Database, Key } from 'lucide-react';
+const PlusOutlined = (p: any) => <Plus size={16} {...p} />;
+const EditOutlined = (p: any) => <Pencil size={16} {...p} />;
+const DeleteOutlined = (p: any) => <Trash2 size={16} {...p} />;
+const ApiOutlined = (p: any) => <Plug size={16} {...p} />;
+const DatabaseOutlined = (p: any) => <Database size={16} {...p} />;
+const KeyOutlined = (p: any) => <Key size={16} {...p} />;
 import callServer from '../gas-client';
 import type { Recurso, ServerResponse } from '../types';
 
@@ -149,6 +155,7 @@ export default function RecursosPanel({ sistemaId }: RecursosPanelProps): React.
         loading={loading}
         pagination={false}
         size="small"
+        scroll={{ x: 'max-content' }}
         locale={{ emptyText: 'Nenhum recurso registrado' }}
       />
 

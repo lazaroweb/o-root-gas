@@ -1,6 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Button, Modal, Form, Input, InputNumber, Space, message, Typography, Card, Progress, Empty } from 'antd';
-import { PlusOutlined, EditOutlined, WarningOutlined } from '@ant-design/icons';
+import { Plus, Pencil, AlertTriangle } from 'lucide-react';
+const PlusOutlined = (p: any) => <Plus size={16} {...p} />;
+const EditOutlined = (p: any) => <Pencil size={16} {...p} />;
+const WarningOutlined = (p: any) => <AlertTriangle size={16} {...p} />;
+import { useTokens } from '../themeContext';
 import callServer from '../gas-client';
 import type { Risco, ServerResponse } from '../types';
 
@@ -30,6 +34,7 @@ function getGravidadeColor(g: number): string {
 }
 
 export default function RiscosPanel({ sistemaId }: RiscosPanelProps): React.ReactElement {
+  const t = useTokens();
   const [riscos, setRiscos] = useState<Risco[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -99,17 +104,17 @@ export default function RiscosPanel({ sistemaId }: RiscosPanelProps): React.Reac
               <Card
                 key={risco.id}
                 size="small"
-                style={{ borderColor: '#2A2D35', borderLeft: `3px solid ${getGravidadeColor(risco.gravidade)}` }}
+                style={{ borderColor: t.border, borderLeft: `3px solid ${getGravidadeColor(risco.gravidade)}` }}
                 styles={{ body: { padding: '12px 16px' } }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div style={{ flex: 1 }}>
-                    <Text strong style={{ color: '#E8E8ED', fontSize: 14 }}>{risco.area}</Text>
-                    <Paragraph style={{ color: '#8B8D98', fontSize: 13, margin: '4px 0' }} ellipsis={{ rows: 2 }}>
+                    <Text strong style={{ color: t.text, fontSize: 14 }}>{risco.area}</Text>
+                    <Paragraph style={{ color: t.textSecondary, fontSize: 13, margin: '4px 0' }} ellipsis={{ rows: 2 }}>
                       {risco.descricao}
                     </Paragraph>
                     {risco.historicoIncidentes && (
-                      <Text style={{ color: '#5C5E6A', fontSize: 11 }}>📋 {risco.historicoIncidentes}</Text>
+                      <Text style={{ color: t.textTertiary, fontSize: 11 }}>{risco.historicoIncidentes}</Text>
                     )}
                   </div>
                   <Space direction="vertical" align="end" size={4} style={{ minWidth: 80 }}>
@@ -119,7 +124,7 @@ export default function RiscosPanel({ sistemaId }: RiscosPanelProps): React.Reac
                       percent={risco.gravidade * 10}
                       format={() => `${risco.gravidade}`}
                       strokeColor={getGravidadeColor(risco.gravidade)}
-                      trailColor="#2A2D35"
+                      trailColor={t.borderSoft}
                     />
                     <Button type="text" size="small" icon={<EditOutlined />} onClick={() => handleOpen(risco)} />
                   </Space>

@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Modal, Button, message, Spin, Typography } from 'antd';
-import { FileMarkdownOutlined, CopyOutlined } from '@ant-design/icons';
+import { FileText, Copy } from 'lucide-react';
+import { useTokens } from '../themeContext';
+import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import type { ServerResponse } from '../types';
 
@@ -55,6 +57,7 @@ _Gerado pela FORJA em 2026-06-12_
 `;
 
 export default function PassaporteModal({ sistemaId, sistemaNome }: PassaporteModalProps): React.ReactElement {
+  const t = useTokens();
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [markdown, setMarkdown] = useState('');
@@ -95,17 +98,17 @@ export default function PassaporteModal({ sistemaId, sistemaNome }: PassaporteMo
   return (
     <>
       <Button
-        icon={<FileMarkdownOutlined />}
+        icon={<FileText size={15} />}
         onClick={handleGenerate}
-        style={{ borderColor: '#D4A853', color: '#D4A853' }}
+        style={{ borderColor: `${t.accents.peach}99`, color: t.accents.peach }}
       >
         Passaporte
       </Button>
 
       <Modal
         title={
-          <span>
-            <FileMarkdownOutlined style={{ marginRight: 8, color: '#D4A853' }} />
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <FileText size={18} color={t.accents.peach} />
             Passaporte — {sistemaNome}
           </span>
         }
@@ -114,7 +117,7 @@ export default function PassaporteModal({ sistemaId, sistemaNome }: PassaporteMo
         width={720}
         footer={[
           <Button key="close" onClick={() => setOpen(false)}>Fechar</Button>,
-          <Button key="copy" type="primary" icon={<CopyOutlined />} onClick={handleCopy} disabled={!markdown}>
+          <Button key="copy" type="primary" icon={<Copy size={15} />} onClick={handleCopy} disabled={!markdown}>
             Copiar Markdown
           </Button>,
         ]}
@@ -123,22 +126,22 @@ export default function PassaporteModal({ sistemaId, sistemaNome }: PassaporteMo
           <div style={{ textAlign: 'center', padding: 48 }}>
             <Spin size="large" />
             <div style={{ marginTop: 16 }}>
-              <Text style={{ color: '#8B8D98' }}>Compilando passaporte...</Text>
+              <Text style={{ color: t.textSecondary }}>Compilando passaporte...</Text>
             </div>
           </div>
         ) : (
           <div
             style={{
-              background: '#0F1114',
-              border: '1px solid #2A2D35',
-              borderRadius: 8,
+              background: '#16171A',
+              border: `1px solid ${t.border}`,
+              borderRadius: 12,
               padding: 20,
               maxHeight: 500,
               overflow: 'auto',
-              fontFamily: '"JetBrains Mono", monospace',
-              fontSize: 12,
-              lineHeight: 1.6,
-              color: '#E8E8ED',
+              fontFamily: FONTS.mono,
+              fontSize: 12.5,
+              lineHeight: 1.7,
+              color: '#E8E6E1',
               whiteSpace: 'pre-wrap',
             }}
           >
@@ -146,9 +149,9 @@ export default function PassaporteModal({ sistemaId, sistemaNome }: PassaporteMo
           </div>
         )}
 
-        <div style={{ marginTop: 12, padding: '8px 12px', background: '#1E2028', borderRadius: 6 }}>
-          <Text style={{ color: '#5C5E6A', fontSize: 11 }}>
-            💡 Cole este Markdown no início de uma conversa com Claude para dar contexto completo sobre o sistema.
+        <div style={{ marginTop: 12, padding: '10px 14px', background: t.surfaceMuted, borderRadius: 10 }}>
+          <Text style={{ color: t.textSecondary, fontSize: 12 }}>
+            Cole este Markdown no início de uma conversa com Cursor ou Claude para dar contexto completo sobre o sistema.
           </Text>
         </div>
       </Modal>
