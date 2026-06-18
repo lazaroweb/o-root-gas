@@ -70,7 +70,12 @@ export default function LumeAssistant({ viewLabel }: { viewLabel: string }): Rea
   const [sending, setSending] = useState(false);
   const [dica, setDica] = useState('');
   const [dicaLoading, setDicaLoading] = useState(false);
+  const [dicaErro, setDicaErro] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
+  // Guarda anti-loop: ignora respostas obsoletas e mata o spinner se o
+  // google.script.run pendurar (proxy de IA lento/travado).
+  const dicaReqRef = useRef(0);
+  const dicaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs, sending]);
 
@@ -83,13 +88,36 @@ export default function LumeAssistant({ viewLabel }: { viewLabel: string }): Rea
   }, [open]);
 
   const carregarDica = useCallback(() => {
+    const reqId = ++dicaReqRef.current;
     setDicaLoading(true);
     setDica('');
+    setDicaErro('');
+    if (dicaTimerRef.current) clearTimeout(dicaTimerRef.current);
+    // Timeout de segurança: se não voltar em 30s, libera a UI e oferece retry.
+    dicaTimerRef.current = setTimeout(() => {
+      if (dicaReqRef.current === reqId) {
+        setDicaLoading(false);
+        setDicaErro('Demorou demais pra gerar a dica. Toque no ↻ pra tentar de novo.');
+      }
+    }, 30000);
     callServer<ServerResult>('lumeDica', viewLabel)
-      .then((r) => { if (r.ok && r.data) setDica((r.data as { texto: string }).texto || ''); })
-      .catch(() => { /* sem dica no preview */ })
-      .finally(() => setDicaLoading(false));
+      .then((r) => {
+        if (dicaReqRef.current !== reqId) return; // resposta obsoleta — ignora
+        if (r.ok && r.data) setDica((r.data as { texto: string }).texto || '');
+        else setDicaErro(r.error || 'Não consegui gerar a dica agora.');
+      })
+      .catch(() => {
+        if (dicaReqRef.current === reqId) setDicaErro('Sem conexão de IA. Verifique em Configurações.');
+      })
+      .finally(() => {
+        if (dicaReqRef.current !== reqId) return;
+        if (dicaTimerRef.current) { clearTimeout(dicaTimerRef.current); dicaTimerRef.current = null; }
+        setDicaLoading(false);
+      });
   }, [viewLabel]);
+
+  // Limpa o timer ao desmontar pra não vazar timeout.
+  useEffect(() => () => { if (dicaTimerRef.current) clearTimeout(dicaTimerRef.current); }, []);
 
   // Ao abrir com a conversa vazia, a Lume "puxa assunto" com uma dica proativa.
   useEffect(() => {
@@ -256,6 +284,10 @@ export default function LumeAssistant({ viewLabel }: { viewLabel: string }): Rea
                       Explorar essa dica →
                     </button>
                   </>
+                ) : dicaErro ? (
+                  <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.accents.clay, lineHeight: 1.5 }}>
+                    {dicaErro}
+                  </div>
                 ) : (
                   <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textTertiary }}>
                     Toque no ↻ pra eu olhar seus dados e sugerir algo.

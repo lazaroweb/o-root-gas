@@ -36,6 +36,18 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.67.1] — 2026-06-18
+
+### Corrigido
+
+- **Lume travada em "loop eterno" gerando a DICA DA LUME.** O carregamento da dica
+  não tinha timeout: se o proxy de IA demorava/travava, o `google.script.run` ficava
+  pendurado e o spinner rodava pra sempre. Agora há **timeout de segurança (30s)**,
+  guarda contra respostas obsoletas (ignora chamadas antigas) e **fallback com
+  mensagem + retry** (↻) em vez do spinner infinito. Limpa o timer ao desmontar.
+
+---
+
 ## [1.67.0] — 2026-06-18
 
 ### Adicionado
