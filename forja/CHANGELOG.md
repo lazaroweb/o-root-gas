@@ -36,6 +36,25 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.60.1] — 2026-06-18
+
+### Corrigido
+
+- **`_fmtBRL` duplicada (bug de formatação de moeda).** Havia duas definições da
+  função `_fmtBRL` em `server.ts` com comportamentos diferentes — uma com 2 casas
+  decimais e outra com 0. No escopo global do Apps Script a segunda vencia e
+  zerava os centavos em vários textos (análises do Norte, MRR/custo dos sistemas).
+  Agora existe uma única `_fmtBRL` canônica em pt-BR, com 2 casas e separador de
+  milhar (ex.: `R$ 1.234,56`).
+- **Função `_vencimentoNoMes` duplicada** removida (colidia com a versão original).
+- **Placeholders de e-mail** trocados para o domínio `example.com` (formulários e
+  dados de exemplo), atendendo à política de DLP.
+
+### Manutenção
+
+- Primeiro commit versionando todo o app no git (ponto de rollback). Erros de
+  tipo sob `tsc --noEmit` caíram de 35 → 31.
+
 ## [1.60.0] — 2026-06-17
 
 ### Adicionado

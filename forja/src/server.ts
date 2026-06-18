@@ -3926,9 +3926,11 @@ function _ultimosMesesComp(n: number): string[] {
   return arr;
 }
 
+// Formatação canônica de moeda BRL (pt-BR, 2 casas + separador de milhar).
+// Definição ÚNICA: antes havia uma duplicata mais abaixo que, no escopo
+// global do GAS, sobrescrevia esta e zerava os centavos. Não duplicar.
 function _fmtBRL(v: number): string {
-  const n = Math.round(v * 100) / 100;
-  return 'R$ ' + n.toFixed(2).replace('.', ',');
+  return 'R$ ' + (Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function _nomeCatAss(g: string): string {
@@ -11637,10 +11639,6 @@ function calcularSaudeReal(sistemaId: string): ServerResult {
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao calcular saúde' };
   }
-}
-
-function _fmtBRL(v: number): string {
-  return 'R$' + v.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
 
 function atualizarSaudeReal(sistemaId: string): ServerResult {
