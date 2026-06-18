@@ -19,6 +19,8 @@ interface ServicoIAItem {
   rotulo: string;
   tier: string;
   endpoint: string;
+  saude?: 'verde' | 'vermelho' | 'desconhecido';
+  ultimaChamada?: { ts: number; ok: boolean; latenciaMs?: number; erro?: string } | null;
 }
 
 interface ServicosIAData {
@@ -39,7 +41,7 @@ const COR_FAROL: Record<string, string> = { verde: '#3CB371', vermelho: '#E5484D
 const COR_COMPLEX: Record<string, 'green' | 'blue' | 'purple'> = { simples: 'green', media: 'blue', pesada: 'purple' };
 const LABEL_COMPLEX: Record<string, string> = { simples: 'simples', media: 'média', pesada: 'pesada' };
 
-export default function RoteamentoIAPanel(): React.ReactElement {
+export default function RoteamentoIAPanel({ embedded = false }: { embedded?: boolean }): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [data, setData] = useState<ServicosIAData | null>(null);
@@ -122,22 +124,34 @@ export default function RoteamentoIAPanel(): React.ReactElement {
     return base.map((id) => ({ value: id, label: id }));
   };
 
+  const farol = (s: ServicoIAItem) => {
+    const cor = COR_FAROL[s.saude || 'desconhecido'];
+    const uc = s.ultimaChamada;
+    const tip = uc
+      ? `${uc.ok ? 'OK' : 'Falhou'}${uc.latenciaMs ? ` · ${uc.latenciaMs}ms` : ''}${uc.erro ? ` · ${uc.erro.slice(0, 90)}` : ''}`
+      : 'Sem chamada recente neste serviço';
+    return (
+      <Tooltip title={tip}>
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: cor, display: 'inline-block', flexShrink: 0, boxShadow: s.saude === 'verde' ? `0 0 5px ${COR_FAROL.verde}` : 'none' }} />
+      </Tooltip>
+    );
+  };
+
   const tierChip = (tier: string, rotulo: string) => (
     <Tag style={{ marginInlineEnd: 0, fontFamily: FONTS.mono, fontSize: 10 }} color={
       tier === 'premium' ? 'purple' : tier === 'balanceado' ? 'blue' : tier === 'rapido' ? 'green' : tier === 'economico' ? 'gold' : 'default'
     }>{rotulo || '—'}</Tag>
   );
 
-  return (
-    <Panel
-      title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Cpu size={18} strokeWidth={1.6} color={t.accents.blue} /> Roteamento de IA por serviço</span>}
-      extra={
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Button size="small" icon={<RefreshCw size={13} />} onClick={() => { carregar(); carregarModelos(); }}>Resincronizar</Button>
-          <Button size="small" type="primary" icon={<Wand2 size={13} />} loading={sugerindo} onClick={sugerir}>Sugerir modelos (IA)</Button>
-        </div>
-      }
-    >
+  const toolbar = (
+    <div style={{ display: 'flex', gap: 8 }}>
+      <Button size="small" icon={<RefreshCw size={13} />} onClick={() => { carregar(); carregarModelos(); }}>Resincronizar</Button>
+      <Button size="small" type="primary" icon={<Wand2 size={13} />} loading={sugerindo} onClick={sugerir}>Sugerir modelos (IA)</Button>
+    </div>
+  );
+
+  const corpo = (
+    <>
       {loading && !data ? (
         <Skeleton active paragraph={{ rows: 5 }} />
       ) : (
@@ -182,6 +196,7 @@ export default function RoteamentoIAPanel(): React.ReactElement {
                   display: 'flex', flexDirection: 'column', gap: 8,
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    {farol(s)}
                     <span style={{ fontFamily: FONTS.ui, fontSize: 13, fontWeight: 600, color: t.text }}>{s.label}</span>
                     <Tag color={COR_COMPLEX[s.complexidade]} style={{ marginInlineEnd: 0, fontSize: 10 }}>{LABEL_COMPLEX[s.complexidade]}</Tag>
                     {s.overrideAtivo
@@ -258,11 +273,29 @@ export default function RoteamentoIAPanel(): React.ReactElement {
           )}
 
           <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginTop: 14, lineHeight: 1.5 }}>
-            O farol de status é compartilhado entre os serviços do proxy (vem da última chamada).
-            A Auditoria tem painel próprio acima, mas também respeita o override aqui.
+            O farol (●) de cada serviço reflete a <strong>última chamada real daquele serviço</strong> nos últimos 30 min:
+            verde = ok, vermelho = falhou, cinza = sem chamada recente. Passe o mouse pra ver latência/erro.
           </div>
         </>
       )}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>{toolbar}</div>
+        {corpo}
+      </div>
+    );
+  }
+
+  return (
+    <Panel
+      title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Cpu size={18} strokeWidth={1.6} color={t.accents.blue} /> Roteamento de IA por serviço</span>}
+      extra={toolbar}
+    >
+      {corpo}
     </Panel>
   );
 }

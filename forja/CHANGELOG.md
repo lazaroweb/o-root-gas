@@ -36,6 +36,97 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.74.0] — 2026-06-18
+
+### Alterado
+
+- **Refino da lista de Contas.** Estado de abertura das linhas agora é controlado
+  (sobrevive a filtros/buscas) e ganhou um botão **"Expandir tudo / Recolher tudo"**
+  acima da lista, com a contagem de contas filtradas. Hover das linhas reescrito de
+  forma mais limpa (estado local, sem manipular o DOM direto).
+
+---
+
+## [1.73.0] — 2026-06-18
+
+### Alterado
+
+- **Contas mais clean e premium (Atelier → Contas).** Os cards grandes deram lugar a
+  uma **lista colapsável agrupada por categoria**: cada linha mostra só o essencial
+  (ícone, serviço, nº de contas e o **status** — pra saber de bate-pronto se está
+  ativa) e **expande** ao clicar pra revelar logins, plano, custo, renovação,
+  pagamento, notas, tags e ações. Dentro de cada grupo, as contas vêm ordenadas por
+  status (ativas primeiro) e nome.
+- **Abre direto em "Ativas"** por padrão (antes era "Todos"), reduzindo o ruído ao
+  entrar.
+
+---
+
+## [1.72.0] — 2026-06-18
+
+### Adicionado
+
+- **Múltiplos logins por conta (Atelier → Contas).** Agora um mesmo serviço pode
+  ter várias contas/e-mails (ex.: Manus pessoal + trabalho), cada um com e-mail e
+  apelido próprios, compartilhando o resto dos dados (plano, custo, etc.). No card,
+  quando há mais de um login, eles aparecem como chips; a busca varre todos os
+  e-mails/apelidos.
+  - Schema `Contas` ganhou a coluna `logins` (JSON, append-only →
+    `SCHEMA_VERSION v1.46-contas-logins`). Contas antigas de e-mail único migram
+    automaticamente (o e-mail vira o 1º login) — sem perda de dados.
+
+---
+
+## [1.71.0] — 2026-06-18
+
+### Adicionado
+
+- **Nova estação "Contas" no Atelier** — inventário central de todas as suas contas:
+  e-mails, ferramentas de IA (ChatGPT, Claude.ai, Gemini, Manus, Perplexity…), dev
+  (Cursor, Replit, Copilot, v0, Lovable…), mídia, infra e e-mail. Cada conta guarda
+  **categoria, rótulo, e-mail, URL, plano, tipo de cobrança, custo + moeda, forma de
+  pagamento, próxima renovação, status e tags**.
+  - **Resumo no topo:** total de contas, custo mensal recorrente (por moeda),
+    renovações nos próximos 14 dias e nº de categorias.
+  - **Filtros:** busca + categoria + status (ativa/avaliar/trial/cancelada).
+  - **Semear catálogo:** botão que popula sugestões de ferramentas atuais de IA/dev/
+    e-mail pra você só completar (idempotente — não duplica o que já existe; entram
+    como "avaliar").
+  - **Segurança por design:** só metadados ficam aqui. Senha/API key vão pro **Cofre**
+    (E2E) — a conta marca *“senha no Cofre”* + o label pra você achar rápido. Nada de
+    credencial em texto plano fora do cofre.
+- Tabela `Contas` no SheetDB (`SCHEMA_VERSION` → `v1.45-contas-hub`) + funções
+  `contasList`, `contasSave`, `contasDelete`, `contasSeedCatalogo`.
+
+---
+
+## [1.70.0] — 2026-06-18
+
+### Adicionado
+
+- **Roteamento de IA estendido a todos os serviços.** O catálogo de roteamento
+  agora cobre também: **Conselho de especialistas**, **Entrevistas & discovery**,
+  **Ações rápidas** (resumo executivo, preço, release notes, ideias de cliente,
+  risco de portfólio, refinar prompt) e **Finanças** — separadas em *planos*
+  (pesada), *leitura de fatura* (média) e *reclassificar categorias* (simples).
+  Cada um pode ter modelo próprio via `LLM_MODEL_<SERVICO>`.
+- **Farol de status por serviço.** Cada serviço do proxy agora tem seu próprio
+  indicador (●) que reflete a **última chamada real daquele serviço** (verde = ok,
+  vermelho = falhou, cinza = sem chamada recente nos últimos 30 min). O tooltip
+  mostra latência e mensagem de erro. Backend persiste status em
+  `FORJA_STATUS_USO_<servico>` a cada chamada.
+
+### Alterado
+
+- **Configurações → Inteligência (IA) agora é colapsável e respirável.** Os quatro
+  blocos (Conexão Proxy, Gemini, Roteamento, Auditoria) viraram um acordeão
+  **colapsado por padrão** — o status de conexão continua visível no cabeçalho de
+  cada bloco mesmo fechado, então a página deixou de ser uma rolagem longa.
+- `RoteamentoIAPanel` e `ModeloAuditoriaPanel` ganharam modo `embedded` (sem a
+  moldura `Panel`) para se encaixarem no acordeão sem cabeçalho duplicado.
+
+---
+
 ## [1.69.0] — 2026-06-18
 
 ### Adicionado

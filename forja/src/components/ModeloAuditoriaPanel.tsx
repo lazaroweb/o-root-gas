@@ -35,7 +35,7 @@ const ICON_CAT: Record<string, React.ReactNode> = {
   'qualidade': <Award size={11} />,
 };
 
-export default function ModeloAuditoriaPanel(): React.ReactElement {
+export default function ModeloAuditoriaPanel({ embedded = false }: { embedded?: boolean } = {}): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [loading, setLoading] = useState(true);
@@ -109,38 +109,29 @@ export default function ModeloAuditoriaPanel(): React.ReactElement {
 
   const naoAlterou = valor === (info?.modeloAuditoria || '');
 
-  return (
-    <Panel
-      title={
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-          <Sparkles size={17} strokeWidth={1.6} color={t.accents.peach} />
-          Modelo de IA para Auditoria
-          <Tooltip title="A Auditoria Forja IA roda separadamente do chat. Aqui você escolhe qual modelo usar — geralmente vale a pena usar um modelo mais rápido (ex.: Haiku) porque a auditoria roda sob demanda e você não quer esperar 30s+ toda vez.">
-            <Info size={13} color={t.textTertiary} style={{ cursor: 'help' }} />
-          </Tooltip>
-        </span>
-      }
-      extra={
-        <div style={{ display: 'flex', gap: 6 }}>
-          <Tooltip title="Recarrega o valor que está em Script Properties (caso você tenha editado direto no Apps Script)">
-            <Button size="small" icon={<RefreshCw size={13} />} onClick={() => carregar(true)}>Sincronizar</Button>
-          </Tooltip>
-          {info?.settingsUrl && (
-            <Tooltip title="Abre a página de Project Settings do Apps Script — role até 'Script Properties' pra editar direto lá">
-              <Button
-                size="small"
-                icon={<ExternalLink size={13} />}
-                href={info.settingsUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Script Properties
-              </Button>
-            </Tooltip>
-          )}
-        </div>
-      }
-    >
+  const acoes = (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <Tooltip title="Recarrega o valor que está em Script Properties (caso você tenha editado direto no Apps Script)">
+        <Button size="small" icon={<RefreshCw size={13} />} onClick={() => carregar(true)}>Sincronizar</Button>
+      </Tooltip>
+      {info?.settingsUrl && (
+        <Tooltip title="Abre a página de Project Settings do Apps Script — role até 'Script Properties' pra editar direto lá">
+          <Button
+            size="small"
+            icon={<ExternalLink size={13} />}
+            href={info.settingsUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Script Properties
+          </Button>
+        </Tooltip>
+      )}
+    </div>
+  );
+
+  const corpo = (
+    <>
       {loading ? (
         <Skeleton active paragraph={{ rows: 3 }} />
       ) : (
@@ -236,6 +227,32 @@ export default function ModeloAuditoriaPanel(): React.ReactElement {
           />
         </>
       )}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>{acoes}</div>
+        {corpo}
+      </div>
+    );
+  }
+
+  return (
+    <Panel
+      title={
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <Sparkles size={17} strokeWidth={1.6} color={t.accents.peach} />
+          Modelo de IA para Auditoria
+          <Tooltip title="A Auditoria Forja IA roda separadamente do chat. Aqui você escolhe qual modelo usar — geralmente vale a pena usar um modelo mais rápido (ex.: Haiku) porque a auditoria roda sob demanda e você não quer esperar 30s+ toda vez.">
+            <Info size={13} color={t.textTertiary} style={{ cursor: 'help' }} />
+          </Tooltip>
+        </span>
+      }
+      extra={acoes}
+    >
+      {corpo}
     </Panel>
   );
 }

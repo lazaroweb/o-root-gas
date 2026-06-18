@@ -93,6 +93,14 @@ const SCHEMA: SheetSchema[] = [
   // conexão real (OAuth) é por provedor e os tokens, quando houver, ficam no
   // PropertiesService server-side. `status`: registrada|conectada|erro.
   { name: 'DriveConnectors', columns: ['id', 'provedor', 'email', 'rotulo', 'status', 'pastaRaizId', 'notas', 'criadoEm', 'atualizadoEm'] },
+  // Contas (Atelier → Contas): inventário central de contas do usuário — e-mails,
+  // ferramentas de IA, dev, design, infra etc. Guarda METADADOS (plano, cobrança,
+  // custo, renovação) — NUNCA a senha. Pra senha/API key, o item aponta pro Cofre
+  // (E2E) via `segredoLabel`. `temSegredo`: 'sim'|'' indica que existe segredo lá.
+  // `logins` (append v1.46): JSON [{email,rotulo}] — várias contas/e-mails no mesmo
+  // serviço (ex.: Manus pessoal + trabalho). `email`/`rotulo` ficam como o 1º login
+  // (back-compat). Append-only: nunca reordenar (a migração só reescreve o header).
+  { name: 'Contas', columns: ['id', 'categoria', 'servico', 'rotulo', 'email', 'url', 'plano', 'tipoCobranca', 'custo', 'moeda', 'formaPagamento', 'proximaCobranca', 'status', 'temSegredo', 'segredoLabel', 'tags', 'notas', 'criadoEm', 'atualizadoEm', 'logins'] },
   // ─── Finanças pessoais (v1.3) ──────────────────────────────────────────────
   // FinPessoalLancamentos: cada despesa/entrada pessoal. `valor` sempre positivo
   // — o `tipo` ('despesa'|'entrada') é quem dita o sinal nos cálculos.
@@ -241,7 +249,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.44-skills-traducao';
+const SCHEMA_VERSION = 'v1.46-contas-logins';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -4337,7 +4345,7 @@ function gerarPlanoReducaoIA(): ServerResult {
     const user = `Retrato financeiro mensal (em reais) de uma pessoa:\n\n${JSON.stringify(resumo, null, 2)}\n\nGere um plano com estas seções em markdown:\n\n## Diagnóstico\n(3-4 frases sobre a situação atual, usando os números reais)\n\n## Plano de redução de despesas\n(lista priorizada — para cada item: o que cortar/negociar → quanto economiza por mês → como fazer na prática)\n\n## Estratégia de reserva de emergência\n(como chegar na meta mais rápido com a sobra atual)\n\n## Caminho para a abundância (1 a 5 anos)\n(o que fazer com a sobra depois da reserva pronta — investir, metas de patrimônio, usando a projeção de 5 anos)\n\n## 3 dicas de ouro\n\nSeja conciso e específico.`;
 
     const msgs: LlmMessage[] = [{ role: 'system', content: sys }, { role: 'user', content: user }];
-    const r = forjaCallLLMDetalhado(msgs, 1900);
+    const r = forjaCallLLMDetalhado(msgs, 1900, undefined, 'financasPlano');
     const registro = { texto: r.texto, modelo: r.modelo, latenciaMs: r.latenciaMs, criadoEm: new Date().toISOString() };
     try { PropertiesService.getScriptProperties().setProperty('FIN_PLANO_IA', JSON.stringify(registro)); } catch { /* ok */ }
     return { ok: true, data: registro };
@@ -4684,7 +4692,7 @@ function analisarIdealIA(): ServerResult {
     const user = `IDEAL (alvos por categoria):\n${JSON.stringify(idealResumo, null, 2)}\n\nREAL (gasto por categoria + exemplos de lançamentos):\n${JSON.stringify(realResumo, null, 2)}`;
 
     const msgs: LlmMessage[] = [{ role: 'system', content: sys }, { role: 'user', content: user }];
-    const r = forjaCallLLMDetalhado(msgs, 1600);
+    const r = forjaCallLLMDetalhado(msgs, 1600, undefined, 'financasPlano');
     const parsed = extrairJson(r.texto) as Record<string, unknown>;
     const mapeamentos = Array.isArray(parsed['mapeamentos'])
       ? (parsed['mapeamentos'] as Array<Record<string, unknown>>).map((m) => ({
@@ -4791,7 +4799,7 @@ function gerarPlanoIdealIA(): ServerResult {
       + '## 3 lembretes pra não recair\n\nSeja específico e conciso.';
 
     const msgs: LlmMessage[] = [{ role: 'system', content: sys }, { role: 'user', content: user }];
-    const r = forjaCallLLMDetalhado(msgs, 1800);
+    const r = forjaCallLLMDetalhado(msgs, 1800, undefined, 'financasPlano');
     const registro = { texto: r.texto, modelo: r.modelo, criadoEm: new Date().toISOString() };
     try { PropertiesService.getScriptProperties().setProperty('FIN_PLANO_IDEAL', JSON.stringify(registro)); } catch { /* ok */ }
     return { ok: true, data: registro };
@@ -4836,7 +4844,7 @@ function interpretarFaturaIA(textoFatura: string): ServerResult {
       { role: 'system', content: sys },
       { role: 'user', content: 'Texto da fatura:\n\n' + txt },
     ];
-    const r = forjaCallLLMDetalhado(msgs, 8000);
+    const r = forjaCallLLMDetalhado(msgs, 8000, undefined, 'financasLeitura');
     let parsed: Record<string, unknown>;
     try { parsed = extrairJsonFatura(r.texto) as Record<string, unknown>; }
     catch { return { ok: false, error: 'A IA não retornou um JSON válido. Tente de novo ou cole o texto manualmente.' }; }
@@ -6928,7 +6936,7 @@ function reclassificarCategoriasIA(mes: string): ServerResult {
       const g = geminiGenerateContent([{ text: userMsg }], { system: sys, json: true, maxTokens: 4000, temperature: 0 });
       texto = g.texto; modelo = g.modelo;
     } else {
-      const r = forjaCallLLMDetalhado([{ role: 'system', content: sys }, { role: 'user', content: userMsg }], 4000);
+      const r = forjaCallLLMDetalhado([{ role: 'system', content: sys }, { role: 'user', content: userMsg }], 4000, undefined, 'financasCategorias');
       texto = r.texto; modelo = r.modelo;
     }
 
@@ -7784,6 +7792,12 @@ const SERVICOS_IA: ServicoIA[] = [
   { id: 'blueprint', label: 'Blueprint',           descricao: 'Gera blueprint técnico + prompts (saída longa em JSON).', stack: 'proxy',  complexidade: 'pesada',  propKey: 'LLM_MODEL_BLUEPRINT', roteavel: true },
   { id: 'diagrama',  label: 'Diagrama',            descricao: 'Gera diagramas Mermaid.',                                 stack: 'proxy',  complexidade: 'media',   propKey: 'LLM_MODEL_DIAGRAMA',  roteavel: true },
   { id: 'auditoria', label: 'Auditoria',           descricao: 'Auditoria técnica de sistemas (override dedicado).',      stack: 'proxy',  complexidade: 'pesada',  propKey: 'LLM_MODEL_AUDITORIA', roteavel: true },
+  { id: 'conselho',  label: 'Conselho de especialistas', descricao: 'Pareceres multi-persona de produto.',               stack: 'proxy',  complexidade: 'media',   propKey: 'LLM_MODEL_CONSELHO',  roteavel: true },
+  { id: 'entrevista', label: 'Entrevistas & discovery', descricao: 'Análise de entrevista + roteiro de discovery.',       stack: 'proxy',  complexidade: 'media',   propKey: 'LLM_MODEL_ENTREVISTA', roteavel: true },
+  { id: 'acoes',     label: 'Ações rápidas da IA', descricao: 'Resumo executivo, preço, release notes, ideias, risco, refinar prompt.', stack: 'proxy', complexidade: 'media', propKey: 'LLM_MODEL_ACOES', roteavel: true },
+  { id: 'financasPlano', label: 'Finanças — planos (IA)', descricao: 'Plano de redução, mapa ideal e plano por fases.',  stack: 'proxy',  complexidade: 'pesada',  propKey: 'LLM_MODEL_FIN_PLANO', roteavel: true },
+  { id: 'financasLeitura', label: 'Finanças — leitura de fatura', descricao: 'Interpreta texto de fatura de cartão.',     stack: 'proxy',  complexidade: 'media',   propKey: 'LLM_MODEL_FIN_FATURA', roteavel: true },
+  { id: 'financasCategorias', label: 'Finanças — reclassificar', descricao: 'Classifica gastos "outros" (fallback sem Gemini).', stack: 'proxy', complexidade: 'simples', propKey: 'LLM_MODEL_FIN_CAT', roteavel: true },
   // Gemini (multimodal) — visualização; troca de modelo no select Gemini.
   { id: 'fatura',     label: 'OCR de fatura (Gemini)',  descricao: 'Lê faturas de cartão em PDF/imagem.',                stack: 'gemini', complexidade: 'media',   propKey: 'GEMINI_MODEL', roteavel: false },
   { id: 'recibo',     label: 'Recibos da empresa (Gemini)', descricao: 'Lê recibos/notas de despesa da empresa.',        stack: 'gemini', complexidade: 'media',   propKey: 'GEMINI_MODEL', roteavel: false },
@@ -8001,6 +8015,22 @@ function _lerStatusLLM(): UltimoStatusLLM | null {
   } catch { return null; }
 }
 
+// Status POR serviço (uso) — sustenta o farol individual no painel de roteamento.
+function _salvarStatusUso(uso: string, s: UltimoStatusLLM): void {
+  if (!uso) return;
+  try {
+    PropertiesService.getScriptProperties().setProperty('FORJA_STATUS_USO_' + uso, JSON.stringify(s));
+  } catch { /* ignore */ }
+}
+
+function _lerStatusUso(uso: string): UltimoStatusLLM | null {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty('FORJA_STATUS_USO_' + uso);
+    if (!raw) return null;
+    return JSON.parse(raw) as UltimoStatusLLM;
+  } catch { return null; }
+}
+
 function forjaCallLLM(messages: LlmMessage[], maxTokens?: number, modeloOverride?: string, uso?: string): string {
   // Wrapper retro-compatível — só devolve o texto. Atualiza _ultimoModeloUsado
   // pra quem precisar resgatar via getUltimoModeloUsado().
@@ -8043,7 +8073,8 @@ function forjaCallLLMDetalhado(
       else if (r.code === 529 || r.code === 503) hint = ' — o provedor do LLM está sobrecarregado no momento (já tentamos algumas vezes). Aguarde 1-2 min e tente de novo, ou conecte o Gemini em Configurações pra leitura mais estável.';
       else if (r.code === 429) hint = ' — sugestão: limite de rate atingido. Aguarde 1min ou troque de modelo.';
       else if (r.code === 401 || r.code === 403) hint = ' — sugestão: chave da API inválida. Cheque em Configurações.';
-      _salvarStatusLLM({ ok: false, ts: Date.now(), modelo, latenciaMs: Date.now() - t0, codigo: r.code, erro: `HTTP ${r.code}${hint}` });
+      const stErr = { ok: false, ts: Date.now(), modelo, latenciaMs: Date.now() - t0, codigo: r.code, erro: `HTTP ${r.code}${hint}` };
+      _salvarStatusLLM(stErr); _salvarStatusUso(uso || '', stErr);
       throw new Error(`LLM ${r.code} (${elapsed}s) em ${r.url} — ${r.body.slice(0, 300)}${hint}`);
     }
     const json = JSON.parse(r.body);
@@ -8062,14 +8093,16 @@ function forjaCallLLMDetalhado(
       else if (r.code === 529 || r.code === 503) hint = ' — o provedor do LLM está sobrecarregado no momento (já tentamos algumas vezes). Aguarde 1-2 min e tente de novo, ou conecte o Gemini em Configurações pra leitura mais estável.';
       else if (r.code === 429) hint = ' — sugestão: limite de rate atingido. Aguarde 1min ou troque de modelo.';
       else if (r.code === 401 || r.code === 403) hint = ' — sugestão: chave da API inválida. Cheque em Configurações.';
-      _salvarStatusLLM({ ok: false, ts: Date.now(), modelo, latenciaMs: Date.now() - t0, codigo: r.code, erro: `HTTP ${r.code}${hint}` });
+      const stErr = { ok: false, ts: Date.now(), modelo, latenciaMs: Date.now() - t0, codigo: r.code, erro: `HTTP ${r.code}${hint}` };
+      _salvarStatusLLM(stErr); _salvarStatusUso(uso || '', stErr);
       throw new Error(`LLM ${r.code} (${elapsed}s) em ${r.url} — ${r.body.slice(0, 300)}${hint}`);
     }
     const json = JSON.parse(r.body);
     texto = (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '';
   }
   const latenciaMs = Date.now() - t0;
-  _salvarStatusLLM({ ok: true, ts: Date.now(), modelo, latenciaMs });
+  const stOk = { ok: true, ts: Date.now(), modelo, latenciaMs };
+  _salvarStatusLLM(stOk); _salvarStatusUso(uso || '', stOk);
   return { texto, modelo, latenciaMs };
 }
 
@@ -8311,7 +8344,7 @@ function refinarPrompt(input: { key: string; atual?: string; instrucao?: string 
     const out = forjaCallLLM([
       { role: 'system', content: sys },
       { role: 'user', content: base },
-    ], 2000);
+    ], 2000, undefined, 'acoes');
     return { ok: true, data: String(out || '').replace(/^```[a-z]*\s*/i, '').replace(/\s*```$/i, '').trim() };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao refinar prompt' };
@@ -8534,7 +8567,7 @@ function acaoIAResumoExecutivo(): ServerResult {
   try {
     const ctx = buildContextoPortfolio();
     const sys = getPromptEfetivo('chat') + ctx + '\n\nVocê acabou de receber um snapshot REAL do portfólio. Faça um RESUMO EXECUTIVO de no máximo 250 palavras com: 1) panorama (1 linha), 2) destaques positivos (2-3 bullets), 3) pontos de atenção (2-3 bullets), 4) próximas ações sugeridas (3 bullets concretos). Use markdown. Cite NOMES específicos do contexto.';
-    const out = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: 'Gere o resumo executivo do meu portfólio.' }], 1200);
+    const out = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: 'Gere o resumo executivo do meu portfólio.' }], 1200, undefined, 'acoes');
     return { ok: true, data: out };
   } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro' }; }
 }
@@ -8544,7 +8577,7 @@ function acaoIASugerirPreco(sistemaId: string): ServerResult {
     if (!sistemaId) return { ok: false, error: 'Selecione um sistema' };
     const ctx = buildContextoSistema(sistemaId);
     const sys = getPromptEfetivo('chat') + ctx + '\n\nCom base no contexto do sistema selecionado (estágio, propósito, stack, custos), SUGIRA 3 modelos de precificação por assinatura (planos sugeridos com nome, preço mensal, o que entrega, perfil de cliente). Use markdown com tabela ou bullets. Justifique cada faixa. Em R$. Conservador, mas que cubra os custos e gere margem mínima de 60%. Máx 350 palavras.';
-    const out = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: 'Sugira preços de assinatura para este sistema.' }], 1500);
+    const out = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: 'Sugira preços de assinatura para este sistema.' }], 1500, undefined, 'acoes');
     return { ok: true, data: out };
   } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro' }; }
 }
@@ -8562,7 +8595,7 @@ function acaoIAReleaseNotes(sistemaId: string, dias: number): ServerResult {
     if (commits.length === 0) return { ok: false, error: 'Nenhum commit no período' };
     const lista = commits.slice(0, 40).map((c) => `- [${c.sha}] ${c.message.split('\n')[0]} — ${c.author} (${c.date.slice(0, 10)})`).join('\n');
     const sys = getPromptEfetivo('chat') + `\n\nVocê é encarregado de gerar RELEASE NOTES em markdown para o sistema "${sistema['nome']}" (${sistema['codinome']}). Agrupe por categoria (✨ Novidades, 🛠️ Melhorias, 🐛 Correções, 🧹 Manutenção). Reescreva mensagens técnicas em linguagem de produto para usuários finais. Omita commits triviais (merge, bump). Use tom profissional, em português. No final, inclua "## Detalhes técnicos" com até 5 commits importantes (mensagem original).`;
-    const out = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: `Commits dos últimos ${dias || 30} dias:\n\n${lista}\n\nGere as release notes.` }], 2500);
+    const out = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: `Commits dos últimos ${dias || 30} dias:\n\n${lista}\n\nGere as release notes.` }], 2500, undefined, 'acoes');
     return { ok: true, data: { texto: out, totalCommits: commits.length } };
   } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro' }; }
 }
@@ -8580,7 +8613,7 @@ function acaoIAIdeiasParaCliente(clienteId: string): ServerResult {
     for (const s of sistemas.slice(0, 15)) ctx += `- ${s['nome']}: ${String(s['proposito'] || '').slice(0, 120)}\n`;
     ctx += '--- FIM DO CONTEXTO ---\n';
     const sys = getPromptEfetivo('chat') + ctx + '\n\nGere 5 NOVAS IDEIAS DE PRODUTO/AUTOMAÇÃO sob medida para este cliente, considerando suas notas. Para cada ideia: título, problema que resolve (1 linha), proposta (2 linhas), faixa de complexidade (baixa/média/alta), e por que faz sentido AGORA. Evite ideias que já existam no portfólio acima. Use markdown.';
-    const out = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: `Me dê 5 ideias novas para ${cliente['nome']}.` }], 1800);
+    const out = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: `Me dê 5 ideias novas para ${cliente['nome']}.` }], 1800, undefined, 'acoes');
     return { ok: true, data: out };
   } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro' }; }
 }
@@ -8589,7 +8622,7 @@ function acaoIARiscoPortfolio(): ServerResult {
   try {
     const ctx = buildContextoPortfolio();
     const sys = getPromptEfetivo('chat') + ctx + '\n\nFaça uma ANÁLISE DE RISCOS do portfólio: 1) concentração (cliente único, stack única, dependência única), 2) saúde (sistemas críticos), 3) financeira (custos vs receita visível), 4) operacional (alertas recentes). Para cada risco identificado: severidade (baixa/média/alta), impacto, mitigação acionável. Máx 400 palavras, markdown.';
-    const out = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: 'Analise os riscos do meu portfólio.' }], 1500);
+    const out = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: 'Analise os riscos do meu portfólio.' }], 1500, undefined, 'acoes');
     return { ok: true, data: out };
   } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro' }; }
 }
@@ -9073,7 +9106,7 @@ function conselhoEspecialistas(input: { ideiaId?: string; sistemaId?: string; te
     const resposta = forjaCallLLM([
       { role: 'system', content: system },
       { role: 'user', content: contexto },
-    ], 2500);
+    ], 2500, undefined, 'conselho');
     const json = extrairJson(resposta);
 
     dbCreate('Conselho', { contexto: contexto.slice(0, 4000), persona: personas.join(','), parecer: JSON.stringify(json), sintese: '', data: new Date().toISOString() });
@@ -9533,7 +9566,7 @@ function analisarEntrevista(input: { id?: string; transcricao?: string }): Serve
     const resposta = forjaCallLLM([
       { role: 'system', content: getPromptEfetivo('entrevista') },
       { role: 'user', content: texto },
-    ], 1500);
+    ], 1500, undefined, 'entrevista');
     const json = extrairJson(resposta) as {
       resumo?: string; dores?: string[]; objetivos?: string[];
       requisitos?: string[]; perguntasAbertas?: string[]; oportunidade?: string;
@@ -9569,7 +9602,7 @@ function gerarPerguntasDiscovery(input: { segmento?: string; contexto?: string }
     const resposta = forjaCallLLM([
       { role: 'system', content: system },
       { role: 'user', content: userMsg },
-    ], 1400);
+    ], 1400, undefined, 'entrevista');
     const json = extrairJson(resposta) as { blocos?: Array<{ tema?: string; perguntas?: string[] }> };
     return { ok: true, data: { blocos: json.blocos || [] } };
   } catch (e: unknown) {
@@ -11979,7 +12012,7 @@ function acaoIAAuditarSistema(sistemaId: string): ServerResult {
     const modeloEfetivo = modeloAuditoria || props.getProperty('LLM_MODEL') || 'desconhecido';
 
     const inicio = Date.now();
-    const resposta = forjaCallLLM(messages, 5500, modeloAuditoria);
+    const resposta = forjaCallLLM(messages, 5500, modeloAuditoria, 'auditoria');
     const duracaoMs = Date.now() - inicio;
     const parsed = _parseAuditPayload(resposta);
 
@@ -12329,12 +12362,21 @@ function listarServicosIA(): ServerResult {
       const ov = (props.getProperty(s.propKey) || '').trim();
       const modeloEfetivo = ov || cfg.modelo;
       const meta = _classificarModelo(modeloEfetivo);
+      // Farol individual: status da última chamada DESTE serviço (< 30min).
+      const stUso = _lerStatusUso(s.id);
+      let saude: 'verde' | 'vermelho' | 'desconhecido' = 'desconhecido';
+      let ultimaChamada: { ts: number; ok: boolean; latenciaMs?: number; erro?: string } | null = null;
+      if (stUso) {
+        const min = (Date.now() - stUso.ts) / 60000;
+        if (min < 30) saude = stUso.ok ? 'verde' : 'vermelho';
+        ultimaChamada = { ts: stUso.ts, ok: stUso.ok, latenciaMs: stUso.latenciaMs, erro: stUso.erro };
+      }
       return {
         id: s.id, label: s.label, descricao: s.descricao, stack: s.stack,
         complexidade: s.complexidade, roteavel: s.roteavel,
         modeloEfetivo, overrideAtivo: !!ov,
         rotulo: meta.rotulo, tier: meta.tier,
-        endpoint: cfg.baseUrl,
+        endpoint: cfg.baseUrl, saude, ultimaChamada,
       };
     });
 
@@ -12541,6 +12583,195 @@ function driveConnectorDelete(id: string): ServerResult {
     return { ok: true };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover conta' };
+  }
+}
+
+// ─── Contas (Atelier → Contas) — inventário central de contas/serviços ────────
+// Guarda só metadados (plano, cobrança, custo, renovação). A senha/API key vive
+// no Cofre (E2E) — aqui só referenciamos via segredoLabel + flag temSegredo.
+
+function _parseLogins(l: Record<string, unknown>): Array<{ email: string; rotulo: string }> {
+  let logins: Array<{ email: string; rotulo: string }> = [];
+  try {
+    const raw = l.logins;
+    if (raw) {
+      const arr = JSON.parse(String(raw));
+      if (Array.isArray(arr)) {
+        logins = arr
+          .map((x) => ({ email: String((x && x.email) || ''), rotulo: String((x && x.rotulo) || '') }))
+          .filter((x) => x.email || x.rotulo);
+      }
+    }
+  } catch { /* json inválido — cai no fallback */ }
+  // Back-compat: linhas antigas sem `logins` mas com `email` único.
+  if (logins.length === 0 && String(l.email || '').trim()) {
+    logins = [{ email: String(l.email).trim(), rotulo: String(l.rotulo || '').trim() }];
+  }
+  return logins;
+}
+
+function _normalizarConta(l: Record<string, unknown>): Record<string, unknown> {
+  const logins = _parseLogins(l);
+  return {
+    id: String(l.id || ''),
+    categoria: String(l.categoria || 'outro'),
+    servico: String(l.servico || ''),
+    rotulo: String(l.rotulo || ''),
+    email: logins[0] ? logins[0].email : String(l.email || ''),
+    logins,
+    url: String(l.url || ''),
+    plano: String(l.plano || ''),
+    tipoCobranca: String(l.tipoCobranca || ''),
+    custo: Number(l.custo || 0) || 0,
+    moeda: String(l.moeda || 'BRL'),
+    formaPagamento: String(l.formaPagamento || ''),
+    proximaCobranca: String(l.proximaCobranca || ''),
+    status: String(l.status || 'ativa'),
+    temSegredo: String(l.temSegredo || ''),
+    segredoLabel: String(l.segredoLabel || ''),
+    tags: String(l.tags || ''),
+    notas: String(l.notas || ''),
+    criadoEm: String(l.criadoEm || ''),
+    atualizadoEm: String(l.atualizadoEm || ''),
+  };
+}
+
+function contasList(): ServerResult {
+  try {
+    const linhas = (dbGetAll('Contas') as Array<Record<string, unknown>>).map(_normalizarConta);
+    return { ok: true, data: linhas };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar contas' };
+  }
+}
+
+function contasSave(payload: {
+  id?: string; categoria?: string; servico?: string; rotulo?: string; email?: string; url?: string;
+  logins?: Array<{ email?: string; rotulo?: string }>;
+  plano?: string; tipoCobranca?: string; custo?: number | string; moeda?: string; formaPagamento?: string;
+  proximaCobranca?: string; status?: string; temSegredo?: string; segredoLabel?: string; tags?: string; notas?: string;
+}): ServerResult {
+  try {
+    const servico = String(payload.servico || '').trim();
+    if (!servico) throw new Error('Informe o nome do serviço/conta (ex.: ChatGPT, Gmail).');
+    const agora = new Date().toISOString();
+    const custoNum = typeof payload.custo === 'number' ? payload.custo : parseFloat(String(payload.custo || '0').replace(',', '.'));
+    // Normaliza a lista de logins (várias contas/e-mails no mesmo serviço).
+    let logins = Array.isArray(payload.logins)
+      ? payload.logins.map((x) => ({ email: String((x && x.email) || '').trim(), rotulo: String((x && x.rotulo) || '').trim() })).filter((x) => x.email || x.rotulo)
+      : [];
+    if (logins.length === 0 && String(payload.email || '').trim()) {
+      logins = [{ email: String(payload.email).trim(), rotulo: String(payload.rotulo || '').trim() }];
+    }
+    const base = {
+      categoria: String(payload.categoria || 'outro').trim(),
+      servico,
+      rotulo: String(payload.rotulo || '').trim(),
+      email: logins[0] ? logins[0].email : String(payload.email || '').trim(),
+      logins: JSON.stringify(logins),
+      url: String(payload.url || '').trim(),
+      plano: String(payload.plano || '').trim(),
+      tipoCobranca: String(payload.tipoCobranca || '').trim(),
+      custo: Number.isFinite(custoNum) ? custoNum : 0,
+      moeda: String(payload.moeda || 'BRL').trim(),
+      formaPagamento: String(payload.formaPagamento || '').trim(),
+      proximaCobranca: String(payload.proximaCobranca || '').trim(),
+      status: String(payload.status || 'ativa').trim(),
+      temSegredo: payload.temSegredo ? 'sim' : '',
+      segredoLabel: String(payload.segredoLabel || '').trim(),
+      tags: String(payload.tags || '').trim(),
+      notas: String(payload.notas || '').trim(),
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('Contas', payload.id, base);
+      return { ok: true, data: { id: payload.id } };
+    }
+    const novo = dbCreate('Contas', { ...base, criadoEm: agora });
+    return { ok: true, data: { id: String(novo.id || '') } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar conta' };
+  }
+}
+
+function contasDelete(id: string): ServerResult {
+  try {
+    dbDelete('Contas', id);
+    return { ok: true };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover conta' };
+  }
+}
+
+// Catálogo-semente: ferramentas/serviços atuais que vale a pena ter mapeados ou
+// experimentar. Idempotente — só adiciona os que ainda não existem (match por
+// servico, case-insensitive). Entram com status 'avaliar' pra você completar.
+function contasSeedCatalogo(): ServerResult {
+  try {
+    const CATALOGO: Array<{ categoria: string; servico: string; url: string; plano?: string; tipoCobranca?: string }> = [
+      // IA — assistentes / LLMs
+      { categoria: 'ia', servico: 'ChatGPT (OpenAI)', url: 'https://chat.openai.com', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'ia', servico: 'Claude.ai (Anthropic)', url: 'https://claude.ai', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'ia', servico: 'Gemini (Google)', url: 'https://gemini.google.com', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'ia', servico: 'Manus', url: 'https://manus.im', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'ia', servico: 'Perplexity', url: 'https://perplexity.ai', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'ia', servico: 'Grok (xAI)', url: 'https://grok.com', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'ia', servico: 'DeepSeek', url: 'https://chat.deepseek.com', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'ia', servico: 'Mistral (Le Chat)', url: 'https://chat.mistral.ai', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'ia', servico: 'NotebookLM (Google)', url: 'https://notebooklm.google.com', plano: 'Free', tipoCobranca: 'gratuito' },
+      // IA — código / dev
+      { categoria: 'dev', servico: 'Cursor', url: 'https://cursor.com', plano: 'Hobby', tipoCobranca: 'gratuito' },
+      { categoria: 'dev', servico: 'Replit', url: 'https://replit.com', plano: 'Starter', tipoCobranca: 'gratuito' },
+      { categoria: 'dev', servico: 'GitHub Copilot', url: 'https://github.com/features/copilot', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'dev', servico: 'v0 (Vercel)', url: 'https://v0.dev', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'dev', servico: 'Lovable', url: 'https://lovable.dev', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'dev', servico: 'Bolt.new', url: 'https://bolt.new', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'dev', servico: 'Windsurf', url: 'https://windsurf.com', plano: 'Free', tipoCobranca: 'gratuito' },
+      // IA — mídia / criação
+      { categoria: 'midia', servico: 'Midjourney', url: 'https://midjourney.com', plano: '—', tipoCobranca: 'mensal' },
+      { categoria: 'midia', servico: 'ElevenLabs', url: 'https://elevenlabs.io', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'midia', servico: 'Suno', url: 'https://suno.com', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'midia', servico: 'Runway', url: 'https://runwayml.com', plano: 'Free', tipoCobranca: 'gratuito' },
+      // Infra / dev tools
+      { categoria: 'infra', servico: 'GitHub', url: 'https://github.com', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'infra', servico: 'Vercel', url: 'https://vercel.com', plano: 'Hobby', tipoCobranca: 'gratuito' },
+      { categoria: 'infra', servico: 'Cloudflare', url: 'https://cloudflare.com', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'infra', servico: 'Supabase', url: 'https://supabase.com', plano: 'Free', tipoCobranca: 'gratuito' },
+      // E-mail
+      { categoria: 'email', servico: 'Gmail', url: 'https://mail.google.com', plano: 'Free', tipoCobranca: 'gratuito' },
+      { categoria: 'email', servico: 'Outlook', url: 'https://outlook.com', plano: 'Free', tipoCobranca: 'gratuito' },
+    ];
+    const existentes = (dbGetAll('Contas') as Array<Record<string, unknown>>)
+      .map((l) => String(l.servico || '').trim().toLowerCase());
+    const agora = new Date().toISOString();
+    let inseridos = 0;
+    for (const c of CATALOGO) {
+      if (existentes.indexOf(c.servico.toLowerCase()) >= 0) continue;
+      dbCreate('Contas', {
+        categoria: c.categoria,
+        servico: c.servico,
+        rotulo: '',
+        email: '',
+        url: c.url,
+        plano: c.plano || '',
+        tipoCobranca: c.tipoCobranca || '',
+        custo: 0,
+        moeda: 'BRL',
+        formaPagamento: '',
+        proximaCobranca: '',
+        status: 'avaliar',
+        temSegredo: '',
+        segredoLabel: '',
+        tags: 'sugestão',
+        notas: '',
+        criadoEm: agora,
+        atualizadoEm: agora,
+      });
+      inseridos += 1;
+    }
+    return { ok: true, data: { inseridos } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao semear catálogo' };
   }
 }
 

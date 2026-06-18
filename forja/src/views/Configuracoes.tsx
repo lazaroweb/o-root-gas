@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Row, Col, Input, Button, Form, Select, Tag, Popconfirm, App as AntApp, Skeleton, Spin } from 'antd';
+import { Row, Col, Input, Button, Form, Select, Tag, Popconfirm, App as AntApp, Skeleton, Spin, Collapse } from 'antd';
 import { Sparkles, GitBranch, Layers, KeyRound, Plus, Trash2, CheckCircle2, Zap, RefreshCw, ExternalLink } from 'lucide-react';
 import { ShieldCheck, Tags, Bell, Database, Layers as LayersSection } from 'lucide-react';
 import { PageHeader, Panel } from '../components/ui';
@@ -168,14 +168,14 @@ export default function Configuracoes(): React.ReactElement {
     switch (secao) {
       case 'conta':
         return <UsuariosPanel />;
-      case 'ia':
-        return (
-          <Row gutter={[18, 18]}>
-            <Col xs={24} lg={12}>
-              <Panel
-                title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Sparkles size={18} strokeWidth={1.6} color={t.accents.peach} /> Conexão de IA (Proxy)</span>}
-                extra={settings && connBadge(settings.llm.temChave, status?.llm)}
-              >
+      case 'ia': {
+        const iaItems = [
+          {
+            key: 'conexao',
+            label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Sparkles size={17} strokeWidth={1.6} color={t.accents.peach} /> Conexão de IA (Proxy)</span>,
+            extra: settings ? connBadge(settings.llm.temChave, status?.llm) : undefined,
+            children: (
+              <>
                 <Form form={llmForm} layout="vertical" onFinish={saveLlm} requiredMark={false}>
                   <Form.Item name="provider" label="Provedor">
                     <Select
@@ -207,14 +207,15 @@ export default function Configuracoes(): React.ReactElement {
                     onSelect={(id) => llmForm.setFieldsValue({ modelo: id })}
                   />
                 )}
-              </Panel>
-            </Col>
-
-            <Col xs={24} lg={12}>
-              <Panel
-                title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Sparkles size={18} strokeWidth={1.6} color={t.accents.sage} /> Google Gemini (gratuito)</span>}
-                extra={settings && connBadge(!!settings.gemini?.temChave)}
-              >
+              </>
+            ),
+          },
+          {
+            key: 'gemini',
+            label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Sparkles size={17} strokeWidth={1.6} color={t.accents.sage} /> Google Gemini (gratuito)</span>,
+            extra: settings ? connBadge(!!settings.gemini?.temChave) : undefined,
+            children: (
+              <>
                 <div style={{ background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 10, padding: '12px 14px', marginBottom: 16 }}>
                   <div style={{ fontSize: 12.5, fontWeight: 600, color: t.text, marginBottom: 6 }}>Como pegar sua chave (1 min, grátis):</div>
                   <ol style={{ margin: 0, paddingLeft: 18, color: t.textSecondary, fontSize: 12.5, lineHeight: 1.7 }}>
@@ -242,18 +243,30 @@ export default function Configuracoes(): React.ReactElement {
                     <Button icon={<Zap size={15} />} loading={testingGemini} onClick={testarGemini} disabled={!settings?.gemini?.temChave}>Testar</Button>
                   </div>
                 </Form>
-              </Panel>
-            </Col>
-
-            <Col xs={24}>
-              <RoteamentoIAPanel />
-            </Col>
-
-            <Col xs={24}>
-              <ModeloAuditoriaPanel />
-            </Col>
-          </Row>
+              </>
+            ),
+          },
+          {
+            key: 'roteamento',
+            label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Sparkles size={17} strokeWidth={1.6} color={t.accents.blue} /> Roteamento de IA por serviço</span>,
+            children: <RoteamentoIAPanel embedded />,
+          },
+          {
+            key: 'auditoria',
+            label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Sparkles size={17} strokeWidth={1.6} color={t.accents.peach} /> Modelo de IA para Auditoria</span>,
+            children: <ModeloAuditoriaPanel embedded />,
+          },
+        ];
+        return (
+          <Collapse
+            defaultActiveKey={[]}
+            items={iaItems}
+            expandIconPosition="end"
+            style={{ background: 'transparent', border: 'none' }}
+            className="forja-ia-collapse"
+          />
         );
+      }
       case 'integracoes':
         return (
           <Panel
