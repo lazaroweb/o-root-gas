@@ -114,16 +114,41 @@ export default function DriverPanel(): React.ReactElement {
 
   // ─── Navegador de arquivos (fonte: 'local' ou connectorId) ───────────────
   const [fonteAtiva, setFonteAtiva] = useState<string>('local');
-  const [trilha, setTrilha] = useState<Crumb[]>([{ id: 'root', nome: 'Meu Drive' }]);
+  // Uma trilha (breadcrumb) por fonte → cada aba lembra a pasta onde você estava.
+  const [trilhas, setTrilhas] = useState<Record<string, Crumb[]>>({ local: [{ id: 'root', nome: 'Meu Drive' }] });
+  // Cache de itens por "fonte::pasta" → alternar entre abas não recarrega.
+  const cacheRef = useRef<Record<string, DriveItem[]>>({});
   const [itens, setItens] = useState<DriveItem[]>([]);
   const [carregando, setCarregando] = useState(false);
   const [busca, setBusca] = useState('');
   const [authUrl, setAuthUrl] = useState('');
   const [erro, setErro] = useState('');
 
+  const trilha = trilhas[fonteAtiva] || [{ id: 'root', nome: 'Meu Drive' }];
   const atual = trilha[trilha.length - 1];
 
-  const listar = useCallback((fonte: string, folderId: string, termo: string) => {
+  const setTrilhaAtual = (updater: (prev: Crumb[]) => Crumb[]) => {
+    setTrilhas((m) => {
+      const prev = m[fonteAtiva] || [{ id: 'root', nome: 'Meu Drive' }];
+      return { ...m, [fonteAtiva]: updater(prev) };
+    });
+  };
+
+  const purgarFonte = (id: string) => {
+    setTrilhas((m) => { const n = { ...m }; delete n[id]; return n; });
+    Object.keys(cacheRef.current).forEach((k) => { if (k.indexOf(id + '::') === 0) delete cacheRef.current[k]; });
+  };
+
+  const listar = useCallback((fonte: string, folderId: string, termo: string, force = false) => {
+    const key = `${fonte}::${folderId}`;
+    // Busca é sempre ao vivo; navegação normal usa cache (se houver e não for refresh).
+    if (!termo && !force && cacheRef.current[key]) {
+      setErro('');
+      setAuthUrl('');
+      setItens(cacheRef.current[key]);
+      setCarregando(false);
+      return;
+    }
     setCarregando(true);
     setErro('');
     setAuthUrl('');
@@ -133,7 +158,9 @@ export default function DriverPanel(): React.ReactElement {
     call
       .then((r) => {
         if (r.ok && r.data) {
-          setItens((r.data as { arquivos: DriveItem[] }).arquivos || []);
+          const arr = (r.data as { arquivos: DriveItem[] }).arquivos || [];
+          setItens(arr);
+          if (!termo) cacheRef.current[key] = arr;
         } else if (r.error === 'NOT_CONNECTED') {
           setErro('Esta conta não está conectada. Vá em "Contas & nuvens" e clique em Conectar.');
           setItens([]);
@@ -162,14 +189,18 @@ export default function DriverPanel(): React.ReactElement {
   }, [busca]);
 
   const trocarFonte = (f: string) => {
-    setFonteAtiva(f);
     setBusca('');
-    let nome = 'Meu Drive';
-    if (f !== 'local') {
-      const c = conectores.find((x) => x.id === f);
-      nome = c?.rotulo || provedorLabel(c?.provedor || '') || 'Conta';
-    }
-    setTrilha([{ id: 'root', nome }]);
+    // Mantém a trilha já existente da fonte (lembra a pasta); só inicializa se nova.
+    setTrilhas((m) => {
+      if (m[f]) return m;
+      let nome = 'Meu Drive';
+      if (f !== 'local') {
+        const c = conectores.find((x) => x.id === f);
+        nome = c?.rotulo || provedorLabel(c?.provedor || '') || 'Conta';
+      }
+      return { ...m, [f]: [{ id: 'root', nome }] };
+    });
+    setFonteAtiva(f);
   };
 
   const entrarPasta = (item: DriveItem) => {
@@ -178,12 +209,12 @@ export default function DriverPanel(): React.ReactElement {
       return;
     }
     setBusca('');
-    setTrilha((tr) => [...tr, { id: item.id, nome: item.nome }]);
+    setTrilhaAtual((tr) => [...tr, { id: item.id, nome: item.nome }]);
   };
 
   const irParaCrumb = (idx: number) => {
     setBusca('');
-    setTrilha((tr) => tr.slice(0, idx + 1));
+    setTrilhaAtual((tr) => tr.slice(0, idx + 1));
   };
 
   // ─── Conexão OAuth ────────────────────────────────────────────────────────
@@ -229,6 +260,7 @@ export default function DriverPanel(): React.ReactElement {
     const r = await callServer<ServerResult>('driveOAuthDesconectar', c.id);
     if (r.ok) {
       message.success('Conta desconectada');
+      purgarFonte(c.id);
       if (fonteAtiva === c.id) trocarFonte('local');
       carregarContas();
     } else message.error(r.error || 'Erro');
@@ -258,7 +290,7 @@ export default function DriverPanel(): React.ReactElement {
 
   const removerConta = async (id: string) => {
     const r = await callServer<ServerResult>('driveConnectorDelete', id);
-    if (r.ok) { message.success('Conta removida'); if (fonteAtiva === id) trocarFonte('local'); carregarContas(); }
+    if (r.ok) { message.success('Conta removida'); purgarFonte(id); if (fonteAtiva === id) trocarFonte('local'); carregarContas(); }
     else message.error(r.error || 'Erro');
   };
 
@@ -292,20 +324,41 @@ export default function DriverPanel(): React.ReactElement {
 
   // ─── Render: aba Arquivos ───────────────────────────────────────────────
   const fonteOptions = useMemo(() => ([
-    { value: 'local', label: `Meu Drive${contaGoogle ? ` · ${contaGoogle}` : ''}` },
-    ...conectadas.map((c) => ({ value: c.id, label: `${c.rotulo || provedorLabel(c.provedor)} · ${provedorLabel(c.provedor)}` })),
-  ]), [conectadas, contaGoogle]);
+    { value: 'local', short: 'Meu Drive', provedor: 'local' },
+    ...conectadas.map((c) => ({ value: c.id, short: c.rotulo || provedorLabel(c.provedor), provedor: c.provedor })),
+  ]), [conectadas]);
 
   const renderArquivos = () => (
     <div style={{ padding: '14px 18px 18px' }}>
+      {/* Abas de contas (fontes) — alternar é instantâneo (cache por aba) */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12, overflowX: 'auto', paddingBottom: 2 }}>
+        {fonteOptions.map((o) => {
+          const ativo = o.value === fonteAtiva;
+          return (
+            <button
+              key={o.value}
+              onClick={() => trocarFonte(o.value)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 7,
+                padding: '7px 13px', borderRadius: 999, cursor: 'pointer',
+                whiteSpace: 'nowrap', flexShrink: 0,
+                fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: ativo ? 600 : 500,
+                border: `1px solid ${ativo ? t.accents.blue : t.borderSoft}`,
+                background: ativo ? `${t.accents.blue}14` : 'transparent',
+                color: ativo ? t.text : t.textSecondary,
+                transition: 'all 0.15s',
+              }}
+            >
+              {o.provedor === 'local'
+                ? <HardDrive size={14} color={ativo ? t.accents.blue : t.textTertiary} />
+                : <Cloud size={14} color={ativo ? t.accents.blue : t.textTertiary} />}
+              {o.short}
+            </button>
+          );
+        })}
+      </div>
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-        <Select
-          value={fonteAtiva}
-          onChange={trocarFonte}
-          options={fonteOptions}
-          style={{ minWidth: 230 }}
-          size="middle"
-        />
         <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', flex: 1, minWidth: 160 }}>
           {trilha.map((c, i) => (
             <React.Fragment key={c.id + i}>
@@ -335,8 +388,8 @@ export default function DriverPanel(): React.ReactElement {
           allowClear
           style={{ width: 200 }}
         />
-        <Tooltip title="Atualizar">
-          <Button icon={<RefreshCw size={14} />} onClick={() => listar(fonteAtiva, atual.id, busca.trim())} />
+        <Tooltip title="Atualizar (recarrega esta pasta)">
+          <Button icon={<RefreshCw size={14} />} onClick={() => listar(fonteAtiva, atual.id, busca.trim(), true)} />
         </Tooltip>
       </div>
 

@@ -36,6 +36,15 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.63.1] — 2026-06-18
+
+### Alterado
+
+- **Driver → Arquivos: abas de contas no lugar do dropdown.** As fontes (Meu Drive
+  + contas conectadas) viram abas lado a lado, estilo navegador. Alternar é
+  **instantâneo**: cada aba tem cache de itens por pasta e **lembra a pasta** onde
+  você estava. O botão Atualizar força o recarregamento da pasta atual.
+
 ## [1.63.0] — 2026-06-18
 
 ### Adicionado
