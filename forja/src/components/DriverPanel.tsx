@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   App as AntApp, Button, Input, Tabs, Tag, Empty, Skeleton, Tooltip,
   Select, Form, Popconfirm, Modal,
@@ -6,7 +6,7 @@ import {
 import {
   HardDrive, Folder, FileText, FileSpreadsheet, FileImage, Presentation,
   ChevronRight, RefreshCw, Search, ExternalLink, Plus, Trash2, Cloud,
-  Home, ShieldCheck, Info, Link2,
+  Home, ShieldCheck, Info, Link2, KeyRound, Copy, Unplug,
 } from 'lucide-react';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -44,6 +44,9 @@ const PROVEDORES = [
   { value: 'outro', label: 'Outro' },
 ];
 
+// Provedores com OAuth implementado.
+const OAUTH_PROVS = ['google-drive', 'onedrive'];
+
 function provedorLabel(v: string): string {
   return PROVEDORES.find((p) => p.value === v)?.label || v || 'Conta';
 }
@@ -63,7 +66,6 @@ function dataHumana(iso: string): string {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-// Ícone por tipo de arquivo do Drive.
 function IconePorMime({ item, size = 18 }: { item: DriveItem; size?: number }): React.ReactElement {
   const t = useTokens();
   if (item.isFolder) return <Folder size={size} color={t.accents.blue} strokeWidth={1.7} />;
@@ -79,7 +81,39 @@ export default function DriverPanel(): React.ReactElement {
   const { message } = AntApp.useApp();
   const [tab, setTab] = useState<'arquivos' | 'contas'>('arquivos');
 
-  // ─── Navegador de arquivos ──────────────────────────────────────────────
+  // ─── Contas (carregadas no mount: alimentam o seletor de fonte e a aba) ───
+  const [conectores, setConectores] = useState<Connector[]>([]);
+  const [contaGoogle, setContaGoogle] = useState('');
+  const [credStatus, setCredStatus] = useState<Record<string, boolean>>({});
+  const [redirectUri, setRedirectUri] = useState('');
+  const [carregandoContas, setCarregandoContas] = useState(false);
+
+  const carregarContas = useCallback(() => {
+    setCarregandoContas(true);
+    Promise.all([
+      callServer<ServerResult>('driveConnectorsList'),
+      callServer<ServerResult>('driveInfoConta'),
+      callServer<ServerResult>('driveOAuthGetCredenciaisStatus'),
+    ])
+      .then(([rc, ri, rs]) => {
+        if (rc.ok && rc.data) setConectores(rc.data as Connector[]);
+        if (ri.ok && ri.data) setContaGoogle((ri.data as { email: string }).email || '');
+        if (rs.ok && rs.data) {
+          const d = rs.data as { status: Record<string, boolean>; redirectUri: string };
+          setCredStatus(d.status || {});
+          setRedirectUri(d.redirectUri || '');
+        }
+      })
+      .catch(() => { /* silencioso */ })
+      .finally(() => setCarregandoContas(false));
+  }, []);
+
+  useEffect(() => { carregarContas(); }, [carregarContas]);
+
+  const conectadas = useMemo(() => conectores.filter((c) => c.status === 'conectada'), [conectores]);
+
+  // ─── Navegador de arquivos (fonte: 'local' ou connectorId) ───────────────
+  const [fonteAtiva, setFonteAtiva] = useState<string>('local');
   const [trilha, setTrilha] = useState<Crumb[]>([{ id: 'root', nome: 'Meu Drive' }]);
   const [itens, setItens] = useState<DriveItem[]>([]);
   const [carregando, setCarregando] = useState(false);
@@ -89,19 +123,25 @@ export default function DriverPanel(): React.ReactElement {
 
   const atual = trilha[trilha.length - 1];
 
-  const listar = useCallback((folderId: string, termo: string) => {
+  const listar = useCallback((fonte: string, folderId: string, termo: string) => {
     setCarregando(true);
     setErro('');
     setAuthUrl('');
-    callServer<ServerResult>('driveListar', folderId, termo)
+    const call = fonte === 'local'
+      ? callServer<ServerResult>('driveListar', folderId, termo)
+      : callServer<ServerResult>('driveListarRemoto', fonte, folderId, termo);
+    call
       .then((r) => {
         if (r.ok && r.data) {
           setItens((r.data as { arquivos: DriveItem[] }).arquivos || []);
+        } else if (r.error === 'NOT_CONNECTED') {
+          setErro('Esta conta não está conectada. Vá em "Contas & nuvens" e clique em Conectar.');
+          setItens([]);
         } else if (r.error && r.error.indexOf('AUTH_NEEDED::') === 0) {
           setAuthUrl(r.error.split('::')[1] || '');
           setItens([]);
         } else {
-          setErro(r.error || 'Erro ao listar o Drive');
+          setErro(r.error || 'Erro ao listar arquivos');
           setItens([]);
         }
       })
@@ -110,17 +150,27 @@ export default function DriverPanel(): React.ReactElement {
   }, []);
 
   useEffect(() => {
-    if (tab === 'arquivos') listar(atual.id, busca.trim());
+    if (tab === 'arquivos') listar(fonteAtiva, atual.id, busca.trim());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [atual.id, tab]);
+  }, [atual.id, fonteAtiva, tab]);
 
-  // Busca com debounce dentro da pasta atual
   useEffect(() => {
     if (tab !== 'arquivos') return;
-    const timer = setTimeout(() => listar(atual.id, busca.trim()), 380);
+    const timer = setTimeout(() => listar(fonteAtiva, atual.id, busca.trim()), 380);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busca]);
+
+  const trocarFonte = (f: string) => {
+    setFonteAtiva(f);
+    setBusca('');
+    let nome = 'Meu Drive';
+    if (f !== 'local') {
+      const c = conectores.find((x) => x.id === f);
+      nome = c?.rotulo || provedorLabel(c?.provedor || '') || 'Conta';
+    }
+    setTrilha([{ id: 'root', nome }]);
+  };
 
   const entrarPasta = (item: DriveItem) => {
     if (!item.isFolder) {
@@ -136,32 +186,58 @@ export default function DriverPanel(): React.ReactElement {
     setTrilha((tr) => tr.slice(0, idx + 1));
   };
 
-  // ─── Contas & nuvens ────────────────────────────────────────────────────
-  const [conectores, setConectores] = useState<Connector[]>([]);
-  const [contaGoogle, setContaGoogle] = useState('');
-  const [carregandoContas, setCarregandoContas] = useState(false);
+  // ─── Conexão OAuth ────────────────────────────────────────────────────────
+  const [conectandoId, setConectandoId] = useState('');
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+  const conectar = async (c: Connector) => {
+    if (!credStatus[c.provedor]) {
+      message.warning('Configure as credenciais OAuth deste provedor primeiro.');
+      abrirCredenciais(c.provedor);
+      return;
+    }
+    setConectandoId(c.id);
+    try {
+      const r = await callServer<ServerResult>('driveOAuthAuthorizeUrl', c.id);
+      if (!r.ok) { message.error(r.error || 'Erro ao iniciar autorização'); setConectandoId(''); return; }
+      const data = r.data as { authorized?: boolean; url?: string };
+      if (data.authorized) { message.success('Conta já conectada!'); setConectandoId(''); carregarContas(); return; }
+      window.open(data.url, '_blank', 'width=560,height=680,noopener');
+      message.info('Conclua o consentimento na nova janela. Vou verificar automaticamente.');
+      let tentativas = 0;
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(() => {
+        tentativas += 1;
+        callServer<ServerResult>('driveOAuthStatus', c.id).then((s) => {
+          const conectada = !!(s.ok && (s.data as { conectada?: boolean })?.conectada);
+          if (conectada || tentativas > 40) {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setConectandoId('');
+            if (conectada) { message.success('Conta conectada!'); carregarContas(); }
+          }
+        });
+      }, 3000);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro');
+      setConectandoId('');
+    }
+  };
+
+  const desconectar = async (c: Connector) => {
+    const r = await callServer<ServerResult>('driveOAuthDesconectar', c.id);
+    if (r.ok) {
+      message.success('Conta desconectada');
+      if (fonteAtiva === c.id) trocarFonte('local');
+      carregarContas();
+    } else message.error(r.error || 'Erro');
+  };
+
+  // ─── Modal: adicionar conta ────────────────────────────────────────────────
   const [modalAberto, setModalAberto] = useState(false);
   const [salvando, setSalvando] = useState(false);
   const [form] = Form.useForm();
-
-  const carregarContas = useCallback(() => {
-    setCarregandoContas(true);
-    Promise.all([
-      callServer<ServerResult>('driveConnectorsList'),
-      callServer<ServerResult>('driveInfoConta'),
-    ])
-      .then(([rc, ri]) => {
-        if (rc.ok && rc.data) setConectores(rc.data as Connector[]);
-        if (ri.ok && ri.data) setContaGoogle((ri.data as { email: string }).email || '');
-      })
-      .catch(() => { /* silencioso */ })
-      .finally(() => setCarregandoContas(false));
-  }, []);
-
-  useEffect(() => {
-    if (tab === 'contas') carregarContas();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
 
   const salvarConta = async () => {
     try {
@@ -169,35 +245,68 @@ export default function DriverPanel(): React.ReactElement {
       setSalvando(true);
       const r = await callServer<ServerResult>('driveConnectorSave', vals);
       if (r.ok) {
-        message.success('Conta registrada. A sincronização via OAuth é o próximo passo.');
+        message.success('Conta registrada. Configure as credenciais e clique em Conectar.');
         setModalAberto(false);
         form.resetFields();
         carregarContas();
-      } else {
-        message.error(r.error || 'Erro ao salvar');
-      }
+      } else message.error(r.error || 'Erro ao salvar');
     } catch (e) {
-      if (e && typeof e === 'object' && 'errorFields' in e) return; // validação do form
+      if (e && typeof e === 'object' && 'errorFields' in e) return;
       message.error(e instanceof Error ? e.message : 'Erro');
-    } finally {
-      setSalvando(false);
-    }
+    } finally { setSalvando(false); }
   };
 
   const removerConta = async (id: string) => {
     const r = await callServer<ServerResult>('driveConnectorDelete', id);
-    if (r.ok) { message.success('Conta removida'); carregarContas(); }
+    if (r.ok) { message.success('Conta removida'); if (fonteAtiva === id) trocarFonte('local'); carregarContas(); }
     else message.error(r.error || 'Erro');
   };
 
-  const itensFiltrados = useMemo(() => itens, [itens]);
+  // ─── Modal: credenciais OAuth ──────────────────────────────────────────────
+  const [credModal, setCredModal] = useState(false);
+  const [salvandoCred, setSalvandoCred] = useState(false);
+  const [credForm] = Form.useForm();
+
+  const abrirCredenciais = (provedor?: string) => {
+    credForm.resetFields();
+    credForm.setFieldsValue({ provedor: provedor && OAUTH_PROVS.indexOf(provedor) >= 0 ? provedor : 'google-drive' });
+    setCredModal(true);
+  };
+
+  const salvarCredenciais = async () => {
+    try {
+      const vals = await credForm.validateFields();
+      setSalvandoCred(true);
+      const r = await callServer<ServerResult>('driveOAuthSetCredenciais', vals);
+      if (r.ok) { message.success('Credenciais salvas. Agora clique em Conectar na conta.'); setCredModal(false); credForm.resetFields(); carregarContas(); }
+      else message.error(r.error || 'Erro ao salvar');
+    } catch (e) {
+      if (e && typeof e === 'object' && 'errorFields' in e) return;
+      message.error(e instanceof Error ? e.message : 'Erro');
+    } finally { setSalvandoCred(false); }
+  };
+
+  const copiar = (txt: string) => {
+    if (navigator.clipboard) { void navigator.clipboard.writeText(txt); message.success('Copiado'); }
+  };
 
   // ─── Render: aba Arquivos ───────────────────────────────────────────────
+  const fonteOptions = useMemo(() => ([
+    { value: 'local', label: `Meu Drive${contaGoogle ? ` · ${contaGoogle}` : ''}` },
+    ...conectadas.map((c) => ({ value: c.id, label: `${c.rotulo || provedorLabel(c.provedor)} · ${provedorLabel(c.provedor)}` })),
+  ]), [conectadas, contaGoogle]);
+
   const renderArquivos = () => (
     <div style={{ padding: '14px 18px 18px' }}>
-      {/* Trilha + ações */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', flex: 1, minWidth: 200 }}>
+        <Select
+          value={fonteAtiva}
+          onChange={trocarFonte}
+          options={fonteOptions}
+          style={{ minWidth: 230 }}
+          size="middle"
+        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', flex: 1, minWidth: 160 }}>
           {trilha.map((c, i) => (
             <React.Fragment key={c.id + i}>
               {i > 0 && <ChevronRight size={13} color={t.textTertiary} />}
@@ -224,14 +333,13 @@ export default function DriverPanel(): React.ReactElement {
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
           allowClear
-          style={{ width: 220 }}
+          style={{ width: 200 }}
         />
         <Tooltip title="Atualizar">
-          <Button icon={<RefreshCw size={14} />} onClick={() => listar(atual.id, busca.trim())} />
+          <Button icon={<RefreshCw size={14} />} onClick={() => listar(fonteAtiva, atual.id, busca.trim())} />
         </Tooltip>
       </div>
 
-      {/* Autorização necessária */}
       {authUrl ? (
         <div style={{
           background: `${t.accents.peach}14`, border: `1px solid ${t.accents.peach}44`,
@@ -252,13 +360,13 @@ export default function DriverPanel(): React.ReactElement {
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span style={{ color: t.textSecondary }}>{erro}</span>} />
       ) : carregando && itens.length === 0 ? (
         <Skeleton active paragraph={{ rows: 6 }} />
-      ) : itensFiltrados.length === 0 ? (
+      ) : itens.length === 0 ? (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span style={{ color: t.textSecondary }}>Pasta vazia ou nada encontrado.</span>} />
       ) : (
         <div style={{ border: `1px solid ${t.borderSoft}`, borderRadius: 12, overflow: 'hidden' }}>
-          {itensFiltrados.map((it, i) => (
+          {itens.map((it, i) => (
             <div
-              key={it.id}
+              key={it.id + i}
               onClick={() => entrarPasta(it)}
               style={{
                 display: 'flex', alignItems: 'center', gap: 12,
@@ -284,7 +392,7 @@ export default function DriverPanel(): React.ReactElement {
               {it.isFolder
                 ? <ChevronRight size={16} color={t.textTertiary} />
                 : it.link && (
-                  <Tooltip title="Abrir no Drive">
+                  <Tooltip title="Abrir">
                     <ExternalLink size={15} color={t.textTertiary} />
                   </Tooltip>
                 )}
@@ -305,14 +413,22 @@ export default function DriverPanel(): React.ReactElement {
       }}>
         <Info size={16} color={t.accents.blue} style={{ marginTop: 2, flexShrink: 0 }} />
         <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, lineHeight: 1.6 }}>
-          Centralize aqui suas nuvens. A conta deste app já navega seu Google Drive na aba
-          <strong style={{ color: t.text }}> Arquivos</strong>. Para outras contas (OneDrive, outra conta Google),
-          registre-as abaixo — a conexão real será via <strong style={{ color: t.text }}>OAuth</strong> (consentimento),
-          nunca pedimos senha.
+          Conecte OneDrive e contas Google extras via <strong style={{ color: t.text }}>OAuth</strong> (consentimento) —
+          nunca pedimos senha. Primeiro registre o app OAuth do provedor em <strong style={{ color: t.text }}>Credenciais</strong>,
+          depois clique em <strong style={{ color: t.text }}>Conectar</strong> na conta.
         </div>
       </div>
 
-      {/* Conta principal (este app) */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        <Button icon={<KeyRound size={14} />} onClick={() => abrirCredenciais()}>Credenciais OAuth</Button>
+        {OAUTH_PROVS.map((p) => (
+          <Tag key={p} color={credStatus[p] ? 'green' : 'default'} style={{ marginInlineEnd: 0 }}>
+            {provedorLabel(p)}: {credStatus[p] ? 'configurado' : 'pendente'}
+          </Tag>
+        ))}
+      </div>
+
+      {/* Conta principal */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 12,
         border: `1px solid ${t.border}`, borderRadius: 12, padding: '12px 14px', marginBottom: 12,
@@ -329,7 +445,6 @@ export default function DriverPanel(): React.ReactElement {
         <Tag color="green" style={{ marginInlineEnd: 0 }}>conectada</Tag>
       </div>
 
-      {/* Conectores registrados */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '18px 0 10px' }}>
         <span style={{ fontFamily: FONTS.ui, fontSize: 13, fontWeight: 600, color: t.text }}>Outras contas & nuvens</span>
         <Button type="primary" size="small" icon={<Plus size={13} />} onClick={() => { form.resetFields(); setModalAberto(true); }}>
@@ -340,40 +455,63 @@ export default function DriverPanel(): React.ReactElement {
       {carregandoContas && conectores.length === 0 ? (
         <Skeleton active paragraph={{ rows: 2 }} />
       ) : conectores.length === 0 ? (
-        <Empty
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description={<span style={{ color: t.textSecondary, fontFamily: FONTS.ui }}>Nenhuma outra conta registrada ainda.</span>}
-        />
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span style={{ color: t.textSecondary, fontFamily: FONTS.ui }}>Nenhuma outra conta registrada ainda.</span>} />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {conectores.map((c) => (
-            <div key={c.id} style={{
-              display: 'flex', alignItems: 'center', gap: 12,
-              border: `1px solid ${t.borderSoft}`, borderRadius: 12, padding: '12px 14px',
-            }}>
-              <div style={{ width: 36, height: 36, borderRadius: 9, background: `${t.accents.lavender}1f`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Cloud size={18} color={t.accents.lavender} />
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontFamily: FONTS.ui, fontSize: 13.5, fontWeight: 600, color: t.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {c.rotulo || provedorLabel(c.provedor)}
+          {conectores.map((c) => {
+            const oauthOk = OAUTH_PROVS.indexOf(c.provedor) >= 0;
+            const conectada = c.status === 'conectada';
+            return (
+              <div key={c.id} style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                border: `1px solid ${t.borderSoft}`, borderRadius: 12, padding: '12px 14px',
+              }}>
+                <div style={{ width: 36, height: 36, borderRadius: 9, background: `${t.accents.lavender}1f`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Cloud size={18} color={t.accents.lavender} />
                 </div>
-                <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {provedorLabel(c.provedor)}{c.email ? ` · ${c.email}` : ''}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: FONTS.ui, fontSize: 13.5, fontWeight: 600, color: t.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {c.rotulo || provedorLabel(c.provedor)}
+                  </div>
+                  <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {provedorLabel(c.provedor)}{c.email ? ` · ${c.email}` : ''}
+                  </div>
                 </div>
+                <Tag color={conectada ? 'green' : 'default'} style={{ marginInlineEnd: 0 }}>{c.status}</Tag>
+                {conectada ? (
+                  <>
+                    <Tooltip title="Ver arquivos">
+                      <Button size="small" icon={<Folder size={13} />} onClick={() => { trocarFonte(c.id); setTab('arquivos'); }} />
+                    </Tooltip>
+                    <Tooltip title="Desconectar">
+                      <Button size="small" icon={<Unplug size={13} />} onClick={() => desconectar(c)} />
+                    </Tooltip>
+                  </>
+                ) : oauthOk ? (
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={<Link2 size={13} />}
+                    loading={conectandoId === c.id}
+                    onClick={() => conectar(c)}
+                  >
+                    Conectar
+                  </Button>
+                ) : (
+                  <Tooltip title="OAuth ainda não disponível para este provedor">
+                    <Button size="small" icon={<Link2 size={13} />} disabled>Conectar</Button>
+                  </Tooltip>
+                )}
+                <Popconfirm title="Remover esta conta?" onConfirm={() => removerConta(c.id)} okText="Remover" cancelText="Cancelar">
+                  <Button size="small" danger icon={<Trash2 size={13} />} />
+                </Popconfirm>
               </div>
-              <Tag color={c.status === 'conectada' ? 'green' : 'default'} style={{ marginInlineEnd: 0 }}>{c.status}</Tag>
-              <Tooltip title="Conectar via OAuth (em breve)">
-                <Button size="small" icon={<Link2 size={13} />} disabled>Conectar</Button>
-              </Tooltip>
-              <Popconfirm title="Remover esta conta?" onConfirm={() => removerConta(c.id)} okText="Remover" cancelText="Cancelar">
-                <Button size="small" danger icon={<Trash2 size={13} />} />
-              </Popconfirm>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
+      {/* Modal: adicionar conta */}
       <Modal
         open={modalAberto}
         onCancel={() => setModalAberto(false)}
@@ -396,10 +534,52 @@ export default function DriverPanel(): React.ReactElement {
           <Form.Item name="notas" label="Notas (opcional)">
             <Input.TextArea rows={2} placeholder="Pra que serve essa conta no seu QG" />
           </Form.Item>
-          <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, display: 'flex', gap: 6, alignItems: 'flex-start' }}>
-            <ShieldCheck size={13} style={{ marginTop: 1, flexShrink: 0 }} />
-            Guardamos só estes metadados. Nenhuma senha é solicitada — a sincronização usa consentimento OAuth do provedor.
+        </Form>
+      </Modal>
+
+      {/* Modal: credenciais OAuth */}
+      <Modal
+        open={credModal}
+        onCancel={() => setCredModal(false)}
+        onOk={salvarCredenciais}
+        okText="Salvar credenciais"
+        cancelText="Cancelar"
+        confirmLoading={salvandoCred}
+        title="Credenciais OAuth do provedor"
+        width={560}
+      >
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 8, marginBottom: 14,
+          background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 10, padding: 12,
+        }}>
+          <ShieldCheck size={15} color={t.accents.sage} style={{ marginTop: 1, flexShrink: 0 }} />
+          <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, lineHeight: 1.6, flex: 1, minWidth: 0 }}>
+            Registre um app OAuth no provedor e cole <strong style={{ color: t.text }}>Client ID</strong> e
+            <strong style={{ color: t.text }}> Client Secret</strong> aqui. Use esta <strong style={{ color: t.text }}>Redirect URI</strong>:
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+              <code style={{
+                fontFamily: FONTS.mono, fontSize: 11, background: t.surface, color: t.text,
+                border: `1px solid ${t.border}`, borderRadius: 6, padding: '4px 8px',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
+              }}>
+                {redirectUri || '—'}
+              </code>
+              <Tooltip title="Copiar Redirect URI">
+                <Button size="small" icon={<Copy size={12} />} onClick={() => copiar(redirectUri)} disabled={!redirectUri} />
+              </Tooltip>
+            </div>
           </div>
+        </div>
+        <Form form={credForm} layout="vertical">
+          <Form.Item name="provedor" label="Provedor" rules={[{ required: true }]}>
+            <Select options={PROVEDORES.filter((p) => OAUTH_PROVS.indexOf(p.value) >= 0)} />
+          </Form.Item>
+          <Form.Item name="clientId" label="Client ID" rules={[{ required: true, message: 'Cole o Client ID' }]}>
+            <Input placeholder="ex.: 1234-abcd.apps.googleusercontent.com" />
+          </Form.Item>
+          <Form.Item name="clientSecret" label="Client Secret" rules={[{ required: true, message: 'Cole o Client Secret' }]}>
+            <Input.Password placeholder="••••••••••••" />
+          </Form.Item>
         </Form>
       </Modal>
     </div>

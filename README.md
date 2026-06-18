@@ -4,7 +4,7 @@
 
 ![status](https://img.shields.io/badge/status-ativo-3CB371)
 ![stack](https://img.shields.io/badge/stack-React%2018%20%2B%20GAS-444)
-![version](https://img.shields.io/badge/version-1.62.0-blue)
+![version](https://img.shields.io/badge/version-1.63.0-blue)
 
 Forja é uma plataforma pessoal para quem desenvolve produtos com IA (Cursor, Claude, ChatGPT) e precisa orquestrar tudo: clientes, ideias, sistemas, custos, receitas, status operacional, auditorias e o próprio "atelier" de trabalho (skills, snippets, templates, bookmarks, Driver/nuvens, hospedagem, cofre criptografado).
 
@@ -135,6 +135,7 @@ A URL do app é sempre a mesma — só o conteúdo muda/volta no tempo.
 - [forja/ARCHITECTURE.md](forja/ARCHITECTURE.md) — design do SheetDB engine, chunking strategy, fluxo GAS↔React
 - [forja/DEPLOY.md](forja/DEPLOY.md) — passo a passo de deploy + propriedades necessárias
 - [forja/SECURITY.md](forja/SECURITY.md) — modelo de segurança do Cofre (zero-knowledge)
+- [forja/DRIVER_OAUTH.md](forja/DRIVER_OAUTH.md) — conectar OneDrive e contas Google extras (passo a passo Azure/Google)
 
 ---
 

@@ -12352,10 +12352,288 @@ function driveConnectorSave(payload: {
 
 function driveConnectorDelete(id: string): ServerResult {
   try {
+    // Limpa o token OAuth associado (se houver) antes de remover o registro.
+    try {
+      const conn = _findConnector(id);
+      if (conn && _OAUTH_PROVIDERS[String(conn.provedor || '')]) {
+        _oauthService(id, String(conn.provedor || '')).reset();
+      }
+    } catch { /* sem token, segue */ }
     dbDelete('DriveConnectors', id);
     return { ok: true };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover conta' };
+  }
+}
+
+// ─── Driver — OAuth multi-cloud (Google extra / OneDrive via Microsoft Graph) ─
+// Fluxo de authorization code com a lib apps-script-oauth2 (userSymbol OAuth2).
+// Credenciais do app OAuth (client id/secret) ficam no ScriptProperties por
+// PROVEDOR (um app cobre N contas). O token de cada CONTA fica no UserProperties
+// sob o nome "oauth_<connectorId>". A redirect URI é a /usercallback do script.
+
+interface OAuth2Service {
+  setAuthorizationBaseUrl(url: string): OAuth2Service;
+  setTokenUrl(url: string): OAuth2Service;
+  setClientId(id: string): OAuth2Service;
+  setClientSecret(secret: string): OAuth2Service;
+  setScope(scope: string): OAuth2Service;
+  setCallbackFunction(name: string): OAuth2Service;
+  setPropertyStore(store: GoogleAppsScript.Properties.Properties): OAuth2Service;
+  setCache(cache: GoogleAppsScript.Cache.Cache): OAuth2Service;
+  setParam(name: string, value: string): OAuth2Service;
+  getAuthorizationUrl(optState?: Record<string, string>): string;
+  handleCallback(request: { parameter: Record<string, string> }): boolean;
+  hasAccess(): boolean;
+  getAccessToken(): string;
+  reset(): void;
+}
+declare const OAuth2: {
+  createService(name: string): OAuth2Service;
+  getRedirectUri(optScriptId?: string): string;
+};
+
+interface OAuthProviderCfg {
+  authUrl: string;
+  tokenUrl: string;
+  scope: string;
+  extraAuthParams: Record<string, string>;
+  callback: string;
+}
+
+const _OAUTH_PROVIDERS: Record<string, OAuthProviderCfg> = {
+  'google-drive': {
+    authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+    tokenUrl: 'https://oauth2.googleapis.com/token',
+    scope: 'https://www.googleapis.com/auth/drive.readonly',
+    extraAuthParams: { access_type: 'offline', prompt: 'consent' },
+    callback: 'authCallbackGoogle',
+  },
+  onedrive: {
+    authUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+    tokenUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+    scope: 'offline_access Files.Read User.Read',
+    extraAuthParams: { prompt: 'consent' },
+    callback: 'authCallbackMicrosoft',
+  },
+};
+
+function _findConnector(id: string): Record<string, unknown> | null {
+  const linhas = dbGetAll('DriveConnectors') as Array<Record<string, unknown>>;
+  return linhas.find((l) => String(l.id || '') === id) || null;
+}
+
+function _oauthService(connectorId: string, provedor: string): OAuth2Service {
+  const cfg = _OAUTH_PROVIDERS[provedor];
+  if (!cfg) throw new Error('Provedor sem OAuth suportado: ' + provedor);
+  const props = PropertiesService.getScriptProperties();
+  const clientId = props.getProperty('oauth_' + provedor + '_client_id');
+  const clientSecret = props.getProperty('oauth_' + provedor + '_client_secret');
+  if (!clientId || !clientSecret) {
+    throw new Error('Configure as credenciais OAuth deste provedor antes de conectar.');
+  }
+  let svc = OAuth2.createService('oauth_' + connectorId)
+    .setAuthorizationBaseUrl(cfg.authUrl)
+    .setTokenUrl(cfg.tokenUrl)
+    .setClientId(clientId)
+    .setClientSecret(clientSecret)
+    .setScope(cfg.scope)
+    .setCallbackFunction(cfg.callback)
+    .setPropertyStore(PropertiesService.getUserProperties())
+    .setCache(CacheService.getUserCache());
+  const extra = cfg.extraAuthParams;
+  Object.keys(extra).forEach((k) => { svc = svc.setParam(k, extra[k]); });
+  return svc;
+}
+
+function _oauthHtml(titulo: string, msg: string): string {
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+    + '<style>body{font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;background:#0f1115;color:#e7e2d8;'
+    + 'display:flex;align-items:center;justify-content:center;height:100vh;margin:0}div{text-align:center;max-width:440px;padding:32px}'
+    + 'h2{font-weight:600;margin:0 0 10px;font-size:20px}p{color:#9aa0a6;margin:0;line-height:1.5}</style></head>'
+    + '<body><div><h2>' + titulo + '</h2><p>' + msg + '</p></div></body></html>';
+}
+
+function driveOAuthRedirectUri(): ServerResult {
+  try {
+    let uri = '';
+    try { uri = OAuth2.getRedirectUri(); } catch { uri = ''; }
+    if (!uri) uri = 'https://script.google.com/macros/d/' + ScriptApp.getScriptId() + '/usercallback';
+    return { ok: true, data: { redirectUri: uri } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function driveOAuthGetCredenciaisStatus(): ServerResult {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const status: Record<string, boolean> = {};
+    Object.keys(_OAUTH_PROVIDERS).forEach((p) => {
+      status[p] = !!(props.getProperty('oauth_' + p + '_client_id') && props.getProperty('oauth_' + p + '_client_secret'));
+    });
+    let redirectUri = '';
+    try { redirectUri = OAuth2.getRedirectUri(); } catch { redirectUri = 'https://script.google.com/macros/d/' + ScriptApp.getScriptId() + '/usercallback'; }
+    return { ok: true, data: { status, redirectUri } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function driveOAuthSetCredenciais(payload: { provedor: string; clientId: string; clientSecret: string }): ServerResult {
+  try {
+    const provedor = String(payload.provedor || '').trim();
+    if (!_OAUTH_PROVIDERS[provedor]) throw new Error('Provedor sem OAuth suportado: ' + provedor);
+    const clientId = String(payload.clientId || '').trim();
+    const clientSecret = String(payload.clientSecret || '').trim();
+    if (!clientId || !clientSecret) throw new Error('Informe Client ID e Client Secret.');
+    const props = PropertiesService.getScriptProperties();
+    props.setProperty('oauth_' + provedor + '_client_id', clientId);
+    props.setProperty('oauth_' + provedor + '_client_secret', clientSecret);
+    return { ok: true };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar credenciais' };
+  }
+}
+
+function driveOAuthAuthorizeUrl(connectorId: string): ServerResult {
+  try {
+    const conn = _findConnector(connectorId);
+    if (!conn) throw new Error('Conta não encontrada.');
+    const provedor = String(conn.provedor || '');
+    const svc = _oauthService(connectorId, provedor);
+    if (svc.hasAccess()) {
+      dbUpdate('DriveConnectors', connectorId, { status: 'conectada', atualizadoEm: new Date().toISOString() });
+      return { ok: true, data: { authorized: true } };
+    }
+    const url = svc.getAuthorizationUrl({ connector: connectorId });
+    return { ok: true, data: { authorized: false, url } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao iniciar autorização' };
+  }
+}
+
+function _oauthHandleCallback(request: { parameter: Record<string, string> }): GoogleAppsScript.HTML.HtmlOutput {
+  const connectorId = String((request && request.parameter && request.parameter.connector) || '');
+  const conn = connectorId ? _findConnector(connectorId) : null;
+  const provedor = conn ? String(conn.provedor || '') : '';
+  try {
+    if (!conn) throw new Error('Conta não encontrada para este retorno de OAuth.');
+    const svc = _oauthService(connectorId, provedor);
+    const ok = svc.handleCallback(request);
+    if (ok) {
+      dbUpdate('DriveConnectors', connectorId, { status: 'conectada', atualizadoEm: new Date().toISOString() });
+      return HtmlService.createHtmlOutput(_oauthHtml('✅ Conta conectada!', 'Pode fechar esta aba e voltar ao Forja.'));
+    }
+    return HtmlService.createHtmlOutput(_oauthHtml('Acesso negado', 'A autorização foi cancelada. Pode fechar esta aba.'));
+  } catch (e: unknown) {
+    return HtmlService.createHtmlOutput(_oauthHtml('Erro ao conectar', e instanceof Error ? e.message : String(e)));
+  }
+}
+
+function authCallbackGoogle(request: { parameter: Record<string, string> }): GoogleAppsScript.HTML.HtmlOutput {
+  return _oauthHandleCallback(request);
+}
+
+function authCallbackMicrosoft(request: { parameter: Record<string, string> }): GoogleAppsScript.HTML.HtmlOutput {
+  return _oauthHandleCallback(request);
+}
+
+function driveOAuthStatus(connectorId: string): ServerResult {
+  try {
+    const conn = _findConnector(connectorId);
+    if (!conn) throw new Error('Conta não encontrada.');
+    const provedor = String(conn.provedor || '');
+    if (!_OAUTH_PROVIDERS[provedor]) return { ok: true, data: { conectada: false, suportado: false } };
+    const svc = _oauthService(connectorId, provedor);
+    const conectada = svc.hasAccess();
+    dbUpdate('DriveConnectors', connectorId, { status: conectada ? 'conectada' : 'registrada', atualizadoEm: new Date().toISOString() });
+    return { ok: true, data: { conectada, suportado: true } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao verificar conexão' };
+  }
+}
+
+function driveOAuthDesconectar(connectorId: string): ServerResult {
+  try {
+    const conn = _findConnector(connectorId);
+    if (conn && _OAUTH_PROVIDERS[String(conn.provedor || '')]) {
+      _oauthService(connectorId, String(conn.provedor || '')).reset();
+      dbUpdate('DriveConnectors', connectorId, { status: 'registrada', atualizadoEm: new Date().toISOString() });
+    }
+    return { ok: true };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao desconectar' };
+  }
+}
+
+// Lista arquivos de uma conta REMOTA conectada (Google extra ou OneDrive).
+function driveListarRemoto(connectorId: string, folderId?: string, busca?: string): ServerResult {
+  try {
+    const conn = _findConnector(connectorId);
+    if (!conn) throw new Error('Conta não encontrada.');
+    const provedor = String(conn.provedor || '');
+    if (!_OAUTH_PROVIDERS[provedor]) throw new Error('Provedor sem OAuth suportado.');
+    const svc = _oauthService(connectorId, provedor);
+    if (!svc.hasAccess()) return { ok: false, error: 'NOT_CONNECTED' };
+    const token = svc.getAccessToken();
+    const headers = { Authorization: 'Bearer ' + token };
+
+    if (provedor === 'onedrive') {
+      const base = 'https://graph.microsoft.com/v1.0/me/drive';
+      let url: string;
+      if (busca && busca.trim()) {
+        url = base + "/root/search(q='" + encodeURIComponent(busca.trim()) + "')?$top=200";
+      } else if (folderId && folderId !== 'root') {
+        url = base + '/items/' + encodeURIComponent(folderId) + '/children?$top=200';
+      } else {
+        url = base + '/root/children?$top=200';
+      }
+      const resp = UrlFetchApp.fetch(url, { headers, muteHttpExceptions: true });
+      if (resp.getResponseCode() >= 400) throw new Error('Microsoft Graph ' + resp.getResponseCode() + ': ' + resp.getContentText().slice(0, 200));
+      const data = JSON.parse(resp.getContentText()) as { value?: Array<Record<string, unknown>> };
+      const arquivos = (data.value || []).map((it) => {
+        const folder = it.folder as Record<string, unknown> | undefined;
+        const file = it.file as Record<string, unknown> | undefined;
+        return {
+          id: String(it.id || ''),
+          nome: String(it.name || '(sem nome)'),
+          mimeType: folder ? 'application/vnd.google-apps.folder' : String((file && file.mimeType) || ''),
+          isFolder: !!folder,
+          modificado: String(it.lastModifiedDateTime || ''),
+          tamanho: Number(it.size || 0),
+          link: String(it.webUrl || ''),
+        };
+      });
+      return { ok: true, data: { arquivos } };
+    }
+
+    // google-drive (outra conta)
+    const parent = (folderId && folderId !== 'root') ? folderId : 'root';
+    let q = "'" + parent + "' in parents and trashed = false";
+    if (busca && busca.trim()) q += " and name contains '" + busca.trim().replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
+    const fields = 'files(id,name,mimeType,modifiedTime,size,webViewLink)';
+    const url = 'https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(q)
+      + '&pageSize=200&orderBy=' + encodeURIComponent('folder,name')
+      + '&fields=' + encodeURIComponent(fields);
+    const resp = UrlFetchApp.fetch(url, { headers, muteHttpExceptions: true });
+    if (resp.getResponseCode() >= 400) throw new Error('Google Drive ' + resp.getResponseCode() + ': ' + resp.getContentText().slice(0, 200));
+    const data = JSON.parse(resp.getContentText()) as { files?: Array<Record<string, unknown>> };
+    const arquivos = (data.files || []).map((f) => {
+      const mime = String(f.mimeType || '');
+      return {
+        id: String(f.id || ''),
+        nome: String(f.name || '(sem nome)'),
+        mimeType: mime,
+        isFolder: mime === 'application/vnd.google-apps.folder',
+        modificado: String(f.modifiedTime || ''),
+        tamanho: f.size ? Number(f.size) : 0,
+        link: String(f.webViewLink || ''),
+      };
+    });
+    return { ok: true, data: { arquivos } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar a conta remota' };
   }
 }
 

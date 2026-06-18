@@ -36,6 +36,25 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.63.0] — 2026-06-18
+
+### Adicionado
+
+- **Driver multi-cloud ao vivo (OAuth).** Conecta de verdade OneDrive (Microsoft
+  Graph) e contas Google extras via fluxo OAuth2 (lib `apps-script-oauth2`):
+  - Modal **Credenciais OAuth** por provedor (Client ID/Secret no ScriptProperties)
+    exibindo a **Redirect URI** (`/usercallback`) pra copiar no Azure/Google.
+  - Botão **Conectar** abre o consentimento e verifica a conexão automaticamente
+    (polling); **Desconectar** revoga o token local.
+  - Aba **Arquivos** ganha seletor de fonte: navega o Drive deste app **ou** as
+    contas remotas conectadas (Google extra / OneDrive), com trilha e busca.
+  - Tokens por conta no `UserProperties`; credenciais do app por provedor. Nunca
+    armazenamos senha.
+
+### Alterado
+
+- `appsscript.json`: adicionada a biblioteca `OAuth2` (apps-script-oauth2, v43).
+
 ## [1.62.0] — 2026-06-18
 
 ### Adicionado
