@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.62.0] — 2026-06-18
+
+### Adicionado
+
+- **Atelier → Driver (novo).** Estação que navega o Google Drive desta conta
+  (read-only, via Advanced Drive Service + escopo `drive.readonly`): trilha de
+  pastas, busca dentro da pasta, abrir arquivo no Drive. Trata o caso de
+  autorização pendente com CTA pro consentimento do Google.
+- **Driver → Contas & nuvens.** Registro central das suas nuvens (OneDrive,
+  contas Google extras, Dropbox…). Guarda **apenas metadados** (provedor, e-mail,
+  rótulo, status) na sheet `DriveConnectors` — **nunca senha**. A sincronização
+  real é desenhada via OAuth (botão "Conectar" preparado, ativação na próxima fase).
+
 ## [1.61.0] — 2026-06-18
 
 ### Adicionado

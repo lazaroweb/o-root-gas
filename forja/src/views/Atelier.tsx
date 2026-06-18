@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat, Compass } from 'lucide-react';
+import { BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat, Compass, HardDrive } from 'lucide-react';
 import { PageHeader } from '../components/ui';
 import { useForja, useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -11,13 +11,14 @@ import TemplatesPanel from '../components/TemplatesPanel';
 import BookmarksPanel from '../components/BookmarksPanel';
 import CodexPanel from '../components/CodexPanel';
 import ReceituarioPanel from '../components/ReceituarioPanel';
+import DriverPanel from '../components/DriverPanel';
 import AtelierGuia from '../components/AtelierGuia';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 // Cada section do Atelier é uma "estação de bancada". A nav é vertical (sidebar
 // interna) pra escalar bem: descrição rica por item, sem overflow nem botão
 // "...". Padrão usado por Linear/Notion settings — premium e familiar.
-export type AtelierTab = 'guia' | 'skills' | 'snippets' | 'templates' | 'bookmarks' | 'codex' | 'receituario' | 'hospedagem' | 'cofre';
+export type AtelierTab = 'guia' | 'skills' | 'snippets' | 'templates' | 'bookmarks' | 'driver' | 'codex' | 'receituario' | 'hospedagem' | 'cofre';
 
 interface AtelierProps {
   initialTab?: AtelierTab;
@@ -87,6 +88,15 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
       accent: 'peach',
     },
     {
+      key: 'driver',
+      icon: <HardDrive size={17} strokeWidth={1.6} />,
+      iconActive: <HardDrive size={17} strokeWidth={1.8} />,
+      label: 'Driver',
+      descricao: 'Navegue seu Google Drive e registre suas outras nuvens (OneDrive, contas extras) num só lugar.',
+      accent: 'blue',
+      novo: true,
+    },
+    {
       key: 'codex',
       icon: <BookOpen size={17} strokeWidth={1.6} />,
       iconActive: <BookOpen size={17} strokeWidth={1.8} />,
@@ -139,6 +149,8 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
         return wrapCard(<TemplatesPanel />);
       case 'bookmarks':
         return wrapCard(<BookmarksPanel />);
+      case 'driver':
+        return wrapCard(<DriverPanel />);
       case 'codex':
         return wrapCard(<CodexPanel />);
       case 'receituario':

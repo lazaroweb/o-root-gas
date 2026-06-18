@@ -86,6 +86,11 @@ const SCHEMA: SheetSchema[] = [
   { name: 'Snippets', columns: ['id', 'titulo', 'descricao', 'linguagem', 'codigo', 'tags', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm'] },
   { name: 'Templates', columns: ['id', 'nome', 'descricao', 'categoria', 'conteudo', 'variaveis', 'tags', 'criadoEm', 'atualizadoEm'] },
   { name: 'Bookmarks', columns: ['id', 'titulo', 'url', 'descricao', 'categoria', 'tags', 'destacado', 'criadoEm', 'atualizadoEm'] },
+  // DriveConnectors (Atelier → Driver): registro das contas/nuvens do usuário.
+  // Guarda APENAS metadados (provedor, email/rótulo, status) — NUNCA senha. A
+  // conexão real (OAuth) é por provedor e os tokens, quando houver, ficam no
+  // PropertiesService server-side. `status`: registrada|conectada|erro.
+  { name: 'DriveConnectors', columns: ['id', 'provedor', 'email', 'rotulo', 'status', 'pastaRaizId', 'notas', 'criadoEm', 'atualizadoEm'] },
   // ─── Finanças pessoais (v1.3) ──────────────────────────────────────────────
   // FinPessoalLancamentos: cada despesa/entrada pessoal. `valor` sempre positivo
   // — o `tipo` ('despesa'|'entrada') é quem dita o sinal nos cálculos.
@@ -12240,6 +12245,117 @@ function setModeloAuditoria(modelo: string): ServerResult {
     return { ok: true, data: { modeloAuditoria: modelo.trim() || '(usando o mesmo modelo do chat)' } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ─── Driver (Atelier) — navegador do Google Drive + registro de nuvens ───────
+// Lista pastas/arquivos do Drive da conta logada (read-only via Advanced Drive
+// Service v3 + escopo drive.readonly). Multi-cloud (OneDrive / outras contas
+// Google) é por conector OAuth — driveConnectors* guarda só METADADOS da conta
+// (provedor, email, rótulo, status). NUNCA senha; tokens OAuth, quando houver,
+// ficam no PropertiesService server-side.
+
+function _driveFilesList(opts: Record<string, unknown>): { files?: unknown[]; nextPageToken?: string } {
+  return (Drive as unknown as { Files: { list: (o: Record<string, unknown>) => { files?: unknown[]; nextPageToken?: string } } }).Files.list(opts);
+}
+
+function driveListar(folderId?: string, busca?: string, pageToken?: string): ServerResult {
+  try {
+    const parent = (folderId && folderId !== 'root') ? folderId : 'root';
+    let q = `'${parent}' in parents and trashed = false`;
+    if (busca && busca.trim()) {
+      const termo = busca.trim().replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      q += ` and name contains '${termo}'`;
+    }
+    const resp = _driveFilesList({
+      q,
+      fields: 'nextPageToken, files(id,name,mimeType,modifiedTime,size,webViewLink)',
+      pageSize: 200,
+      orderBy: 'folder,name',
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+      pageToken: pageToken || undefined,
+    });
+    const arquivos = ((resp.files || []) as Array<Record<string, unknown>>).map((f) => {
+      const mime = String(f.mimeType || '');
+      return {
+        id: String(f.id || ''),
+        nome: String(f.name || '(sem nome)'),
+        mimeType: mime,
+        isFolder: mime === 'application/vnd.google-apps.folder',
+        modificado: String(f.modifiedTime || ''),
+        tamanho: f.size ? Number(f.size) : 0,
+        link: String(f.webViewLink || ''),
+      };
+    });
+    return { ok: true, data: { arquivos, nextPageToken: String(resp.nextPageToken || '') } };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/permission|authoriz|scope|403|401/i.test(msg)) {
+      return { ok: false, error: 'AUTH_NEEDED::' + `https://script.google.com/home/projects/${ScriptApp.getScriptId()}/edit` };
+    }
+    return { ok: false, error: 'Erro ao listar o Drive: ' + msg };
+  }
+}
+
+function driveInfoConta(): ServerResult {
+  try {
+    return { ok: true, data: { email: Session.getActiveUser().getEmail() || '' } };
+  } catch {
+    return { ok: true, data: { email: '' } };
+  }
+}
+
+function driveConnectorsList(): ServerResult {
+  try {
+    const linhas = (dbGetAll('DriveConnectors') as Array<Record<string, unknown>>).map((l) => ({
+      id: String(l.id || ''),
+      provedor: String(l.provedor || ''),
+      email: String(l.email || ''),
+      rotulo: String(l.rotulo || ''),
+      status: String(l.status || 'registrada'),
+      pastaRaizId: String(l.pastaRaizId || ''),
+      notas: String(l.notas || ''),
+      criadoEm: String(l.criadoEm || ''),
+    }));
+    return { ok: true, data: linhas };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar contas' };
+  }
+}
+
+function driveConnectorSave(payload: {
+  id?: string; provedor: string; email?: string; rotulo?: string; pastaRaizId?: string; notas?: string;
+}): ServerResult {
+  try {
+    const provedor = String(payload.provedor || '').trim();
+    if (!provedor) throw new Error('Escolha o provedor (Google Drive, OneDrive…).');
+    const agora = new Date().toISOString();
+    const base = {
+      provedor,
+      email: String(payload.email || '').trim(),
+      rotulo: String(payload.rotulo || '').trim(),
+      pastaRaizId: String(payload.pastaRaizId || '').trim(),
+      notas: String(payload.notas || '').trim(),
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('DriveConnectors', payload.id, base);
+      return { ok: true, data: { id: payload.id } };
+    }
+    const novo = dbCreate('DriveConnectors', { ...base, status: 'registrada', criadoEm: agora });
+    return { ok: true, data: { id: String(novo.id || '') } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar conta' };
+  }
+}
+
+function driveConnectorDelete(id: string): ServerResult {
+  try {
+    dbDelete('DriveConnectors', id);
+    return { ok: true };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover conta' };
   }
 }
 
