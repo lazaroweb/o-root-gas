@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.61.0] — 2026-06-18
+
+### Adicionado
+
+- **Importar GAS App Kit (Skills Hub).** Botão na aba "Minhas skills" que semeia a
+  biblioteca com as 10 skills do `gas-app-kit` de uma vez. As skills são embarcadas
+  no build (`esbuild` lê `gas-app-kit/skills/*/SKILL.md`) e a importação é
+  idempotente — reimportar atualiza por `fonte` em vez de duplicar.
+- **Padrão de README (skill `gas-readme-standard`).** Novo SKILL.md no kit com a
+  ordem canônica de seções, badges, blocos de deploy/rollback e um template
+  pronto, pra todas as aplicações subirem pro git no mesmo padrão. O README deste
+  repo foi alinhado ao padrão (badges + seção "Deploy & rollback").
+
 ## [1.60.2] — 2026-06-18
 
 ### Corrigido

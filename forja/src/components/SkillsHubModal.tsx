@@ -11,6 +11,7 @@ import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import type { ServerResult } from '../types';
+import { GAS_APP_KIT_SKILLS } from '../data/gasAppKitSkills';
 
 interface SkillSummary {
   id: string;
@@ -88,6 +89,7 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
   const [categoriaOverride, setCategoriaOverride] = useState('');
   const [tagsOverride, setTagsOverride] = useState('');
   const [salvando, setSalvando] = useState(false);
+  const [importandoKit, setImportandoKit] = useState(false);
   const [preview, setPreview] = useState<{ nome: string; descricao: string; categoria: string; tags: string[]; secoes: string[] } | null>(null);
   const [previewing, setPreviewing] = useState(false);
 
@@ -175,6 +177,38 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
     } finally { setSalvando(false); }
   };
 
+  // Semeia a biblioteca com as skills do GAS App Kit embarcadas no build.
+  // Idempotente: faz upsert por `fonte` (atualiza a existente em vez de duplicar).
+  const importarKit = async () => {
+    if (GAS_APP_KIT_SKILLS.length === 0) {
+      message.warning('Nenhuma skill do GAS App Kit foi embarcada neste build.');
+      return;
+    }
+    setImportandoKit(true);
+    const hide = message.loading(`Importando ${GAS_APP_KIT_SKILLS.length} skills do GAS App Kit…`, 0);
+    let novas = 0; let atualizadas = 0; let erros = 0;
+    try {
+      const idPorFonte = new Map(skills.map((s) => [s.fonte, s.id]));
+      for (const ks of GAS_APP_KIT_SKILLS) {
+        const id = idPorFonte.get(ks.fonte);
+        // eslint-disable-next-line no-await-in-loop
+        const r = await callServer<ServerResult>('skillsSave', { id, conteudo: ks.conteudo, fonte: ks.fonte });
+        if (r.ok) { if (id) atualizadas++; else novas++; } else { erros++; }
+      }
+    } catch {
+      /* o resumo abaixo reporta o que deu certo */
+    } finally {
+      hide();
+      setImportandoKit(false);
+      carregar();
+    }
+    if (erros && !novas && !atualizadas) {
+      message.error('Não foi possível importar as skills do GAS App Kit.');
+    } else {
+      message.success(`GAS App Kit importado — ${novas} nova(s), ${atualizadas} atualizada(s)${erros ? `, ${erros} com erro` : ''}.`);
+    }
+  };
+
   const abrirSkill = async (id: string) => {
     setCarregandoAberta(true);
     try {
@@ -253,6 +287,13 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                       allowClear
                       style={{ flex: 1, minWidth: 240 }}
                     />
+                    {GAS_APP_KIT_SKILLS.length > 0 && (
+                      <Tooltip title={`Adiciona as ${GAS_APP_KIT_SKILLS.length} skills do GAS App Kit à sua biblioteca. Reimportar atualiza, não duplica.`}>
+                        <Button icon={<Download size={14} />} loading={importandoKit} onClick={importarKit}>
+                          Importar GAS App Kit
+                        </Button>
+                      </Tooltip>
+                    )}
                     <Button type="primary" icon={<Plus size={14} />} onClick={() => { resetForm(); setTab('adicionar'); }}>
                       Adicionar skill
                     </Button>

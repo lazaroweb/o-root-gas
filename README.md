@@ -2,6 +2,10 @@
 
 > **Da ideia ao app no ar, num só lugar.** O QG do vibe coder — gestão completa de produtos com IA embarcada, rodando 100% no Google Apps Script.
 
+![status](https://img.shields.io/badge/status-ativo-3CB371)
+![stack](https://img.shields.io/badge/stack-React%2018%20%2B%20GAS-444)
+![version](https://img.shields.io/badge/version-1.61.0-blue)
+
 Forja é uma plataforma pessoal para quem desenvolve produtos com IA (Cursor, Claude, ChatGPT) e precisa orquestrar tudo: clientes, ideias, sistemas, custos, receitas, status operacional, auditorias e o próprio "atelier" de trabalho (skills, snippets, templates, bookmarks, hospedagem, cofre criptografado).
 
 Roda inteiramente como um **Web App do Google Apps Script**, usando **Google Sheets como banco**. Não precisa servidor, não precisa pagar nada, é seu — e a planilha vive na sua conta Google.
@@ -110,6 +114,19 @@ npx clasp deploy -i <DEPLOYMENT_ID> -d "descrição"
 ```
 
 Veja [forja/DEPLOY.md](forja/DEPLOY.md) pra setup completo, propriedades do Script, scopes OAuth e troubleshooting.
+
+---
+
+## Deploy & rollback
+
+```bash
+cd forja
+npm run deploy                 # build + push + deploy (descrição automática do CHANGELOG)
+npm run versions               # lista todas as versões publicadas
+npm run rollback -- <numero>   # volta o deploy estável pra uma versão anterior
+```
+
+A URL do app é sempre a mesma — só o conteúdo muda/volta no tempo.
 
 ---
 
