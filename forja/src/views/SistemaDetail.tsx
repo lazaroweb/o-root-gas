@@ -258,19 +258,21 @@ export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDeta
                 icon={sistema.dominioCustomizado ? <Globe2 size={15} /> : <ExternalLink size={15} />}
                 href={sistema.dominioCustomizado ? `https://${sistema.dominioCustomizado.replace(/^https?:\/\//, '')}` : sistema.urlProd}
                 target="_blank"
-              >
-                Abrir
-              </Button>
+              />
             </Tooltip>
           )}
-          {sistema.repoUrl && <Button icon={<GitBranch size={15} />} href={sistema.repoUrl} target="_blank">Repo</Button>}
+          {sistema.repoUrl && (
+            <Tooltip title="Abrir repositório">
+              <Button icon={<GitBranch size={15} />} href={sistema.repoUrl} target="_blank" />
+            </Tooltip>
+          )}
           {sistema.scriptId && (
             <>
               <Tooltip title="Abrir projeto no editor do Apps Script">
-                <Button icon={<FileCode size={15} />} href={`https://script.google.com/d/${sistema.scriptId}/edit`} target="_blank">GAS</Button>
+                <Button icon={<FileCode size={15} />} href={`https://script.google.com/d/${sistema.scriptId}/edit`} target="_blank" />
               </Tooltip>
-              <Tooltip title="Reler nome e deploy do GAS">
-                <Button icon={<RefreshCw size={15} className={syncing ? 'forja-spin' : undefined} />} loading={syncing} onClick={handleSyncGAS}>Sincronizar</Button>
+              <Tooltip title="Reler nome e deploy do GAS (Sincronizar)">
+                <Button icon={<RefreshCw size={15} className={syncing ? 'forja-spin' : undefined} />} loading={syncing} onClick={handleSyncGAS} />
               </Tooltip>
             </>
           )}

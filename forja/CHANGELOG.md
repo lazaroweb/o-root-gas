@@ -36,6 +36,17 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.74.1] — 2026-06-18
+
+### Alterado
+
+- **Detalhe do Sistema: barra de ações em uma única linha.** Os botões utilitários
+  (Abrir, Repo, GAS, Sincronizar) viraram só ícone + tooltip, evitando que o
+  "Editar" quebrasse pra outra linha. Os botões de ação (Passaporte, Auditar com IA,
+  Editar) seguem com texto.
+
+---
+
 ## [1.74.0] — 2026-06-18
 
 ### Alterado
