@@ -1,6 +1,8 @@
 import React from 'react';
-import { Segmented, Select, Input } from 'antd';
+import { Select, Input } from 'antd';
+import { Lightbulb, Layers, PenLine } from 'lucide-react';
 import { useTokens } from '../themeContext';
+import ContextCards from './ContextCards';
 import type { Ideia, Sistema } from '../types';
 
 export interface Contexto {
@@ -23,13 +25,13 @@ export default function ContextoPicker({ value, onChange, ideias, sistemas, plac
   return (
     <div>
       <div style={{ marginBottom: 12 }}>
-        <Segmented
+        <ContextCards
           value={value.modo}
           onChange={(v) => onChange({ modo: v as Contexto['modo'] })}
           options={[
-            { label: 'Ideia', value: 'ideia' },
-            { label: 'Sistema', value: 'sistema' },
-            { label: 'Texto livre', value: 'texto' },
+            { value: 'ideia', label: 'Ideia', desc: 'Parte de uma ideia já cadastrada na Forja.', icon: <Lightbulb size={14} />, accent: t.accents.lavender },
+            { value: 'sistema', label: 'Sistema', desc: 'Usa um sistema existente do seu portfólio.', icon: <Layers size={14} />, accent: t.accents.peach },
+            { value: 'texto', label: 'Texto livre', desc: 'Descreva do zero, sem nada cadastrado.', icon: <PenLine size={14} />, accent: t.accents.blue },
           ]}
         />
       </div>

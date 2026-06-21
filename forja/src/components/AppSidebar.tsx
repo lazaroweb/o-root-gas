@@ -18,6 +18,7 @@ import {
   Bell,
   Sun,
   Moon,
+  GraduationCap,
 } from 'lucide-react';
 import BrasaIndicator from './BrasaIndicator';
 import { useForja } from '../themeContext';
@@ -51,6 +52,7 @@ const ITEMS: Array<{ key: ViewName; icon: React.ReactNode; label: string }> = [
   { key: 'financeiro', icon: <Wallet size={18} strokeWidth={1.6} />, label: 'Financeiro' },
   { key: 'forja-ia', icon: <Sparkles size={18} strokeWidth={1.6} />, label: 'Forja IA' },
   { key: 'atelier', icon: <Wrench size={18} strokeWidth={1.6} />, label: 'Atelier' },
+  { key: 'estudos', icon: <GraduationCap size={18} strokeWidth={1.6} />, label: 'Estudos' },
   { key: 'relatorios', icon: <FileText size={18} strokeWidth={1.6} />, label: 'Relatórios' },
 ];
 
@@ -112,19 +114,24 @@ export default function AppSidebar({ currentView, saudeMedia, papel, onNavigate,
         zIndex: 10,
       }}
     >
-      {/* Logo + brasa viva + slogan. Clicar no FORJA volta pra abertura. */}
-      <div style={{ padding: '4px 8px 18px' }}>
+      {/* Marca — wordmark editorial + filete dourado + brasa viva.
+          Tratamento "Opção B": tipografia como herói, filete em gradiente
+          peach→ember separa o wordmark da assinatura. Clicar no FORJA volta
+          pra abertura. A brasa permanece como indicador vivo (atividade).
+          Padding inferior generoso (36px) pra dar respiro entre a assinatura
+          e o campo de busca — quietude antes do conteúdo começar. */}
+      <div style={{ padding: '4px 8px 36px' }}>
         <button
           onClick={onLogoClick}
           title="Voltar pra página de abertura"
           style={{
-            display: 'flex', alignItems: 'center', gap: 10,
+            display: 'flex', alignItems: 'center', gap: 9,
             border: 'none', background: 'transparent', padding: 0, margin: 0,
             cursor: onLogoClick ? 'pointer' : 'default',
           }}
         >
           <span
-            style={{ fontFamily: FONTS.display, fontSize: 22, fontWeight: 600, letterSpacing: '0.22em', color: t.text, transition: 'opacity 0.18s ease' }}
+            style={{ fontFamily: FONTS.display, fontSize: 22, fontWeight: 600, letterSpacing: '0.08em', color: t.text, transition: 'opacity 0.18s ease', lineHeight: 1 }}
             onMouseEnter={(e) => { if (onLogoClick) e.currentTarget.style.opacity = '0.7'; }}
             onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
           >
@@ -133,18 +140,28 @@ export default function AppSidebar({ currentView, saudeMedia, papel, onNavigate,
           <BrasaIndicator marca size={9} qtdFagulhas={10} />
         </button>
         <div
+          aria-hidden
           style={{
-            fontFamily: FONTS.display,
-            fontStyle: 'italic',
-            fontSize: 11.5,
-            fontWeight: 400,
+            height: 1.5,
+            width: 60,
+            background: `linear-gradient(90deg, ${t.accents.peach}, ${t.accents.peach}66 70%, transparent)`,
+            borderRadius: 1,
+            marginTop: 11,
+          }}
+        />
+        <div
+          style={{
+            fontSize: 9,
+            fontWeight: 600,
             color: t.textTertiary,
-            letterSpacing: '0.01em',
-            marginTop: 6,
+            letterSpacing: '0.28em',
+            textTransform: 'uppercase',
+            marginTop: 10,
             whiteSpace: 'nowrap',
+            lineHeight: 1,
           }}
         >
-          Onde ideias ganham forma
+          Inteligência de Negócios
         </div>
       </div>
 

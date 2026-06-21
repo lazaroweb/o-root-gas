@@ -79,6 +79,9 @@ export interface AuditFinding {
   prompt: string;
   toolSugerida?: string;
   toolParams?: Record<string, unknown>;
+  // Auditoria incremental (Fase 2.5): "novo" = introduzido pelo diff;
+  // "persiste" = achado anterior que ainda está aberto.
+  origem?: 'novo' | 'persiste';
 }
 
 export interface AuditPayload {
@@ -86,6 +89,8 @@ export interface AuditPayload {
   oQueEmpolga: string[];
   proximosPassos: string;
   findings: AuditFinding[];
+  // Títulos de achados anteriores que o diff resolveu (só em auditoria incremental).
+  resolvidos?: string[];
 }
 
 export interface AuditFontes {
@@ -99,6 +104,20 @@ export interface AuditFontes {
   temStack: boolean;
   temUrl: boolean;
   temRepo: boolean;
+  // Metadados da leitura de código (Fase 1 da auditoria de código). Presentes
+  // quando o modo inclui código e há fonte (GitHub/GAS) disponível.
+  modo?: 'governanca' | 'codigo' | 'completa';
+  fonteCodigo?: 'github' | 'gas' | '';
+  arquivosLidos?: number;
+  bytesCodigo?: number;
+  commitSha?: string;
+  codigoTruncado?: boolean;
+  codigoErro?: string;
+  // Auditoria incremental (Fase 2.5): rodou só sobre o diff desde a última auditoria.
+  incremental?: boolean;
+  baseCommit?: string;
+  // Auditoria de onboarding: sistema sem dados — devolvemos um checklist (sem IA).
+  onboarding?: boolean;
 }
 
 // Estado por finding registrado: persiste o vínculo audit ↔ entidade criada
@@ -119,6 +138,53 @@ export interface AuditResult {
   duracaoMs?: number;
   criadoEm?: string;
   registros?: Record<string, RegistroFinding>;
+  // true quando a auditoria foi curto-circuitada (HEAD == commit já auditado):
+  // o backend devolveu o resultado salvo sem chamar o LLM.
+  semMudanca?: boolean;
+  // Itens de backlog (decisão/risco/oportunidade) fechados automaticamente porque
+  // o diff resolveu o achado que os originou (só em auditoria incremental).
+  fechadosAuto?: BacklogFechadoAuto[];
+}
+
+export interface BacklogFechadoAuto {
+  tipo: string;       // 'decisao' | 'risco' | 'oportunidade'
+  idCriado: string;
+  titulo: string;
+}
+
+// Uma rodada no histórico de auditorias de um sistema (linha do tempo).
+export interface HistoricoAuditoriaItem {
+  id: string;
+  criadoEm: string;
+  modeloUsado: string;
+  duracaoMs: number;
+  scoreNoMomento: number;
+  numFindings: number;
+  resolvidos: number;
+  incremental: boolean;
+  commitSha: string;
+}
+
+// Status de frescor da auditoria de código (Fase 2): diz se o repositório mudou
+// desde a última auditoria, pra UI decidir se vale re-rodar.
+export interface StatusAuditoriaCodigo {
+  temFonte: boolean;
+  fonte: 'github' | 'gas' | '';
+  nuncaAuditado: boolean;
+  ultimoCommitAuditado: string;
+  headCommit: string;
+  mudou: boolean;
+  semDiff: boolean;
+  arquivosMudados: number;
+  listaMudados: string[];
+  erro?: string;
+  // Total de arquivos que mudaram no diff, incluindo não-código (docs, configs).
+  // Usado pra detectar o cenário "IA externa só escreveu .md em vez de
+  // implementar correções" — quando `arquivosMudadosTotal > 0` mas
+  // `arquivosMudados === 0`, levantamos a flag `mudancasSaoDocsOnly`.
+  arquivosMudadosTotal?: number;
+  mudancasSaoDocsOnly?: boolean;
+  listaDocsMudados?: string[];
 }
 
 export interface UltimaAuditoriaInfo {
@@ -279,8 +345,13 @@ export interface Risco {
   sistemaId: string;
   area: string;
   descricao: string;
-  gravidade: number;
+  // Texto: 'alta' | 'media' | 'baixa' (alinhado com a auditoria e o score de saúde).
+  // Registros antigos podem ter número (1-10) — normalizados na UI.
+  gravidade: string;
   historicoIncidentes: string;
+  // '' (aberto) | 'mitigado'. Auditoria incremental marca 'mitigado' quando o
+  // diff resolve o risco. Riscos mitigados somem do mapa e param de penalizar a saúde.
+  status?: string;
 }
 
 export interface Ideia {
@@ -290,6 +361,13 @@ export interface Ideia {
   notaImpacto: number;
   notaEsforco: number;
   estado: string;
+  // 'sistema' = faísca de produto novo (→ Gênese). 'melhoria' = incremento num
+  // sistema existente (→ Backlog). Ausente em ideias legadas = tratar como 'sistema'.
+  tipo?: 'sistema' | 'melhoria';
+  sistemaId?: string;
+  prioridade?: string;
+  criadoEm?: string;
+  atualizadoEm?: string;
 }
 
 export interface Oportunidade {
@@ -307,6 +385,32 @@ export interface Pessoa {
   contato: string;
   papel: 'cliente' | 'parceiro';
   notas: string;
+  email?: string;
+  // Pessoa de contato
+  nomeContato?: string;
+  cargo?: string;
+  telefone?: string;
+  // Empresa
+  empresa?: string;
+  cnpj?: string;
+  segmento?: string;
+  cidade?: string;
+  uf?: string;
+  site?: string;
+  instagram?: string;
+  // Negócio
+  faturamentoFaixa?: string;
+  funcionariosFaixa?: string;
+  tempoOperacaoAnos?: string;
+  // Financeiro/Comercial
+  ticketPrevisto?: string;
+  statusComercial?: string;
+  origemContato?: string;
+  proximaAcao?: string;
+  // Campos derivados (calculados em getPessoas, somente leitura)
+  saude?: 'em_dia' | 'atencao' | 'inadimplente' | 'sem_historico';
+  pendenciasQtd?: number;
+  pendenciasValor?: number;
 }
 
 export interface AnaliseEntrevista {
@@ -328,6 +432,43 @@ export interface Entrevista {
   requisitos: string;
   pessoaNome?: string;
   analise?: AnaliseEntrevista | null;
+}
+
+export interface DiscoveryBloco {
+  tema?: string;
+  perguntas?: string[];
+}
+
+export interface DiscoveryForm {
+  id: string;
+  pessoaId: string;
+  pessoaNome: string;
+  titulo: string;
+  segmento: string;
+  blocos: DiscoveryBloco[];
+  token: string;
+  status: 'rascunho' | 'publicado';
+  url: string;
+  publicoConfigurado: boolean;
+  respostasCount: number;
+  criadoEm: string;
+  publicadoEm: string;
+}
+
+export interface DiscoveryResposta {
+  id: string;
+  formId: string;
+  pessoaId: string;
+  pessoaNome: string;
+  emailRespondente: string;
+  nome: string;
+  respostas: Record<string, unknown>;
+  ferramentas: string[];
+  querAmostra: boolean;
+  agendaPref: string;
+  score: number;
+  breakdown: Record<string, number>;
+  criadoEm: string;
 }
 
 export interface Custo {
@@ -1248,6 +1389,7 @@ export type ViewName =
   | 'forja-ia'
   | 'relatorios'
   | 'atelier'
+  | 'estudos'
   | 'configuracoes'
   | 'sistema-form'
   | 'sistema-detail'

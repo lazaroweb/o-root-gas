@@ -154,6 +154,16 @@ export default function FindingCard({ finding, auditoriaId, sistemaId, registro,
           {sev.label}
         </Tag>
         <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, textTransform: 'lowercase' }}>{finding.area}</span>
+        {finding.origem === 'novo' && (
+          <Tooltip title="Problema introduzido pelas mudanças desde a última auditoria.">
+            <Tag style={{ background: `${t.accents.peach}1a`, color: t.accents.peach, border: `1px solid ${t.accents.peach}55`, marginInlineEnd: 0, fontSize: 9, fontWeight: 600, textTransform: 'uppercase' }}>novo</Tag>
+          </Tooltip>
+        )}
+        {finding.origem === 'persiste' && (
+          <Tooltip title="Achado da auditoria anterior que continua aberto.">
+            <Tag style={{ background: t.surfaceMuted, color: t.textTertiary, border: `1px solid ${t.borderSoft}`, marginInlineEnd: 0, fontSize: 9, fontWeight: 600, textTransform: 'uppercase' }}>persiste</Tag>
+          </Tooltip>
+        )}
         <span style={{ flex: 1, fontFamily: FONTS.ui, fontSize: 14, color: t.text, fontWeight: 500 }}>{finding.titulo}</span>
         {registrado && <Tag color="green" style={{ marginInlineEnd: 0, fontSize: 10 }}>✓ registrado</Tag>}
       </button>

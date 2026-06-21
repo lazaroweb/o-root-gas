@@ -4,7 +4,7 @@
 // espaço pra vendas avulsas/personalizadas). Esta aba mostra o negócio pela
 // lente certa: MRR/ARR, assinantes, ARPU, novo MRR e churn do mês, MRR por app,
 // próximas cobranças, e um catálogo de planos por app que acelera o cadastro.
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Button, Modal, Form, Input, Select, Table, Tag, App as AntApp, Popconfirm,
   InputNumber, Drawer, Empty, Tooltip, DatePicker, Dropdown,
@@ -13,13 +13,14 @@ import dayjs, { Dayjs } from 'dayjs';
 import {
   Plus, Pencil, Trash2, TrendingUp, Repeat, DollarSign, Layers as LayersIcon,
   CalendarClock, Package, UserPlus, Boxes, CircleDollarSign, AlertCircle, Check,
-  FileText, Building2, Download,
+  FileText, Building2, Download, User as UserIcon, Filter,
 } from 'lucide-react';
 import { Panel, formatBRL } from '../components/ui';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import { gerarEbaixarPdf } from '../pdf-client';
+import ClienteSnapshotDrawer from '../components/ClienteSnapshotDrawer';
 import type { Receita, Sistema, Pessoa, ResumoReceitas, PlanoApp, ServerResponse } from '../types';
 
 const RECORRENCIAS = [
@@ -57,9 +58,23 @@ export default function FinReceitas({ sistemas }: { sistemas: Sistema[] }): Reac
   const [receber, setReceber] = useState<{ id: string; valor: number; rotulo: string } | null>(null);
   const [emissorOpen, setEmissorOpen] = useState(false);
   const [gerando, setGerando] = useState<string>('');
+  // FASE 4 — cross-link Cliente ↔ Financeiro: filtro por cliente e snapshot inline
+  const [clienteFiltro, setClienteFiltro] = useState<string>('todos');
+  const [snapshotPessoa, setSnapshotPessoa] = useState<{ id: string; nome: string } | null>(null);
 
   const nomeApp = (id?: string) => sistemas.find((s) => s.id === id)?.nome || '—';
-  const nomeCliente = (id?: string) => clientes.find((p) => p.id === id)?.nome || '';
+  // Prefere "empresa" (ficha rica) sobre "nome" pra dar contexto comercial
+  const nomeCliente = (id?: string) => {
+    const p = clientes.find((c) => c.id === id);
+    if (!p) return '';
+    return p.empresa || p.nome || '';
+  };
+
+  // Receitas filtradas pelo cliente selecionado (filtro local, sem ida ao server)
+  const receitasFiltradas = useMemo(() => {
+    if (clienteFiltro === 'todos') return receitas;
+    return receitas.filter((r) => r.pessoaId === clienteFiltro);
+  }, [receitas, clienteFiltro]);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -212,16 +227,77 @@ export default function FinReceitas({ sistemas }: { sistemas: Sistema[] }): Reac
 
       {/* Tabela de assinaturas */}
       <Panel title="Assinaturas" padding={8}>
+        {/* FASE 4 — filtro por cliente (cross-link com o cadastro de Pessoas) */}
+        {clientes.length > 0 && (
+          <div style={{ padding: '8px 12px 12px', display: 'flex', alignItems: 'center', gap: 10, borderBottom: `1px solid ${t.borderSoft}`, marginBottom: 4 }}>
+            <Filter size={14} style={{ color: t.textTertiary }} />
+            <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, textTransform: 'uppercase', letterSpacing: 0.4, fontWeight: 600 }}>
+              Cliente
+            </span>
+            <Select
+              size="small"
+              showSearch
+              value={clienteFiltro}
+              onChange={setClienteFiltro}
+              style={{ minWidth: 240, maxWidth: 360 }}
+              optionFilterProp="label"
+              options={[
+                { value: 'todos', label: `Todos os clientes (${receitas.length} assinaturas)` },
+                ...clientes
+                  .filter((c) => receitas.some((r) => r.pessoaId === c.id))
+                  .map((c) => ({
+                    value: c.id,
+                    label: `${nomeCliente(c.id) || c.nome} (${receitas.filter((r) => r.pessoaId === c.id).length})`,
+                  })),
+              ]}
+            />
+            {clienteFiltro !== 'todos' && (
+              <Button
+                size="small"
+                type="link"
+                icon={<UserIcon size={13} />}
+                onClick={() => {
+                  const p = clientes.find((c) => c.id === clienteFiltro);
+                  if (p) setSnapshotPessoa({ id: p.id, nome: nomeCliente(p.id) || p.nome });
+                }}
+                style={{ marginLeft: 'auto', padding: 0 }}
+              >
+                Abrir ficha
+              </Button>
+            )}
+          </div>
+        )}
         <Table
           rowKey="id"
           loading={loading}
-          dataSource={receitas}
+          dataSource={receitasFiltradas}
           pagination={false}
           scroll={{ x: 'max-content' }}
-          locale={{ emptyText: 'Nenhuma assinatura cadastrada' }}
+          locale={{ emptyText: clienteFiltro !== 'todos' ? 'Nenhuma assinatura pra este cliente' : 'Nenhuma assinatura cadastrada' }}
           columns={[
             { title: 'Aplicação', dataIndex: 'sistemaId', render: (id: string) => <span style={{ color: t.text, fontWeight: 500 }}>{nomeApp(id)}</span> },
-            { title: 'Cliente', dataIndex: 'pessoaId', render: (id: string) => <span style={{ color: t.textSecondary }}>{nomeCliente(id) || '—'}</span> },
+            {
+              title: 'Cliente', dataIndex: 'pessoaId',
+              render: (id: string) => id ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nome = nomeCliente(id);
+                    if (nome) setSnapshotPessoa({ id, nome });
+                  }}
+                  style={{
+                    background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                    color: t.accents.blue, fontFamily: 'inherit', fontSize: 'inherit',
+                    textAlign: 'left', textDecoration: 'none',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.textDecoration = 'underline'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.textDecoration = 'none'; }}
+                  title="Abrir ficha do cliente"
+                >
+                  {nomeCliente(id) || '—'}
+                </button>
+              ) : <span style={{ color: t.textTertiary }}>—</span>,
+            },
             { title: 'Plano', dataIndex: 'plano', render: (v: string, r: Receita) => (
               <span style={{ color: t.textSecondary }}>
                 {v || '—'}{ehAvulsa(r.recorrencia) && <Tag bordered={false} style={{ marginLeft: 6, background: `${t.accents.lavender}22`, color: t.accents.lavender, fontSize: 10 }}>avulsa</Tag>}
@@ -302,6 +378,13 @@ export default function FinReceitas({ sistemas }: { sistemas: Sistema[] }): Reac
       />
 
       <ModalEmissor open={emissorOpen} onClose={() => setEmissorOpen(false)} />
+
+      {/* FASE 4 — snapshot inline do cliente (cross-link Financeiro → Cliente) */}
+      <ClienteSnapshotDrawer
+        pessoaId={snapshotPessoa?.id || null}
+        pessoaNome={snapshotPessoa?.nome}
+        onClose={() => setSnapshotPessoa(null)}
+      />
     </div>
   );
 }

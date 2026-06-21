@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Button, Input, Tag, Spin, Empty, App as AntApp } from 'antd';
-import { Wand2, Save, RotateCcw, Sparkles } from 'lucide-react';
+import { Button, Input, Tag, Spin, App as AntApp } from 'antd';
+import { Wand2, Save, RotateCcw, Sparkles, SlidersHorizontal } from 'lucide-react';
 import { Panel } from '../components/ui';
+import PremiumEmpty from '../components/PremiumEmpty';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
@@ -86,13 +87,28 @@ export default function IAPrompts(): React.ReactElement {
   };
 
   if (loading) return <Spin style={{ display: 'block', margin: '60px auto' }} />;
-  if (prompts.length === 0) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Prompts indisponíveis (rode no app publicado)" style={{ marginTop: 40 }} />;
+  if (prompts.length === 0) return (
+    <PremiumEmpty
+      icon={<SlidersHorizontal size={26} strokeWidth={1.5} />}
+      accent={t.accents.peach}
+      title="Prompts indisponíveis"
+      subtitle="Os prompts de sistema carregam quando o app roda publicado, com a IA configurada em Configurações."
+    />
+  );
 
   return (
     <div>
-      <p style={{ color: t.textSecondary, fontSize: 13.5, marginTop: 0, marginBottom: 16 }}>
-        Cada recurso da Forja IA usa um prompt de sistema. Veja, edite, peça um refinamento à IA ou volte ao padrão. Mantenha os placeholders e estruturas JSON para o recurso continuar funcionando.
-      </p>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '14px 16px', marginBottom: 18, borderRadius: 14, background: `${t.accents.peach}0d`, border: `1px solid ${t.accents.peach}33` }}>
+        <span style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: `${t.accents.peach}1f`, color: t.accents.peach }}>
+          <SlidersHorizontal size={17} strokeWidth={1.7} />
+        </span>
+        <div>
+          <div style={{ fontFamily: FONTS.display, fontSize: 15, fontWeight: 600, color: t.text, marginBottom: 2 }}>Prompts de sistema</div>
+          <div style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary, lineHeight: 1.55 }}>
+            Cada recurso da Forja IA usa um prompt de sistema. Veja, edite, peça um refinamento à IA ou volte ao padrão — mantenha os placeholders e estruturas JSON para o recurso continuar funcionando.
+          </div>
+        </div>
+      </div>
       {prompts.map((p) => {
         const personalizado = !!p.custom;
         const alterado = edits[p.key] !== (p.custom || p.padrao);

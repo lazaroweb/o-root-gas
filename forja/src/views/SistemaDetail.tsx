@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Typography, Button, Space, Spin, Alert, Descriptions, Table, Divider, Tabs, App as AntApp, Tooltip, Popover, Progress } from 'antd';
+import { Typography, Button, Space, Spin, Alert, Descriptions, Divider, Tabs, App as AntApp, Tooltip, Popover, Progress } from 'antd';
 import { ArrowLeft, Pencil, ExternalLink, GitBranch, RefreshCw, FileCode, Wand2, Globe2, CheckCircle2, XCircle, HeartPulse, Info, Plug, ClipboardList, ShieldAlert, Receipt, Activity, Layers } from 'lucide-react';
 import StageBadge from '../components/StageBadge';
 import { Panel } from '../components/ui';
@@ -9,12 +9,15 @@ import RecursosPanel from './RecursosPanel';
 import DecisoesPanel from './DecisoesPanel';
 import BacklogPanel from './BacklogPanel';
 import BacklogDrawer from '../components/BacklogDrawer';
+import IdeiasFaixa from '../components/IdeiasFaixa';
 import RiscosPanel from './RiscosPanel';
 import PulsosPanel from './PulsosPanel';
 import PassaporteModal from './PassaporteModal';
 import AuditoriaDrawer from '../components/AuditoriaDrawer';
+import GraduacaoChecklist from '../components/GraduacaoChecklist';
+import CustosTab from '../components/CustosTab';
 import callServer from '../gas-client';
-import type { Sistema, Custo, ServerResponse, ServerResult, SaudeBreakdown } from '../types';
+import type { Sistema, ServerResponse, ServerResult, SaudeBreakdown } from '../types';
 
 const { Text, Paragraph } = Typography;
 
@@ -36,15 +39,10 @@ const MOCK_SISTEMA: Sistema = {
   scoreSaude: 85,
 };
 
-const MOCK_CUSTOS: Custo[] = [
-  { id: 'c1', sistemaId: 'mock-1', fornecedor: 'Google Workspace', valor: 0, recorrencia: 'mensal', proximaCobranca: '' },
-];
-
 export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDetailProps): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [sistema, setSistema] = useState<Sistema | null>(null);
-  const [custos, setCustos] = useState<Custo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -57,6 +55,17 @@ export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDeta
   const [backlogCount, setBacklogCount] = useState<{ aFazer: number; fazendo: number; alta: number; total: number } | null>(null);
   // Drawer full-screen do Kanban — espaço apertado dentro da tab não dá conta
   const [backlogDrawerOpen, setBacklogDrawerOpen] = useState(false);
+  // Aba ativa controlada — permite que clicar num fator da Saúde leve direto
+  // pra aba que resolve aquele item (Custos, Riscos, Pulsos).
+  const [activeTab, setActiveTab] = useState('recursos');
+  const tabsRef = React.useRef<HTMLDivElement>(null);
+  // Sinal pra forçar o checklist de graduação a recarregar após mudanças.
+  const [graduacaoReload, setGraduacaoReload] = useState(0);
+
+  const irParaAba = (tab: string) => {
+    setActiveTab(tab);
+    setTimeout(() => tabsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+  };
 
   const carregarUltimaAuditoria = () => {
     callServer<ServerResult>('getUltimaAuditoria', sistemaId)
@@ -107,29 +116,30 @@ export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDeta
     }
   };
 
-  // Carrega o breakdown do servidor (sem persistir) sempre que o sistema muda
+  // Recalcula E persiste o score sempre que abre o sistema — assim o número
+  // fica sempre fresco sem depender do botão, e as listas (Bancada/Dashboard)
+  // refletem o valor atual automaticamente.
   useEffect(() => {
     if (!sistemaId) return;
-    callServer<ServerResult>('calcularSaudeReal', sistemaId)
-      .then((r) => { if (r.ok && r.data) setSaude(r.data as SaudeBreakdown); })
+    callServer<ServerResult>('atualizarSaudeReal', sistemaId)
+      .then((r) => {
+        if (r.ok && r.data) {
+          const d = r.data as SaudeBreakdown;
+          setSaude(d);
+          setSistema((s) => (s ? { ...s, scoreSaude: d.score } : s));
+        }
+      })
       .catch(() => { /* preview local */ });
   }, [sistemaId]);
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([
-      callServer<ServerResponse<Sistema>>('getSistemaById', sistemaId),
-      callServer<ServerResponse<Custo[]>>('getCustosBySistema', sistemaId),
-    ])
-      .then(([sRes, cRes]) => {
+    callServer<ServerResponse<Sistema>>('getSistemaById', sistemaId)
+      .then((sRes) => {
         if (sRes.ok && sRes.data) setSistema(sRes.data);
         else setError(sRes.error || 'Sistema não encontrado');
-        if (cRes.ok && cRes.data) setCustos(cRes.data);
       })
-      .catch(() => {
-        setSistema(MOCK_SISTEMA);
-        setCustos(MOCK_CUSTOS);
-      })
+      .catch(() => { setSistema(MOCK_SISTEMA); })
       .finally(() => setLoading(false));
   }, [sistemaId]);
 
@@ -157,13 +167,6 @@ export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDeta
   if (loading) return <Spin size="large" style={{ display: 'block', margin: '80px auto' }} />;
   if (error || !sistema) return <Alert type="error" message={error || 'Erro'} showIcon style={{ margin: 24 }} />;
 
-  const custosColumns = [
-    { title: 'Fornecedor', dataIndex: 'fornecedor', key: 'fornecedor' },
-    { title: 'Valor', dataIndex: 'valor', key: 'valor', render: (v: number) => `R$ ${v.toFixed(2)}` },
-    { title: 'Recorrência', dataIndex: 'recorrencia', key: 'recorrencia' },
-    { title: 'Próxima Cobrança', dataIndex: 'proximaCobranca', key: 'proximaCobranca' },
-  ];
-
   const tabItems = [
     {
       key: 'recursos',
@@ -187,6 +190,7 @@ export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDeta
       ),
       children: (
         <TabBody titulo="Backlog" hint="Itens a fazer, fazendo, pausados, feitos e cancelados. Abra o Kanban em tela cheia pra gestão completa. Achados da Auditoria Forja IA aterrissam em 'A fazer' — arraste pra 'Fazendo' quando começar e pra 'Feito' quando concluir.">
+          <IdeiasFaixa sistemaId={sistemaId} sistemaNome={sistema.nome} onPromovido={carregarBacklogCount} />
           <BacklogTabResumo
             sistemaId={sistemaId}
             sistemaNome={sistema.nome}
@@ -210,7 +214,7 @@ export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDeta
       label: <TabLabel emoji={<ShieldAlert size={14} strokeWidth={1.7} />} label="Riscos" />,
       children: (
         <TabBody titulo="Riscos abertos" hint="Vulnerabilidades técnicas, operacionais, de segurança, dependências ou financeiras conhecidas. Use o botão 'Auditar com IA' lá em cima pra a Forja IA descobrir riscos novos pra você.">
-          <RiscosPanel sistemaId={sistemaId} />
+          <RiscosPanel sistemaId={sistemaId} onChanged={() => { recalcularSaude(); setGraduacaoReload((n) => n + 1); }} />
         </TabBody>
       ),
     },
@@ -219,14 +223,9 @@ export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDeta
       label: <TabLabel emoji={<Receipt size={14} strokeWidth={1.7} />} label="Custos" />,
       children: (
         <TabBody titulo="Custos recorrentes" hint="Hospedagem, APIs, domínios, assinaturas. Tudo que sai da sua conta pra esse sistema ficar de pé.">
-          <Table
-            columns={custosColumns}
-            dataSource={custos}
-            rowKey="id"
-            pagination={false}
-            size="small"
-            scroll={{ x: 'max-content' }}
-            locale={{ emptyText: 'Nenhum custo registrado ainda.' }}
+          <CustosTab
+            sistemaId={sistemaId}
+            onChanged={() => { recalcularSaude(); setGraduacaoReload((n) => n + 1); }}
           />
         </TabBody>
       ),
@@ -325,15 +324,32 @@ export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDeta
           recalcular={recalcularSaude}
           recalculando={recalculando}
           onAuditarIA={() => setAuditOpen(true)}
+          onEditar={() => onEdit(sistemaId)}
+          onIrPara={irParaAba}
         />
       </Panel>
 
+      {sistema.estagio === 'forja' && (
+        <GraduacaoChecklist
+          sistemaId={sistemaId}
+          reloadSignal={graduacaoReload}
+          onGraduated={() => {
+            setSistema((s) => (s ? { ...s, estagio: 'tempera' } : s));
+            recalcularSaude();
+          }}
+        />
+      )}
+
       <Divider style={{ borderColor: t.borderSoft, marginBottom: 8 }} />
-      <Tabs items={tabItems} defaultActiveKey="recursos" />
+      <div ref={tabsRef}>
+        <Tabs items={tabItems} activeKey={activeTab} onChange={setActiveTab} />
+      </div>
 
       <AuditoriaDrawer
         sistemaId={sistemaId}
         sistemaNome={sistema.nome}
+        repoUrl={sistema.repoUrl}
+        scriptId={sistema.scriptId}
         open={auditOpen}
         onClose={() => setAuditOpen(false)}
         onAuditoriaAtualizada={carregarUltimaAuditoria}
@@ -467,36 +483,79 @@ function MetricaMini({ emoji, label, valor, cor, destaque }: { emoji: string; la
   );
 }
 
+// Mapeia o nome de um fator de saúde pra uma ação que leva o usuário pra onde
+// resolver (editar a ficha, ou abrir a aba certa). Retorna null se não houver
+// destino acionável (ex.: alertas, que vivem fora do detalhe).
+function acaoDoFator(
+  nome: string,
+  handlers: { onEditar: () => void; onIrPara: (tab: string) => void },
+): { label: string; run: () => void } | null {
+  const n = nome.toLowerCase();
+  if (n.includes('propósito') || n.includes('proposito') || n.includes('stack') || n.includes('acessível') || n.includes('acessivel') || n.includes('repositório') || n.includes('repositorio')) {
+    return { label: 'Editar ficha', run: handlers.onEditar };
+  }
+  if (n.includes('custo') || n.includes('receita')) {
+    return { label: 'Abrir Custos', run: () => handlers.onIrPara('custos') };
+  }
+  if (n.includes('atividade')) {
+    return { label: 'Abrir Pulsos', run: () => handlers.onIrPara('pulsos') };
+  }
+  if (n.includes('risco')) {
+    return { label: 'Abrir Riscos', run: () => handlers.onIrPara('riscos') };
+  }
+  return null;
+}
+
 // Bloco visual de Saúde: barra + score + breakdown clicável (Popover)
 function SaudeBlock({
-  saude, score, recalcular, recalculando, onAuditarIA,
+  saude, score, recalcular, recalculando, onAuditarIA, onEditar, onIrPara,
 }: {
   saude: SaudeBreakdown | null;
   score: number;
   recalcular: () => void;
   recalculando: boolean;
   onAuditarIA: () => void;
+  onEditar: () => void;
+  onIrPara: (tab: string) => void;
 }): React.ReactElement {
   const t = useTokens();
+  const [popOpen, setPopOpen] = useState(false);
   const scoreReal = saude ? saude.score : score;
   const cor = scoreReal === 0 ? t.textTertiary : scoreReal >= 70 ? t.accents.sage : scoreReal >= 40 ? t.accents.peach : t.accents.rose;
 
   const breakdownContent = saude ? (
-    <div style={{ maxWidth: 360 }}>
+    <div style={{ maxWidth: 380 }}>
       <p style={{ fontSize: 11.5, color: t.textTertiary, margin: '0 0 10px', lineHeight: 1.55 }}>
-        Score é determinístico (sem IA). Soma de 9 fatores em 4 categorias: completude (20), visibilidade (20), operacional (30) e riscos&financeiro (30).
+        Score é determinístico (sem IA). Clique num fator pendente pra ir direto onde resolver.
       </p>
-      <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {saude.fatores.map((f, i) => (
-          <li key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>
-            {f.ok ? <CheckCircle2 size={13} color={t.accents.sage} style={{ marginTop: 2, flexShrink: 0 }} /> : <XCircle size={13} color={t.accents.rose} style={{ marginTop: 2, flexShrink: 0 }} />}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ color: t.text }}>{f.nome}</div>
-              <div style={{ color: t.textTertiary, fontSize: 11, marginTop: 1 }}>{f.detalhe}</div>
-            </div>
-            <span style={{ fontFamily: FONTS.mono, fontSize: 11, color: t.textTertiary, flexShrink: 0 }}>{f.pontos}/{f.max}</span>
-          </li>
-        ))}
+      <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {saude.fatores.map((f, i) => {
+          const acao = !f.ok ? acaoDoFator(f.nome, { onEditar, onIrPara }) : null;
+          const clicavel = !!acao;
+          return (
+            <li
+              key={i}
+              onClick={clicavel ? () => { acao!.run(); setPopOpen(false); } : undefined}
+              style={{
+                display: 'flex', alignItems: 'flex-start', gap: 8, fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary,
+                padding: '5px 6px', borderRadius: 8, cursor: clicavel ? 'pointer' : 'default',
+                transition: 'background 0.12s',
+              }}
+              onMouseEnter={clicavel ? (e) => { (e.currentTarget as HTMLElement).style.background = t.surfaceMuted; } : undefined}
+              onMouseLeave={clicavel ? (e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; } : undefined}
+            >
+              {f.ok ? <CheckCircle2 size={13} color={t.accents.sage} style={{ marginTop: 2, flexShrink: 0 }} /> : <XCircle size={13} color={t.accents.rose} style={{ marginTop: 2, flexShrink: 0 }} />}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: t.text }}>{f.nome}</div>
+                <div style={{ color: t.textTertiary, fontSize: 11, marginTop: 1 }}>{f.detalhe}</div>
+                {clicavel && (
+                  <div style={{ color: cor, fontSize: 11, marginTop: 3, fontWeight: 600 }}>{acao!.label} →</div>
+                )}
+              </div>
+              <span style={{ fontFamily: FONTS.mono, fontSize: 11, color: t.textTertiary, flexShrink: 0 }}>{f.pontos}/{f.max}</span>
+            </li>
+          );
+        })}
       </ul>
     </div>
   ) : <span style={{ color: t.textTertiary, fontSize: 12 }}>Carregando…</span>;
@@ -510,7 +569,7 @@ function SaudeBlock({
           <Tooltip title="Score de 0 a 100 calculado a partir de sinais reais do sistema. Clique pra ver o breakdown.">
             <Info size={12} color={t.textTertiary} style={{ cursor: 'help' }} />
           </Tooltip>
-          <Popover content={breakdownContent} title="Como esse score é calculado" trigger="click" placement="bottomLeft">
+          <Popover content={breakdownContent} title="Como esse score é calculado" trigger="click" placement="bottomLeft" open={popOpen} onOpenChange={setPopOpen}>
             <span
               style={{
                 fontFamily: FONTS.display, fontSize: 22, fontWeight: 500, color: cor, cursor: 'pointer',

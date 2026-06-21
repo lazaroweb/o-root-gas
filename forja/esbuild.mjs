@@ -210,6 +210,48 @@ const html = `<!DOCTYPE html>
         50%      { box-shadow: 0 0 0 4px rgba(232, 85, 85, 0.18); }
       }
       .forja-pulse { animation: forjaPulseGlow 1.8s ease-in-out infinite; }
+      /* Pulse "brasa" pra chamar atencao no botao de auditar mudancas detectadas */
+      @keyframes forjaPulseAuditar {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(217, 155, 115, 0.0); }
+        50%      { box-shadow: 0 0 0 6px rgba(217, 155, 115, 0.30); }
+      }
+      .forja-pulse-audit { animation: forjaPulseAuditar 1.6s ease-in-out infinite; }
+      /* ─── Premium ambient (Dashboard) ──────────────────────────────────────
+         Aurora: manchas de cor da paleta, muito borradas, derivando devagar —
+         dá profundidade e "vida" sem poluir. Lift: cards sobem de leve no hover. */
+      @keyframes forjaAurora {
+        0%   { transform: translate3d(0,0,0) scale(1); }
+        33%  { transform: translate3d(7%, -6%, 0) scale(1.18); }
+        66%  { transform: translate3d(-5%, 5%, 0) scale(1.06); }
+        100% { transform: translate3d(0,0,0) scale(1); }
+      }
+      @keyframes forjaAurora2 {
+        0%   { transform: translate3d(0,0,0) scale(1.1); }
+        50%  { transform: translate3d(-9%, 7%, 0) scale(1); }
+        100% { transform: translate3d(0,0,0) scale(1.1); }
+      }
+      @keyframes forjaAurora3 {
+        0%   { transform: translate3d(0,0,0) scale(1); }
+        50%  { transform: translate3d(6%, 8%, 0) scale(1.16); }
+        100% { transform: translate3d(0,0,0) scale(1); }
+      }
+      .forja-aurora { position: absolute; border-radius: 50%; filter: blur(100px); pointer-events: none; will-change: transform; }
+      /* Dither: ruído finíssimo que quebra o banding do degradê (os "degraus"
+         de cor em fundo escuro) e deixa a transição imperceptível. Mesmo truque
+         de Stripe/Apple. Quase invisível — só "amacia" o gradiente. */
+      .forja-grain {
+        position: absolute; inset: 0; pointer-events: none;
+        opacity: 0.08;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+        background-size: 140px 140px;
+      }
+      .forja-lift { transition: transform 0.3s cubic-bezier(0.22,1,0.36,1), box-shadow 0.3s ease, border-color 0.3s ease; will-change: transform; }
+      .forja-lift:hover { transform: translateY(-4px); }
+      @media (prefers-reduced-motion: reduce) {
+        .forja-aurora { animation: none !important; }
+        .forja-lift { transition: none; }
+        .forja-lift:hover { transform: none; }
+      }
       /* Acoes do card Kanban so aparecem on hover (limpa visualmente o backlog) */
       .forja-kanban-card .forja-card-actions { opacity: 0; transition: opacity 0.18s ease; pointer-events: none; }
       .forja-kanban-card:hover .forja-card-actions { opacity: 1; pointer-events: auto; }
@@ -257,7 +299,8 @@ const html = `<!DOCTYPE html>
           grid-template-columns: 1fr !important;
           gap: 14px !important;
         }
-        .forja-subnav-grid > nav {
+        .forja-subnav-grid > nav,
+        .forja-subnav-grid > div > nav {
           flex-direction: row !important;
           position: static !important;
           overflow-x: auto;
@@ -265,8 +308,13 @@ const html = `<!DOCTYPE html>
           scrollbar-width: none;
           -webkit-overflow-scrolling: touch;
         }
-        .forja-subnav-grid > nav::-webkit-scrollbar { height: 0; width: 0; display: none; }
-        .forja-subnav-grid > nav > button { flex: 0 0 auto !important; white-space: nowrap; }
+        /* moldura do Atelier (wrapper do nav) vira faixa simples no mobile */
+        .forja-subnav-grid > div:has(> nav) { align-self: start !important; }
+        .forja-atelier-mark { display: none !important; }
+        .forja-subnav-grid > nav::-webkit-scrollbar,
+        .forja-subnav-grid > div > nav::-webkit-scrollbar { height: 0; width: 0; display: none; }
+        .forja-subnav-grid > nav > button,
+        .forja-subnav-grid > div > nav > button { flex: 0 0 auto !important; white-space: nowrap; }
 
         /* Tabelas largas rolam na horizontal em vez de espremer colunas. */
         .ant-table-wrapper .ant-table-content { overflow-x: auto; }

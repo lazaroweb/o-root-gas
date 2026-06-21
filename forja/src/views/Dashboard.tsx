@@ -4,7 +4,7 @@ import {
   HeartPulse, Sparkles, GitBranch, Server, Plus, AppWindow, Flame, FileCode, FileText,
   AlertTriangle, AlertCircle, Info, ListChecks, GitCommit, ChevronRight, CloudOff,
 } from 'lucide-react';
-import { Panel, Skeleton, RingProgress, LiveDot, EmptyArt } from '../components/ui';
+import { Panel, Skeleton, RingProgress, LiveDot, EmptyArt, useCountUp } from '../components/ui';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
@@ -95,6 +95,10 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
       .catch(() => { /* sync é best-effort */ });
   }, []);
 
+  // Contador animado do score (0 → valor) no mount. Chamado antes dos early
+  // returns pra respeitar as regras de hooks; cai pra 0 enquanto carrega.
+  const saudeAnim = Math.round(useCountUp(data?.kpis.saudeMedia ?? 0, 900));
+
   if (loading) {
     return (
       <div className="forja-view" style={{ padding: '36px 40px', maxWidth: 1280, margin: '0 auto' }}>
@@ -127,8 +131,30 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
   // Breakdown técnico — usa dados operacionais ou cai pro mock
   const bk = ops?.breakdown || { rascunho: 0, forja: 0, tempera: 0, prateleira: 0, atencao: 0 };
 
+  // Recomendação dinâmica pra saúde média — o que fazer pra chegar perto de 100.
+  const saudeDica = kpis.saudeMedia >= 75
+    ? 'Saudável. Pra manter perto de 100: monitore os Pulsos e resolva os findings da auditoria conforme aparecem.'
+    : kpis.saudeMedia >= 45
+      ? 'Atenção leve. Abra os apps com score mais baixo e feche os fatores vermelhos: custos, atividade (Pulsos) e riscos altos.'
+      : 'Crítico. Priorize: em cada app abra a Saúde, clique nos fatores vermelhos e resolva — cadastrar custos, ligar monitoramento (Pulsos) e baixar riscos altos sobem o score rápido.';
+
   return (
-    <div style={{ padding: '36px 40px 48px', maxWidth: 1280, margin: '0 auto' }}>
+    // minHeight 100vh: o fundo ambiente (aurora + dither) preenche a viewport
+    // toda. Sem isso, quando o conteúdo é mais curto que a tela, a camada de
+    // dither terminava no fim do conteúdo e o appBg puro aparecia abaixo —
+    // criando uma faixa/serrilha horizontal. Agora a transição é uniforme.
+    <div style={{ position: 'relative', zIndex: 0, minHeight: '100vh' }}>
+      {/* Aurora ambiente — full-bleed: cobre TODA a área de conteúdo (não só a
+          coluna de 1280), pra os brilhos sangrarem de ponta a ponta sem marcar
+          bandas nas laterais. Cada mancha desvanece em radial, então o recorte
+          acontece só na borda real do viewer. zIndex -1 = atrás de tudo. */}
+      <div aria-hidden style={{ position: 'absolute', inset: 0, overflow: 'hidden', zIndex: -1, pointerEvents: 'none' }}>
+        <span className="forja-aurora" style={{ width: 640, height: 640, top: -160, left: '2%', background: `radial-gradient(circle, ${t.accents.peach}, transparent 70%)`, opacity: 0.11, animation: 'forjaAurora 18s ease-in-out infinite' }} />
+        <span className="forja-aurora" style={{ width: 560, height: 560, top: -120, right: '6%', background: `radial-gradient(circle, ${t.accents.clay}, transparent 70%)`, opacity: 0.075, animation: 'forjaAurora2 23s ease-in-out infinite' }} />
+        <span className="forja-aurora" style={{ width: 520, height: 520, top: 200, left: '44%', background: `radial-gradient(circle, ${saudeCor}, transparent 72%)`, opacity: 0.09, animation: 'forjaAurora3 27s ease-in-out infinite' }} />
+        <div className="forja-grain" />
+      </div>
+      <div style={{ padding: '68px 40px 56px', maxWidth: 1280, margin: '0 auto' }}>
       {/* Hero editorial — sem números financeiros */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 24, flexWrap: 'wrap', marginBottom: 28, ...stagger(0) }}>
         <div>
@@ -140,7 +166,7 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <Button icon={<FileText size={16} />} onClick={() => onNavigate('relatorios')}>Relatório do mês</Button>
-          <Button type="primary" icon={<Plus size={16} />} onClick={() => onNavigate('sistemas')}>Novo sistema</Button>
+          <Button type="primary" icon={<Plus size={16} />} onClick={() => onNavigate('sistemas')} style={{ boxShadow: `0 6px 18px ${t.accents.peach}4d` }}>Novo sistema</Button>
         </div>
       </header>
 
@@ -148,15 +174,16 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
       <Row gutter={[20, 20]}>
         <Col xs={24} lg={16}>
           {/* Hero técnico: saúde média grande + breakdown estágios + counts operacionais */}
-          <div style={{
+          <div className="forja-lift" style={{
             ...stagger(1),
             position: 'relative',
             borderRadius: 22,
             border: `1px solid ${t.border}`,
-            background: `linear-gradient(140deg, ${saudeCor}1a 0%, ${saudeCor}08 30%, ${t.surface} 62%)`,
-            boxShadow: t.shadowSoft,
+            background: `linear-gradient(140deg, ${saudeCor}22 0%, ${saudeCor}0a 32%, ${t.surface} 64%)`,
+            boxShadow: t.shadow,
             padding: 28,
             overflow: 'hidden',
+            height: '100%',
             minHeight: 280,
           }}>
             <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg, ${saudeCor}00, ${saudeCor}, ${saudeCor}00)`, opacity: 0.55 }} />
@@ -165,22 +192,29 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 600, color: t.textSecondary, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
                 <HeartPulse size={14} strokeWidth={1.8} color={saudeCor} /> Saúde operacional
               </span>
-              <Tag bordered={false} style={{ marginInlineEnd: 0, fontSize: 11, background: `${saudeCor}1a`, color: saudeCor }}>{saudeLabel}</Tag>
+              <Tooltip title={<TipBox titulo={`Status: ${saudeLabel}`} dica={saudeDica} />} placement="left">
+                <Tag bordered={false} style={{ marginInlineEnd: 0, fontSize: 11, background: `${saudeCor}1a`, color: saudeCor, cursor: 'help' }}>{saudeLabel}</Tag>
+              </Tooltip>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, flexWrap: 'wrap', marginBottom: 4 }}>
-              <span style={{
-                fontFamily: FONTS.display, fontWeight: 500, fontSize: 64,
-                color: t.text, lineHeight: 1, letterSpacing: '-0.025em',
-                fontVariantNumeric: 'tabular-nums',
-              }}>
-                {kpis.saudeMedia}
-                <span style={{ fontSize: 28, color: t.textTertiary, marginLeft: 4 }}>/100</span>
-              </span>
+              <Tooltip title={<TipBox titulo="Saúde média dos sistemas (0–100)" dica={saudeDica} />} placement="bottom">
+                <span style={{
+                  fontFamily: FONTS.display, fontWeight: 500, fontSize: 64,
+                  color: t.text, lineHeight: 1, letterSpacing: '-0.025em',
+                  fontVariantNumeric: 'tabular-nums', cursor: 'help',
+                  textShadow: `0 2px 24px ${saudeCor}40`,
+                }}>
+                  {saudeAnim}
+                  <span style={{ fontSize: 28, color: t.textTertiary, marginLeft: 4 }}>/100</span>
+                </span>
+              </Tooltip>
             </div>
-            <div style={{ fontSize: 13, color: t.textTertiary, marginBottom: 22 }}>
-              <span style={{ fontWeight: 600, color: t.text }}>{data.totais.ativos}</span> ativo{data.totais.ativos !== 1 ? 's' : ''} de <span style={{ fontWeight: 600, color: t.text }}>{data.totais.sistemas}</span> sistema{data.totais.sistemas !== 1 ? 's' : ''} cadastrado{data.totais.sistemas !== 1 ? 's' : ''}
-            </div>
+            <Tooltip title={<TipBox titulo="Sistemas ativos vs. cadastrados" dica="Ativo = teve pulso/decisão/incidente recente. Apps parados não contam como ativos — registre atividade ou monitore a URL (Pulsos) pra reativar." />} placement="bottom">
+              <div style={{ fontSize: 13, color: t.textTertiary, marginBottom: 22, display: 'inline-block', cursor: 'help' }}>
+                <span style={{ fontWeight: 600, color: t.text }}>{data.totais.ativos}</span> ativo{data.totais.ativos !== 1 ? 's' : ''} de <span style={{ fontWeight: 600, color: t.text }}>{data.totais.sistemas}</span> sistema{data.totais.sistemas !== 1 ? 's' : ''} cadastrado{data.totais.sistemas !== 1 ? 's' : ''}
+              </div>
+            </Tooltip>
 
             {/* Mini-stats operacionais: estágios + counts */}
             <Row gutter={[18, 14]}>
@@ -190,22 +224,25 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
                   valor={bk.forja}
                   cor={t.accents.peach}
                   hint="Em desenvolvimento"
+                  dica="Sistemas em construção. Ação: abra cada um e complete o checklist de graduação (deploy, dossiê, custos, riscos, fluxo) pra graduar pra Têmpera."
                 />
               </Col>
               <Col xs={12} sm={6}>
                 <TechMiniStat
                   titulo="Têmpera"
                   valor={bk.tempera}
-                  cor={t.accents.blue}
-                  hint="Em refinamento"
+                  cor={t.accents.sage}
+                  hint="No ar / em produção"
+                  dica="No ar, em produção. Ação: monitore a URL (Pulsos), resolva findings da auditoria e mantenha custos/risco em dia. Quando aposentar ou pausar, mova pra Prateleira."
                 />
               </Col>
               <Col xs={12} sm={6}>
                 <TechMiniStat
                   titulo="Prateleira"
                   valor={bk.prateleira}
-                  cor={t.accents.sage}
-                  hint="Em produção"
+                  cor={t.textTertiary}
+                  hint="Pausado / aposentado"
+                  dica="Pausado ou aposentado. Ação: manutenção mínima — revise custos pra não pagar por algo parado e desligue monitoramento se não fizer mais sentido."
                 />
               </Col>
               <Col xs={12} sm={6}>
@@ -215,6 +252,9 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
                   cor={bk.atencao > 0 ? t.accents.rose : t.textTertiary}
                   hint="Pedindo ação"
                   destaque={bk.atencao > 0}
+                  dica={bk.atencao > 0
+                    ? 'Apps com alerta crítico ou risco alto. Ação: abra cada um e trate o que está vermelho na Saúde — isso tira do status atenção.'
+                    : 'Nenhum app pedindo ação agora. Mantenha resolvendo alertas e findings assim que aparecem.'}
                 />
               </Col>
             </Row>
@@ -228,16 +268,20 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
                 fontSize: 12.5, color: t.textTertiary,
               }}>
                 {ops.decisoesAbertas > 0 && (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                    <ListChecks size={13} color={t.accents.lavender} />
-                    <strong style={{ color: t.text, fontVariantNumeric: 'tabular-nums' }}>{ops.decisoesAbertas}</strong> decisões em aberto
-                  </span>
+                  <Tooltip title={<TipBox titulo="Decisões em aberto" dica="Itens no backlog ainda não concluídos. Ação: abra o sistema → aba Backlog e mova pra 'Feito' o que já resolveu." />}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'help' }}>
+                      <ListChecks size={13} color={t.accents.lavender} />
+                      <strong style={{ color: t.text, fontVariantNumeric: 'tabular-nums' }}>{ops.decisoesAbertas}</strong> decisões em aberto
+                    </span>
+                  </Tooltip>
                 )}
                 {ops.findingsAbertos > 0 && (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                    <AlertTriangle size={13} color={t.accents.peach} />
-                    <strong style={{ color: t.text, fontVariantNumeric: 'tabular-nums' }}>{ops.findingsAbertos}</strong> findings pra resolver
-                  </span>
+                  <Tooltip title={<TipBox titulo="Findings de auditoria" dica="Achados da Forja IA ainda não tratados. Ação: abra o sistema, resolva (ou registre como risco/decisão) — um por dia já mantém a casa em ordem." />}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'help' }}>
+                      <AlertTriangle size={13} color={t.accents.peach} />
+                      <strong style={{ color: t.text, fontVariantNumeric: 'tabular-nums' }}>{ops.findingsAbertos}</strong> findings pra resolver
+                    </span>
+                  </Tooltip>
                 )}
                 {ops.alertasNaoLidos > 0 && onOpenAlertas && (
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }} onClick={onOpenAlertas}>
@@ -251,7 +295,7 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
         </Col>
 
         <Col xs={24} lg={8}>
-          <div style={{ ...stagger(2), borderRadius: 22, border: `1px solid ${t.border}`, background: t.surface, boxShadow: t.shadowSoft, padding: 24, height: '100%', minHeight: 280 }}>
+          <div className="forja-lift" style={{ ...stagger(2), borderRadius: 22, border: `1px solid ${t.border}`, background: t.surface, boxShadow: t.shadow, padding: 24, height: '100%', minHeight: 280 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 600, color: t.textSecondary, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
                 <Server size={14} strokeWidth={1.8} color={t.accents.blue} /> Conexões
@@ -260,9 +304,11 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
                 <Tag bordered={false} style={{ marginInlineEnd: 0, fontSize: 11, fontWeight: 600, background: status.resumo.online === status.resumo.total ? `${t.accents.sage}1a` : `${t.accents.clay}1a`, color: status.resumo.online === status.resumo.total ? t.accents.sage : t.accents.clay }}>{status.resumo.online}/{status.resumo.total} online</Tag>
               )}
             </div>
-            <div style={{ display: 'flex', justifyContent: 'center', padding: '4px 0 10px' }}>
-              <RingProgress value={kpis.saudeMedia} color={saudeCor} size={132} sublabel={`${data.totais.ativos} apps ativos`} />
-            </div>
+            <Tooltip title={<TipBox titulo="Saúde média × apps ativos" dica={saudeDica} />} placement="bottom">
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '4px 0 10px', cursor: 'help' }}>
+                <RingProgress value={kpis.saudeMedia} color={saudeCor} size={132} sublabel={`${data.totais.ativos} apps ativos`} />
+              </div>
+            </Tooltip>
             <div style={{ borderTop: `1px solid ${t.borderSoft}`, paddingTop: 8 }}>
               {(status ? [
                 { icon: <Sparkles size={14} strokeWidth={1.8} />, nome: 'IA — Proxy', live: status.llm, tip: status.llm.detalhe || 'Conexão com o proxy de LLM (Configurações).' },
@@ -305,12 +351,12 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
       {/* Aplicações + Atividade técnica */}
       <Row gutter={[20, 20]} align="stretch">
         <Col xs={24} lg={16}>
-          <div style={{ ...stagger(3), height: '100%' }}>
+          <div className="forja-lift" style={{ ...stagger(3), height: '100%' }}>
             <Panel
               title="Aplicações"
               extra={apps.length > 0 ? <a onClick={() => onNavigate('sistemas')} style={{ color: t.accents.peach, fontSize: 13, cursor: 'pointer' }}>Ver todas →</a> : undefined}
               padding={8}
-              style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
+              style={{ height: '100%', display: 'flex', flexDirection: 'column', boxShadow: t.shadow }}
               bodyStyle={apps.length > 0 ? { flex: 1, minHeight: 0, position: 'relative', padding: 0 } : undefined}
             >
               {apps.length === 0 ? (
@@ -370,7 +416,7 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
         </Col>
 
         <Col xs={24} lg={8}>
-          <div style={stagger(4)}>
+          <div className="forja-lift" style={stagger(4)}>
             <AtividadePanel
               ops={ops}
               onAbrirAlertas={onOpenAlertas || (() => { /* sem callback: link omitido */ })}
@@ -380,18 +426,29 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
           </div>
         </Col>
       </Row>
+      </div>
     </div>
   );
 }
 
 // ─── Sub-componentes técnicos ────────────────────────────────────────────────
 
-function TechMiniStat({ titulo, valor, cor, hint, destaque }: {
-  titulo: string; valor: number; cor: string; hint?: string; destaque?: boolean;
+// Conteúdo padrão de tooltip "didático": título + recomendação acionável.
+function TipBox({ titulo, dica }: { titulo: string; dica: string }): React.ReactElement {
+  return (
+    <div style={{ maxWidth: 250 }}>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{titulo}</div>
+      <div style={{ fontSize: 12, opacity: 0.88, lineHeight: 1.5 }}>{dica}</div>
+    </div>
+  );
+}
+
+function TechMiniStat({ titulo, valor, cor, hint, destaque, dica }: {
+  titulo: string; valor: number; cor: string; hint?: string; destaque?: boolean; dica?: string;
 }): React.ReactElement {
   const t = useTokens();
-  return (
-    <div>
+  const conteudo = (
+    <div style={{ cursor: dica ? 'help' : 'default' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ width: 7, height: 7, borderRadius: '50%', background: cor }} />
         <span style={{ fontSize: 12, fontWeight: 600, color: t.textSecondary, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{titulo}</span>
@@ -406,6 +463,9 @@ function TechMiniStat({ titulo, valor, cor, hint, destaque }: {
       {hint && <div style={{ fontSize: 11.5, color: t.textTertiary, marginTop: 2 }}>{hint}</div>}
     </div>
   );
+  return dica
+    ? <Tooltip title={<TipBox titulo={titulo} dica={dica} />} placement="bottom">{conteudo}</Tooltip>
+    : conteudo;
 }
 
 // Painel de atividade técnica — substitui "Contas a vencer" (que era $ no dashboard).
@@ -422,7 +482,7 @@ function AtividadePanel({ ops, onAbrirAlertas, onAbrirSistema, temAlertasCallbac
 
   if (!ops) {
     return (
-      <Panel title="Atividade técnica" padding={8}>
+      <Panel title="Atividade técnica" padding={8} style={{ boxShadow: t.shadow }}>
         <div style={{ padding: 20, color: t.textTertiary, fontSize: 13, textAlign: 'center' }}>
           Carregando...
         </div>
@@ -432,7 +492,7 @@ function AtividadePanel({ ops, onAbrirAlertas, onAbrirSistema, temAlertasCallbac
 
   if (semConteudo) {
     return (
-      <Panel title="Atividade técnica" padding={8}>
+      <Panel title="Atividade técnica" padding={8} style={{ boxShadow: t.shadow }}>
         <EmptyArt
           icon={<AppWindow size={26} strokeWidth={1.6} />}
           titulo="Tudo silêncio"
@@ -451,6 +511,7 @@ function AtividadePanel({ ops, onAbrirAlertas, onAbrirSistema, temAlertasCallbac
           : undefined
       }
       padding={8}
+      style={{ boxShadow: t.shadow }}
     >
       {/* Alertas não lidos (top 3) */}
       {ops.alertasTop.length > 0 && (

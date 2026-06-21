@@ -4,7 +4,9 @@
 
 ![status](https://img.shields.io/badge/status-ativo-3CB371)
 ![stack](https://img.shields.io/badge/stack-React%2018%20%2B%20GAS-444)
-![version](https://img.shields.io/badge/version-1.64.0-blue)
+![version](https://img.shields.io/badge/version-1.140.1-blue)
+
+> **👋 Você é um agente IA?** Leia [**AGENTS.md**](AGENTS.md) na raiz — é o handoff completo (estado atual, roadmap, comandos, padrões, princípios). 5 minutos de leitura te poupam horas.
 
 Forja é uma plataforma pessoal para quem desenvolve produtos com IA (Cursor, Claude, ChatGPT) e precisa orquestrar tudo: clientes, ideias, sistemas, custos, receitas, status operacional, auditorias e o próprio "atelier" de trabalho (skills, snippets, templates, bookmarks, Driver/nuvens, hospedagem, cofre criptografado).
 
@@ -132,10 +134,14 @@ A URL do app é sempre a mesma — só o conteúdo muda/volta no tempo.
 
 ## Documentação
 
+- [**AGENTS.md**](AGENTS.md) — **handoff completo pro próximo agente AI** (estado atual, roadmap quente, padrões, princípios)
+- [forja/ROADMAP.md](forja/ROADMAP.md) — o que foi entregue + fila com prioridades
+- [forja/CHANGELOG.md](forja/CHANGELOG.md) — histórico detalhado por versão
 - [forja/ARCHITECTURE.md](forja/ARCHITECTURE.md) — design do SheetDB engine, chunking strategy, fluxo GAS↔React
 - [forja/DEPLOY.md](forja/DEPLOY.md) — passo a passo de deploy + propriedades necessárias
 - [forja/SECURITY.md](forja/SECURITY.md) — modelo de segurança do Cofre (zero-knowledge)
 - [forja/DRIVER_OAUTH.md](forja/DRIVER_OAUTH.md) — conectar OneDrive e contas Google extras (passo a passo Azure/Google)
+- [forja-public/README.md](forja-public/README.md) — projeto separado do formulário público de Discovery (segurança por isolamento)
 
 ---
 
@@ -149,13 +155,14 @@ A URL do app é sempre a mesma — só o conteúdo muda/volta no tempo.
 
 ---
 
-## Roadmap (v1.1+)
+## Roadmap
 
-- Snapshot por cliente (filtra portfólio em PDF)
-- Editor markdown rico (Monaco/CodeMirror) no Atelier
-- Sincronização multi-device (mesma planilha, deploys diferentes)
-- Sugestões automáticas de skills baseadas em contexto
-- Marketplace de templates da comunidade
+Roadmap completo (entregue + fila) vive em [forja/ROADMAP.md](forja/ROADMAP.md). Itens de alta prioridade no momento:
+
+- **Leitura paginada da auditoria de código** — resolver alerta `DIFF TRUNCADO` em repos grandes (>60-80KB)
+- **Audit "alerta sem tratativa proibido"** — varrer todos os alertas/badges, garantir CTA em cada um (princípio #6)
+
+Backlog geral: dunning automático, exportação Excel, multi-moeda, modo offline/PWA, integração Open Finance.
 
 ---
 

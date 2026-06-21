@@ -11,6 +11,7 @@ import ShortcutsModal from './components/ShortcutsModal';
 import ImportGASModal from './components/ImportGASModal';
 import SkillsHubModal from './components/SkillsHubModal';
 import Atelier from './views/Atelier';
+import Estudos from './views/Estudos';
 import { useIsMobile } from './useResponsive';
 import Dashboard from './views/Dashboard';
 import Configuracoes from './views/Configuracoes';
@@ -36,7 +37,7 @@ const { Content } = Layout;
 const VIEW_LABELS: Record<ViewName, string> = {
   dashboard: 'Dashboard', clientes: 'Clientes', ideias: 'Ideias', sistemas: 'Sistemas (Bancada)',
   operacoes: 'Operações', financeiro: 'Financeiro', 'forja-ia': 'Forja IA', relatorios: 'Relatórios',
-  atelier: 'Atelier', configuracoes: 'Configurações', 'sistema-form': 'Criar/editar sistema',
+  atelier: 'Atelier', estudos: 'Estudos', configuracoes: 'Configurações', 'sistema-form': 'Criar/editar sistema',
   'sistema-detail': 'Detalhe do sistema', oportunidades: 'Oportunidades', genese: 'Gênese (kickoff)',
 };
 
@@ -114,7 +115,7 @@ export default function App(): React.ReactElement {
     const navMap: Record<string, ViewName> = {
       d: 'dashboard', c: 'clientes', i: 'ideias', s: 'sistemas',
       o: 'operacoes', f: 'financeiro', a: 'forja-ia', r: 'relatorios',
-      v: 'atelier', ',': 'configuracoes',
+      v: 'atelier', e: 'estudos', ',': 'configuracoes',
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -247,6 +248,8 @@ export default function App(): React.ReactElement {
         return <Relatorios />;
       case 'atelier':
         return <Atelier />;
+      case 'estudos':
+        return <Estudos />;
       case 'configuracoes':
         return isAdmin ? <Configuracoes /> : <AcessoNegado area="Configurações" onVoltar={() => handleNavigate('dashboard')} />;
       case 'sistema-form':

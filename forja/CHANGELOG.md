@@ -36,6 +36,1955 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.140.1] — 2026-06-21
+
+### Mudado — Reconciliação semântica em 2 camadas (Jaccard + área+keywords)
+
+- **Reconciliador agora pega reformulações da IA que o Jaccard puro não pegava.** Reação direta a falso-positivo visto na v1.140.0: 3 achados marcados como "resolvidos" foram na verdade reformulados como "novos" pela IA (mesmo tema, palavras diferentes) — Jaccard de 0.09 a 0.22, abaixo do threshold 0.4.
+
+#### Casos reais que motivaram
+
+| Anterior | Novo | Jaccard | Diagnóstico antigo | Diagnóstico novo |
+|---|---|---|---|---|
+| "Zero monitoramento/alerting em produção" | "Sem monitoramento/alertas de erros em produção" | 0.22 | ❌ resolvido + novo | ✅ persiste |
+| "Spreadsheet como DB sem backup" | "Spreadsheet como DB com 20+ módulos" | 0.09 | ❌ resolvido + novo | ✅ persiste |
+| "Cobertura de testes insuficiente para Server" | "Cobertura de testes limitada a smoke tests" | 0.20 | ❌ resolvido + novo | ✅ persiste |
+
+#### Solução: nova função `_mesmoAchado(prev, atual)` com 2 camadas
+
+**Camada 1** — Jaccard de palavras-chave ≥ 0.4 (mantido — cobre variações textuais óbvias).
+
+**Camada 2 (nova)** — `MESMA ÁREA + ≥1 keyword técnica em comum`:
+- Whitelist de ~40 keywords técnicas: monitoramento, backup, testes, deploy, spreadsheet, vendor, segurança, auth, dependência, lint, performance, secret, logs, cron, cors, xss, sql, etc.
+- Se 2 findings têm a mesma `area` E compartilham ≥1 keyword, considera mesmo achado.
+- Evita falso-positivo cruzando áreas (ex: "Vendor lock-in" em arquitetura × "Deploy local" em operacional → continuam diferentes).
+
+Qualquer das camadas positiva = mesmo achado. Reduz drasticamente o ruído de "resolvido fantasma + novo fantasma" que confundia o ComparativoAntesDepois.
+
+#### Nova função auxiliar `_extrairKeywordsTema(titulo)`
+
+Normaliza título (lowercase, sem acentos) e retorna lista de keywords técnicas presentes. Reutilizável em futuras necessidades de classificação de achados.
+
+---
+
+## [1.140.0] — 2026-06-21
+
+### Adicionado — Reconciliação determinística pós-IA (Antes vs Depois SEMPRE)
+
+- **Auditoria completa também faz Antes vs Depois agora.** Reação direta ao usuário: "deveria separar isso e de fato dizer, tinhamos 10 problemas você resolveu dos 10 7 ficou 3 e apareceu mais 5 por exemplo entende?" — sim, exatamente isso, e era buraco no caminho completo.
+
+Caso real: usuário forçou "Rodar de novo" (caminho completo, sem diff). A IA retornou 5 achados novos do zero, sem comparação com os 6 anteriores. Resultado: "0 fechados · 0 novos" no Comparativo Antes/Depois, score caiu 1 pt, achados completamente diferentes. Frustração: "rodei, baixou 1 ponto, tá osso".
+
+Causa: o caminho INCREMENTAL passa achados anteriores pra IA reconciliar e marcar origem (novo/persiste/resolvidos). O caminho COMPLETO não — IA olha o sistema do zero, retorna achados sem origem. ComparativoAntesDepois exibia "0 fechados" porque o payload não tinha `resolvidos[]`.
+
+#### Solução: reconciliação determinística no backend, pós-IA
+
+Nova função `_reconciliarComAnterior(payload, sistemaId)`:
+
+1. Se a IA já marcou origem (caminho incremental) → não mexe.
+2. Senão, busca a última auditoria salva do mesmo sistema.
+3. Cruza títulos atuais × anteriores usando **Jaccard de palavras-chave**:
+   - Normaliza: lowercase, sem acentos, sem pontuação, sem palavras < 4 chars
+   - `similaridade = intersecção / união`
+   - Threshold: **0.4** — testado contra casos reais ("URL de produção não registrada" vs "URL de produção não registrada na Forja" = 0.66; "Webapp ANYONE" vs "Webapp restritivo" = 0.2)
+4. Marca cada finding atual como `origem: 'novo'|'persiste'`.
+5. Constrói `resolvidos[]` = anteriores sem similar no atual.
+
+Aplicada no caminho COMPLETO antes de salvar. O `ComparativoAntesDepois` do frontend agora **sempre** funciona, mostrando saíram/entraram/persistem mesmo em auditorias forçadas.
+
+#### Bônus: `_fecharBacklogResolvidos` também no caminho completo
+
+Antes, só o incremental fechava backlog automaticamente. Agora o completo também — quando o reconciliador detecta um resolvido, qualquer risco/decisão registrado relacionado é marcado como resolvido. Fecha o ciclo: "registrei decisão sobre achado X → próxima auditoria reconhece e fecha X automaticamente".
+
+#### Função auxiliar: `_similaridadeTitulos(a, b)`
+
+Implementação pura V8/GAS (sem Sets pra suportar runtime antigo), retorna `0..1`. Reutilizável em futuras necessidades de deduplicação.
+
+---
+
+## [1.139.2] — 2026-06-21
+
+### Corrigido — Botão de auditoria com label correto após hard-refresh
+
+- **Após hard-refresh (Cmd+Shift+R), o botão do header mostrava "Nova auditoria" mesmo com sistema tendo histórico**. Causa: a condição usava `resultado` (estado de sessão React, vazio até o async carregar a última do banco), em vez de `dadosExibidos` (que combina resultado novo + última salva).
+
+Pedido direto do usuário: "tudo que pode me ser oferecido depois que eu rodei a primeira vez deveria ser Rodar de Novo, não acha?" — sim, total. Conceitualmente o sistema só tem "primeira auditoria" UMA vez. Tudo depois é re-rodar.
+
+**Fix**: 
+- Botão header agora usa `dadosExibidos` em vez de `resultado` na condição. Mostra "Rodar de novo" assim que detecta qualquer auditoria salva (sessão atual OU histórico).
+- Mensagem "Você está vendo o resultado salvo. Clique em **Nova auditoria**" corrigida pra "Clique em **Rodar de novo**" (consistência com o botão).
+
+---
+
+## [1.139.1] — 2026-06-21
+
+### Corrigido — "Rodar de novo" agora força re-análise de verdade (não usa cache)
+
+- **Bug crítico de UX**: clicar em "Rodar de novo" no header do drawer disparava `auditar()` sem o flag `forcar=true`. Resultado: quando o código do repositório não tinha mudado, o backend retornava a última auditoria do cache (linha 13477 de server.ts: `return { ok: true, data: Object.assign({}, ult.data, { semMudanca: true }) }`). A IA NUNCA re-analisava governança.
+
+Caso real que descobriu o bug: usuário preencheu o campo `urlProd` na ficha + registrou Decisão arquitetural + clicou "Rodar de novo" esperando que a IA detectasse essas melhorias. Mas a auditoria retornou o cache antigo idêntico (mesmos 6 achados, mesmos resolvidos/novos), só atualizando o score determinístico (+3 pts pela URL ativando o fator "Está acessível"). Sensação: "trabalhei e a Forja não viu".
+
+**Fix**: botão "Rodar de novo" / "Nova auditoria" agora passa `forcar=true`. Ganhou também um Tooltip explicando: "Re-analisa TUDO do zero (código + governança), mesmo se o repositório não mudou. Use depois de preencher dados na ficha, registrar decisões/riscos ou quando quiser uma 2ª opinião."
+
+Quem quiser o comportamento incremental (mais rápido e barato em LLM) continua usando o "Auditar mudanças" peach do banner de frescor, que só dispara quando o GitHub tem commits novos.
+
+---
+
+## [1.139.0] — 2026-06-21
+
+### Mudado — Auditoria: rebalanceamento do score + prompt qualidade-primeiro
+
+- **Score agora tem teto realista (soft cap perdoa primeiros 2 achados leves, penalizações suaves) + prompt da IA exige IMPACTO ao invés de quantidade.** Reação direta à observação do usuário após a v1.138.0: "preciso de um teto, sempre vai ter algo pra melhorar — talvez o prompt antigo não fosse tão eficiente, gera achados de pouco valor".
+
+Aprendizado do caso real: usuário fechou 4 fixes via Cursor (security HIGH +
+testes +94% cov + lint), score caiu 73 → 64 (fix da v1.138 que finalmente
+fez achados pesarem). Frustração legítima: trabalho duro, ponteiro pra
+baixo. Investigação confirmou que o cálculo era CORRETO mas SEVERO
+demais — todo sistema saudável tem 1-2 TODOs naturais, não faz sentido
+puni-los como se fossem dívida.
+
+#### 1. Rebalanceamento do fator "Achados em aberto"
+
+| Parâmetro | v1.138.0 | v1.139.0 |
+|---|---|---|
+| Max do fator | 15 pts | **10 pts** |
+| Penalização alta | -5 | **-3** |
+| Penalização média | -2 | **-1** |
+| Penalização baixa | -1 | -1 (mantido) |
+| Soft cap (perdoa primeiros leves) | não tinha | **2 baixas/médias perdoadas** |
+| Max possível total | 115 | **110** |
+
+Lógica do soft cap: perdoa primeiro as baixas (mais leves), depois médias.
+Achados altos sempre pesam — são vulnerabilidades reais que precisam ser
+fechadas. Médias e baixas têm o "buffer" de 2 perdoadas pra refletir que
+backlog saudável != backlog vazio.
+
+**Impacto pro caso do usuário** (1 alta + 4 médias + 1 baixa em aberto):
+- v1.138.0: -5 -8 -1 = -14 → 1 pt → score 64
+- v1.139.0: -3 -3 -0 = -6 (soft cap perdoa 1 baixa + 1 média) → 4 pts → score 70
+
+Subiu 6 pts sem fechar nenhum achado novo. E **com 0 achados em aberto**,
+sistema com governança 73 chega em 75 (versus 64 antes do fix v1.138.0).
+
+#### 2. Prompt de auditoria: qualidade > quantidade
+
+Ambos os prompts (completa + incremental) ganharam bloco novo de regras:
+
+- **Sem mínimo de findings.** Aceito 0 se sistema não tiver problemas
+  reais. Antes: forçava mínimo 3.
+- **Critério de IMPACTO obrigatório.** Antes de listar, IA deve perguntar
+  a si mesma: "Este achado tem impacto mensurável (segurança, dinheiro,
+  tempo, manutenibilidade) OU é nitpicking estético?" Se for nitpicking,
+  não lista.
+- **Severidades com critério OBJETIVO** (documentado no prompt):
+  - ALTA: vulnerabilidade, perda de dados, sistema indisponível, PII,
+    custo descontrolado, blocker de negócio.
+  - MEDIA: dívida técnica que limita evolução, deps com CVE, falta de
+    monitoramento/testes em código crítico.
+  - BAIXA: melhorias de DX que economizam tempo no longo prazo. **Usar
+    COM PARCIMÔNIA** — sistema saudável não precisa ter achados baixos.
+- **Campo `problema` exige IMPACTO explícito.** "Não está documentado"
+  sozinho é rejeitado. Precisa "não está documentado, e isso faz X
+  (custo/risco/atraso/dívida) acontecer".
+
+Efeito esperado: próximas auditorias devem trazer findings mais
+acionáveis e menos. Sistemas bem cuidados podem retornar 0-2 achados
+em vez de inflarem pra 3-5 só por causa do mínimo.
+
+---
+
+## [1.138.0] — 2026-06-21
+
+### Corrigido — Auditoria: score que não evoluía + 3 bugs visuais/lógicos
+
+- **Score agora reflete achados de auditoria em aberto + drawer mais limpo + reconciliação anti-duplicidade.** Causa raiz: o cálculo de saúde era 100% determinístico em metadados (propósito, stack, URL, custos, alertas, riscos, MRR) e ignorava completamente os achados das auditorias. Resolver achado via re-auditoria não movia o ponteiro, quebrando a promessa "Auditar com AI → vejo progresso".
+
+Aprendizado direto do caso real: usuário rodou a auditoria incremental
+depois de o Cursor implementar 4 fixes (security HIGH + testes +94% cov
++ lint), e o score ficou idêntico (73 → 73). Frustração total — "agora
+eu não vi mudanças nas visões sobre o que foi feito e o que falta".
+
+Investigação revelou 4 bugs distintos:
+
+#### Bug 1 — Header do drawer cobria o nome do sistema
+
+Os 4 botões do `extra` (Histórico · Baixar .md · Limpar · Rodar de novo,
+todos com texto+ícone) ocupavam tanta largura que sobrepunham a Tag
+laranja com o nome do sistema. Em drawers de 720px ficava ilegível.
+
+**Fix**: botões secundários viraram só ícones com `Tooltip`. Só o CTA
+"Rodar de novo" mantém texto+ícone. Tag do nome ganhou `maxWidth: 180`
+com `text-overflow: ellipsis` e tooltip pro nome completo.
+
+#### Bug 2 (CAUSA RAIZ) — Score nunca refletia o trabalho da auditoria
+
+`calcularSaudeReal` (forja/src/server.ts) tinha 10 fatores totalizando
+100 pontos, todos derivados de metadados (sem qualquer leitura de
+`Auditorias.payloadJson`). Achados eram informação paralela.
+
+**Fix**:
+- Novo fator **"Achados de auditoria em aberto"** (max 15 pontos).
+  Começa em 15 e perde: -5 por achado HIGH aberto (cap 3 = -15),
+  -2 por MEDIUM (cap 4 = -8), -1 por LOW (cap 3 = -3). Mínimo 0.
+- Escala normalizada: `score = (totalPontos / maxPossivel) * 100`.
+  Max possível subiu de 100 → 115. Sistemas existentes podem oscilar
+  ±3 pts por causa da normalização — esperado e estável.
+- `calcularSaudeReal(sistemaId, payloadOverride?)` ganhou 2º
+  parâmetro opcional. `_executarAuditoriaIncremental` e o caminho
+  completo de auditoria passam o `parsed.payload` direto — assim o
+  score já reflete os achados RECÉM-reconciliados em vez dos antigos
+  ainda no banco (que só são sobrescritos linhas depois).
+
+Impacto prático: o Cursor fechou um HIGH (security) e dois LOWs em re-
+auditoria → score sobe +5+1+1 = +7 pts imediatamente. O ponteiro mexe.
+
+#### Bug 3 — Mesmo achado aparecia em "resolvidos" E em "novos"
+
+Caso real: "URL de produção não registrada" (resolvido) +
+"URL de produção não registrada na Forja (campo urlProd vazio)" (novo).
+Mesma causa-raiz, redação ligeiramente diferente, criando confusão.
+
+**Fix**: prompt de reconciliação ganhou bloco **ANTI-DUPLICIDADE**
+explícito com exemplo concreto: "se um achado está em 'resolvidos',
+você NÃO pode criar achado novo cuja CAUSA-RAIZ seja a mesma — escolha
+UM dos dois lados". Antes de marcar como NOVO, IA deve checar se a
+DIMENSÃO é genuinamente diferente.
+
+#### Bug 4 — Falta de transparência sobre o escopo da reconciliação
+
+Usuário esperava que TODOS os achados históricos fossem reconciliados;
+na verdade, só os da ÚLTIMA auditoria entram. Os de auditorias mais
+antigas (fechadas ou substituídas) ficam de fora — comportamento
+correto, mas não comunicado.
+
+**Fix**: faixa do comparativo "Antes vs Agora" ganhou indicador
+**"escopo: N achados anteriores"** com tooltip explicando que só a
+última auditoria entra, e que isso é o esperado.
+
+---
+
+## [1.137.0] — 2026-06-21
+
+### Adicionado — Auditoria: detector de docs-only + .md fortalecidos pra não confundir IA externa
+
+- **Detector automático de docs-only + textos fortalecidos** — quando o diff só tem arquivos não-código (.md, configs), aparece alerta peach com "Copiar prompt corretivo" pronto. Prompts master e relatório de baixa reforçados pra não deixar mais a IA externa documentar em vez de implementar.
+
+Aprendizado direto do caso real: usuário levou o `auditoria-realizada.md`
+pro Cursor pedindo pra "seguir as instruções dentro", e o Cursor criou 2
+commits `docs:` consolidando análise em vez de implementar correções no
+código. A Forja, ao re-auditar, viu praticamente o mesmo estado e o
+usuário ficou confuso achando que o sistema estava com bug.
+
+Causa raiz: o `.md` original podia ser interpretado como ordem de gerar
+documentação, e a Forja não tinha como detectar/avisar.
+
+Esta versão fecha as 3 brechas.
+
+#### 1. Backend: detector automático de docs-only
+
+`getStatusAuditoriaCodigo` agora retorna 3 campos novos:
+- `arquivosMudadosTotal: number` — quantos arquivos TOTAL mudaram no diff
+  (antes só contava os de código).
+- `mudancasSaoDocsOnly: boolean` — true quando o total > 0 mas o filtro
+  `_codeArquivoRelevante` exclui todos (ou seja, mudou só .md / .txt /
+  configs / paths como `docs/`).
+- `listaDocsMudados: string[]` — amostra dos primeiros 8 arquivos
+  não-código pra mostrar exemplos no alerta.
+
+#### 2. Frontend: alerta `DocsOnlyAlerta` (peach)
+
+Renderizado logo após o banner de status (antes do hero). Mostra:
+- Título: "A última rodada só teve commits de documentação".
+- Descrição: "N arquivos mudaram mas nenhum é de código. Isso geralmente
+  significa que a IA externa analisou/documentou em vez de implementar".
+- Lista dos arquivos `.md` / docs detectados (até 5).
+- Botão primário **"Copiar prompt corretivo"** — copia uma instrução
+  pronta pro Cursor implementar de verdade. Inclui regras: 1 commit
+  por correção, prefixos `fix:` / `feat:` / `refactor:` (NÃO `docs:`),
+  proibição de criar mais .md.
+
+#### 3. `prompt-de-ajustes.md` reforçado
+
+Seção "Instruções para a IA" reescrita como ORDEM DE SERVIÇO clara, com
+5 regras não-negociáveis no topo:
+- O entregável é CÓDIGO, não documentação.
+- Cada correção = 1 commit `fix:` / `feat:` / `refactor:` (NUNCA `docs:`).
+- Proibido criar arquivos `.md` consolidando ou analisando achados.
+- Falso positivo → cita na conversa, não faz commit.
+- `git push` ao final + aviso "implementei N, push feito".
+
+#### 4. `auditoria-realizada.md` reforçado
+
+Subtítulo virou "**RELATÓRIO de baixa (não é ordem de serviço)**", com aviso
+proeminente no topo: *"⚠ LEIA PRIMEIRO — Este arquivo NÃO é uma ordem
+para escrever código. É relatório de status pra você atualizar planning/
+backlog interno. Não crie arquivos .md, não escreva código, não faça
+commits a partir deste documento."*
+
+Instruções da seção "Para você, IA" reescritas pra deixar inequívoco
+que a tarefa é APENAS atualizar planning interno — código mexe-se a
+partir do `prompt-de-ajustes.md`, não daqui. Adicionada regra 6 explícita:
+*"Se você concluir o trabalho com base SÓ neste arquivo (criando .md,
+escrevendo análise, fazendo commits docs:) → você fez ERRADO."*
+
+#### Resultado prático
+
+- Próxima vez que o Cursor (ou outra IA) confundir os dois papéis e só
+  documentar, a Forja detecta e te avisa **antes mesmo de você abrir os
+  detalhes da auditoria**.
+- Com 1 clique você copia um prompt corretivo já pronto e cola no Cursor
+  pra ele finalmente implementar.
+- E ainda: os próximos `.md` gerados não vão deixar margem pra confusão
+  na origem.
+
+---
+
+## [1.136.0] — 2026-06-21
+
+### Melhorado — Auditoria: Comparativo Antes vs Depois + Ação Principal focal
+
+- **Comparativo Antes/Depois 2 colunas + Ação Principal única** — re-auditorias mostram lado a lado o estado anterior e o atual com Resolvidos/Novos no meio. CTAs do hero foram substituídos por UM card de ação que escolhe automaticamente qual .md baixar baseado no momento (primeira auditoria → prompt; re-auditoria → baixa).
+
+Pedido direto do usuário após sequência de iterações que empilharam complexidade:
+*"O que eu queria era algo bem simples. Auditei a primeira vez, encontrei 10 coisas, gerei o prompt. Quando eu voltar ele me mostra o antes e depois, só isso."*
+
+#### Componente `ComparativoAntesDepois` (substitui `MudancasDesdeUltima`)
+
+Renderizado SÓ em re-auditorias (histórico ≥ 2). Mostra:
+
+- **Faixa fina no topo**: "Comparando · {N} fechados / {M} novos · [delta pill]"
+- **2 colunas lado a lado**:
+  - **Antes** (commit base, "há X horas") — score grande, contagem de
+    achados, commit SHA.
+  - **→** seta visual conectando.
+  - **Agora** (recém-auditado) — score, contagem, badge "melhorou" /
+    "piorou" se aplicável.
+- **Listas em 2 painéis abaixo** (quando houver):
+  - **Resolvidos · saíram (N)** — fundo sage, check verde.
+  - **Novos · entraram (N)** — fundo peach, marcador `+` com severidade.
+- **Linha discreta** sobre achados que persistem ("X persistem · veja em
+  Achados detalhados abaixo") sem poluir.
+
+#### Componente `AcaoPrincipal` (substitui os 2 sub-blocos do Hero)
+
+Hoje o hero tinha 2 sub-blocos competindo: "Prompt de ajustes" + "Relatório
+de baixa". Confuso porque só um faz sentido por vez. Agora é UM card focal:
+
+- **Primeira auditoria** (peach, ícone Rocket): "Próximo passo: implementar
+  as correções" + botão grande "Baixar prompt de ajustes (.md)" +
+  "Copiar prompt".
+- **Re-auditoria** (sage, ícone ClipboardCheck): "Próximo passo: avisar a
+  IA o que foi resolvido" + botão grande "Baixar relatório de baixa (.md)" +
+  botão discreto "Também baixar prompt p/ novos achados".
+
+Cada momento do ciclo tem 1 ação óbvia. A alternativa fica disponível mas
+em segundo plano.
+
+#### Hero simplificado
+
+`ResultadoHero` agora é só medidor de estado (score grande + delta pill +
+severidades + metadados de modelo/tempo). Sem CTAs dentro — eles vivem
+no card `AcaoPrincipal` logo abaixo, com contexto próprio.
+
+#### Nova ordem visual
+
+1. Header (Histórico, Baixar .md, Limpar, Rodar de novo)
+2. Tabs scope (Completa / Código / Governança)
+3. Banner status (em dia / mudou + botão Auditar)
+4. **Hero** — score + delta + severidades (compacto, sem CTAs)
+5. **Comparativo Antes/Depois** (só re-auditorias)
+6. **Ação Principal** (card focal com 1 CTA)
+7. Banners contextuais (onboarding, incremental, fechados-auto) se aplicáveis
+8. **Achados detalhados** (sempre aberto)
+9. Mais detalhes técnicos (colapsados): Fontes, Estado geral, O que empolga,
+   Próximos passos, Composição do Score
+
+#### Por que essa estrutura
+
+- Olhar de cima → primeiro entende ESTADO (hero).
+- Em seguida vê O QUE MUDOU (comparativo).
+- Sabe imediatamente O QUE FAZER A SEGUIR (ação principal).
+- Detalhes profundos ficam um clique de distância.
+
+---
+
+## [1.135.0] — 2026-06-21
+
+### Melhorado — Auditoria: drawer enxuto com sections colapsáveis
+
+- **Drawer da auditoria enxuto** — Estado geral, O que empolga, Próximos passos, Composição do Score e Fontes consultadas viram colapsáveis (fechados por padrão), reduzindo o scroll inicial drasticamente. Achados detalhados continuam abertos por padrão (é o coração do trabalho), mas também viraram colapsáveis pra quem já leu fechar.
+
+Conforme a auditoria foi ganhando mais blocos (delta, mudanças desde a
+última, relatório de baixa), o drawer ficou enorme. Agora a primeira
+visualização cabe em uma tela e o usuário expande só o que importa.
+
+#### Sections colapsáveis (novo padrão de drawer)
+
+`Section` ganhou três props:
+- `collapsible?: boolean` — habilita chevron + clique-pra-toggle no header.
+- `defaultOpen?: boolean` — estado inicial (default `true`).
+- `badge?: string | number` — micro-contagem ao lado do título
+  (ex: "Achados detalhados (7)"), pra dar pista do tamanho sem precisar abrir.
+
+#### Estado inicial das seções (após o hero + Mudanças desde a última)
+
+Aberto por padrão:
+- **Achados detalhados** (N) — coração do trabalho; mas agora pode fechar
+  com um clique pra quem já registrou todos.
+
+Fechado por padrão:
+- **Estado geral** — narrativa qualitativa, longa.
+- **O que empolga** — positivo mas não acionável.
+- **Próximos passos estratégicos** — orientação geral redundante com findings.
+- **Composição do Score de Saúde** — detalhe técnico; o número grande já
+  está no hero. Quem quer entender "por que 73?" abre.
+
+#### Fontes consultadas pela IA — agora colapsado com resumo inline
+
+O bloco "Fontes" também colapsa, mas mantendo o **resumo na linha do header**
+quando fechado: "4/4 metadados · 0/5 backlogs com dados". O bloco
+**"Código lido / diff truncado" continua sempre visível** abaixo dos chips —
+ele carrega o aviso crítico que afeta a leitura dos resolvidos e não deve
+ficar escondido.
+
+#### Resultado
+
+- Antes: ~6-7 sections abertas após o hero ≈ scroll longo.
+- Agora: 1 section aberta (Achados) + 4-5 sections fechadas em uma linha
+  cada ≈ drawer cabendo numa viewport típica.
+
+---
+
+## [1.134.0] — 2026-06-21
+
+### Adicionado — Auditoria: relatório de baixa pra fechar o ciclo Forja ↔ IA
+
+- **Relatório de baixa (auditoria_realizada.md)** — novo .md gerado ao final de toda auditoria, com instruções diretivas pra IA externa atualizar o backlog: marca resolvidos, mantém persistentes, adiciona novos.
+
+Fecha o ciclo Forja → IA → Forja → IA sem ambiguidade. A IA que executou as
+correções recebe um documento oficial dizendo exatamente o que foi fechado,
+o que persiste e o que apareceu de novo — não precisa adivinhar.
+
+#### O que o .md contém
+
+- **Cabeçalho técnico**: origem (Forja IA), sistema, tipo da auditoria
+  (baseline/incremental/completa), repositório, range de commits auditado
+  (`base → head`), volume lido pela IA (arquivos, KB, flag de truncado),
+  score atual com delta vs. anterior.
+- **Instruções diretivas** pra IA externa (5 regras numeradas):
+  marcar como concluído, manter em aberto, adicionar ao backlog, não
+  inventar, e o que fazer quando um item não foi marcado como resolvido
+  mesmo após o fix (verificação manual).
+- **Tabela de saldo** com métricas numéricas: achados anteriores, resolvidos,
+  persistem, novos, total atual, score com delta.
+- **Checklists Markdown padrão**:
+  - `## Resolvidos pela Forja IA` — `- [x] título` (pra IA marcar feito)
+  - `## Persistem em aberto` — `- [ ] título` + problema/evidência/solução
+  - `## Novos detectados nesta rodada` — `- [ ] título` + detalhes
+- **Estado geral + próximos passos** sugeridos pela Forja IA.
+- Fallback pra auditorias antigas (sem campo `origem`): mostra como
+  "Achados abertos atuais".
+
+#### Como o usuário usa
+
+1. Roda a auditoria na Forja.
+2. Baixa o **"Prompt de ajustes .md"** (passo 1 do hero).
+3. Cola na IA executora (Cursor/Claude) — ela implementa as correções.
+4. Roda a auditoria na Forja de novo (incremental).
+5. Baixa o **"Relatório de baixa .md"** (passo 2 do hero) e entrega à mesma
+   IA — ela atualiza o backlog/planning dela.
+
+#### UX do hero
+
+O bloco de CTAs foi reorganizado em 2 sub-blocos visuais separados, cada
+um marcando o **momento do ciclo**:
+
+- **Sub-bloco 1 — "Prompt de ajustes"** (peach, ícone Rocket, etiqueta
+  "antes do fix"): botão primário "Baixar prompt .md" + "Copiar prompt".
+- **Sub-bloco 2 — "Relatório de baixa"** (sage, ícone ClipboardCheck,
+  etiqueta "depois do fix"): botão primário "Baixar baixa .md" +
+  "Relatório completo .md" (movido pra cá pra desafogar o bloco 1).
+
+#### Quando aparece
+
+Sempre que há auditoria concluída — inclusive na primeira (que só tem a
+lista "Achados detectados"), pra a IA externa já abrir o backlog inicial
+com base no baseline.
+
+---
+
+## [1.133.0] — 2026-06-21
+
+### Melhorado — Auditoria: transparência total sobre o que o LLM viu
+
+- **Transparência da auditoria** — badge de "diff truncado" quando o LLM não viu tudo, e tags `novo`/`persiste` em cada finding pra entender por que o n.º de "resolvidos" pode parecer menor que o n.º real de correções.
+
+Continuação do trabalho de feedback iniciado em `1.132.0`: agora ataca a dor
+de *"rodei 27 correções e ele só viu 2 resolvidos"* mostrando explicitamente
+o que o LLM analisou.
+
+#### Por que esse problema existe
+
+Os dois números diferentes são fáceis de confundir:
+
+- **N. de correções aplicadas no código**: ex. 27 arquivos tocados pelo Cursor
+- **N. de achados resolvidos**: dos N achados originais (ex. 4), quantos o
+  diff fechou — porque cada achado vira ~5-10 alterações de código distintas
+
+Quando o diff é grande, ainda tem um terceiro fator: o conteúdo enviado à
+IA pode ter sido **truncado por limite de contexto**, e correções no trecho
+cortado não são reconhecidas.
+
+#### O que muda na UI
+
+- **Badge "diff truncado — IA não viu tudo"** no bloco de Fontes consultadas,
+  em peach com ícone de alerta, quando `codigoTruncado=true`. Tooltip explica
+  o impacto na detecção de resolvidos e sugere rodar auditoria completa.
+- **Texto contextual**: "Diff lido de GitHub · 28 arquivo(s) · ~108KB" em vez
+  do genérico "Código lido de" quando a auditoria é incremental.
+- **Tags `novo` / `persiste` em cada FindingCard** — já existiam no payload
+  (campo `origem`) e na renderização, agora ficam visíveis em todas as
+  auditorias incrementais. Resolve o "esse achado é novo ou já era assim?"
+  com um olhar.
+
+#### Quando rodar auditoria completa
+
+Se você fez muitas mudanças estruturais (refatorações grandes, mudança de
+arquitetura) e o reconciliador parece estar perdendo correções, o caminho
+é usar **"Auditar mesmo assim"** quando o status é "em dia" — força uma
+varredura completa que ignora o histórico e re-lê o repo do zero.
+
+---
+
+## [1.132.0] — 2026-06-21
+
+### Melhorado — Auditoria: feedback claro sobre o que mudou entre runs
+
+- **Auditoria com feedback claro entre runs** — delta do score no hero, card "Mudanças desde a última auditoria" e celebração visual dos resolvidos.
+
+Antes, quando você corrigia issues e rodava "Auditar mudanças" de novo, a UI
+não te dava feedback do esforço: o score continuava igual, os contadores
+pareciam idênticos, e a lista de "Resolvidos" vivia enterrada como texto
+riscado lá embaixo. A IA reconciliava certo — mas a interface escondia.
+
+Agora o trabalho feito vira primeira leitura.
+
+#### No hero do resultado
+
+- Pill de delta do score ao lado do título — `↑ +8 pts` em sage quando
+  melhorou, `↓ -5 pts` em rose quando caiu, escondido quando não mudou.
+- Tooltip mostra o score anterior pra contextualizar a variação.
+
+#### Novo card "Mudanças desde a última auditoria" (entre hero e banners)
+
+- **3 stats lado a lado**: Resolvidos, Novos detectados, Saldo total
+  (antes → agora). Resolve o mistério do "resolvi 2 mas o total ficou igual"
+  — mostra explicitamente que surgiram 2 novos.
+- **Tom geral colorido** pelo desfecho: sage quando você avançou, peach
+  quando ficou neutro/empate, rose quando o diff piorou o quadro.
+- **Título contextual**: "Você avançou no diff", "Saldo zero: você resolveu
+  mas surgiram novos", "Surgiram mais achados que resolvidos" ou
+  "Sem alterações detectadas".
+- **Lista celebratória dos resolvidos** dentro do mesmo card, com check verde
+  e fundo sage — sai do tom postmortem riscado e vira conquista visível.
+
+#### Quando aparece
+
+O card só renderiza se temos ≥2 auditorias no histórico OU pelo menos 1 item
+resolvido. Primeiras auditorias seguem limpas, sem ruído extra.
+
+#### Por que isso muda o uso
+
+- O ciclo "rodar IA → aplicar fix → re-rodar IA" agora fecha com um momento
+  claro de feedback ("você resolveu 2!").
+- Quando o score parecer "estagnado", a UI te diz o motivo (novos achados
+  apareceram) em vez de só mostrar o número final.
+- A "celebração" dos resolvidos vira parte do hero do resultado, não uma
+  section escondida no rolar.
+
+---
+
+## [1.131.0] — 2026-06-20
+
+### Adicionado — Financeiro v2: ficha rica do cliente + Pipeline comercial + cross-links
+
+Quatro frentes que transformam o módulo financeiro em algo profundo e navegável:
+
+#### Ficha financeira do cliente (Snapshot drawer)
+
+- Nova section **"Histórico financeiro"** (estimado) no drawer do cliente com:
+  - 4 KPIs adicionais: **LTV estimado**, **Ticket médio**, **Cliente desde**
+    (com "há X meses"), **Pendências** (qtd + valor em atraso).
+  - **Linha do tempo de cobranças** filtrável por status (Todas/Pagas/Atrasadas/
+    Futuras) e por ano. Cada cobrança mostra status com ícone, plano, data e valor.
+  - **Tag "estimado"** com tooltip explicando o trade-off: o schema atual de
+    `Receitas` não loga eventos de pagamento individuais; a timeline é derivada
+    de `inicio` + `recorrencia` + `canceladaEm` + `valor`.
+
+#### Saúde financeira do cliente (FASE 2)
+
+- Novo cálculo automático de **saúde** por cliente derivado das receitas com
+  `proximaCobranca` vencida e status `ativa`:
+  - 🟢 **Em dia** — sem cobranças atrasadas
+  - 🟡 **Atenção** — atraso ≤ 15 dias
+  - 🔴 **Inadimplente** — atraso > 15d OU 3+ cobranças pendentes
+  - ⚪ **Sem histórico** — cliente sem receitas
+- Nova coluna **Saúde** na tabela de Clientes (filtrável e ordenável).
+- **Badge no header** do snapshot drawer mostrando saúde + valor em atraso.
+
+#### Pipeline comercial (FASE 3)
+
+- Nova aba **Pipeline** dentro de Clientes, ao lado de Contatos e Radar.
+- **Kanban** com 4 colunas: Lead → Em conversa → Proposta enviada → Em negociação.
+- Cards mostram: empresa, ticket previsto, próxima ação, origem do contato.
+- **Drag-and-drop nativo** (HTML5, sem deps novas) atualiza o `statusComercial`
+  com optimistic update e rollback em caso de erro.
+- **KPIs no topo**: total em pipeline, valor ponderado (× probabilidade do
+  estágio), ticket médio, conversão histórica (ativos / (ativos+perdidos)).
+- Filtro por **origem do contato** (Indicação, Instagram, Evento etc).
+- Click no card abre o snapshot drawer completo do cliente.
+
+#### Cross-links Cliente ↔ Financeiro (FASE 4)
+
+- Em **Financeiro → A receber**:
+  - Novo **filtro por cliente** no topo da tabela de assinaturas.
+  - Coluna **Cliente** virou link clicável que abre o snapshot drawer inline.
+  - Botão **"Abrir ficha"** quando um cliente está filtrado.
+- `getPessoas` agora retorna campos derivados (`saude`, `pendenciasQtd`,
+  `pendenciasValor`) calculados a partir das receitas.
+
+### Técnico
+
+- Nova função interna `_calcularSaudePessoa(receitas)` compartilhada entre
+  `getPessoas` e `snapshotCliente` (DRY).
+- `ClienteSnapshotPayload` ganhou `historicoCobrancas[]`, `kpis.ltvEstimado`,
+  `kpis.ticketMedio`, `kpis.clienteDesde`, `kpis.pendenciasQtd`,
+  `kpis.pendenciasValor`, `kpis.saude`.
+- `Pessoa` ganhou campos derivados read-only: `saude`, `pendenciasQtd`,
+  `pendenciasValor`.
+- `STATUS_COMERCIAL_OPTIONS` e `ORIGEM_LABEL_MAP` exportados de `PessoasView`
+  pra reuso em `PipelineComercial`.
+- Novas constantes `PIPELINE_ESTAGIOS` com probabilidade por estágio
+  (Lead 10% → Conversa 25% → Proposta 50% → Negociação 75%).
+
+## [1.130.1] — 2026-06-20
+
+### Melhorado — Respiro pós-assinatura na marca FORJA
+
+- **Sidebar**: padding inferior do bloco de marca passou de `20px` → `36px`,
+  dando ar entre a assinatura "Inteligência de Negócios" e o campo de Busca.
+  Gaps internos da marca também ficaram mais generosos (filete `9→11`, slogan
+  `8→10`).
+- **Onboarding**: gap entre a assinatura e o título "Bem-vindo ao seu QG"
+  passou de `18px` → `28px`.
+- **Public form**: o gap interno do Brand (wordmark → filete → assinatura)
+  ficou levemente mais largo no modo hero (`7→10/11px`) pra manter o ritmo
+  visual consistente entre superfícies.
+
+## [1.130.0] — 2026-06-20
+
+### Melhorado — Identidade visual unificada (wordmark editorial + filete dourado)
+
+- **Marca FORJA refinada em todas as superfícies** — adotada a "Opção B"
+  (wordmark editorial), aplicada de forma consistente em sidebar, topbar mobile,
+  onboarding, landing page e formulário público (Discovery):
+  - **Tipografia mais apertada** (letter-spacing de `0.22em` → `0.08em` no app,
+    `0.26em` → `0.18em` na landing) — wordmark ganha peso e autoridade.
+  - **Filete dourado** (linha em gradiente peach→transparente) embaixo do
+    wordmark — ancora a marca como um selo de masthead editorial (NYT,
+    MIT Tech Review). Largura/intensidade adaptadas por superfície.
+  - **Assinatura "Inteligência de Negócios"** uppercase com letter-spacing
+    `0.28em` substitui o slogan italic anterior no sidebar/onboarding;
+    landing mantém a poética "Onde ideias ganham forma" + filete.
+  - **Brasa viva** preservada onde já existia (sidebar, topbar, landing) —
+    continua sendo indicador funcional de atividade, agora ao lado do
+    wordmark refinado.
+- **Removido** o "F em quadradinho gradiente" do formulário público — substituído
+  pela mesma marca editorial. Sem ícone-mark; tipografia faz o trabalho.
+
+## [1.129.1] — 2026-06-20
+
+### Melhorado — UX premium da capa do Discovery + UF como Select
+
+- **Capa do Discovery público redesenhada**:
+  - Marca da Forja vira hero único na intro (some a duplicação da marca pequena
+    do topo-esquerdo só nessa tela; ela reaparece nas demais).
+  - Hierarquia: brand (56px) → kicker (mais espaçado) → saudação (leve, fora do
+    peso) → título (até 46px, letter-spacing negativo) → subtítulo → CTA.
+  - Subtítulo reescrito pra não duplicar o título ("Algumas perguntas pra entender
+    como vocês trabalham hoje…").
+  - Microcopy do rodapé virou linha com bolinhas separadoras (~3 min · a maioria
+    é só clicar · respostas confidenciais).
+- **Campo UF** no cadastro do cliente agora é Select com os **27 estados** (26 + DF),
+  searchable por sigla ou nome.
+
+## [1.129.0] — 2026-06-20
+
+### Adicionado — Ficha rica do cliente (4 seções) + saudação personalizada no Discovery
+
+- **Schema**: `Pessoas` ganha 17 novos campos opcionais:
+  - **Pessoa de contato**: `nomeContato`, `cargo`, `telefone`
+  - **Empresa**: `empresa`, `cnpj`, `segmento`, `cidade`, `uf`, `site`, `instagram`
+  - **Negócio**: `faturamentoFaixa`, `funcionariosFaixa`, `tempoOperacaoAnos`
+  - **Financeiro/Comercial**: `ticketPrevisto`, `statusComercial`, `origemContato`, `proximaAcao`
+  - `SCHEMA_VERSION` → `v1.63-pessoa-ficha-rica` (migração suave, dados antigos preservados).
+- **Modal de cadastro**: agora seccionado (Collapse) com as 4 seções acima — Pessoa e Empresa
+  abertas por padrão; Negócio e Comercial recolhidas para não intimidar. Selects pra
+  faixas (faturamento, funcionários, status comercial, origem).
+- **Tabela de clientes** mostra **Empresa** como destaque + nome do contato/cargo
+  logo abaixo, colunas separadas pra email/telefone, segmento e status comercial.
+- **Discovery público** agora saúda pelo primeiro nome do contato:
+  - "Olá, **Simara** 👋"
+  - "Vamos desenhar juntos o sistema ideal da **AC Contabilidade**."
+- **Pré-preenchimento**: o nome do contato já aparece no campo "Seu nome" no fim
+  do formulário, evitando redigitação.
+- Migração: o `nome` antigo continua exibido como fallback se `empresa` estiver vazia.
+  Ao salvar, o `nome` é sincronizado automaticamente com `empresa || nomeContato`
+  pra manter compatibilidade.
+
+## [1.128.0] — 2026-06-20
+
+### Mudado — "Baixar briefing" no lugar de Imprimir + .md (com Discovery completo)
+
+- **Removido o botão Imprimir** (baixo valor, fragil; pra PDF o usuário usa o
+  Cmd+P do navegador).
+- **".md" virou "Baixar briefing"** (botão primário, único): agora gera um
+  documento único contendo:
+  - Identidade do cliente, financeiro com a Forja, sistemas em operação,
+    próximas cobranças, oportunidades, entrevistas registradas e alertas
+    (como antes);
+  - **NOVO — Discovery completo**: todos os roteiros aplicados àquele cliente
+    (com blocos/perguntas, datas) e **todas as respostas** que ele deu
+    (com score, ferramentas, e cada pergunta-resposta vinculada ao enunciado);
+  - **Instrução final** ensinando a colar o briefing na IA pra construir o app.
+- Subtítulo do drawer atualizado: "Ficha completa · Snapshot + Discovery".
+- Arquivo passa a se chamar `briefing-<cliente>-<data>.md`.
+
+## [1.127.0] — 2026-06-20
+
+### Adicionado — Opção "Outro" em listagens do formulário público
+
+- **Prompt de estruturação**: AI passa a incluir SEMPRE `Outro` como última opção
+  em perguntas de listagem não-exaustiva (sistemas, ferramentas, marcas, etc.) e
+  gera de 3 a 6 opções (mais a "Outro" quando aplicável).
+- **Form público**: ao escolher `Outro` em `unica` ou `multipla`, abre um campo de
+  texto inline pra digitar (sem quebrar o ritmo). O valor é enviado como
+  `"Outro: <texto digitado>"`.
+- **Roteiros antigos**: o normalizador do form público auto-injeta `Outro` em
+  listas `unica`/`multipla` com 2+ opções que ainda não tinham — assim
+  formulários já publicados ganham o campo aberto na hora, sem republicar.
+
+## [1.126.3] — 2026-06-20
+
+### Adicionado — Data/hora nos discoveries e respostas
+
+- Cards de **discovery** (dentro do cliente e no Radar) mostram **criado em dd/mm/aaaa hh:mm**
+  e, quando publicado, **publicado em dd/mm/aaaa hh:mm**.
+- Cards de **respostas recebidas** mostram **data/hora do envio**.
+- Fica fácil saber a ordem cronológica do que foi gerado e quando o cliente respondeu.
+
+## [1.126.2] — 2026-06-20
+
+### Melhorado — Abrir cliente direto pelo nome (e linha clicável)
+
+- O nome do cliente na lista de Contatos agora é um **link clicável** que abre a ficha
+  (snapshot + discovery). Hover em azul, tooltip explica.
+- Toda a **linha da tabela** também é clicável (cursor pointer), exceto cliques em
+  botões de ação dentro dela. Acabou o atalho escondido só no ícone do caderno.
+
+## [1.126.1] — 2026-06-20
+
+### Corrigido — Discovery do cliente sempre visível na ficha
+
+- Dentro do cliente (Contatos → abrir → aba Discovery), os painéis "Discoveries deste
+  cliente" e "Respostas recebidas" agora **renderizam sempre**, com empty state claro
+  quando vazios ("Nenhum discovery salvo aqui ainda. Gere acima e clique em Salvar
+  em [Cliente]"). Antes os painéis sumiam quando vazios e dava a impressão de que
+  os roteiros salvos só apareciam no Radar.
+- Adicionado contador (`Tag`) ao lado do título dos dois painéis.
+- Botão de salvar agora rotula explicitamente "Salvar em [Cliente]" em modo embutido.
+
+## [1.126.0] — 2026-06-20
+
+### Adicionado — Gerenciar/apagar discoveries no Radar
+
+- **Painel "Discoveries criados"** no Radar de oportunidades: lista TODOS os roteiros/
+  formulários (rascunho e publicado), com cliente, status, nº de perguntas e respostas.
+  Cada item permite **Publicar/Republicar, copiar Link, Abrir** (vai pra ficha do
+  cliente na aba Discovery) e **Remover** (Popconfirm; as respostas já recebidas
+  continuam guardadas). Resolve a falta de uma visão global do que já foi feito + apagar.
+
+## [1.125.0] — 2026-06-20
+
+### Mudado — Discovery por cliente + Radar de oportunidades (híbrido)
+
+- **Discovery agora vive dentro de cada cliente**: em Clientes → Contatos, o botão de
+  abrir o cliente traz um seletor **Snapshot · Discovery**. Na aba Discovery você gera
+  o roteiro, salva, publica o link e vê as respostas + score **sem precisar selecionar
+  o cliente toda vez** — tudo já no contexto dele (a "pasta" completa do cliente).
+- **Aba global virou "Radar de oportunidades"**: no lugar do antigo Discovery global
+  (com seletor), agora há um painel que ranqueia **todas as respostas por score**, mostra
+  ferramentas, quem quer amostra, e abre o cliente direto na aba Discovery. Inclui a
+  seção "Publicados aguardando resposta" e a configuração do app público.
+- **Componente `Discovery` parametrizado** por `pessoaId`: em modo embutido, filtra
+  roteiros/respostas/entrevistas do cliente e injeta o cliente automaticamente ao salvar.
+- Sem mudança de schema — só reorganização de UX/navegação.
+
+
+
+### Melhorado — Discovery focado no sistema do cliente + marca no formulário
+
+- **Perguntas com a régua mais alta**: o prompt agora mira EXTRAIR TUDO sobre o
+  sistema/ferramentas/rotina que o cliente usa hoje (telas, funções, o que ama/odeia,
+  o que é manual, relatórios que faltam, integrações, volume, jornada ponta a ponta,
+  o que seria mágico) — base direta pro app novo em vibe code. Pede exemplos concretos
+  e convida a compartilhar prints do sistema atual. Tuned pra negócios não-software.
+- **Estruturação equilibrada**: perguntas profundas sobre o sistema viram `texto_longo`
+  (resposta rica); qualificação rápida segue clicável. Campos-chave marcados como
+  obrigatórios.
+- **Formulário público com presença de marca**: "FORJA · Inteligência de Negócios"
+  no topo, capa premium saudando o cliente pelo nome, rodapé e tela final com a marca
+  + botão **"Enviar outra resposta"**.
+
+## [1.123.0] — 2026-06-20
+
+### Adicionado — Conectar o app público pela própria Forja
+
+- **Configuração do app público na UI**: banner em "Roteiros salvos" pra colar a
+  URL `/exec` do formulário público e salvar (`DISCOVERY_PUBLIC_URL`) sem mexer em
+  Script Properties. Depois de conectado, o botão **Link** copia `…/exec?f=TOKEN`.
+- O projeto público (`forja-public/`) passou a **localizar a planilha da Forja pelo
+  nome** (roda como o dono) — dispensa configurar `FORJA_SHEET_ID` na mão.
+
+## [1.122.0] — 2026-06-20
+
+### Adicionado — Promover resposta de Discovery a Ideia
+
+- **"Promover a ideia"** no card de cada resposta recebida: cria uma Ideia no banco
+  já com contato, ferramentas, respostas e **impacto sugerido pelo score** (score/10).
+  Fecha o ciclo oportunidade → ideia priorizável.
+
+## [1.121.0] — 2026-06-20
+
+### Adicionado — Discovery Leva 2: formulário público estruturado (estrutura na publicação)
+
+Prepara o app principal pro formulário público (projeto separado `forja-public/`).
+
+- **Estruturação na publicação**: ao **Publicar** um roteiro, a IA converte as
+  perguntas (texto) em **campos clicáveis** (sim/não, escala 1–5, única, múltipla
+  ou texto), priorizando clique. Idempotente e com fallback pra texto se a IA falhar.
+- **`forja-public/`** (novo, fora do app): projeto Apps Script anônimo que serve o
+  formulário React progressivo (1 pergunta por vez, capa, e-mail como chave,
+  ferramentas, "quer amostra" + agenda) e grava na mesma planilha. Inclui runbook
+  de setup (`README.md`) e o motor de score replicado.
+- **Segurança**: superfície pública mínima (só `doGet` + 2 funções), entrada
+  validada/truncada, rate-limit por token e teto de respostas por formulário.
+
+## [1.120.0] — 2026-06-20
+
+### Adicionado — Discovery: roteiro salvo por cliente + base do formulário público
+
+Leva 1 da evolução do Discovery. O roteiro gerado pela IA **deixa de se perder**:
+agora é salvo e vinculado ao cliente, com base de dados pronta pro formulário
+público (Leva 2).
+
+- **Bug corrigido**: o roteiro gerado só vivia na tela. Adicionado seletor de
+  cliente + **"Salvar no cliente"** no card do roteiro.
+- **Roteiros salvos**: novo painel lista os roteiros por cliente, com status
+  (rascunho/publicado), contagem de perguntas/respostas, **Publicar** (gera token)
+  e **copiar link** (quando o app público estiver configurado).
+- **Respostas recebidas**: painel que mostra as submissões do formulário público
+  com **score de oportunidade** (0–100), ferramentas usadas, "quer amostra" e
+  agenda — pronto pra receber os dados da Leva 2.
+- **Modelo de dados**: novas sheets `DiscoveryForms` e `DiscoveryRespostas`;
+  coluna `email` em `Pessoas` (chave do cliente). `SCHEMA_VERSION` → `v1.62`.
+- **Segurança**: a superfície pública será um **projeto Apps Script separado**
+  (a Forja continua privada e intocada) — decisão registrada para a Leva 2.
+
+## [1.119.0] — 2026-06-20
+
+### Corrigido — Significado dos estágios consistente
+
+O dashboard descrevia Têmpera/Prateleira ao contrário do formulário de edição
+(e da metáfora da forja). Agora tudo segue o mesmo ciclo:
+**Faísca → Forja (dev) → Têmpera (no ar/produção) → Prateleira (pausado/aposentado)**.
+
+- **Dashboard**: Têmpera agora é "No ar / em produção" (verde sage); Prateleira é
+  "Pausado / aposentado" (cinza) — alinhado ao `StageBadge` e ao formulário.
+- **Exemplo Mermaid** e prompt de contexto da IA reescritos com o ciclo correto.
+- **Bug**: "Pular sistemas aposentados" (auditoria agendada) checava o estágio
+  `aposentado`, que não existe — o valor real é `prateleira`. Agora pula de fato
+  os sistemas em Prateleira.
+
+---
+
+## [1.118.0] — 2026-06-20
+
+### Mudado — Botão "Auditar mudanças" pulsa quando há diff
+
+Quando o repositório mudou desde a última auditoria, o botão **Auditar
+mudanças (N)** agora **pulsa** (glow brasa) e fica em negrito pra chamar
+atenção. Some enquanto está auditando.
+
+---
+
+## [1.117.0] — 2026-06-20
+
+### Adicionado — Histórico de auditorias + auto-fechar backlog
+
+Fecha o loop "auditar → ajustar → re-auditar": o re-run incremental agora
+**fecha sozinho** os itens de backlog que o diff resolveu, e há uma **linha do
+tempo** da evolução do sistema.
+
+- **Histórico** (botão no cabeçalho da Auditoria): timeline de todas as rodadas
+  com score, nº de achados, resolvidos, modelo e commit + **mini-gráfico** da
+  evolução do score (SVG inline, sem dependência nova).
+- **Auto-fechar backlog**: quando a auditoria incremental marca um achado como
+  resolvido, o item que ele originou é fechado automaticamente — Decisão →
+  `feito`, Risco → `mitigado`, Oportunidade → `ganho`. Toast + banner listam o
+  que foi fechado.
+- **Riscos mitigados** somem do Mapa de Quebra e param de penalizar o score
+  (nova coluna `status` em `Riscos`; `SCHEMA_VERSION` → `v1.61-risco-status`).
+
+> Versionamento/rollback: o rollback dos ajustes mora no **git do sistema** (PR/
+> revert). A Forja só amarra cada auditoria a um commit e guarda o histórico.
+
+---
+
+## [1.116.0] — 2026-06-20
+
+### Adicionado — Score premium + prompt de ajustes (.md)
+
+Ao terminar a auditoria, o drawer agora abre com um **hero de resultado**:
+score em destaque e um **prompt mestre** pronto pra levar pra IA.
+
+- **Score premium** num medidor (dashboard) com cor por faixa (saudável/atenção/
+  crítico) + contagem de achados por severidade (altas/médias/baixas).
+- **Prompt de ajustes (.md)**: gera um único `.md` estruturado com todas as
+  instruções — contexto pra IA, achados ordenados por prioridade (problema,
+  evidência, solução, instrução detalhada), ordem de execução e próximos passos.
+- **Baixar / Copiar** o prompt direto do hero (além do relatório completo).
+
+---
+
+## [1.115.0] — 2026-06-20
+
+### Adicionado — Cronômetro ao vivo na auditoria
+
+Enquanto a auditoria roda, o drawer agora mostra **tempo decorrido ao vivo** +
+barra de progresso, pra você acompanhar e perceber risco de timeout.
+
+- **Contador grande** (`12s`, depois `1m 03s`) atualizado em tempo real.
+- **Barra de progresso** assintótica que muda de cor (azul → âmbar após 1min →
+  vermelho após 4min).
+- **Aviso de timeout**: passando de 4min, lembra que o Apps Script corta em ~6min
+  e sugere modos mais leves (Código/Governança) ou modelo mais rápido.
+
+---
+
+## [1.114.0] — 2026-06-20
+
+### Adicionado — Conectar repositórios em lote (Sistemas → GitHub)
+
+Pra quem tem o portfólio todo no GitHub mas importou os sistemas do GAS (só com
+`scriptId`): um conector em lote pra preencher o `repoUrl` de todos de uma vez —
+e assim auditar pelo GitHub, que é mais rico e seguro que a Apps Script API.
+
+- **Botão "Conectar repos (N)"** no topo de Sistemas (aparece quando há sistemas
+  sem repoUrl).
+- Você informa a **organização do GitHub** e o **campo base do slug** (nome ou
+  codinome); a Forja gera `github.com/<org>/<slug>` pra cada sistema sem repo e
+  **verifica no GitHub quais existem de verdade** (✓/✗), sem chutar.
+- **Preview editável**: ajusta qualquer URL, marca/desmarca, "selecionar só os
+  encontrados" e conecta os escolhidos em um clique.
+
+#### Técnico
+- Servidor: `sugerirReposGitHub(org, campo)` (slug + verificação via
+  `fetchAll` em lotes) e `conectarReposEmLote(itens)`.
+- Frontend: `ConectarReposModal` + entrada no `Bancada`.
+
+---
+
+## [1.113.0] — 2026-06-20
+
+### Adicionado — Conectar repo e limpar histórico direto na Auditoria
+
+Dois atalhos pra fechar o ciclo de teste da auditoria sem sair do drawer.
+
+- **Conectar repositório inline**: quando o sistema não tem `repoUrl`, o drawer
+  mostra um campo "Conectar repositório GitHub". Você cola a URL, ele salva na
+  ficha (`updateSistema`) e **já roda a auditoria completa** lendo o código via
+  git — sem precisar abrir o formulário do sistema. Desbloqueia também a
+  auditoria incremental.
+- **Limpar histórico**: botão **"Limpar"** (com confirmação) apaga todas as
+  auditorias salvas do sistema — pra testar do zero depois de mudanças, sem o
+  curto-circuito/incremental reaproveitando rodadas antigas.
+
+#### Técnico
+- Servidor: `limparAuditoriasSistema(sistemaId)` (bulk delete via `dbDeleteMany`).
+- Frontend: campo de conexão de repo + `Popconfirm` de limpeza no `AuditoriaDrawer`;
+  estado local de `repoUrl` que re-deriva o modo padrão ao conectar.
+
+---
+
+## [1.112.0] — 2026-06-19
+
+### Melhorado — Auditoria de sistemas "sem dados" (GAS + governança vazia)
+
+Quando a auditoria caía num sistema sem código legível e sem governança, ela
+devolvia achados genéricos e um erro de código que era só texto morto. Agora esse
+caso é tratado de ponta a ponta.
+
+- **Erro de código acionável**: o aviso "Apps Script API desativada" virou CTA —
+  botão **"Ativar Apps Script API"** (abre as configurações) + **"Tentar ler o
+  código de novo"** (re-roda forçando a releitura). Para GitHub desconectado,
+  aponta pro `GITHUB_TOKEN` em Configurações.
+- **Checklist de setup (sem IA)**: se o sistema não tem código, repo nem nenhum
+  registro de governança, a auditoria devolve um **passo a passo determinístico**
+  (instantâneo, sem gastar LLM): ative a API, conecte o repo, defina propósito/
+  stack/URL, registre a 1ª decisão/risco — com botões que já registram.
+- **Dica de GitHub pra projetos GAS**: sugere conectar o `repoUrl` (mesmo em
+  projetos Apps Script versionados via clasp) pra destravar leitura de código
+  mais rica + auditoria incremental.
+- **Banner GAS mais claro**: "a auditoria roda completa a cada vez" no lugar do
+  confuso "sem histórico de commits pra comparar".
+
+#### Técnico
+- Servidor: `_auditoriaOnboarding` (checklist determinístico) + detecção
+  "data-starved" em `acaoIAAuditarSistema`; `AuditFontes.onboarding`.
+- Frontend: `FontesBlock` com CTAs (Ativar API / re-auditar / dicas); banner de
+  onboarding no resultado; mensagem GAS suavizada no banner de frescor.
+
+---
+
+## [1.111.0] — 2026-06-19
+
+### Adicionado — Auditoria focada no diff (Fase 2.5)
+
+Quando o repositório mudou desde a última auditoria, a Forja agora **re-audita só
+o que mudou** em vez de reler o código inteiro — e reconcilia os achados antigos.
+
+- **Auditar mudanças (N)** dispara uma **auditoria incremental**: a IA recebe os
+  achados anteriores + o **diff** (patches do GitHub) e decide o que foi
+  **resolvido**, o que **persiste** e quais problemas **novos** o diff introduziu.
+- **Cards marcados**: cada achado ganha um selo **"novo"** (introduzido pelo diff)
+  ou **"persiste"** (continua aberto da rodada anterior).
+- **Resolvidos desde a última**: bloco no topo lista os achados que o diff
+  fechou — feedback de progresso real.
+- **Bem mais barato**: o incremental usa só os patches que já vêm na compare API
+  (sem baixar o repo) e respeita o mesmo orçamento de arquivos/KB.
+- **Banner de rastreabilidade** no resultado mostra "Auditoria incremental —
+  N arquivos do diff · `base` → `head`".
+- Forçar ("Auditar mesmo assim" quando em dia) continua rodando a varredura
+  completa do repositório.
+
+#### Técnico
+- Servidor: `_lerDiffGitHub` (compare API → patches, orçado); branch incremental
+  em `acaoIAAuditarSistema` + `_executarAuditoriaIncremental` (prompt de
+  reconciliação, mesmo formato `AuditPayload`); parser estendido pra `origem` e
+  `resolvidos`.
+- Types: `AuditFinding.origem`, `AuditPayload.resolvidos`,
+  `AuditFontes.incremental` / `baseCommit`.
+
+---
+
+## [1.110.0] — 2026-06-19
+
+### Adicionado — Auditoria incremental (Fase 2): re-run barato
+
+A auditoria de código agora sabe **se vale a pena re-rodar**. Ela compara o HEAD
+do repositório com o commit já auditado e, quando nada mudou, não gasta LLM.
+
+- **Banner de frescor** no drawer da Auditoria (modos Completa/Código):
+  - 🟢 **Em dia** com o commit `abc1234` quando nada mudou — com botão discreto
+    "Auditar mesmo assim".
+  - 🟡 **N arquivos mudaram** desde a última auditoria, com lista colapsável dos
+    arquivos relevantes alterados e botão primário "Auditar mudanças (N)".
+  - ℹ️ Avisos claros quando não dá pra comparar (projeto GAS, base reescrita,
+    GitHub indisponível).
+- **Curto-circuito sem LLM**: se o HEAD == commit auditado e você não forçar, a
+  Forja devolve o resultado salvo na hora, com aviso leve "sem mudanças".
+- **Cache efêmero de blobs (6h)**: o conteúdo dos arquivos do GitHub é cacheado
+  por SHA de blob (content-addressed — muda o arquivo, muda o SHA, invalida
+  sozinho). Re-runs na sessão baixam só o que faltava.
+
+#### Técnico
+- Servidor: `getStatusAuditoriaCodigo(sistemaId)` (HEAD + compare API, conta
+  arquivos relevantes); `acaoIAAuditarSistema(sistemaId, modo, forcar?)` com
+  curto-circuito por commit; `_lerCodigoGitHub` agora persiste o **commit sha**
+  real (não a tree sha) e usa `CacheService` por blob.
+- Types: `StatusAuditoriaCodigo`; `AuditResult.semMudanca`.
+
+---
+
+## [1.109.0] — 2026-06-19
+
+### Adicionado — Auditoria que lê o CÓDIGO de verdade (Fase 1)
+
+Antes a "Auditar com IA" olhava só os metadados de governança da Forja (custos,
+riscos, decisões, campos da ficha) — nunca abria o repositório. Agora ela lê o
+código real.
+
+- **Seletor de escopo** no drawer da Auditoria: **Completa** (governança + código),
+  **Código** (só o repositório) ou **Governança** (como era). Default = Completa
+  quando o sistema tem repositório.
+- **Lê o repositório de verdade**:
+  - **GitHub** via `repoUrl` + token já configurado (árvore recursiva + download
+    dos arquivos-chave em paralelo via `fetchAll`).
+  - **Google Apps Script** via `scriptId` (Apps Script API, escopo já presente).
+- **Curadoria com orçamento**: prioriza READMEs, manifestos, configs e `src/`,
+  ignora `node_modules/dist/locks/binários`, respeita um teto de arquivos/KB pra
+  caber no prompt e nos 6 min do Apps Script.
+- **Evidência de código**: achados passam a citar **arquivo + trecho literal**
+  (segredos hardcoded, dependências, falta de testes/CI, arquitetura, código morto).
+- **Rastreabilidade**: o bloco "Fontes" mostra o que foi lido — origem (GitHub/GAS),
+  nº de arquivos, KB e o **commit** auditado. Se não houver repositório, um aviso
+  claro guia a conectar um `repoUrl`.
+- **Custo sob controle**: a auditoria agendada em background continua só em
+  governança (barata); a de código roda sob demanda no drawer.
+
+#### Técnico
+- Coletores `_lerCodigoGitHub` / `_lerCodigoGAS` + seleção/orçamento; `AuditFontes`
+  estendida com metadados de código; `acaoIAAuditarSistema(sistemaId, modo)`.
+
+---
+
+## [1.108.0] — 2026-06-19
+
+### Adicionado — "Ideias de melhoria": capture sua faísca e promova ao Backlog
+
+Antes o Backlog de cada sistema era alimentado quase só pela Auditoria IA. Agora
+você tem onde lançar suas próprias ideias de melhoria — sem poluir o acionável e
+sem criar conceito duplicado.
+
+- **Uma faísca só**: a seção **Ideias** ganhou tipo **"Novo sistema"** (continua
+  indo pra Gênese, como sempre) vs **"Melhoria"** (incremento num sistema que já
+  existe → vai pro Backlog). Filtro `Todas / Novos sistemas / Melhorias`.
+- **Faixa "Ideias" no Backlog** (dentro de cada Sistema, na aba Backlog e no Kanban):
+  captura rápida de 1 campo pra jogar a faísca na hora. Fica separada das colunas
+  acionáveis — ideia crua não polui "A fazer".
+- **Promover com anti-redundância**: ao promover, a IA estrutura a ideia num item
+  de backlog (o quê / por quê / prioridade / estimativa) **e checa duplicado**
+  contra o backlog existente daquele sistema, avisando antes de criar. Você revisa,
+  edita e confirma — aí vira item "A fazer".
+- **Caixa global**: melhorias soltas (sem sistema) podem ser capturadas na seção
+  Ideias e destinadas a um sistema na hora de promover.
+
+#### Técnico
+- Tabela `Ideias` estendida (`tipo`, `sistemaId`, `prioridade`, timestamps);
+  `SCHEMA_VERSION` → `v1.60-ideias-melhoria` (migração automática, ideias legadas
+  viram tipo "sistema").
+- Novas funções server: `getMelhoriasBySistema`, `refinarIdeiaMelhoria`,
+  `confirmarPromocaoIdeia`. Novo componente `IdeiasFaixa` + `PromoverIdeiaModal`.
+
+---
+
+## [1.107.1] — 2026-06-19
+
+### Alterado — instruções do Estúdio viraram modal (tela mais leve)
+
+- O guia de passos saiu do corpo da tela (estava pesado) e virou um **modal** que
+  abre sozinho na **primeira visita** (lembrado via `localStorage`) e pode ser reaberto
+  pelo link discreto **"Como funciona?"**.
+- O estado vazio do Estúdio voltou a ser leve: placeholder + botões (Abrir Pastas /
+  Colar link) e a trilha **"Continuar assistindo"** logo abaixo.
+
+---
+
+## [1.107.0] — 2026-06-19
+
+### Adicionado — "Trilhas": planos de estudo por tópico
+
+- Nova aba **Trilhas**: cada trilha é um tópico (ex.: Agents, Skills, Tools) com
+  objetivo, status (Planejando/Estudando/Concluído), cor e **barra de progresso**.
+- **Plano da trilha:** itens ordenados que podem ser **vídeos** (do YouTube) ou
+  **tarefas**, cada um com checkbox de concluído alimentando o progresso.
+- **Anexar vídeos** de 3 formas: por **link**, dos seus **Favoritos**, ou **buscando no
+  YouTube** (metadados via oEmbed). 
+- **Integra com o Estúdio:** "Estudar" um vídeo da trilha abre no Estúdio já com a
+  **trilha inteira como Fila** — assiste e anota na sequência do plano.
+- **Ponte com o Caderno:** botão "Virar trilha" promove um assunto do Caderno a trilha.
+- Schema: novas tabelas `EstudoTrilhas` e `EstudoTrilhaItens` — migração automática
+  (`v1.59-estudo-trilhas`).
+
+---
+
+## [1.106.0] — 2026-06-19
+
+### Adicionado — Estudos abre no Estúdio + "Continuar assistindo"
+
+- **Estudos sempre abre na aba Estúdio** (era Pastas). Saiu e voltou, cai no Estúdio.
+- **Histórico premium "Continuar assistindo".** Uma trilha horizontal discreta no estado
+  vazio do Estúdio com os últimos vídeos abertos (capa + título). Clicou, retoma — e a
+  fila vira esse histórico. Só aparece quando há histórico (zero poluição) e tem um
+  "Limpar" discreto. Cada vídeo entra uma vez (reabrir sobe pro topo); guarda até 30.
+- Schema: nova tabela `EstudoHistorico` — migração automática (`v1.58-estudo-historico`).
+
+---
+
+## [1.105.1] — 2026-06-19
+
+### Corrigido — Estúdio dava play sozinho ao voltar pra aba
+
+- O iframe tinha `autoplay=1` fixo, então toda vez que você saía e voltava pro Estúdio
+  o vídeo recomeçava sozinho. Agora o autoplay só acontece quando você **escolhe um
+  vídeo de propósito** (clique em Pastas/Favoritos/Fila ou colar link). Voltar pra aba
+  reabre o mesmo vídeo **pausado**. Além disso, digitar nas notas não reinicia mais o
+  player.
+
+---
+
+## [1.105.0] — 2026-06-19
+
+### Alterado — Estúdio vazio virou uma vitrine de uso (premium)
+
+- Quando não há vídeo aberto, o Estúdio agora mostra um **guia premium** que ocupa o
+  espaço: hero com eyebrow, 4 cards de passos (Escolha → Assista → Anote → Caderno)
+  com ícones em cores de acento, e um rodapé com CTAs **"Abrir Pastas"** / **"Colar um
+  link"** + dicas (autosave, fila, favoritos). Fundo com gradiente radial sutil.
+
+---
+
+## [1.104.0] — 2026-06-19
+
+### Adicionado — "Estúdio": assistir e anotar ao mesmo tempo
+
+- **"Assistir" virou "Estúdio".** É a tela de foco: player grande de um lado, painel
+  de **Notas** do outro. As notas são um **rascunho que salva sozinho** (autosave),
+  amarrado ao vídeo — reabriu o vídeo, a nota volta.
+- **Botão "Mandar pro Caderno"** promove a anotação a um assunto estruturado do
+  Caderno (título já vem do vídeo, link preenchido), sem perder o rascunho.
+- **Aba "Fila"** no painel: os vídeos da pasta/busca de onde você veio ficam listados
+  pra escolher o próximo ali mesmo — assistir + anotar + sequência num lugar só.
+- **Pastas/Buscar viraram o seletor.** Clicar num vídeo (capa corrigida, proporção
+  16:9) leva pro Estúdio já com a fila daquela pasta carregada. O player embutido das
+  Pastas saiu (consolidado no Estúdio).
+- **Favoritos** também manda pro Estúdio com a gaveta inteira como fila.
+- Schema: nova tabela `EstudoVideoNotas` (uma nota por vídeo) — migração automática
+  (`v1.57-estudo-videonotas`).
+
+---
+
+## [1.103.1] — 2026-06-19
+
+### Corrigido — capa do Favoritos colapsada (16:9)
+
+- O card de Favoritos tinha `paddingTop: '56.25%'` (proporção 16:9) e `padding: 0` no
+  **mesmo** `<button>` — o `padding: 0` anulava o `paddingTop`, colapsando a área da
+  capa pra altura ~0 (capa some, título sobe por cima). A proporção foi movida pra um
+  `div` wrapper e o botão agora preenche em `position: absolute`. Capa + alinhamento OK.
+
+---
+
+## [1.103.0] — 2026-06-19
+
+### Corrigido — Favoritos: capas + trava de duplicados
+
+- **Capas dos Favoritos voltaram.** Os cards usavam `<img>` sem `referrerPolicy`, então
+  as thumbs do YouTube falhavam no iframe do Apps Script. Agora reusam o mesmo
+  `ThumbImg` robusto (no-referrer + fallback pelo `videoId`).
+- **Trava de duplicados.** Salvar o mesmo vídeo (mesmo `videoId`) não cria um segundo
+  card: o servidor detecta e responde `duplicado`, e a UI avisa "Esse vídeo já está em
+  Favoritos". Vale pro botão Salvar e pro import a partir das Pastas/Buscar.
+- Obs.: duplicados já existentes continuam lá — remova o repetido pela lixeira do card.
+
+---
+
+## [1.102.0] — 2026-06-19
+
+### Alterado — Pastas estilo YouTube (player embutido + lista lateral)
+
+- **Player embutido dentro da pasta.** Ao abrir uma pasta (ou buscar), agora aparece
+  um player grande à esquerda e a **lista de vídeos ao lado** — clicar num item troca
+  o vídeo na hora, sem ir-e-voltar pra aba Assistir. O primeiro vídeo já entra tocando.
+- **Capas voltaram a aparecer.** As thumbs do YouTube falhavam dentro do iframe do
+  Apps Script; agora usam `referrerPolicy="no-referrer"` e caem em variações pelo
+  `videoId` (`mqdefault`/`hqdefault`/`default`) se a primeira falhar.
+- Ações do vídeo em foco: salvar em Favoritos, abrir em **tela cheia** (aba Assistir)
+  e abrir no YouTube. A mesma lista vale pra Pastas e pra Buscar.
+
+---
+
+## [1.101.0] — 2026-06-19
+
+### Alterado — Estudos com "Pastas" (suas playlists do YouTube como fonte única)
+
+- **Nova aba "Pastas":** suas playlists do YouTube viram as pastas de estudo. Em
+  **Adicionar pasta** você vê todas as suas playlists e marca quais **acompanhar**
+  (as que já têm o que você quer). Abrir uma pasta lista os vídeos **ao vivo** — pra
+  assistir aqui dentro ou salvar em Favoritos. Fonte única: você organiza no YouTube,
+  o QG só reflete.
+- **Coleções manuais removidas.** A organização agora é uma só (suas playlists).
+- **"Minha conta" virou "Pastas"**; "Curtidos" segue fora.
+- **Favoritos** voltou a ser uma **gaveta plana** de vídeos soltos salvos por link/busca
+  (sem coleções).
+- Schema: nova tabela `EstudoPlaylists` (playlists acompanhadas) — migração automática
+  (`v1.56-estudo-pastas`).
+
+---
+
+## [1.100.0] — 2026-06-19
+
+### Alterado — Estudos com foco "zero distração"
+
+- **Favoritos viraram o coração dos Estudos, com Coleções/temas.** Você cria e edita
+  coleções (nome + cor — ex.: Vibe Code, IA, Bancos), filtra por elas em chips no topo
+  e move um vídeo de coleção direto no card. Novo gerenciador de coleções (criar,
+  renomear, recolorir, remover — ao remover, os vídeos voltam pra "Sem coleção").
+- **"Minha conta" (YouTube) agora é garimpo sob demanda**, não vitrine: só **Playlists**
+  (abre uma playlist sua e importa o que interessa) e **Buscar**. No topo, um seletor
+  "Importar p/ [coleção]" manda o vídeo direto pra coleção certa.
+- **Removida a aba "Curtidos"** — trazia tudo que você já curtiu (ruído). Fora.
+- Schema: nova tabela `EstudoColecoes` + coluna `colecaoId` em `EstudoVideos`
+  (migração automática — `v1.55-estudo-colecoes`).
+
+---
+
+## [1.99.1] — 2026-06-19
+
+### Corrigido / Alterado
+
+- **YouTube (Fase 2) agora conecta por OAuth próprio — fim da tela branca.** A v1.99.0
+  pedia a permissão sensível `youtube.readonly` no manifesto do app. Em contas
+  **Google Workspace** com app não verificado, o Google **bloqueava a autorização e
+  devolvia tela em branco**, derrubando o app inteiro. Revertido.
+  - Agora o YouTube usa a mesma infra de **conectores OAuth do Driver** (provedor
+    `google-youtube`): você cadastra um Client ID/Secret próprio (com a **YouTube
+    Data API v3** habilitada), conecta a conta e o app chama a API via **REST com o
+    token do conector** — **sem nenhum scope sensível no manifesto**.
+  - Nova UI em **Estudos → Minha conta**: passos guiados (configurar credenciais →
+    conectar), botão de verificar conexão, avatar do canal e desconectar.
+  - Guia passo-a-passo em `YOUTUBE_OAUTH.md`.
+- O conector do YouTube fica fora do painel **Driver** (não é nuvem de arquivos).
+
+---
+
+## [1.99.0] — 2026-06-19
+
+### Adicionado
+
+- **Estudos → "Minha conta" (YouTube conectado — Fase 2).** Nova sub-aba que liga
+  o seu próprio canal do YouTube ao QG, **somente leitura**, via OAuth nativo do
+  Apps Script (scope `youtube.readonly` + YouTube Advanced Service). Sem chaves de
+  API nem configuração no Google Cloud Console.
+  - **Curtidos**: lista os seus vídeos curtidos com capa, título e canal.
+  - **Playlists**: navega pelas suas playlists e entra em cada uma pra ver os itens.
+  - **Buscar**: pesquisa no catálogo do YouTube direto do app.
+  - Cada vídeo pode ser **tocado** na aba Assistir (sem sair do QG) ou **salvo nos
+    favoritos** com 1 clique (metadados já preenchidos, sem chamada extra).
+  - Cabeçalho mostra o canal conectado; paginação "Carregar mais" em todas as listas.
+- Quando o scope ainda não foi autorizado, a aba mostra um aviso amigável com botão
+  **"Recarregar e autorizar"** (o Google pede o consentimento no carregamento do app).
+
+> Requer reautorização: ao abrir o app após o deploy, aceite a permissão do
+> YouTube na tela do Google.
+
+---
+
+## [1.98.0] — 2026-06-19
+
+### Adicionado
+
+- **Nova seção "Estudos"** no menu lateral (atalho `g e`) — um canto de
+  aprendizado dentro do QG, com 3 sub-áreas:
+  - **Assistir**: cola um link do YouTube (vídeo, `youtu.be` ou shorts) e assiste
+    embutido no app, em player 16:9. Botão pra salvar o vídeo nos favoritos.
+  - **Favoritos**: biblioteca de vídeos salvos em cards com **capa, título e canal
+    preenchidos automaticamente** (via oEmbed público do YouTube — sem API key nem
+    login). Categoria, tags e notas por vídeo; tocar/editar/remover; busca e filtro.
+  - **Caderno**: registro de assuntos/dicas pra revisar e aprofundar (banco de
+    dados, IDE, ferramenta, linguagem, conceito, IA…), com status (A rever /
+    Aprofundando / Dominado), prioridade, tags e link.
+- Schema ganhou `EstudoVideos` e `EstudoNotas` (migração automática append-only —
+  `v1.54-estudos`).
+
+> Fase 2 (futuro): conectar a conta do YouTube via OAuth pra importar vídeos
+> curtidos/playlists e busca no catálogo dentro do app.
+
+---
+
+## [1.97.4] — 2026-06-19
+
+### Adicionado
+
+- **Atelier → selo de bancada no rodapé do sidebar.** O espaço da moldura esticada
+  ganhou um selo discreto (martelo + wordmark "Forja"), ancorado embaixo e bem
+  leve (opacidade baixa) — toque clássico/minimalista. Some no mobile.
+
+---
+
+## [1.97.3] — 2026-06-19
+
+### Alterado
+
+- **Atelier → sidebar emoldurado e alinhado.** A coluna lateral de estações agora
+  estica até o fim do painel de conteúdo (as duas colunas ficam alinhadas, mais
+  harmônico), enquanto a lista de botões continua sticky no topo ao rolar. Mobile
+  segue virando a faixa horizontal de pílulas.
+
+---
+
+## [1.97.2] — 2026-06-19
+
+### Alterado
+
+- **Atelier mais largo.** A área do Atelier passou de 1240px → 1440px de largura
+  máxima, dando mais respiro ao conteúdo (ex.: nomes de conta como "Google One Pro
+  5TB" deixam de ser cortados nas colunas de Contas).
+
+---
+
+## [1.97.1] — 2026-06-19
+
+### Adicionado
+
+- **Contas → autocomplete também no E-mail de recuperação.** O campo de e-mail de
+  recuperação agora sugere os e-mails já cadastrados (mesma lista do campo de
+  login), com o serviço de origem ao lado.
+
+---
+
+## [1.97.0] — 2026-06-19
+
+### Adicionado
+
+- **Contas → sugestão de e-mails já cadastrados.** Ao adicionar/editar uma conta,
+  o campo de e-mail virou autocomplete: ao digitar (ou focar) ele puxa os e-mails
+  que você já usou em outras contas, mostrando ao lado em quais serviços cada um
+  aparece. Continua dando pra digitar um e-mail novo normalmente.
+
+---
+
+## [1.96.2] — 2026-06-19
+
+### Adicionado
+
+- **Contas → estrela de recuperação na lista.** A estrelinha de recuperação agora
+  aparece também em cada linha das colunas Grátis/Premium (e Por categoria), ao
+  lado do nome da conta — dá pra ver de relance quais contas já têm recuperação
+  sem abrir o detalhe.
+
+---
+
+## [1.96.1] — 2026-06-19
+
+### Adicionado
+
+- **Contas → estrela de recuperação.** No modal de detalhe da conta, ao lado do
+  nome, aparece uma estrelinha discreta quando a conta já tem dados de recuperação
+  preenchidos (tooltip "Dados de recuperação preenchidos").
+
+---
+
+## [1.96.0] — 2026-06-19
+
+### Adicionado
+
+- **Contas → campos de Recuperação.** Em `Atelier → Contas → Editar` agora há uma
+  seção destacada **Recuperação** com e-mail de recuperação, telefone de
+  recuperação e um campo livre (códigos de backup, 2FA, perguntas). Aparece também
+  em destaque no modal de detalhe da conta (com botão de copiar).
+- **Contas → Relatórios.** Novo botão **Relatórios** no topo das Contas, com duas
+  abas:
+  - **Recuperação** — agrupa as contas por cada e-mail/telefone de recuperação
+    (marcando os **compartilhados por 2+ contas**) pra você achar tudo que depende
+    de um contato antes de trocá-lo/cancelá-lo; lista também as contas ativas
+    **sem nenhum dado de recuperação**.
+  - **Visão geral** — total de contas, pagas × gratuitas, distribuição por status
+    e por categoria (com barras) e custo mensal recorrente.
+- Schema `Contas` ganhou `recEmail`, `recTelefone`, `recNotas` (migração
+  automática, append-only — `v1.53-contas-recuperacao`).
+
+---
+
+## [1.95.0] — 2026-06-19
+
+### Adicionado
+
+- **Skills → cache das adaptações por IA.** Cada adaptação (por ambiente) fica
+  guardada por skill (`adaptacoes`); reexportar o mesmo kit pro mesmo ambiente
+  reusa o cache e não gasta tokens de novo. Invalidado quando o conteúdo da skill
+  muda.
+
+---
+
+## [1.94.0] — 2026-06-19
+
+### Adicionado
+
+- **Skills → preview da adaptação por IA.** Ao exportar com "Adaptar com IA", o
+  modal agora mostra uma etapa de revisão: cada skill num colapsável com toggle
+  Adaptado/Original e tag "adaptada/sem mudança". Só baixa o `.zip` depois que
+  você revisa (as skills originais não são alteradas).
+- **Skills → lembra a última config de export.** IDE/destino, SO, shell e as
+  opções (contexto/adaptar) ficam salvos (localStorage) e voltam preenchidos no
+  próximo export — não precisa reescolher toda vez.
+
+---
+
+## [1.93.0] — 2026-06-19
+
+### Adicionado
+
+- **Skills → escolher a IDE/destino no export.** O modal de export agora pergunta
+  onde o kit vai ser usado e adapta a estrutura do `.zip`:
+  - **Cursor** → `.cursor/rules/<skill>.mdc` (com frontmatter `description`/`alwaysApply`).
+  - **Claude Code** → `.claude/skills/<skill>/SKILL.md`.
+  - **Genérico** → `skills/<skill>/SKILL.md` (padrão agent-skills).
+  Combina com ambiente (SO/shell) + contexto (AGENTS.md) + adaptação por IA.
+
+---
+
+## [1.92.0] — 2026-06-19
+
+### Adicionado
+
+- **Skills → export parametrizado por ambiente.** No exportar (pasta ou kit
+  custom) dá pra definir o ambiente alvo (SO + shell + contexto livre, com
+  presets Windows/macOS/Linux) e escolher:
+  - **Incluir contexto** (grátis): injeta um `AGENTS.md` + cabeçalho em cada
+    SKILL.md descrevendo o ambiente.
+  - **Adaptar com IA**: reescreve comandos/caminhos/exemplos pro ambiente
+    (bash→PowerShell etc.). As duas opções são combináveis.
+
+---
+
+## [1.91.0] — 2026-06-19
+
+### Adicionado
+
+- **Skills → exportar pasta como .zip.** Cada pasta tem um botão de exportar que
+  gera um `.zip` com `skills/<nome>/SKILL.md` + um `README.md`. Extrai na raiz do
+  projeto e o Cursor/Claude/outras IDEs leem. Geração 100% no cliente, sem
+  dependências (gerador de ZIP próprio).
+- **Skills → montar kit custom.** Botão "Montar kit" entra em modo seleção:
+  marque skills de qualquer pasta, dê um nome e gere um `.zip` só com elas — ideal
+  pra levar um kit parametrizado pra um projeto novo.
+
+---
+
+## [1.90.0] — 2026-06-19
+
+### Adicionado
+
+- **Skills → cor da pasta.** No editar pasta dá pra escolher uma cor de destaque
+  (paleta do tema); o ícone da pasta passa a usá-la.
+- **Skills → mover skill entre pastas.** No detalhe da skill (drawer), botão
+  "Mover" lista as pastas existentes + "Avulsas" e troca a skill de pacote.
+- **Skills → remover pasta.** No editar pasta, botão "Remover pasta": apaga a
+  pasta e manda as skills dela pra "Avulsas" (não apaga as skills).
+
+---
+
+## [1.89.0] — 2026-06-19
+
+### Modificado
+
+- **Skills → temas colapsáveis dentro de cada pasta.** Cada classificação (tema)
+  dentro de uma pasta agora é um sub-colapsável, recolhido por padrão: você abre
+  a pasta, vê a lista de todos os temas e expande só o que quiser. Com busca
+  ativa, os temas abrem sozinhos pra revelar os resultados.
+
+---
+
+## [1.88.0] — 2026-06-19
+
+### Adicionado
+
+- **Skills → pastas como pacotes editáveis.** Cada pasta agora tem nome e
+  descrição próprios (nova aba `SkillFontes`), editáveis pelo lápis no cabeçalho
+  — inclusive a do GAS App Kit. As pastas existentes são semeadas
+  automaticamente, então já aparecem prontas pra editar.
+- **Skills → "Importar pacote".** Botão que cria uma pasta com nome + descrição
+  e sobe vários `.md` de uma vez; tudo entra sob esse pacote (`fonte`
+  "&lt;pacote&gt;/&lt;skill&gt;"). Ideal pra quando você pega o pack de outra pessoa.
+
+---
+
+## [1.87.0] — 2026-06-19
+
+### Adicionado
+
+- **Skills → classificação por tema (IA).** Botão "Classificar por tema": a IA lê
+  nome + descrição de cada skill e atribui um tema de alto nível de um conjunto
+  fixo (Design, Frontend, Backend, Dados, Infra/DevOps, Testes, Segurança,
+  IA/Prompts, Automação, Documentação, Revisão de código, Produtividade, Outro).
+  As seções dentro de cada pasta passam a usar esse tema (com fallback pra
+  `categoria` do frontmatter quando existir). Resultado fica em cache (`tipoIA`),
+  numa única chamada à LLM pra todas as pendentes — não re-gasta tokens.
+
+---
+
+## [1.86.0] — 2026-06-19
+
+### Adicionado
+
+- **Skills → organização por pastas (fonte).** As skills agora ficam agrupadas
+  por origem em pastas colapsáveis (ex.: **GAS App Kit**), fechadas por padrão —
+  a tela não enche mais. Cada pasta mostra contagem e tamanho; ao importar novos
+  packs no futuro, cada um vira sua própria pasta automaticamente (convenção de
+  `fonte` "&lt;pack&gt;/&lt;skill&gt;"; uploads avulsos caem em "Avulsas / Importadas").
+- **Skills → seções por categoria dentro de cada pasta.** Dentro de cada fonte,
+  as skills são separadas por categoria com um rótulo (ex.: "review", "design"),
+  pra entender o tipo num relance.
+- **Skills → tradução das descrições em lote.** Botão "Traduzir descrições"
+  traduz pra pt-BR todas as descrições ainda no original (uma frase cada),
+  guardando em cache (`descricaoPt`) pra não re-gastar tokens. Os cards passam a
+  mostrar a descrição traduzida quando disponível. Busca também olha o pt-BR.
+
+---
+
+## [1.85.0] — 2026-06-18
+
+### Alterado
+
+- **Contas → detalhes em modal (visão sempre limpa).** Clicar numa conta não
+  expande mais inline (que empurrava a lista e desequilibrava as colunas) — agora
+  abre um **modal premium** com todos os detalhes. As linhas ficam sempre no
+  estado enxuto (ícone, nome, custo, status, seta).
+  - **Seletor de conta/e-mail:** quando o serviço tem mais de um login (ex.: Gmail
+    Pessoal + Empresarial), o modal mostra chips pra escolher qual ver, com o
+    e-mail em destaque e botão de **copiar**.
+  - Metadados organizados em grade (plano, cobrança, custo, renovação, pagamento,
+    categoria), notas, tags e ações (Abrir · Cofre · Editar · Remover) no rodapé.
+  - Removido o "Expandir/Recolher tudo" (não faz mais sentido sem expansão inline).
+
+---
+
+## [1.84.0] — 2026-06-18
+
+### Adicionado
+
+- **Contas → visão "Grátis / Premium" (dois lados).** Novo toggle de
+  organização: à esquerda as contas **Gratuitas** (acento sálvia, ícone folha),
+  à direita as **Premium / pagas** (acento pêssego, ícone coroa) com o **custo
+  mensal recorrente** da coluna no cabeçalho. Cada lado é um card leve com as
+  linhas colapsáveis — sem agrupar por categoria, pra ficar minimalista. A visão
+  **Por categoria** continua disponível no mesmo toggle (default: Grátis/Premium).
+  Colunas se empilham sozinhas em telas estreitas.
+
+---
+
+## [1.83.1] — 2026-06-18
+
+### Corrigido
+
+- **Assistente sem barra de rolagem no estado inicial.** A área do chat agora
+  estica mais pra baixo (e o hero ficou um pouco mais compacto), então o título,
+  o texto e os 4 cards de sugestão encaixam sem precisar rolar.
+
+---
+
+## [1.83.0] — 2026-06-18
+
+### Alterado
+
+- **Forja IA — passe de design premium em todas as abas.**
+  - **Seletor de contexto em cartões (novo).** "Sem contexto / Portfólio /
+    Sistema" no Assistente — e "Ideia / Sistema / Texto livre" no Conselho,
+    Blueprint e Diagramas — viraram cartões com ícone, título e **uma linha
+    explicando o que cada modo faz**. Quem seleciona entende a feature na hora;
+    o cartão ativo acende no accent (borda + tint + ícone preenchido).
+  - **Estados vazios premium.** Conselho, Blueprint e Prompts ganharam um empty
+    com ícone em brilho ambiente, título em Fraunces e subtítulo orientando o
+    próximo passo — em vez do `Empty` genérico.
+  - **Conselho:** cards de parecer com fio de cor no topo (por especialista) e
+    micro-elevação no hover.
+  - **Prompts:** intro virou banner premium com ícone, separando "o que é" de
+    "como usar".
+  - Componentes reutilizáveis novos: `ContextCards` e `PremiumEmpty`.
+
+---
+
+## [1.82.0] — 2026-06-18
+
+### Alterado
+
+- **Forja IA → Assistente — passe de design premium.**
+  - **Ações rápidas com identidade:** cada chip ganhou ícone num chip colorido
+    próprio (azul/rose/argila/sálvia/lavanda/pêssego), sombra suave e
+    micro-elevação no hover — o poder de cada ação fica visível, não chapado.
+  - **"Pensa em melhorias" e "Gera backlog .md"** unificados ao mesmo visual dos
+    demais chips, com divisória sutil antes do bloco de cliente.
+  - **Estado inicial virou hero:** ícone com brilho ambiente, título em Fraunces
+    ("O que vamos forjar hoje?") e as sugestões como cards com ícone, elevação e
+    borda que acende no accent — em vez do `Empty` genérico.
+  - **Campo de input com foco premium:** borda e halo no accent pêssego ao focar.
+
+---
+
+## [1.81.1] — 2026-06-18
+
+### Alterado
+
+- **Painel Contas — passe de design premium.**
+  - **Stat tiles** ganharam profundidade (sombra + contorno vivo, ícone em chip
+    colorido, fio de luz no topo) — sem mais "contorno morto".
+  - **Grupos viraram cards reais** com cabeçalho destacado (faixa muted, ícone em
+    chip, badge de contagem e custo do grupo em pill).
+  - **Status em pill colorida** (em vez de bolinha + texto) — leitura imediata.
+  - **Colapsado mais informativo:** mostra o custo recorrente sem precisar abrir.
+  - **Expandido com respiro:** mais espaçamento, faixa única de metadados
+    (plano · custo · renovação · pagamento), notas com filete lateral e ações em
+    rodapé com divisória.
+
+---
+
+## [1.81.0] — 2026-06-18
+
+### Adicionado
+
+- **Contas → atalho pro Cofre.** Cards de conta com "senha no Cofre" agora têm
+  botão **Cofre** que salta direto pra estação Cofre já filtrada pelo label do
+  segredo associado — acha a chave em um clique.
+- **Contas → custo por grupo.** O cabeçalho de cada categoria mostra o custo
+  mensal recorrente do grupo (mensais + anuais rateados), por moeda.
+
+### Corrigido
+
+- **Erro amigável ao conectar contas (Driver OAuth).** Antes, falhas mostravam
+  erro cru — e o timeout do poll não avisava nada (usuário ficava no vácuo).
+  Agora um diálogo explica a causa provável (redirect_uri_mismatch, acesso
+  negado, credenciais inválidas, pop-up bloqueado, timeout…) e oferece **Tentar
+  de novo** / **Abrir credenciais** + **Ver passo a passo**. Também detecta
+  pop-up bloqueado pelo navegador.
+
+---
+
+## [1.80.7] — 2026-06-18
+
+### Corrigido
+
+- **Faixa horizontal embaixo da Home (causa raiz).** A camada de aurora+dither
+  cobria só a caixa do conteúdo; quando o conteúdo era mais curto que a tela, o
+  `appBg` puro aparecia abaixo e a borda inferior do dither virava uma faixa
+  horizontal. Agora o Dashboard tem `minHeight: 100vh`, então o fundo ambiente
+  preenche a viewport inteira de forma uniforme — sem faixa, sem seam.
+
+---
+
+## [1.80.6] — 2026-06-18
+
+### Alterado
+
+- **Aurora mais sutil (zera a serrilha).** Opacidades das manchas reduzidas
+  (~0.11 / 0.075 / 0.09). Menos contraste de cor = menos degraus pra escalonar =
+  banding praticamente imperceptível, e o efeito fica mais discreto/premium.
+
+---
+
+## [1.80.5] — 2026-06-18
+
+### Corrigido
+
+- **Contraste e cards de baixo flutuando.**
+  - Aurora suavizada na faixa do topo (opacidades menores e manchas reposicionadas)
+    pra não lavar o "mestre" nem o botão "Novo sistema" — de quebra, menos banding.
+  - Botão "Novo sistema" ganhou sombra suave na cor da brasa, saltando da aurora.
+  - Cards "Aplicações" e "Atividade técnica" agora usam a mesma sombra encorpada
+    dos cards de cima, então flutuam igual — visual harmonizado.
+
+---
+
+## [1.80.4] — 2026-06-18
+
+### Corrigido
+
+- **Blur da aurora de volta pra 100px.** O 130px deixava o carregamento mais
+  lento e criava uma faixa escura na parte de baixo, sem ganho real contra a
+  serrilha. Mantidos o dither e a harmonização de altura dos cards.
+
+---
+
+## [1.80.3] — 2026-06-18
+
+### Corrigido
+
+- **Banding da aurora mais suave + cards harmonizados.**
+  - Reforço anti-banding: blur 100→130px e dither mais presente (0.045→0.08,
+    ruído mais fino) pra matar a serrilha que ainda aparecia no degradê.
+  - O Hero (Saúde operacional) agora preenche 100% da altura da coluna, ficando
+    do mesmo tamanho do card Conexões ao lado — alinhamento harmonizado.
+
+---
+
+## [1.80.2] — 2026-06-18
+
+### Corrigido
+
+- **Aurora sem banding + respiro no topo.** O degradê mostrava "granulado"
+  (banding — degraus de cor em fundo escuro). Aumentei o blur (80→100px) e
+  adicionei uma camada de *dither* (ruído finíssimo, opacidade 0.045) que quebra
+  os degraus e deixa a transição imperceptível — mesmo truque de Stripe/Apple.
+- **Conteúdo desceu** (padding do topo 40→68px): o header "Boa tarde, mestre"
+  não fica mais colado no topo; melhor distribuição vertical.
+
+---
+
+## [1.80.1] — 2026-06-18
+
+### Corrigido
+
+- **Aurora sem bandas marcadas + movimento visível.** O brilho ambiente estava
+  preso na coluna central de 1280px com recorte, criando duas faixas marcadas
+  nas laterais em telas largas. Agora é full-bleed: cobre toda a área de
+  conteúdo, sangrando de ponta a ponta com fade radial (o recorte só acontece na
+  borda real do viewer). As animações ganharam deslocamento maior e uma terceira
+  trajetória, então o movimento agora é perceptível (continua lento e discreto).
+
+---
+
+## [1.80.0] — 2026-06-18
+
+### Adicionado
+
+- **Home premium — passe de design.** A Dashboard ganhou profundidade e impacto
+  sem perder o "quiet luxury":
+  - **Aurora ambiente:** manchas de cor da paleta (brasa, argila e a cor do
+    status de saúde), muito borradas, derivando devagar no fundo — dá vida e
+    profundidade sem poluir. Respeita `prefers-reduced-motion`.
+  - **Profundidade nos cards:** Hero, Conexões, Aplicações e Atividade sobem 4px
+    de leve no hover (`.forja-lift`) e usam sombra mais encorpada.
+  - **Score que conta:** o número da Saúde anima de 0 ao valor no carregamento e
+    ganhou um brilho sutil (`text-shadow`) na cor do status.
+  - **Anel com glow:** o `RingProgress` agora tem um halo suave na cor do arco.
+  - Mais respiro: padding vertical e gutters ajustados.
+
+---
+
+## [1.79.1] — 2026-06-18
+
+### Corrigido
+
+- **"Decisões em aberto" não conta mais itens concluídos.** O contador da Home
+  só excluía `concluido`/`cancelado`, mas o Kanban marca "Feito" como `feito` —
+  então tarefas concluídas seguiam aparecendo como em aberto. Agora todos os
+  status finais (feito, concluído, cancelado, descartado, revertida) são
+  desconsiderados.
+
+---
+
+## [1.79.0] — 2026-06-18
+
+### Adicionado
+
+- **Indicadores do Dashboard agora ensinam o que fazer.** Tooltips didáticos (com
+  recomendação acionável) no score de Saúde, no selo de status, nos 4 estágios
+  (Forja/Têmpera/Prateleira/Atenção), no anel de Conexões, no "X ativos de Y" e
+  nos contadores de decisões/findings. Passar o mouse explica o indicador e diz
+  a próxima ação pra manter tudo perto de 100%.
+
+---
+
+## [1.78.0] — 2026-06-18
+
+### Corrigido
+
+- **Pulso monitorado agora conta como "Atividade nos últimos 30 dias".** Antes, o
+  fator de saúde só olhava a Timeline, e um pulso respondendo OK não gravava nada
+  lá (só incidentes 5xx gravavam) — então monitorar uma URL saudável não mexia no
+  score. Agora cada checagem grava `verificadoEm`, e um pulso verificado nos
+  últimos 30 dias já marca o sistema como ativo. `SCHEMA_VERSION` →
+  `v1.48-pulso-verificadoem`.
+
+---
+
+## [1.77.1] — 2026-06-18
+
+### Alterado
+
+- **Pulsos: URL truncada no meio (início + fim) com tooltip.** A URL longa do web
+  app ocupava a linha toda e escondia status/latência. Agora aparece encurtada
+  (igual chave de API), liberando as colunas; a URL completa fica no hover.
+- **Riscos: estado vazio explica o racional.** Deixa claro que riscos vêm da
+  "Auditar com IA" (descoberta automática) ou do "Mapear Risco" (manual).
+
+---
+
+## [1.77.0] — 2026-06-18
+
+### Corrigido
+
+- **Riscos agora podem ser excluídos.** O painel só tinha o lápis (editar) — não
+  havia como remover um risco (nem duplicados). Adicionado botão de excluir com
+  confirmação + função `deleteRisco` no servidor.
+- **Gravidade de risco unificada em texto (Alta/Média/Baixa).** A auditoria criava
+  riscos com gravidade textual ("alta"), mas o painel usava número (1-10) — então
+  editar quebrava e o fator de saúde "Sem riscos de gravidade alta" não batia.
+  Agora tudo usa Alta/Média/Baixa (com tag colorida), e registros antigos em número
+  são normalizados automaticamente. Mexer em riscos recalcula a saúde na hora.
+
+### Adicionado
+
+- **Pulsos: botão "Verificar agora".** Antes, as URLs só eram checadas pelo trigger
+  de 15 min — sem trigger ativo, ficavam "Sem dados". Agora dá pra checar na hora
+  e ver status/latência imediatamente (`verificarPulsosSistema`).
+
+---
+
+## [1.76.0] — 2026-06-18
+
+### Adicionado
+
+- **Fatores da Saúde agora são acionáveis.** No breakdown do score (clique no
+  número), cada fator pendente vira um atalho que leva direto pra onde resolver:
+  propósito/stack/URL/repo → "Editar ficha"; custos/receita → aba Custos;
+  atividade → aba Pulsos; risco → aba Riscos. Acabou o "sei o que está errado
+  mas não sei onde arrumar".
+- **Aba Custos agora permite adicionar e remover.** Antes era só leitura (sem
+  jeito de cadastrar pelo detalhe do sistema). Agora tem botão "Adicionar custo"
+  com fornecedor, valor, recorrência, categoria e próxima cobrança — e ao salvar,
+  o score de saúde e o checklist de graduação recalculam na hora.
+
+### Alterado
+
+- O checklist de graduação recarrega automaticamente quando você mexe nos custos.
+
+---
+
+## [1.75.2] — 2026-06-18
+
+### Alterado
+
+- **Score de saúde recalcula e salva sozinho ao abrir o sistema.** Antes, o
+  número exibido era recalculado ao vivo, mas o valor persistido (usado nas
+  listas da Bancada/Dashboard) só atualizava no botão "Recalcular" ou após
+  auditoria. Agora, abrir o detalhe do sistema recalcula **e persiste** o score,
+  mantendo tudo fresco automaticamente. O botão "Recalcular" segue para forçar
+  manualmente.
+
+---
+
+## [1.75.1] — 2026-06-18
+
+### Corrigido
+
+- **Backlog não duplica mais ao re-rodar a auditoria.** O anti-duplicação dos
+  findings era amarrado a cada rodada de auditoria; rodar de novo e registrar
+  recriava cartões iguais. Agora `registrar_decisao` e `registrar_risco`
+  deduplicam por sistema + título (decisão) ou sistema + área/descrição (risco)
+  antes de criar — se já existir, não duplica e avisa "já existia".
+
+---
+
+## [1.75.0] — 2026-06-18
+
+### Adicionado
+
+- **Checklist de graduação (portão Forja → Têmpera).** No detalhe de qualquer
+  sistema em estágio *Forja*, um painel "Pronto pra Têmpera?" mostra 5 critérios
+  objetivos de saída: deploy no ar com acesso, dossiê técnico mínimo (propósito +
+  stack + repositório), custos mapeados, riscos e decisões registrados, e fluxo
+  principal validado. Quatro são **auto-avaliados** a partir dos dados que a Forja
+  já guarda; "fluxo validado" é um toggle manual. Com tudo verde, o botão
+  **"Graduar pra Têmpera"** move o sistema de estágio e registra um marco na
+  timeline. (Origem: backlog A Origem v3 #3 — vale pra todos os sistemas.)
+- **Schema:** coluna `fluxoValidado` em `Sistemas` (append-only) e funções
+  `graduacaoStatus`, `setFluxoValidado`, `graduarSistema`. `SCHEMA_VERSION` →
+  `v1.47-graduacao`.
+
+---
+
 ## [1.74.1] — 2026-06-18
 
 ### Alterado

@@ -1,0 +1,319 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Forja — Brand · Opções</title>
+<style>
+  :root {
+    --bg: #FAF8F5;
+    --bgSoft: #F3EFE9;
+    --text: #2A2724;
+    --textSec: #5C554D;
+    --textTer: #9A9088;
+    --border: #E7E0D6;
+    --peach: #D99B73;
+    --peachSoft: #F3E2D4;
+    --ember: #C97B4A;
+  }
+  body {
+    font-family: 'Inter', -apple-system, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 56px 64px 80px;
+    margin: 0;
+  }
+  h1 { font-family: 'Fraunces', Georgia, serif; font-weight: 500; font-size: 22px; margin: 0 0 4px; }
+  .intro { color: var(--textSec); font-size: 14px; margin: 0 0 48px; max-width: 580px; line-height: 1.55; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 36px;
+    max-width: 1180px;
+  }
+  .card {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 36px 32px 28px;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.02);
+  }
+  .card h3 {
+    font-family: 'Fraunces', Georgia, serif;
+    font-weight: 500;
+    font-size: 13px;
+    color: var(--peach);
+    margin: 0 0 6px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+  }
+  .card .name { font-family: 'Fraunces', Georgia, serif; font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .card .desc { color: var(--textSec); font-size: 13px; line-height: 1.5; margin: 0 0 28px; }
+  .card .stage {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 36px 16px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    min-height: 90px;
+  }
+  .card .sizes { display: flex; gap: 24px; align-items: center; justify-content: center; margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--border); }
+  .card .sizes .lbl { font-size: 10px; color: var(--textTer); text-transform: uppercase; letter-spacing: 0.14em; }
+  .brand-text { display: flex; flex-direction: column; }
+  .wordmark { font-family: 'Fraunces', Georgia, serif; font-weight: 600; color: var(--text); line-height: 1; }
+  .slogan { text-transform: uppercase; color: var(--textTer); font-weight: 600; line-height: 1; }
+</style>
+<body>
+
+<h1>Forja · 6 direções pra marca</h1>
+<p class="intro">
+  Cada cartão mostra a marca aplicada no tamanho hero (36px) + a versão compacta (24px) abaixo.
+  Mesma paleta, mesma wordmark — o que muda é o conceito do mark. Me responde com A/B/C/D/E/F (ou
+  uma combinação, tipo "B com a faísca do A").
+</p>
+
+<div class="grid">
+
+  <!-- ============================== A · SELO CIRCULAR ============================== -->
+  <div class="card">
+    <h3>Opção A</h3>
+    <div class="name">Selo circular</div>
+    <p class="desc">Círculo cheio com gradiente, F vazado em negativo. Vibe de "stamp de cera" / selo de craft. Distintivo e premium, ancestral.</p>
+    <div class="stage">
+      <div style="display:flex; align-items:center; gap:14px">
+        <svg width="36" height="36" viewBox="0 0 36 36">
+          <defs>
+            <linearGradient id="aG" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#F2BB8F"/>
+              <stop offset="100%" stop-color="#A95221"/>
+            </linearGradient>
+            <mask id="aM">
+              <rect width="36" height="36" fill="white"/>
+              <text x="18" y="25.5" text-anchor="middle" font-family="Fraunces, Georgia, serif" font-weight="700" font-size="22" fill="black">F</text>
+            </mask>
+          </defs>
+          <circle cx="18" cy="18" r="17" fill="url(#aG)" mask="url(#aM)"/>
+        </svg>
+        <div class="brand-text" style="gap:6px">
+          <div class="wordmark" style="font-size:19px; letter-spacing:0.08em">FORJA</div>
+          <div class="slogan" style="font-size:9.5px; letter-spacing:0.24em">Inteligência de Negócios</div>
+        </div>
+      </div>
+    </div>
+    <div class="sizes">
+      <div class="lbl">Compact 24px</div>
+      <svg width="24" height="24" viewBox="0 0 36 36">
+        <defs>
+          <linearGradient id="aG2" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#F2BB8F"/>
+            <stop offset="100%" stop-color="#A95221"/>
+          </linearGradient>
+          <mask id="aM2">
+            <rect width="36" height="36" fill="white"/>
+            <text x="18" y="25.5" text-anchor="middle" font-family="Fraunces, Georgia, serif" font-weight="700" font-size="22" fill="black">F</text>
+          </mask>
+        </defs>
+        <circle cx="18" cy="18" r="17" fill="url(#aG2)" mask="url(#aM2)"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ============================== B · WORDMARK PURA (hero tipográfico) ============================== -->
+  <div class="card">
+    <h3>Opção B</h3>
+    <div class="name">Só wordmark · editorial</div>
+    <p class="desc">Sem mark. "FORJA" vira o herói tipográfico, com um filete dourado embaixo e o slogan integrado. Estilo masthead de revista (NYT, MIT Tech Review). Quietude e autoridade.</p>
+    <div class="stage">
+      <div style="display:flex; flex-direction:column; align-items:flex-start; gap:8px">
+        <div style="font-family: 'Fraunces', Georgia, serif; font-weight: 600; font-size: 32px; letter-spacing: 0.06em; color: var(--text); line-height: 1">FORJA</div>
+        <div style="height:1.5px; width: 70px; background: linear-gradient(90deg, #D08456, #F2BB8F 70%, transparent)"></div>
+        <div style="text-transform: uppercase; color: var(--textTer); font-weight: 600; font-size: 9.5px; letter-spacing: 0.32em; line-height: 1">Inteligência de Negócios</div>
+      </div>
+    </div>
+    <div class="sizes">
+      <div class="lbl">Compact</div>
+      <div style="display:flex; flex-direction:column; align-items:flex-start; gap:5px">
+        <div style="font-family: 'Fraunces', Georgia, serif; font-weight: 600; font-size: 18px; letter-spacing: 0.07em; color: var(--text); line-height: 1">FORJA</div>
+        <div style="text-transform: uppercase; color: var(--textTer); font-weight: 600; font-size: 8px; letter-spacing: 0.28em; line-height: 1">Inteligência de Negócios</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================== C · BIGORNA ABSTRATA + FAÍSCA ============================== -->
+  <div class="card">
+    <h3>Opção C</h3>
+    <div class="name">Bigorna abstrata</div>
+    <p class="desc">Silhueta minimalista de bigorna (base trapezoidal sólida) com uma faísca subindo. Sem F. Funciona como símbolo puro — sobrevive a renomeações. Vibe ferramenta de artesão.</p>
+    <div class="stage">
+      <div style="display:flex; align-items:center; gap:14px">
+        <svg width="36" height="36" viewBox="0 0 36 36">
+          <defs>
+            <linearGradient id="cG" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#D08456"/>
+              <stop offset="100%" stop-color="#9E4A1B"/>
+            </linearGradient>
+          </defs>
+          <!-- Bigorna: base trapezoidal larga, pescoço, topo angular -->
+          <g fill="url(#cG)">
+            <!-- Topo (chifre angular esquerdo + corpo) -->
+            <path d="M5 17 L13 13 L29 13 L31 17 L13 17 Z" />
+            <!-- Pescoço -->
+            <path d="M14 17 H22 V21 H14 Z" />
+            <!-- Base trapezoidal -->
+            <path d="M9 21 H27 L29 26 L7 26 Z" />
+          </g>
+          <!-- Faísca subindo -->
+          <path d="M18 3 L19 7 L23 8 L19 9 L18 13 L17 9 L13 8 L17 7 Z" fill="#E6A878"/>
+        </svg>
+        <div class="brand-text" style="gap:6px">
+          <div class="wordmark" style="font-size:19px; letter-spacing:0.08em">FORJA</div>
+          <div class="slogan" style="font-size:9.5px; letter-spacing:0.24em">Inteligência de Negócios</div>
+        </div>
+      </div>
+    </div>
+    <div class="sizes">
+      <div class="lbl">Compact 24px</div>
+      <svg width="24" height="24" viewBox="0 0 36 36">
+        <defs>
+          <linearGradient id="cG2" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#D08456"/>
+            <stop offset="100%" stop-color="#9E4A1B"/>
+          </linearGradient>
+        </defs>
+        <g fill="url(#cG2)">
+          <path d="M5 17 L13 13 L29 13 L31 17 L13 17 Z" />
+          <path d="M14 17 H22 V21 H14 Z" />
+          <path d="M9 21 H27 L29 26 L7 26 Z" />
+        </g>
+        <path d="M18 3 L19 7 L23 8 L19 9 L18 13 L17 9 L13 8 L17 7 Z" fill="#E6A878"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ============================== D · MONOGRAMA SERIFADO PURO ============================== -->
+  <div class="card">
+    <h3>Opção D</h3>
+    <div class="name">F serifado · puro</div>
+    <p class="desc">Só um F em Fraunces bold com gradiente direto na letra. Sem container, sem ornamento, sem faísca. O charme está só na tipografia. Quietíssimo, parece marca de joia.</p>
+    <div class="stage">
+      <div style="display:flex; align-items:center; gap:16px">
+        <svg width="38" height="44" viewBox="0 0 38 44">
+          <defs>
+            <linearGradient id="dG" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#F2BB8F"/>
+              <stop offset="100%" stop-color="#9E4A1B"/>
+            </linearGradient>
+          </defs>
+          <text x="2" y="36" font-family="Fraunces, Georgia, serif" font-weight="700" font-size="44" fill="url(#dG)">F</text>
+        </svg>
+        <div class="brand-text" style="gap:6px">
+          <div class="wordmark" style="font-size:19px; letter-spacing:0.08em">FORJA</div>
+          <div class="slogan" style="font-size:9.5px; letter-spacing:0.24em">Inteligência de Negócios</div>
+        </div>
+      </div>
+    </div>
+    <div class="sizes">
+      <div class="lbl">Compact</div>
+      <svg width="20" height="24" viewBox="0 0 20 24">
+        <defs>
+          <linearGradient id="dG2" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#F2BB8F"/>
+            <stop offset="100%" stop-color="#9E4A1B"/>
+          </linearGradient>
+        </defs>
+        <text x="1" y="20" font-family="Fraunces, Georgia, serif" font-weight="700" font-size="24" fill="url(#dG2)">F</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ============================== E · FAÍSCA SOLO ============================== -->
+  <div class="card">
+    <h3>Opção E</h3>
+    <div class="name">Faísca solo</div>
+    <p class="desc">Sem F, sem bigorna. Só uma faísca de 4 pontas (sparkle) em gradiente. Conecta o conceito de forja (a centelha) com vibe code (a faísca da AI). Atemporal e contemporâneo ao mesmo tempo.</p>
+    <div class="stage">
+      <div style="display:flex; align-items:center; gap:14px">
+        <svg width="34" height="34" viewBox="0 0 36 36">
+          <defs>
+            <linearGradient id="eG" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#F2BB8F"/>
+              <stop offset="100%" stop-color="#9E4A1B"/>
+            </linearGradient>
+          </defs>
+          <!-- Faísca elegante: vertical alongada -->
+          <path d="M18 2 L19.8 16 L34 18 L19.8 20 L18 34 L16.2 20 L2 18 L16.2 16 Z" fill="url(#eG)"/>
+        </svg>
+        <div class="brand-text" style="gap:6px">
+          <div class="wordmark" style="font-size:19px; letter-spacing:0.08em">FORJA</div>
+          <div class="slogan" style="font-size:9.5px; letter-spacing:0.24em">Inteligência de Negócios</div>
+        </div>
+      </div>
+    </div>
+    <div class="sizes">
+      <div class="lbl">Compact 22px</div>
+      <svg width="22" height="22" viewBox="0 0 36 36">
+        <defs>
+          <linearGradient id="eG2" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#F2BB8F"/>
+            <stop offset="100%" stop-color="#9E4A1B"/>
+          </linearGradient>
+        </defs>
+        <path d="M18 2 L19.8 16 L34 18 L19.8 20 L18 34 L16.2 20 L2 18 L16.2 16 Z" fill="url(#eG2)"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ============================== F · LOSANGO COM F SERIFADO ============================== -->
+  <div class="card">
+    <h3>Opção F</h3>
+    <div class="name">Losango forjado</div>
+    <p class="desc">Quadrado rotacionado 45° (losango) preenchido em gradiente, com F serifado branco centralizado. Forma incomum quebra o "ícone quadrado de app" e ganha personalidade — vibe medalha/insígnia.</p>
+    <div class="stage">
+      <div style="display:flex; align-items:center; gap:16px">
+        <svg width="40" height="40" viewBox="0 0 40 40">
+          <defs>
+            <linearGradient id="fG" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#F2BB8F"/>
+              <stop offset="100%" stop-color="#9E4A1B"/>
+            </linearGradient>
+          </defs>
+          <g transform="rotate(45 20 20)">
+            <rect x="6" y="6" width="28" height="28" rx="3" fill="url(#fG)"/>
+          </g>
+          <text x="20" y="26" text-anchor="middle" font-family="Fraunces, Georgia, serif" font-weight="700" font-size="20" fill="#FFFFFF" style="letter-spacing: 0">F</text>
+        </svg>
+        <div class="brand-text" style="gap:6px">
+          <div class="wordmark" style="font-size:19px; letter-spacing:0.08em">FORJA</div>
+          <div class="slogan" style="font-size:9.5px; letter-spacing:0.24em">Inteligência de Negócios</div>
+        </div>
+      </div>
+    </div>
+    <div class="sizes">
+      <div class="lbl">Compact 26px</div>
+      <svg width="26" height="26" viewBox="0 0 40 40">
+        <defs>
+          <linearGradient id="fG2" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#F2BB8F"/>
+            <stop offset="100%" stop-color="#9E4A1B"/>
+          </linearGradient>
+        </defs>
+        <g transform="rotate(45 20 20)">
+          <rect x="6" y="6" width="28" height="28" rx="3" fill="url(#fG2)"/>
+        </g>
+        <text x="20" y="26" text-anchor="middle" font-family="Fraunces, Georgia, serif" font-weight="700" font-size="20" fill="#FFFFFF">F</text>
+      </svg>
+    </div>
+  </div>
+
+</div>
+
+<div style="margin-top: 56px; padding: 24px; background: var(--bgSoft); border-radius: 12px; max-width: 1180px; color: var(--textSec); font-size: 13px; line-height: 1.6">
+  <strong style="color: var(--text); font-family: 'Fraunces', Georgia, serif">Minha leitura (use ou ignore):</strong>
+  &nbsp;<strong>B</strong> (wordmark editorial) é a opção mais sofisticada — quem vê pensa "isso é coisa séria". 
+  <strong>C</strong> (bigorna + faísca) é a mais ousada e única, mas tem risco de virar "logo de marcenaria". 
+  <strong>E</strong> (faísca solo) é a mais moderna e flexível. 
+  <strong>A</strong> (selo) é o meio-termo seguro entre marca e símbolo. 
+  Eu apostaria em <strong>B</strong> pro app principal e <strong>E</strong> como mark companion onde precisar de um ícone (favicon, app icon, marca d'água).
+</div>
+
+</body>
+</html>

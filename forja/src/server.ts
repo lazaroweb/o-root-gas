@@ -34,14 +34,28 @@ interface SheetSchema {
 }
 
 const SCHEMA: SheetSchema[] = [
-  { name: 'Sistemas', columns: ['id', 'nome', 'codinome', 'estagio', 'proposito', 'stack', 'urlProd', 'scoreSaude', 'repoUrl', 'scriptId', 'webAppUrl', 'dominioCustomizado', 'saudeBreakdown', 'saudeCalculadaEm', 'removidoNoGas', 'removidoNoGasEm'] },
+  { name: 'Sistemas', columns: ['id', 'nome', 'codinome', 'estagio', 'proposito', 'stack', 'urlProd', 'scoreSaude', 'repoUrl', 'scriptId', 'webAppUrl', 'dominioCustomizado', 'saudeBreakdown', 'saudeCalculadaEm', 'removidoNoGas', 'removidoNoGasEm', 'fluxoValidado'] },
   { name: 'Usuarios', columns: ['id', 'email', 'nome', 'papel', 'ativo', 'criadoEm', 'criadoPor'] },
   { name: 'Recursos', columns: ['id', 'sistemaId', 'tipo', 'chave', 'descricao', 'link'] },
   { name: 'Decisoes', columns: ['id', 'sistemaId', 'data', 'titulo', 'decisao', 'justificativa', 'status', 'prioridade', 'tags', 'estimativa'] },
-  { name: 'Riscos', columns: ['id', 'sistemaId', 'area', 'descricao', 'gravidade', 'historicoIncidentes'] },
-  { name: 'Ideias', columns: ['id', 'titulo', 'descricao', 'notaImpacto', 'notaEsforco', 'estado'] },
+  { name: 'Riscos', columns: ['id', 'sistemaId', 'area', 'descricao', 'gravidade', 'historicoIncidentes', 'status'] },
+  // Ideias = "a faísca". `tipo` separa duas naturezas: 'sistema' (faísca de
+  // produto novo → vira Sistema via Gênese, comportamento legado/default) e
+  // 'melhoria' (incremento num sistema que já existe → vira item de Backlog).
+  // `sistemaId` só é usado quando tipo='melhoria' (vazio = ainda não destinada).
+  { name: 'Ideias', columns: ['id', 'titulo', 'descricao', 'notaImpacto', 'notaEsforco', 'estado', 'tipo', 'sistemaId', 'prioridade', 'criadoEm', 'atualizadoEm'] },
   { name: 'Oportunidades', columns: ['id', 'titulo', 'pessoaId', 'valorEstimado', 'estado', 'proximoPasso'] },
-  { name: 'Pessoas', columns: ['id', 'nome', 'contato', 'papel', 'notas'] },
+  { name: 'Pessoas', columns: [
+    'id', 'nome', 'contato', 'papel', 'notas', 'email',
+    // Pessoa de contato
+    'nomeContato', 'cargo', 'telefone',
+    // Empresa
+    'empresa', 'cnpj', 'segmento', 'cidade', 'uf', 'site', 'instagram',
+    // Negócio
+    'faturamentoFaixa', 'funcionariosFaixa', 'tempoOperacaoAnos',
+    // Financeiro/Comercial
+    'ticketPrevisto', 'statusComercial', 'origemContato', 'proximaAcao',
+  ] },
   { name: 'Custos', columns: ['id', 'sistemaId', 'fornecedor', 'valor', 'recorrencia', 'proximaCobranca', 'categoria'] },
   // FinEmpresaDespesas (v1.15): livro-caixa MENSAL de despesas avulsas da empresa
   // (contas, recibos, notas) — separado dos `Custos` recorrentes. `competencia`
@@ -49,7 +63,7 @@ const SCHEMA: SheetSchema[] = [
   // 'agendado'. `sistemaId` vincula opcionalmente a um app. `origem` 'manual'|
   // 'import' e `documento` guarda o nome do PDF importado pra rastreabilidade.
   { name: 'FinEmpresaDespesas', columns: ['id', 'data', 'competencia', 'fornecedor', 'descricao', 'categoria', 'valor', 'sistemaId', 'status', 'formaPagamento', 'origem', 'documento', 'notas', 'criadoEm', 'atualizadoEm'] },
-  { name: 'Pulsos', columns: ['id', 'sistemaId', 'urlCheck', 'ultimoStatus', 'latenciaMs'] },
+  { name: 'Pulsos', columns: ['id', 'sistemaId', 'urlCheck', 'ultimoStatus', 'latenciaMs', 'verificadoEm'] },
   { name: 'Timeline', columns: ['id', 'sistemaId', 'data', 'tipo', 'texto'] },
   { name: 'Alertas', columns: ['id', 'tipo', 'severidade', 'titulo', 'mensagem', 'sistemaId', 'criadoEm', 'lidoEm', 'dedupeKey', 'link'] },
   // ─── Novas entidades (Fase 1+) ─────────────────────────────────────────────
@@ -77,17 +91,50 @@ const SCHEMA: SheetSchema[] = [
   { name: 'Diagramas', columns: ['id', 'sistemaId', 'ideiaId', 'tipo', 'titulo', 'mermaid', 'data', 'origem', 'referencia', 'modeloUsado', 'parseAviso'] },
   { name: 'Blueprints', columns: ['id', 'ideiaId', 'sistemaId', 'titulo', 'conteudoMd', 'promptsJson', 'data', 'origem', 'referencia', 'modeloUsado', 'parseAviso'] },
   { name: 'Entrevistas', columns: ['id', 'pessoaId', 'data', 'tipo', 'transcricao', 'resumoIA', 'requisitos'] },
+  // Discovery: roteiro estruturado (perguntas com tipo de campo) salvo por cliente.
+  // Vira formulário público quando publicado (token). perguntasJson = blocos.
+  { name: 'DiscoveryForms', columns: ['id', 'pessoaId', 'titulo', 'segmento', 'perguntasJson', 'token', 'status', 'criadoEm', 'publicadoEm'] },
+  // Respostas do formulário público, casadas ao cliente. score = oportunidade 0-100.
+  { name: 'DiscoveryRespostas', columns: ['id', 'formId', 'pessoaId', 'emailRespondente', 'nome', 'respostasJson', 'ferramentasJson', 'querAmostra', 'agendaPref', 'score', 'scoreBreakdownJson', 'criadoEm'] },
   { name: 'Processos', columns: ['id', 'pessoaId', 'sistemaId', 'nome', 'tipo', 'mermaid', 'notas'] },
   { name: 'Conselho', columns: ['id', 'contexto', 'persona', 'parecer', 'sintese', 'data'] },
   { name: 'Auditorias', columns: ['id', 'sistemaId', 'criadoEm', 'modeloUsado', 'duracaoMs', 'scoreNoMomento', 'numFindings', 'payloadJson', 'fontesJson', 'registrosJson'] },
   // `traducaoPt`: cache JSON da tradução pt-BR ({conteudo, descricao, idioma, em}).
   // Persistido pra não re-gastar tokens. Limpo quando o `conteudo` muda (reimport/edit).
-  { name: 'Skills', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt'] },
+  // `descricaoPt`: cache leve da descrição traduzida pt-BR (independente de
+  // `traducaoPt`, que guarda a tradução completa conteúdo+descrição do drawer).
+  // `tipoIA`: tema de alto nível inferido por IA a partir de nome+descrição
+  // (Design, Frontend, Backend...), usado pra agrupar quando não há categoria.
+  // `adaptacoes`: cache JSON { [ambiente]: {conteudo, em} } das adaptações por IA
+  // pra export parametrizado — evita re-gastar tokens no mesmo ambiente.
+  { name: 'Skills', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes'] },
+  // SkillFontes: metadados das "pastas" de skills. `chave` é o prefixo usado em
+  // Skills.fonte ("<chave>/<skill>"); `nome`/`descricao`/`cor` são editáveis.
+  { name: 'SkillFontes', columns: ['id', 'chave', 'nome', 'descricao', 'cor', 'criadoEm', 'atualizadoEm'] },
   { name: 'Provedores', columns: ['id', 'nome', 'categoria', 'urlSite', 'freeTier', 'precoBase', 'beneficios', 'limitacoes', 'idealPara', 'notas', 'status', 'tags', 'criadoEm', 'atualizadoEm'] },
   { name: 'Cofre', columns: ['id', 'label', 'categoria', 'urlRef', 'usuario', 'iv', 'cipher', 'notas', 'criadoEm', 'atualizadoEm'] },
   { name: 'Snippets', columns: ['id', 'titulo', 'descricao', 'linguagem', 'codigo', 'tags', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm'] },
   { name: 'Templates', columns: ['id', 'nome', 'descricao', 'categoria', 'conteudo', 'variaveis', 'tags', 'criadoEm', 'atualizadoEm'] },
   { name: 'Bookmarks', columns: ['id', 'titulo', 'url', 'descricao', 'categoria', 'tags', 'destacado', 'criadoEm', 'atualizadoEm'] },
+  // Estudos (seção de topo): vídeos do YouTube favoritados (metadados via oEmbed
+  // público — sem API key/OAuth) e um caderno de assuntos/dicas pra revisar.
+  { name: 'EstudoVideos', columns: ['id', 'videoId', 'url', 'titulo', 'canal', 'thumb', 'categoria', 'colecaoId', 'tags', 'nota', 'criadoEm', 'atualizadoEm'] },
+  { name: 'EstudoNotas', columns: ['id', 'titulo', 'tipo', 'descricao', 'prioridade', 'status', 'tags', 'url', 'criadoEm', 'atualizadoEm'] },
+  // Playlists do YouTube que o usuário escolheu acompanhar como "pastas" de estudo
+  // (fonte única de organização — ele já organizou no YouTube). Guarda só um
+  // snapshot de exibição; os vídeos são lidos ao vivo via API quando abre a pasta.
+  { name: 'EstudoPlaylists', columns: ['id', 'playlistId', 'titulo', 'canal', 'thumb', 'qtd', 'ordem', 'criadoEm', 'atualizadoEm'] },
+  // Rascunho de anotações por vídeo (Estúdio): texto livre que salva sozinho
+  // enquanto assiste, amarrado ao videoId. Um registro por vídeo.
+  { name: 'EstudoVideoNotas', columns: ['id', 'videoId', 'texto', 'criadoEm', 'atualizadoEm'] },
+  // Histórico do Estúdio: últimos vídeos abertos (um por videoId, move pro topo
+  // quando reaberto). Usado no "Continuar assistindo". Podado pra não crescer.
+  { name: 'EstudoHistorico', columns: ['id', 'videoId', 'titulo', 'canal', 'thumb', 'url', 'visto', 'criadoEm'] },
+  // Trilhas de estudo: um tópico (ex.: "Agents") com objetivo, status e cor.
+  { name: 'EstudoTrilhas', columns: ['id', 'titulo', 'objetivo', 'status', 'prioridade', 'cor', 'ordem', 'criadoEm', 'atualizadoEm'] },
+  // Itens de uma trilha (o "plano"): vídeos (do YouTube) ou tarefas/notas, com
+  // checkbox de concluído pra alimentar o progresso.
+  { name: 'EstudoTrilhaItens', columns: ['id', 'trilhaId', 'tipo', 'titulo', 'descricao', 'videoId', 'url', 'canal', 'thumb', 'feito', 'ordem', 'criadoEm', 'atualizadoEm'] },
   // DriveConnectors (Atelier → Driver): registro das contas/nuvens do usuário.
   // Guarda APENAS metadados (provedor, email/rótulo, status) — NUNCA senha. A
   // conexão real (OAuth) é por provedor e os tokens, quando houver, ficam no
@@ -100,7 +147,10 @@ const SCHEMA: SheetSchema[] = [
   // `logins` (append v1.46): JSON [{email,rotulo}] — várias contas/e-mails no mesmo
   // serviço (ex.: Manus pessoal + trabalho). `email`/`rotulo` ficam como o 1º login
   // (back-compat). Append-only: nunca reordenar (a migração só reescreve o header).
-  { name: 'Contas', columns: ['id', 'categoria', 'servico', 'rotulo', 'email', 'url', 'plano', 'tipoCobranca', 'custo', 'moeda', 'formaPagamento', 'proximaCobranca', 'status', 'temSegredo', 'segredoLabel', 'tags', 'notas', 'criadoEm', 'atualizadoEm', 'logins'] },
+  // `recEmail`/`recTelefone`/`recNotas` (append v1.53): dados de recuperação da
+  // conta (e-mail/telefone de recuperação, códigos de backup) — base do relatório
+  // que ajuda a achar/atualizar antes de cancelar um e-mail/telefone antigo.
+  { name: 'Contas', columns: ['id', 'categoria', 'servico', 'rotulo', 'email', 'url', 'plano', 'tipoCobranca', 'custo', 'moeda', 'formaPagamento', 'proximaCobranca', 'status', 'temSegredo', 'segredoLabel', 'tags', 'notas', 'criadoEm', 'atualizadoEm', 'logins', 'recEmail', 'recTelefone', 'recNotas'] },
   // ─── Finanças pessoais (v1.3) ──────────────────────────────────────────────
   // FinPessoalLancamentos: cada despesa/entrada pessoal. `valor` sempre positivo
   // — o `tipo` ('despesa'|'entrada') é quem dita o sinal nos cálculos.
@@ -249,7 +299,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.46-contas-logins';
+const SCHEMA_VERSION = 'v1.63-pessoa-ficha-rica';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -639,6 +689,200 @@ function updateSistema(id: string, data: Record<string, unknown>): ServerResult 
     return { ok: true, data: updated };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atualizar sistema' };
+  }
+}
+
+// slug pra casar nome de sistema → nome de repo (lowercase, sem acento, hifens).
+function _slugSistema(s: string): string {
+  return String(s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+// Conector em lote: dado um owner/org do GitHub e o campo base (nome|codinome),
+// gera o candidato `github.com/<owner>/<slug>` pra cada sistema SEM repoUrl e
+// verifica no GitHub quais existem de verdade (não chuta nada — o front mostra
+// preview editável antes de aplicar).
+function sugerirReposGitHub(org: string, campoSlug?: string): ServerResult {
+  try {
+    const owner = String(org || '').trim()
+      .replace(/^https?:\/\/github\.com\//i, '')
+      .replace(/^\/+|\/+$/g, '')
+      .split('/')[0];
+    if (!owner) return { ok: false, error: 'Informe a organização/owner do GitHub.' };
+    const campo = campoSlug === 'codinome' ? 'codinome' : 'nome';
+
+    const sistemas = (dbGetAll('Sistemas') as Array<Record<string, unknown>>)
+      .filter((s) => !String(s.repoUrl || '').trim() && !String(s.removidoNoGas || '').trim());
+
+    const base = sistemas.map((s) => {
+      const fonte = String(s[campo] || s.nome || '');
+      const slug = _slugSistema(fonte);
+      return {
+        sistemaId: String(s.id || ''),
+        nome: String(s.nome || ''),
+        slug,
+        repoUrl: slug ? `https://github.com/${owner}/${slug}` : '',
+        existe: null as boolean | null,
+      };
+    }).filter((x) => x.slug);
+
+    const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+    if (!token) return { ok: true, data: { itens: base, owner, campo, semToken: true } };
+
+    const headers = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'User-Agent': 'FORJA' };
+    const requests = base.map((b) => ({ url: `https://api.github.com/repos/${owner}/${b.slug}`, headers, muteHttpExceptions: true }));
+    for (let i = 0; i < requests.length; i += 50) {
+      const slice = requests.slice(i, i + 50);
+      const res = UrlFetchApp.fetchAll(slice);
+      for (let j = 0; j < res.length; j++) base[i + j].existe = res[j].getResponseCode() === 200;
+    }
+    return { ok: true, data: { itens: base, owner, campo, semToken: false } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao sugerir repositórios' };
+  }
+}
+
+// Aplica em lote os repoUrls confirmados pelo usuário.
+function conectarReposEmLote(itens: Array<{ sistemaId: string; repoUrl: string }>): ServerResult {
+  try {
+    const lista = Array.isArray(itens) ? itens : [];
+    let conectados = 0;
+    for (const it of lista) {
+      const id = String((it && it.sistemaId) || '').trim();
+      const url = String((it && it.repoUrl) || '').trim();
+      if (!id || !url) continue;
+      const upd = dbUpdate('Sistemas', id, { repoUrl: url });
+      if (upd) conectados++;
+    }
+    return { ok: true, data: { conectados } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao conectar repositórios' };
+  }
+}
+
+// Normaliza texto pra comparação de duplicados (lowercase, sem acento, espaços
+// colapsados). Usado pra impedir cartões/riscos repetidos ao re-rodar auditoria.
+function _normDedup(s: string): string {
+  return String(s || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+// ─── Graduação de estágio: portão Forja → Têmpera ─────────────────────────────
+// Checklist objetivo de "critérios de saída" do estágio Forja. 4 dos 5 critérios
+// são auto-avaliados a partir de dados que a Forja já guarda; "fluxo validado" é
+// um toggle manual (não há sinal automático pra "o caminho crítico funciona").
+// Origem: backlog A Origem v3 #3 — vale pra TODOS os sistemas, não só um.
+
+interface CriterioGraduacao {
+  id: string;
+  label: string;
+  auto: boolean;
+  ok: boolean;
+  detalhe: string;
+}
+
+function graduacaoStatus(sistemaId: string): ServerResult {
+  try {
+    initDatabase();
+    const sistema = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => s.id === sistemaId);
+    if (!sistema) return { ok: false, error: 'Sistema não encontrado' };
+
+    const temUrl = !!(sistema.urlProd || sistema.dominioCustomizado || sistema.webAppUrl);
+    const temProposito = !!(sistema.proposito && String(sistema.proposito).trim().length > 8);
+    const temStack = !!(sistema.stack && String(sistema.stack).trim());
+    const temRepo = !!sistema.repoUrl;
+    const dossie = temProposito && temStack && temRepo;
+    const faltaDossie = [
+      !temProposito ? 'propósito' : '',
+      !temStack ? 'stack' : '',
+      !temRepo ? 'repositório' : '',
+    ].filter(Boolean).join(', ');
+
+    const custos = (dbGetAll('Custos') as Array<Record<string, unknown>>).filter((c) => String(c.sistemaId || '') === sistemaId);
+    const riscos = (dbGetAll('Riscos') as Array<Record<string, unknown>>).filter((r) => String(r.sistemaId || '') === sistemaId);
+    const decisoes = (dbGetAll('Decisoes') as Array<Record<string, unknown>>).filter((d) => String(d.sistemaId || '') === sistemaId);
+    const govOk = riscos.length > 0 && decisoes.length > 0;
+
+    const fluxo = String(sistema.fluxoValidado || '') === 'sim';
+
+    const criterios: CriterioGraduacao[] = [
+      {
+        id: 'acesso', label: 'Deploy no ar com acesso', auto: true, ok: temUrl,
+        detalhe: temUrl ? String(sistema.dominioCustomizado || sistema.urlProd || sistema.webAppUrl) : 'Preencha a URL de produção (ou domínio) na ficha do sistema.',
+      },
+      {
+        id: 'dossie', label: 'Dossiê técnico mínimo', auto: true, ok: dossie,
+        detalhe: dossie ? 'Propósito, stack e repositório preenchidos.' : `Falta: ${faltaDossie}.`,
+      },
+      {
+        id: 'custos', label: 'Custos mapeados', auto: true, ok: custos.length > 0,
+        detalhe: custos.length > 0 ? `${custos.length} item(ns) de custo cadastrado(s).` : 'Cadastre ao menos 1 custo (hospedagem/LLM/domínio).',
+      },
+      {
+        id: 'governanca', label: 'Riscos e decisões registrados', auto: true, ok: govOk,
+        detalhe: govOk ? `${riscos.length} risco(s) e ${decisoes.length} decisão(ões).` : `Registre ≥1 risco e ≥1 decisão (hoje: ${riscos.length} risco(s), ${decisoes.length} decisão(ões)).`,
+      },
+      {
+        id: 'fluxo', label: 'Fluxo principal validado ponta a ponta', auto: false, ok: fluxo,
+        detalhe: fluxo ? 'Marcado como validado.' : 'Teste o caminho crítico e marque manualmente.',
+      },
+    ];
+
+    const prontos = criterios.filter((c) => c.ok).length;
+    return {
+      ok: true,
+      data: {
+        estagio: String(sistema.estagio || ''),
+        criterios,
+        prontos,
+        total: criterios.length,
+        podeGraduar: prontos === criterios.length,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao calcular graduação' };
+  }
+}
+
+function setFluxoValidado(sistemaId: string, valor: boolean): ServerResult {
+  try {
+    const updated = dbUpdate('Sistemas', sistemaId, { fluxoValidado: valor ? 'sim' : '' });
+    if (!updated) return { ok: false, error: 'Sistema não encontrado' };
+    return { ok: true, data: { fluxoValidado: !!valor } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar' };
+  }
+}
+
+function graduarSistema(sistemaId: string): ServerResult {
+  try {
+    const status = graduacaoStatus(sistemaId);
+    if (!status.ok) return status;
+    const d = status.data as { podeGraduar: boolean; estagio: string };
+    if (d.estagio !== 'forja') return { ok: false, error: 'Só dá pra graduar sistemas no estágio Forja.' };
+    if (!d.podeGraduar) return { ok: false, error: 'Ainda faltam critérios pra graduar pra Têmpera.' };
+
+    const updated = dbUpdate('Sistemas', sistemaId, { estagio: 'tempera' });
+    if (!updated) return { ok: false, error: 'Sistema não encontrado' };
+
+    try {
+      dbCreate('Timeline', {
+        sistemaId,
+        data: new Date().toISOString().split('T')[0],
+        tipo: 'marco',
+        texto: 'Graduado de Forja → Têmpera (checklist de saída completo).',
+      });
+    } catch (_e) { /* timeline é opcional, não bloqueia graduação */ }
+
+    return { ok: true, data: { estagio: 'tempera' } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao graduar' };
   }
 }
 
@@ -1627,11 +1871,17 @@ function gerarPromptBacklog(sistemaId: string): ServerResult {
 
 // ─── Riscos (Mapa de Quebra) ─────────────────────────────────────────────────
 
+// Um risco está "ativo" enquanto não for mitigado. Riscos mitigados (resolvidos
+// por um diff, via auditoria incremental) somem do mapa e param de pesar na saúde.
+function _riscoAtivo(r: Record<string, unknown>): boolean {
+  return String(r.status || '').toLowerCase().trim() !== 'mitigado';
+}
+
 function getRiscosBySistema(sistemaId: string): ServerResult {
   try {
     const alvo = String(sistemaId || '').trim();
     const riscos = (dbGetAll('Riscos') as Array<Record<string, unknown>>)
-      .filter((r) => String(r.sistemaId || '').trim() === alvo);
+      .filter((r) => String(r.sistemaId || '').trim() === alvo && _riscoAtivo(r));
     return { ok: true, data: riscos };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar riscos' };
@@ -1654,6 +1904,14 @@ function updateRisco(id: string, data: Record<string, unknown>): ServerResult {
     return { ok: true, data: updated };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atualizar risco' };
+  }
+}
+
+function deleteRisco(id: string): ServerResult {
+  try {
+    return dbDelete('Riscos', id) ? { ok: true } : { ok: false, error: 'Risco não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar risco' };
   }
 }
 
@@ -1771,7 +2029,7 @@ function createIdeia(data: Record<string, unknown>): ServerResult {
 
 function updateIdeia(id: string, data: Record<string, unknown>): ServerResult {
   try {
-    const updated = dbUpdate('Ideias', id, data);
+    const updated = dbUpdate('Ideias', id, { ...data, atualizadoEm: new Date().toISOString() });
     if (!updated) return { ok: false, error: 'Ideia não encontrada' };
     return { ok: true, data: updated };
   } catch (e: unknown) {
@@ -1779,14 +2037,194 @@ function updateIdeia(id: string, data: Record<string, unknown>): ServerResult {
   }
 }
 
+// ─── Ideias do tipo "melhoria" (incremento num sistema existente) ─────────────
+//
+// Fluxo: capturei uma faísca de melhoria amarrada a um sistema → ela vive na
+// "faixa Ideias" do Backlog daquele sistema (sem poluir o acionável) → quando
+// refino, a IA estrutura num item de backlog e checa duplicado contra o que já
+// existe → confirmo e vira um item "A fazer".
+
+// Lista melhorias pendentes (não promovidas/descartadas) de um sistema.
+// Aplica o mesmo trim defensivo do Backlog (sistemaId pode ter espaço no Sheets).
+function getMelhoriasBySistema(sistemaId: string): ServerResult {
+  try {
+    const alvo = String(sistemaId || '').trim();
+    const todas = dbGetAll('Ideias') as Array<Record<string, unknown>>;
+    const itens = todas.filter((i) => {
+      if (String(i.tipo || '') !== 'melhoria') return false;
+      if (String(i.sistemaId || '').trim() !== alvo) return false;
+      const estado = String(i.estado || 'nova').toLowerCase();
+      return estado !== 'promovida' && estado !== 'descartada';
+    });
+    // Mais recentes primeiro (criadoEm desc; legado sem data vai pro fim).
+    itens.sort((a, b) => String(b.criadoEm || '').localeCompare(String(a.criadoEm || '')));
+    return { ok: true, data: itens };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar melhorias' };
+  }
+}
+
+// Refina uma ideia/melhoria em um item de backlog estruturado E checa duplicado
+// contra as decisões existentes do sistema. NÃO grava nada — só devolve a
+// proposta + alerta de duplicado pra UI confirmar (passo anti-redundância).
+function refinarIdeiaMelhoria(payload: { ideiaId: string }): ServerResult {
+  try {
+    if (!payload || !payload.ideiaId) return { ok: false, error: 'ideiaId é obrigatório' };
+    const ideia = dbGetById('Ideias', payload.ideiaId) as Record<string, unknown> | null;
+    if (!ideia) return { ok: false, error: 'Ideia não encontrada' };
+
+    const sistemaId = String(ideia.sistemaId || '').trim();
+    const sistema = sistemaId ? dbGetById('Sistemas', sistemaId) as Record<string, unknown> | null : null;
+    const nomeSistema = sistema ? String(sistema.nome || '') : '';
+
+    // Backlog/decisões existentes do sistema pra dedup.
+    const existentes = (dbGetAll('Decisoes') as Array<Record<string, unknown>>)
+      .filter((d) => String(d.sistemaId || '').trim() === sistemaId)
+      .map((d) => ({ id: String(d.id), titulo: String(d.titulo || ''), resumo: String(d.decisao || '').slice(0, 160) }));
+
+    const listaExistentes = existentes.length
+      ? existentes.map((d, i) => `${i + 1}. [${d.id}] ${d.titulo} — ${d.resumo}`).join('\n')
+      : '(nenhum item de backlog ainda)';
+
+    const sys = 'Você é um PM técnico. Transforme uma ideia crua de melhoria em UM item de backlog acionável '
+      + 'e verifique se ela já não existe no backlog atual. Responda SOMENTE com JSON válido, sem markdown, no formato exato:\n'
+      + '{"titulo": string, "decisao": string, "justificativa": string, "prioridade": "alta"|"media"|"baixa", '
+      + '"tags": string, "estimativa": string, "duplicado": {"id": string|null, "titulo": string|null, "motivo": string|null}}\n'
+      + '- "decisao": o que precisa ser feito, objetivo e direto.\n'
+      + '- "justificativa": por que importa.\n'
+      + '- "tags": 1-3 palavras separadas por vírgula.\n'
+      + '- "estimativa": chute curto tipo "2h", "1d" (ou "" se não der pra estimar).\n'
+      + '- "duplicado": se a ideia for essencialmente igual a um item existente, preencha id/titulo/motivo; senão use null em todos.';
+
+    const userMsg = `Sistema: ${nomeSistema || '(sem nome)'}\n\n`
+      + `Ideia de melhoria:\nTítulo: ${String(ideia.titulo || '')}\nDescrição: ${String(ideia.descricao || '')}\n\n`
+      + `Backlog/decisões já existentes neste sistema:\n${listaExistentes}`;
+
+    const resposta = forjaCallLLM(
+      [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
+      900, undefined, 'acoes',
+    );
+    const parsed = extrairJson(resposta) as Record<string, unknown>;
+    const dupRaw = (parsed.duplicado || {}) as Record<string, unknown>;
+    const duplicado = dupRaw && dupRaw.id
+      ? { id: String(dupRaw.id), titulo: String(dupRaw.titulo || ''), motivo: String(dupRaw.motivo || '') }
+      : null;
+
+    const proposta = {
+      titulo: String(parsed.titulo || ideia.titulo || ''),
+      decisao: String(parsed.decisao || ideia.descricao || ''),
+      justificativa: String(parsed.justificativa || ''),
+      prioridade: ['alta', 'media', 'baixa'].includes(String(parsed.prioridade)) ? String(parsed.prioridade) : 'media',
+      tags: String(parsed.tags || ''),
+      estimativa: String(parsed.estimativa || ''),
+    };
+
+    return { ok: true, data: { proposta, duplicado, sistemaId, nomeSistema } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao refinar ideia' };
+  }
+}
+
+// Confirma a promoção: cria o item de backlog (Decisoes, status 'backlog') a
+// partir da proposta (possivelmente editada na UI) e marca a ideia como
+// 'promovida' (preserva o histórico, some das listas ativas).
+function confirmarPromocaoIdeia(payload: {
+  ideiaId: string;
+  sistemaId: string;
+  item: { titulo: string; decisao: string; justificativa?: string; prioridade?: string; tags?: string; estimativa?: string };
+}): ServerResult {
+  try {
+    if (!payload || !payload.ideiaId) return { ok: false, error: 'ideiaId é obrigatório' };
+    const sistemaId = String(payload.sistemaId || '').trim();
+    if (!sistemaId) return { ok: false, error: 'Destine a ideia a um sistema antes de promover' };
+    const item = payload.item || ({} as Record<string, unknown>);
+    if (!item.titulo) return { ok: false, error: 'Título é obrigatório' };
+
+    const created = dbCreate('Decisoes', {
+      sistemaId,
+      data: new Date().toISOString().slice(0, 10),
+      titulo: String(item.titulo),
+      decisao: String(item.decisao || ''),
+      justificativa: String(item.justificativa || ''),
+      status: 'backlog',
+      prioridade: String(item.prioridade || 'media'),
+      tags: String(item.tags || ''),
+      estimativa: String(item.estimativa || ''),
+    });
+
+    dbUpdate('Ideias', payload.ideiaId, { estado: 'promovida', atualizadoEm: new Date().toISOString() });
+
+    return { ok: true, data: { decisao: created } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao promover ideia' };
+  }
+}
+
 // ─── Pessoas (Mini-CRM) ─────────────────────────────────────────────────────
 
 function getPessoas(): ServerResult {
   try {
-    return { ok: true, data: dbGetAll('Pessoas') };
+    const pessoas = dbGetAll('Pessoas') as Array<Record<string, unknown>>;
+    const todasReceitas = dbGetAll('Receitas') as Array<Record<string, unknown>>;
+
+    // Indexar receitas por pessoaId pra um pass O(N)
+    const porPessoa = new Map<string, Array<Record<string, unknown>>>();
+    for (const r of todasReceitas) {
+      const pid = String(r.pessoaId || '');
+      if (!pid) continue;
+      const arr = porPessoa.get(pid) || [];
+      arr.push(r);
+      porPessoa.set(pid, arr);
+    }
+
+    // Enriquece cada pessoa com `saude` + `pendenciasQtd` derivados.
+    // O cálculo é o mesmo de snapshotCliente, só mais enxuto (não monta
+    // o histórico, só conta atrasadas).
+    const enriquecidas = pessoas.map((p) => {
+      const pid = String(p.id || '');
+      const recs = porPessoa.get(pid) || [];
+      const { saude, pendenciasQtd, pendenciasValor } = _calcularSaudePessoa(recs);
+      return { ...p, saude, pendenciasQtd, pendenciasValor };
+    });
+
+    return { ok: true, data: enriquecidas };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar pessoas' };
   }
+}
+
+// Calcula a saúde financeira de uma pessoa a partir das suas receitas.
+// "Atrasada" = a próximaCobranca é uma data no passado E a assinatura está
+// ativa (foi pra cobrar e não foi). Critérios:
+//   • em_dia       — nenhuma receita atrasada
+//   • atencao      — 1+ atrasada com no máx 15 dias de atraso
+//   • inadimplente — atraso > 15d OU 3+ receitas atrasadas
+//   • sem_historico— sem nenhuma receita cadastrada pra essa pessoa
+function _calcularSaudePessoa(
+  receitas: Array<Record<string, unknown>>,
+): { saude: 'em_dia' | 'atencao' | 'inadimplente' | 'sem_historico'; pendenciasQtd: number; pendenciasValor: number } {
+  if (receitas.length === 0) return { saude: 'sem_historico', pendenciasQtd: 0, pendenciasValor: 0 };
+  const hoje = Date.now();
+  let qtd = 0;
+  let valor = 0;
+  let pior = 0; // dias do atraso mais antigo
+  for (const r of receitas) {
+    const statusR = String(r.status || '').toLowerCase();
+    if (statusR !== 'ativa') continue;
+    const proximaStr = String(r.proximaCobranca || '');
+    if (!proximaStr) continue;
+    const t = new Date(proximaStr).getTime();
+    if (Number.isNaN(t) || t >= hoje) continue;
+    const dias = Math.floor((hoje - t) / 86400000);
+    qtd++;
+    valor += Number(r.valor || 0);
+    if (dias > pior) pior = dias;
+  }
+  let saude: 'em_dia' | 'atencao' | 'inadimplente' | 'sem_historico';
+  if (qtd === 0) saude = 'em_dia';
+  else if (pior > 15 || qtd >= 3) saude = 'inadimplente';
+  else saude = 'atencao';
+  return { saude, pendenciasQtd: qtd, pendenciasValor: Math.round(valor * 100) / 100 };
 }
 
 function createPessoa(data: Record<string, unknown>): ServerResult {
@@ -1933,7 +2371,7 @@ function executarPulsos(): void {
       const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
       const latencia = Date.now() - start;
       const status = response.getResponseCode();
-      dbUpdate('Pulsos', String(pulso['id']), { ultimoStatus: status, latenciaMs: latencia });
+      dbUpdate('Pulsos', String(pulso['id']), { ultimoStatus: status, latenciaMs: latencia, verificadoEm: new Date().toISOString() });
 
       // Se status >= 500, atualiza scoreSaude do sistema
       if (status >= 500) {
@@ -1956,7 +2394,7 @@ function executarPulsos(): void {
       }
     } catch {
       // URL inacessível
-      dbUpdate('Pulsos', String(pulso['id']), { ultimoStatus: 0, latenciaMs: 0 });
+      dbUpdate('Pulsos', String(pulso['id']), { ultimoStatus: 0, latenciaMs: 0, verificadoEm: new Date().toISOString() });
       const sistemaId = String(pulso['sistemaId'] || '');
       if (sistemaId) {
         dbCreate('Timeline', {
@@ -1967,6 +2405,32 @@ function executarPulsos(): void {
         });
       }
     }
+  }
+}
+
+// Checa AGORA as URLs monitoradas de um sistema (sem esperar o trigger de 15min)
+// e devolve a lista atualizada. Usado pelo botão "Verificar agora" no painel.
+function verificarPulsosSistema(sistemaId: string): ServerResult {
+  try {
+    initDatabase();
+    const pulsos = (dbGetAll('Pulsos') as Array<Record<string, unknown>>).filter((p) => String(p.sistemaId || '') === sistemaId);
+    for (const pulso of pulsos) {
+      const url = String(pulso.urlCheck || '');
+      if (!url) continue;
+      try {
+        const start = Date.now();
+        const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+        const latencia = Date.now() - start;
+        const status = response.getResponseCode();
+        dbUpdate('Pulsos', String(pulso.id), { ultimoStatus: status, latenciaMs: latencia, verificadoEm: new Date().toISOString() });
+      } catch (_e) {
+        dbUpdate('Pulsos', String(pulso.id), { ultimoStatus: 0, latenciaMs: 0, verificadoEm: new Date().toISOString() });
+      }
+    }
+    const atualizados = (dbGetAll('Pulsos') as Array<Record<string, unknown>>).filter((p) => String(p.sistemaId || '') === sistemaId);
+    return { ok: true, data: atualizados };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao verificar pulsos' };
   }
 }
 
@@ -8276,11 +8740,14 @@ const PROMPTS_PADRAO: Record<string, string> = {
     + '{"resumo":"...","dores":["..."],"objetivos":["..."],"requisitos":["..."],"perguntasAbertas":["..."],"oportunidade":"..."}\n'
     + 'O campo resumo deve ter 2-4 frases. requisitos devem ser claros e acionáveis. '
     + 'perguntasAbertas são dúvidas que ainda precisam ser respondidas em uma próxima conversa. Português do Brasil.',
-  perguntas: 'Você é um especialista em discovery de produto da FORJA. '
-    + 'Gere um roteiro de perguntas para uma entrevista de descoberta com um cliente. '
-    + 'Responda ESTRITAMENTE em JSON válido no formato: {"blocos":[{"tema":"...","perguntas":["..."]}]}. '
-    + 'Cubra: contexto/negócio, problema/dor, processo atual, expectativas/sucesso, restrições (orçamento, prazo, técnicas) e próximos passos. '
-    + 'Adapte ao segmento informado: {{segmento}}. Perguntas abertas, sem jargão técnico. Português do Brasil.',
+  perguntas: 'Você é o estrategista de discovery da FORJA — Inteligência de Negócios. '
+    + 'OBJETIVO CENTRAL: extrair TUDO sobre o SISTEMA, ferramentas e rotina que o cliente usa HOJE, para servir de base ao novo app sob medida que a Forja vai construir (em vibe code). '
+    + 'O cliente NÃO é uma empresa de software — é um negócio do segmento: {{segmento}}. Fale a língua dele, com exemplos do dia a dia dele, sem jargão técnico. '
+    + 'Priorize, em PROFUNDIDADE: (1) quais sistemas/ferramentas/planilhas/apps ele usa hoje e para quê; (2) as TELAS e funções que ele mais usa e o que faz em cada uma; (3) o que ele AMA e o que mais o irrita nessas ferramentas; (4) o que ainda é manual, repetitivo, feito no papel/WhatsApp/planilha; (5) os dados e relatórios que ele precisa ver e hoje não tem (ou tem com dificuldade); (6) como as ferramentas conversam (ou não) e onde a informação se perde/retrabalha; (7) volume e picos (clientes, atendimentos, documentos por mês); (8) a JORNADA completa, do começo ao fim de um caso típico, passo a passo; (9) o que seria mágico ter no app novo; (10) quem usaria o sistema e restrições (orçamento, prazo). '
+    + 'Faça perguntas ESPECÍFICAS que puxem respostas ricas sobre o sistema atual — nada de perguntas genéricas de manual. Sempre que possível, peça exemplos concretos ("me conta um exemplo de..."). '
+    + 'Inclua um bloco final convidando o cliente a compartilhar PRINTS/telas do sistema atual (para inspirar as funcionalidades do novo app). '
+    + 'Gere de 6 a 8 blocos temáticos, cada um com 3 a 5 perguntas, numa ordem que descortina a conversa de forma leve (do contexto ao detalhe). '
+    + 'Responda ESTRITAMENTE em JSON válido no formato: {"blocos":[{"tema":"...","perguntas":["..."]}]}. Português do Brasil.',
 };
 
 function getPromptEfetivo(key: string): string {
@@ -9329,7 +9796,7 @@ Filosofia: vibe code minimalista — premium, leve, intuitivo, fácil de usar.
 Pessoas, Sistemas, Custos, Ideias, Diagramas, Blueprints, Entrevistas, Skills, Snippets, Templates, Bookmarks, Hospedagem, Vault, Decisoes, Riscos, Oportunidades, Apis, AuditFindings, FinPessoal* (5 sheets), Codex* (2 sheets), Config.
 
 ### Estágios do ciclo de uma Ideia
-Faísca (captura) → Forja (em desenvolvimento) → Têmpera (refinamento) → Prateleira (em produção)`;
+Faísca (captura) → Forja (em desenvolvimento) → Têmpera (no ar / produção) → Prateleira (pausado/aposentado)`;
 }
 
 // Atalho que gera um blueprint usando Forja como input. Marca origem=forja-self
@@ -9635,6 +10102,267 @@ function criarIdeiaDeEntrevista(input: { id?: string; titulo?: string }): Server
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao criar ideia' };
   }
+}
+
+// ─── Discovery: roteiros estruturados + formulário público ─────────────────────
+// Leva 1 (este projeto, privado): persiste o roteiro gerado pela IA por cliente,
+// publica (gera token) e lê as respostas que o app público (Leva 2) grava na
+// mesma planilha. A base da URL pública fica em Script Property DISCOVERY_PUBLIC_URL.
+
+function _parseBlocosDiscovery(raw: unknown): unknown[] {
+  try { const v = JSON.parse(String(raw || '[]')); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+
+function _discoveryPublicBaseUrl(): string {
+  try { return String(PropertiesService.getScriptProperties().getProperty('DISCOVERY_PUBLIC_URL') || '').trim(); }
+  catch { return ''; }
+}
+
+function _discoveryUrlComToken(token: string): string {
+  const base = _discoveryPublicBaseUrl();
+  if (!base || !token) return '';
+  return base + (base.indexOf('?') >= 0 ? '&' : '?') + 'f=' + encodeURIComponent(token);
+}
+
+// Score determinístico de oportunidade (0-100): o quanto a resposta sinaliza que
+// vale virar um app. Componentes auditáveis em breakdown. A Leva 2 pode somar IA.
+function _scoreOportunidadeDiscovery(input: {
+  respostas?: Record<string, unknown>; ferramentas?: unknown[];
+  querAmostra?: boolean; agendaPref?: string; nome?: string; email?: string; totalPerguntas?: number;
+}): { score: number; breakdown: Record<string, number> } {
+  const respostas = input.respostas || {};
+  const total = Math.max(1, Number(input.totalPerguntas || Object.keys(respostas).length) || 1);
+  const respondidas = Object.keys(respostas).filter((k) => {
+    const v = respostas[k];
+    return v !== null && v !== undefined && String(v).trim() !== '' && !(Array.isArray(v) && v.length === 0);
+  }).length;
+  const completude = Math.round((respondidas / total) * 40); // até 40
+  const ferramentas = Array.isArray(input.ferramentas) ? input.ferramentas.filter((x) => String(x || '').trim()) : [];
+  const ferramentasPts = ferramentas.length ? Math.min(12, 4 + ferramentas.length * 2) : 0; // até 12
+  // riqueza de texto livre — sinaliza clareza/engajamento
+  let chars = 0;
+  Object.keys(respostas).forEach((k) => { const v = respostas[k]; if (typeof v === 'string') chars += v.trim().length; });
+  const textoPts = Math.min(18, Math.round(chars / 40)); // até 18
+  const amostraPts = input.querAmostra ? 15 : 0;
+  const agendaPts = String(input.agendaPref || '').trim() ? 8 : 0;
+  const contatoPts = (String(input.nome || '').trim() && String(input.email || '').trim()) ? 7 : 0;
+  const breakdown = {
+    completude, ferramentas: ferramentasPts, riquezaTexto: textoPts,
+    pediuAmostra: amostraPts, agenda: agendaPts, contato: contatoPts,
+  };
+  let score = completude + ferramentasPts + textoPts + amostraPts + agendaPts + contatoPts;
+  if (score > 100) score = 100;
+  return { score, breakdown };
+}
+
+function salvarRoteiroDiscovery(input: { id?: string; pessoaId?: string; titulo?: string; segmento?: string; blocos?: unknown }): ServerResult {
+  try {
+    const pessoaId = String(input.pessoaId || '').trim();
+    if (!pessoaId) return { ok: false, error: 'Selecione o cliente para salvar o roteiro' };
+    const blocos = Array.isArray(input.blocos) ? input.blocos : [];
+    if (!blocos.length) return { ok: false, error: 'Roteiro vazio — gere as perguntas primeiro' };
+    const perguntasJson = JSON.stringify(blocos);
+    const titulo = String(input.titulo || '').trim() || ('Roteiro ' + new Date().toISOString().slice(0, 10));
+    const segmento = String(input.segmento || '').trim();
+    if (input.id) {
+      const upd = dbUpdate('DiscoveryForms', String(input.id), { pessoaId, titulo, segmento, perguntasJson });
+      if (!upd) return { ok: false, error: 'Roteiro não encontrado' };
+      return { ok: true, data: upd };
+    }
+    const created = dbCreate('DiscoveryForms', {
+      pessoaId, titulo, segmento, perguntasJson,
+      token: '', status: 'rascunho', criadoEm: new Date().toISOString(), publicadoEm: '',
+    });
+    return { ok: true, data: created };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar roteiro' }; }
+}
+
+function getDiscoveryForms(): ServerResult {
+  try {
+    const pessoas = dbGetAll('Pessoas');
+    const findPessoa = (id: string) => pessoas.find((p) => String(p['id']) === String(id)) || null;
+    const nome = (id: string) => {
+      const p = findPessoa(id);
+      if (!p) return '';
+      return String(p['empresa'] || p['nome'] || '');
+    };
+    const respostas = dbGetAll('DiscoveryRespostas');
+    const rows = dbGetAll('DiscoveryForms').map((r) => {
+      const id = String(r['id']);
+      const token = String(r['token'] || '');
+      const respDoForm = respostas.filter((x) => String(x['formId']) === id).length;
+      return {
+        id,
+        pessoaId: String(r['pessoaId'] || ''),
+        pessoaNome: nome(String(r['pessoaId'] || '')),
+        titulo: String(r['titulo'] || ''),
+        segmento: String(r['segmento'] || ''),
+        blocos: _parseBlocosDiscovery(r['perguntasJson']),
+        token,
+        status: String(r['status'] || 'rascunho'),
+        url: _discoveryUrlComToken(token),
+        publicoConfigurado: !!_discoveryPublicBaseUrl(),
+        respostasCount: respDoForm,
+        criadoEm: String(r['criadoEm'] || ''),
+        publicadoEm: String(r['publicadoEm'] || ''),
+      };
+    });
+    rows.sort((a, b) => (b.criadoEm || '').localeCompare(a.criadoEm || ''));
+    return { ok: true, data: rows };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar roteiros' }; }
+}
+
+// Converte perguntas (texto puro) em campos de formulário leves e clicáveis.
+// Idempotente: se já estiver estruturado, devolve como está. Falha → mantém texto.
+function _estruturarPerguntasDiscovery(blocos: Array<{ tema?: string; perguntas?: unknown[] }>): unknown[] {
+  const jaEstrut = blocos.some((b) => Array.isArray(b.perguntas) && b.perguntas.some((p) => p && typeof p === 'object'));
+  if (jaEstrut) return blocos;
+  try {
+    const system = [
+      'Você transforma perguntas de discovery num formulário leve e progressivo para um cliente leigo.',
+      'Para CADA pergunta escolha o tipo de campo ideal:',
+      "'sim_nao' (Sim/Não/Mais ou menos), 'escala' (1 a 5), 'unica' (uma opção), 'multipla' (várias), 'texto' (curto) ou 'texto_longo'.",
+      'EQUILÍBRIO: use clicáveis (sim_nao/escala/unica/multipla) para qualificar e dar ritmo leve;',
+      "MAS quando a pergunta pede detalhe sobre o SISTEMA/ferramentas/telas/rotina/jornada do cliente, use 'texto_longo' — é onde queremos respostas ricas.",
+      "Para perguntas sobre QUAIS ferramentas/sistemas/marcas/produtos a pessoa usa, prefira 'multipla' (ou 'unica' quando só uma resposta faz sentido) com opções plausíveis do segmento.",
+      "REGRA IMPORTANTE: sempre que a lista NÃO for exaustiva (sistemas, ferramentas, fornecedores, marcas, métodos, etc.), INCLUA SEMPRE 'Outro' como ÚLTIMA opção — exatamente com essa palavra; o frontend já trata isso como campo aberto pro cliente digitar.",
+      "Para 'unica'/'multipla' gere 3 a 6 opções curtas e claras (mais a 'Outro' quando se aplicar).",
+      'Marque obrigatorio:true nas perguntas-chave sobre o sistema atual. Reescreva o texto pra ficar amigável e específico, pedindo exemplos quando fizer sentido. Mantenha os mesmos temas.',
+      'Responda SOMENTE JSON: {"blocos":[{"tema":"...","perguntas":[{"texto":"...","tipo":"...","opcoes":["..."],"obrigatorio":true}]}]}.',
+    ].join(' ');
+    const resp = forjaCallLLM([
+      { role: 'system', content: system },
+      { role: 'user', content: JSON.stringify({ blocos }).slice(0, 6000) },
+    ], 1800, undefined, 'entrevista');
+    const json = extrairJson(resp) as { blocos?: Array<{ tema?: string; perguntas?: unknown[] }> };
+    const out = (json.blocos || []).map((b, bi) => ({
+      tema: String(b.tema || `Bloco ${bi + 1}`),
+      perguntas: (b.perguntas || []).map((p, pi) => {
+        const po = (p && typeof p === 'object') ? p as Record<string, unknown> : { texto: String(p || '') };
+        const tipo = String(po['tipo'] || 'texto');
+        const opcoes = Array.isArray(po['opcoes']) ? (po['opcoes'] as unknown[]).map((o) => String(o)).filter(Boolean).slice(0, 5) : undefined;
+        return { id: `b${bi}q${pi}`, texto: String(po['texto'] || ''), tipo, opcoes, obrigatorio: !!po['obrigatorio'] };
+      }).filter((p) => p.texto),
+    })).filter((b) => b.perguntas.length);
+    return out.length ? out : blocos;
+  } catch { return blocos; }
+}
+
+function publicarFormDiscovery(input: { id?: string }): ServerResult {
+  try {
+    const id = String(input.id || '').trim();
+    if (!id) return { ok: false, error: 'Roteiro inválido' };
+    const row = dbGetAll('DiscoveryForms').find((r) => String(r['id']) === id);
+    if (!row) return { ok: false, error: 'Roteiro não encontrado' };
+    let token = String(row['token'] || '').trim();
+    if (!token) token = Utilities.getUuid().replace(/-/g, '');
+    // Estrutura as perguntas (texto → campos clicáveis) na 1ª publicação.
+    const blocosAtuais = _parseBlocosDiscovery(row['perguntasJson']) as Array<{ tema?: string; perguntas?: unknown[] }>;
+    const estruturado = _estruturarPerguntasDiscovery(blocosAtuais);
+    const upd = dbUpdate('DiscoveryForms', id, {
+      token, status: 'publicado',
+      perguntasJson: JSON.stringify(estruturado),
+      publicadoEm: String(row['publicadoEm'] || '') || new Date().toISOString(),
+    });
+    const url = _discoveryUrlComToken(token);
+    return { ok: true, data: { token, url, configurado: !!_discoveryPublicBaseUrl(), form: upd } };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao publicar' }; }
+}
+
+function excluirFormDiscovery(id: string): ServerResult {
+  try {
+    const ok = dbDelete('DiscoveryForms', String(id));
+    return ok ? { ok: true, data: true } : { ok: false, error: 'Roteiro não encontrado' };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao excluir' }; }
+}
+
+function getDiscoveryPublicUrl(): ServerResult {
+  try { return { ok: true, data: { url: _discoveryPublicBaseUrl() } }; }
+  catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro' }; }
+}
+
+function setDiscoveryPublicUrl(input: { url?: string }): ServerResult {
+  try {
+    const url = String(input.url || '').trim();
+    if (url && !/^https:\/\/script\.google\.com\/.+\/exec(\?.*)?$/.test(url)) {
+      return { ok: false, error: 'Cole a URL do app público (deve terminar em /exec).' };
+    }
+    PropertiesService.getScriptProperties().setProperty('DISCOVERY_PUBLIC_URL', url);
+    return { ok: true, data: { url } };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar URL' }; }
+}
+
+function getRespostasDiscovery(): ServerResult {
+  try {
+    const pessoas = dbGetAll('Pessoas');
+    const nome = (id: string) => String(pessoas.find((p) => String(p['id']) === String(id))?.['nome'] || '');
+    const rows = dbGetAll('DiscoveryRespostas').map((r) => {
+      let respostas: Record<string, unknown> = {};
+      let ferramentas: unknown[] = [];
+      let breakdown: Record<string, number> = {};
+      try { respostas = JSON.parse(String(r['respostasJson'] || '{}')) || {}; } catch { /* ignora */ }
+      try { ferramentas = JSON.parse(String(r['ferramentasJson'] || '[]')) || []; } catch { /* ignora */ }
+      try { breakdown = JSON.parse(String(r['scoreBreakdownJson'] || '{}')) || {}; } catch { /* ignora */ }
+      return {
+        id: String(r['id']),
+        formId: String(r['formId'] || ''),
+        pessoaId: String(r['pessoaId'] || ''),
+        pessoaNome: nome(String(r['pessoaId'] || '')),
+        emailRespondente: String(r['emailRespondente'] || ''),
+        nome: String(r['nome'] || ''),
+        respostas,
+        ferramentas,
+        querAmostra: String(r['querAmostra'] || '') === 'true' || r['querAmostra'] === true,
+        agendaPref: String(r['agendaPref'] || ''),
+        score: Number(r['score'] || 0),
+        breakdown,
+        criadoEm: String(r['criadoEm'] || ''),
+      };
+    });
+    rows.sort((a, b) => (b.criadoEm || '').localeCompare(a.criadoEm || ''));
+    return { ok: true, data: rows };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar respostas' }; }
+}
+
+// Transforma uma resposta de discovery numa Ideia no banco (fecha o ciclo:
+// oportunidade clara → ideia priorizável). Impacto sugerido a partir do score.
+function promoverRespostaDiscoveryParaIdeia(input: { id?: string }): ServerResult {
+  try {
+    const id = String(input.id || '').trim();
+    const r = dbGetAll('DiscoveryRespostas').find((x) => String(x['id']) === id);
+    if (!r) return { ok: false, error: 'Resposta não encontrada' };
+    const pessoas = dbGetAll('Pessoas');
+    const pessoaNome = String(pessoas.find((p) => String(p['id']) === String(r['pessoaId']))?.['nome'] || '');
+    let respostas: Record<string, unknown> = {};
+    let ferramentas: unknown[] = [];
+    try { respostas = JSON.parse(String(r['respostasJson'] || '{}')) || {}; } catch { /* ignora */ }
+    try { ferramentas = JSON.parse(String(r['ferramentasJson'] || '[]')) || []; } catch { /* ignora */ }
+    const score = Number(r['score'] || 0);
+    const nome = String(r['nome'] || '') || pessoaNome || String(r['emailRespondente'] || '');
+
+    const partes: string[] = [];
+    partes.push(`Origem: Discovery (formulário público) — score ${score}/100.`);
+    if (r['emailRespondente']) partes.push(`Contato: ${nome} <${r['emailRespondente']}>`);
+    if (ferramentas.length) partes.push(`Ferramentas que usa hoje: ${ferramentas.join(', ')}`);
+    if (String(r['querAmostra']) === 'true' || r['querAmostra'] === true) partes.push(`Pediu amostra${r['agendaPref'] ? ` — agenda: ${r['agendaPref']}` : ''}.`);
+    const respLinhas = Object.keys(respostas).map((k) => {
+      const v = respostas[k];
+      return `- ${Array.isArray(v) ? v.join(', ') : String(v)}`;
+    }).filter((l) => l !== '- ');
+    if (respLinhas.length) partes.push('Respostas:\n' + respLinhas.join('\n'));
+
+    const saved = dbCreate('Ideias', {
+      titulo: `Discovery — ${nome || 'oportunidade'}`,
+      descricao: partes.join('\n\n'),
+      notaImpacto: Math.max(1, Math.min(10, Math.round(score / 10))),
+      notaEsforco: 5,
+      estado: 'nova',
+      tipo: 'novo',
+      criadoEm: new Date().toISOString(),
+      atualizadoEm: new Date().toISOString(),
+    });
+    return { ok: true, data: saved };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao promover' }; }
 }
 
 // ─── Automações & Alertas (Fase 10) ───────────────────────────────────────────
@@ -10171,7 +10899,8 @@ function _executarAuditoriaAgendada(
   const candidatos: Array<Record<string, unknown>> = [];
 
   for (const s of sistemas) {
-    if (regra.pularAposentados && String(s.estagio || '').toLowerCase() === 'aposentado') continue;
+    const _est = String(s.estagio || '').toLowerCase();
+    if (regra.pularAposentados && (_est === 'prateleira' || _est === 'aposentado')) continue;
     const sid = String(s.id || '');
     const ultISO = ultimaPorSistema[sid];
     if (!ultISO) {
@@ -10195,7 +10924,9 @@ function _executarAuditoriaAgendada(
   for (const s of lote) {
     const sid = String(s.id || '');
     try {
-      const r = acaoIAAuditarSistema(sid);
+      // Auditoria agendada roda em modo governança (barata) — auditoria de
+      // código fica sob demanda no drawer pra não estourar custo em background.
+      const r = acaoIAAuditarSistema(sid, 'governanca');
       if (r.ok && r.data) {
         const d = r.data as { payload?: { findings?: Array<{ severidade?: string }> } };
         const findings = d.payload?.findings || [];
@@ -10281,7 +11012,8 @@ function getAuditoriaAgendadaStatus(): ServerResult {
     let aposentadosPulados = 0;
 
     for (const s of sistemas) {
-      if (regra?.pularAposentados && String(s.estagio || '').toLowerCase() === 'aposentado') {
+      const _est = String(s.estagio || '').toLowerCase();
+      if (regra?.pularAposentados && (_est === 'prateleira' || _est === 'aposentado')) {
         aposentadosPulados++;
         continue;
       }
@@ -11508,6 +12240,16 @@ function _executarUmaTool(call: ToolCall): { tool: string; ok: boolean; data?: u
         if (!sidRaw || sidRaw === '<ID>' || sidRaw === 'undefined' || sidRaw === 'null') {
           return { tool: tool.name, ok: false, error: 'sistemaId inválido — não consegui amarrar a decisão a um sistema', preview: '?' };
         }
+        // Dedup: re-rodar a auditoria gera findings "zerados" (o vínculo de
+        // "já registrado" é por rodada). Sem isso, registrar de novo duplicava
+        // cartões. Aqui checamos se já existe item com mesmo sistema + título.
+        const tituloNorm = _normDedup(String(params.titulo || ''));
+        const decisaoExistente = (dbGetAll('Decisoes') as Array<Record<string, unknown>>).find((d) =>
+          String(d.sistemaId || '') === sidRaw && _normDedup(String(d.titulo || '')) === tituloNorm,
+        );
+        if (decisaoExistente) {
+          return { tool: tool.name, ok: true, data: decisaoExistente, preview: `Já existia "${params.titulo}" no backlog — não dupliquei` };
+        }
         // Decisões registradas via IA entram como "backlog" — o usuário move
         // pra "fazendo" / "feito" no Kanban quando trabalhar nelas.
         const r = dbCreate('Decisoes', {
@@ -11527,6 +12269,13 @@ function _executarUmaTool(call: ToolCall): { tool: string; ok: boolean; data?: u
         const sidRaw = String(params.sistemaId || '').trim();
         if (!sidRaw || sidRaw === '<ID>' || sidRaw === 'undefined' || sidRaw === 'null') {
           return { tool: tool.name, ok: false, error: 'sistemaId inválido — não consegui amarrar o risco a um sistema', preview: '?' };
+        }
+        const riscoNorm = _normDedup(String(params.area || '') + ' ' + String(params.descricao || ''));
+        const riscoExistente = (dbGetAll('Riscos') as Array<Record<string, unknown>>).find((rk) =>
+          String(rk.sistemaId || '') === sidRaw && _normDedup(String(rk.area || '') + ' ' + String(rk.descricao || '')) === riscoNorm,
+        );
+        if (riscoExistente) {
+          return { tool: tool.name, ok: true, data: riscoExistente, preview: `Já existia esse risco em "${params.area}" — não dupliquei` };
         }
         const r = dbCreate('Riscos', {
           sistemaId: sidRaw,
@@ -11611,7 +12360,11 @@ interface FatorSaude {
   detalhe: string;
 }
 
-function calcularSaudeReal(sistemaId: string): ServerResult {
+// payloadOverride: quando a auditoria que ACABOU de rodar ainda não foi
+// persistida (ex: meio do _executarAuditoriaIncremental), permite passar o
+// novo payload diretamente em vez de ler do banco — assim o score já reflete
+// os achados recém-reconciliados em vez dos antigos.
+function calcularSaudeReal(sistemaId: string, payloadOverride?: { findings?: Array<{ severidade?: string }> } | null): ServerResult {
   try {
     initDatabase();
     const sistema = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => s.id === sistemaId);
@@ -11643,8 +12396,21 @@ function calcularSaudeReal(sistemaId: string): ServerResult {
       const d = new Date(String(t.data || '')).getTime();
       return !Number.isNaN(d) && d >= trintaDias;
     }).length;
-    const ativo = eventosRecentes > 0;
-    fatores.push({ nome: 'Atividade nos últimos 30 dias', pontos: ativo ? 10 : 0, max: 10, ok: ativo, detalhe: ativo ? `${eventosRecentes} evento(s) na timeline` : 'Nenhum pulso/decisão/incidente recente — o sistema pode estar parado' });
+    // Um pulso verificado recentemente (mesmo respondendo OK) conta como sinal de
+    // vida — não só os incidentes da timeline. Isso alinha o fator com o que o
+    // usuário espera: "monitorei a URL e ela responde" = sistema ativo.
+    const pulsosSistema = (dbGetAll('Pulsos') as Array<Record<string, unknown>>).filter((p) => String(p.sistemaId || '') === sistemaId);
+    const pulsoRecente = pulsosSistema.some((p) => {
+      const d = new Date(String(p.verificadoEm || '')).getTime();
+      return !Number.isNaN(d) && d >= trintaDias;
+    });
+    const ativo = eventosRecentes > 0 || pulsoRecente;
+    const detalheAtividade = eventosRecentes > 0
+      ? `${eventosRecentes} evento(s) na timeline`
+      : pulsoRecente
+        ? 'Pulso monitorado respondendo (verificado recentemente)'
+        : 'Nenhum pulso/decisão/incidente recente — o sistema pode estar parado';
+    fatores.push({ nome: 'Atividade nos últimos 30 dias', pontos: ativo ? 10 : 0, max: 10, ok: ativo, detalhe: detalheAtividade });
 
     // 3. Alertas em aberto
     const alertas = (dbGetAll('Alertas') as Array<Record<string, unknown>>).filter((a) => {
@@ -11663,7 +12429,7 @@ function calcularSaudeReal(sistemaId: string): ServerResult {
     fatores.push({ nome: 'Sem alertas de aviso abertos', pontos: semAviso ? 10 : Math.max(0, 10 - avisos * 3), max: 10, ok: semAviso, detalhe: semAviso ? 'Sem avisos' : `${avisos} aviso(s) pendente(s)` });
 
     // 4. Riscos e financeiro
-    const riscos = (dbGetAll('Riscos') as Array<Record<string, unknown>>).filter((r) => String(r.sistemaId || '') === sistemaId);
+    const riscos = (dbGetAll('Riscos') as Array<Record<string, unknown>>).filter((r) => String(r.sistemaId || '') === sistemaId && _riscoAtivo(r));
     const riscosAlta = riscos.filter((r) => String(r.gravidade).toLowerCase() === 'alta').length;
     const semRiscoAlta = riscosAlta === 0;
     fatores.push({ nome: 'Sem riscos de gravidade alta', pontos: semRiscoAlta ? 20 : Math.max(0, 20 - riscosAlta * 7), max: 20, ok: semRiscoAlta, detalhe: semRiscoAlta ? `${riscos.length} risco(s) total, nenhum alta` : `${riscosAlta} risco(s) de gravidade alta` });
@@ -11712,11 +12478,84 @@ function calcularSaudeReal(sistemaId: string): ServerResult {
     }
     fatores.push({ nome: 'Equilíbrio custo × receita', pontos: pontosCusto, max: 10, ok: okCusto, detalhe: detalheCusto });
 
+    // 5. Achados de auditoria em aberto — fechar achados sobe o score, MAS
+    // de forma proporcional. Premissas do balanceamento (v2):
+    // - Todo sistema saudável tem 1-2 TODOs naturais → SOFT CAP: os 2 primeiros
+    //   achados de baixa/média SÃO PERDOADOS (não penalizam).
+    // - Achados altos sempre pesam (são vulnerabilidades/quebras reais).
+    // - Penalizações suaves: 1 alta = -3, 1 média = -1, 1 baixa = -0.5.
+    // - Peso total reduzido de 15 → 10 pts (achados influenciam, não dominam).
+    // Resultado: sistema com 0-2 achados leves continua "saudável" (80+).
+    // Sistema com 1 alta + 4 médias + 1 baixa fica na faixa de "atenção" (~70).
+    const MAX_ACHADOS = 10;
+    const SOFT_CAP_LEVES = 2;
+    let pontosAchados = MAX_ACHADOS;
+    let detalheAchados = 'Sem auditoria anterior';
+    let okAchados = true;
+    let payloadParaScore: { findings?: Array<{ severidade?: string }> } | null = payloadOverride || null;
+    if (!payloadParaScore) {
+      const auditorias = (dbGetAll('Auditorias') as Array<Record<string, unknown>>)
+        .filter((a) => String(a.sistemaId || '') === sistemaId)
+        .sort((a, b) => String(b.criadoEm).localeCompare(String(a.criadoEm)));
+      if (auditorias.length > 0) {
+        try {
+          payloadParaScore = JSON.parse(String(auditorias[0].payloadJson || '{}')) as { findings?: Array<{ severidade?: string }> };
+        } catch {
+          payloadParaScore = null;
+          detalheAchados = 'Última auditoria sem payload legível';
+        }
+      }
+    }
+    if (payloadParaScore) {
+      try {
+        const findings = Array.isArray(payloadParaScore.findings) ? payloadParaScore.findings : [];
+        const altas = findings.filter((f) => String(f.severidade || '').toLowerCase() === 'alta').length;
+        const medias = findings.filter((f) => String(f.severidade || '').toLowerCase() === 'media').length;
+        const baixas = findings.filter((f) => String(f.severidade || '').toLowerCase() === 'baixa').length;
+
+        // Soft cap: perdoa os 2 primeiros achados leves (baixa primeiro, depois média).
+        let baixasPunidas = baixas;
+        let mediasPunidas = medias;
+        let perdoadosRestantes = SOFT_CAP_LEVES;
+        const perdoarBaixas = Math.min(baixasPunidas, perdoadosRestantes);
+        baixasPunidas -= perdoarBaixas;
+        perdoadosRestantes -= perdoarBaixas;
+        if (perdoadosRestantes > 0) {
+          const perdoarMedias = Math.min(mediasPunidas, perdoadosRestantes);
+          mediasPunidas -= perdoarMedias;
+        }
+
+        // Penalizações suaves (cap por severidade pra não estourar a escala).
+        const penalAlta = Math.min(altas, 3) * 3;          // até -9
+        const penalMedia = Math.min(mediasPunidas, 4) * 1; // até -4
+        const penalBaixa = Math.min(baixasPunidas, 3) * 1; // até -3 (raro: precisa 5+ baixas após o soft cap)
+        pontosAchados = Math.max(0, MAX_ACHADOS - penalAlta - penalMedia - penalBaixa);
+
+        const totalReais = altas + medias + baixas;
+        const totalPunidos = altas + mediasPunidas + baixasPunidas;
+        okAchados = totalReais === 0;
+        const partes: string[] = [];
+        if (altas > 0) partes.push(`${altas} alta${altas === 1 ? '' : 's'}`);
+        if (medias > 0) partes.push(`${medias} média${medias === 1 ? '' : 's'}`);
+        if (baixas > 0) partes.push(`${baixas} baixa${baixas === 1 ? '' : 's'}`);
+        const perdoadosQtd = totalReais - totalPunidos;
+        const sufixo = perdoadosQtd > 0 ? ` · ${perdoadosQtd} perdoado${perdoadosQtd === 1 ? '' : 's'} (soft cap)` : '';
+        detalheAchados = okAchados
+          ? 'Sem achados em aberto na última auditoria'
+          : `${partes.join(', ')} em aberto${sufixo}`;
+      } catch {
+        detalheAchados = 'Última auditoria sem payload legível';
+      }
+    }
+    fatores.push({ nome: 'Achados de auditoria em aberto', pontos: pontosAchados, max: MAX_ACHADOS, ok: okAchados, detalhe: detalheAchados });
+
     const completude = fatores.slice(0, 4).reduce((acc, f) => acc + f.pontos, 0);
     const totalPontos = fatores.reduce((acc, f) => acc + f.pontos, 0);
+    const maxPossivel = fatores.reduce((acc, f) => acc + f.max, 0);
 
-    // Sistemas muito vazios são marcados como "não avaliados" (score=0)
-    const score = completude < 8 ? 0 : Math.round(totalPontos);
+    // Normaliza 0-100 (max agora é 115 com o fator novo de achados).
+    // Sistemas muito vazios continuam marcados como "não avaliados" (score=0).
+    const score = completude < 8 ? 0 : Math.round((totalPontos / maxPossivel) * 100);
 
     return {
       ok: true,
@@ -11843,13 +12682,25 @@ interface AuditFontes {
   temStack: boolean;
   temUrl: boolean;
   temRepo: boolean;
+  modo?: 'governanca' | 'codigo' | 'completa';
+  fonteCodigo?: 'github' | 'gas' | '';
+  arquivosLidos?: number;
+  bytesCodigo?: number;
+  commitSha?: string;
+  codigoTruncado?: boolean;
+  codigoErro?: string;
+  // Auditoria incremental (Fase 2.5): rodou só sobre o diff desde a última auditoria.
+  incremental?: boolean;
+  baseCommit?: string;
+  // Auditoria de onboarding: sistema sem dados — devolvemos checklist (sem IA).
+  onboarding?: boolean;
 }
 
 function _coletarFontesAuditoria(sistemaId: string): AuditFontes {
   const sistema = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => s.id === sistemaId) || {};
   const custos = (dbGetAll('Custos') as Array<Record<string, unknown>>).filter((c) => String(c.sistemaId || '') === sistemaId);
   const decisoes = (dbGetAll('Decisoes') as Array<Record<string, unknown>>).filter((d) => String(d.sistemaId || '') === sistemaId);
-  const riscos = (dbGetAll('Riscos') as Array<Record<string, unknown>>).filter((r) => String(r.sistemaId || '') === sistemaId);
+  const riscos = (dbGetAll('Riscos') as Array<Record<string, unknown>>).filter((r) => String(r.sistemaId || '') === sistemaId && _riscoAtivo(r));
   const alertas = (dbGetAll('Alertas') as Array<Record<string, unknown>>).filter((a) => String(a.sistemaId || '') === sistemaId || String(a.metadata || '').indexOf(sistemaId) >= 0);
   const timeline = (dbGetAll('Timeline') as Array<Record<string, unknown>>).filter((t) => String(t.sistemaId || '') === sistemaId);
   const oportunidades = dbGetAll('Oportunidades') as Array<Record<string, unknown>>;
@@ -11867,6 +12718,398 @@ function _coletarFontesAuditoria(sistemaId: string): AuditFontes {
   };
 }
 
+// ─── Leitura de CÓDIGO pra auditoria (Fase 1) ────────────────────────────────
+//
+// A auditoria de governança lê só os metadados da Forja. Aqui a gente abre o
+// repositório de verdade (GitHub via repoUrl, ou projeto GAS via scriptId) e
+// monta um contexto de código CURADO dentro de um orçamento — porque um repo
+// inteiro não cabe num prompt nem nos 6 min do Apps Script.
+
+interface CodigoContexto {
+  contexto: string;
+  fonte: 'github' | 'gas' | '';
+  arquivos: number;
+  bytes: number;
+  commitSha: string;
+  truncado: boolean;
+  erro?: string;
+}
+
+// Orçamento conservador: o suficiente pra dar visão real sem estourar tokens/tempo.
+const _CODE_MAX_ARQUIVOS = 28;
+const _CODE_MAX_BYTES_TOTAL = 110000;
+const _CODE_MAX_BYTES_ARQUIVO = 15000;
+
+const _CODE_IGNORE_DIR = /(^|\/)(node_modules|dist|build|out|coverage|vendor|\.git|\.next|\.cache|tmp|__pycache__|target|bin|obj|Pods|\.venv|venv|\.idea|\.vscode)(\/|$)/i;
+const _CODE_IGNORE_FILE = /(\.lock$|package-lock\.json$|yarn\.lock$|pnpm-lock\.yaml$|\.min\.(js|css)$|\.map$|\.(png|jpe?g|gif|svg|ico|webp|pdf|zip|gz|tar|woff2?|ttf|eot|mp4|mp3|mov|bmp|icns)$)/i;
+const _CODE_ALLOW_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|kts|rs|php|cs|swift|c|cc|cpp|h|hpp|sql|sh|bash|vue|svelte|yml|yaml|toml|gradle|md|json)$/i;
+
+// Só inclui JSON/MD que sejam "úteis" pra auditoria (manifestos/configs/README),
+// pra não despejar fixtures e dumps gigantes no contexto.
+function _codeArquivoRelevante(path: string, size: number): boolean {
+  if (_CODE_IGNORE_DIR.test(path)) return false;
+  if (_CODE_IGNORE_FILE.test(path)) return false;
+  if (size > 400000) return false; // arquivo gigante: ignora (provável gerado)
+  const base = path.split('/').pop() || path;
+  if (/\.json$/i.test(base)) {
+    return /^(package\.json|tsconfig.*\.json|.*\.config\.json|appsscript\.json|composer\.json|.*\.csproj)$/i.test(base);
+  }
+  if (/\.md$/i.test(base)) return /readme|contributing|architecture|security/i.test(base);
+  return _CODE_ALLOW_EXT.test(base);
+}
+
+// Prioriza âncoras (manifestos, configs, entrypoints, src) pra caber o que mais
+// informa primeiro. Menor = melhor desempate (cabe mais arquivo no orçamento).
+function _codePrioridade(path: string): number {
+  const base = (path.split('/').pop() || path).toLowerCase();
+  if (/readme/i.test(base)) return 100;
+  if (/^(package\.json|requirements\.txt|go\.mod|cargo\.toml|pom\.xml|build\.gradle|gemfile|composer\.json|pyproject\.toml)$/i.test(base) || /\.csproj$/i.test(base)) return 95;
+  if (/^(tsconfig|.*\.config\.|\.eslintrc|vite\.|webpack\.|next\.|rollup\.|babel\.|dockerfile|docker-compose)/i.test(base)) return 90;
+  if (/^appsscript\.json$/i.test(base)) return 88;
+  if (/(^|\/)\.github\/workflows\//i.test(path)) return 86;
+  if (/^(index|main|app|server)\.(t|j)sx?$/i.test(base)) return 80;
+  if (/^src\//i.test(path)) return 60;
+  if (path.indexOf('/') < 0) return 50; // arquivo na raiz
+  return 30;
+}
+
+interface _CodeFileRef { path: string; size: number; sha?: string }
+
+function _codeSelecionar(files: _CodeFileRef[]): _CodeFileRef[] {
+  const ordenado = files
+    .filter((f) => _codeArquivoRelevante(f.path, f.size))
+    .sort((a, b) => (_codePrioridade(b.path) - _codePrioridade(a.path)) || (a.size - b.size));
+  const out: _CodeFileRef[] = [];
+  let bytes = 0;
+  for (const f of ordenado) {
+    if (out.length >= _CODE_MAX_ARQUIVOS) break;
+    if (bytes >= _CODE_MAX_BYTES_TOTAL) break;
+    out.push(f);
+    bytes += Math.min(f.size || 0, _CODE_MAX_BYTES_ARQUIVO);
+  }
+  return out;
+}
+
+function _codeBloco(path: string, conteudo: string): { texto: string; bytes: number; truncado: boolean } {
+  let c = String(conteudo || '');
+  let truncado = false;
+  if (c.length > _CODE_MAX_BYTES_ARQUIVO) {
+    c = c.slice(0, _CODE_MAX_BYTES_ARQUIVO) + '\n… [arquivo truncado para a auditoria]';
+    truncado = true;
+  }
+  const ext = (path.split('.').pop() || '').toLowerCase();
+  return { texto: `\n### ${path}\n\`\`\`${ext}\n${c}\n\`\`\`\n`, bytes: c.length, truncado };
+}
+
+// Resolve "owner/repo" a partir de uma URL ou nome completo.
+function _ghFullName(repoUrl: string): string {
+  let full = String(repoUrl || '').trim();
+  const m = full.match(/github\.com\/([^/]+\/[^/?#]+)/);
+  if (m) full = m[1];
+  return full.replace(/\.git$/, '').replace(/^\/+|\/+$/g, '');
+}
+
+function _lerCodigoGitHub(repoUrl: string): CodigoContexto {
+  const vazio: CodigoContexto = { contexto: '', fonte: 'github', arquivos: 0, bytes: 0, commitSha: '', truncado: false };
+  const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+  if (!token) return { ...vazio, erro: 'GitHub não conectado (sem token em Configurações).' };
+  const full = _ghFullName(repoUrl);
+  if (!/^[^/]+\/[^/]+$/.test(full)) return { ...vazio, erro: 'repoUrl inválida (use https://github.com/owner/repo).' };
+
+  const headers = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'User-Agent': 'FORJA' };
+  try {
+    const repoRes = UrlFetchApp.fetch(`https://api.github.com/repos/${full}`, { headers, muteHttpExceptions: true });
+    if (repoRes.getResponseCode() !== 200) return { ...vazio, erro: `GitHub respondeu ${repoRes.getResponseCode()} ao abrir o repo.` };
+    const branch = String((JSON.parse(repoRes.getContentText()) as { default_branch?: string }).default_branch || 'main');
+
+    // Commit sha do HEAD do branch (de verdade — não a tree sha). É o que o
+    // diff/compare da Fase 2 usa pra saber se o repo mudou desde a última auditoria.
+    let commitSha = '';
+    try {
+      const commitRes = UrlFetchApp.fetch(`https://api.github.com/repos/${full}/commits/${encodeURIComponent(branch)}`, { headers, muteHttpExceptions: true });
+      if (commitRes.getResponseCode() === 200) commitSha = String((JSON.parse(commitRes.getContentText()) as { sha?: string }).sha || '');
+    } catch { /* segue com tree sha como fallback */ }
+
+    const treeRes = UrlFetchApp.fetch(`https://api.github.com/repos/${full}/git/trees/${encodeURIComponent(branch)}?recursive=1`, { headers, muteHttpExceptions: true });
+    if (treeRes.getResponseCode() !== 200) return { ...vazio, erro: `Não consegui ler a árvore do repo (${treeRes.getResponseCode()}).` };
+    const treeJson = JSON.parse(treeRes.getContentText()) as { sha?: string; tree?: Array<{ path: string; type: string; size?: number; sha: string }> };
+    const headSha = String(commitSha || treeJson.sha || '');
+    const blobs = (treeJson.tree || []).filter((n) => n.type === 'blob');
+    const refs: _CodeFileRef[] = blobs.map((n) => ({ path: n.path, size: n.size || 0, sha: n.sha }));
+    const selecionados = _codeSelecionar(refs);
+    if (selecionados.length === 0) return { ...vazio, commitSha: headSha.slice(0, 7), erro: 'Nenhum arquivo de código auditável encontrado.' };
+
+    // Cache por SHA de blob (content-addressed: muda o arquivo → muda o SHA →
+    // invalida sozinho). Re-runs dentro de 6h não rebaixam blobs já vistos.
+    const cache = CacheService.getScriptCache();
+    const conteudos: Record<string, string> = {};
+    const cacheKeys = selecionados.map((f) => 'fcode:' + f.sha);
+    let cacheados: Record<string, string | null> = {};
+    try { cacheados = cache.getAll(cacheKeys) as Record<string, string | null>; } catch { cacheados = {}; }
+
+    const aBuscar = selecionados.filter((f) => {
+      const hit = cacheados['fcode:' + f.sha];
+      if (typeof hit === 'string') { conteudos[String(f.sha)] = hit; return false; }
+      return true;
+    });
+
+    // fetchAll: baixa em paralelo só os blobs que faltam no cache.
+    if (aBuscar.length > 0) {
+      const requests = aBuscar.map((f) => ({ url: `https://api.github.com/repos/${full}/git/blobs/${f.sha}`, headers, muteHttpExceptions: true }));
+      const respostas = UrlFetchApp.fetchAll(requests);
+      const novos: Record<string, string> = {};
+      for (let i = 0; i < respostas.length; i++) {
+        const r = respostas[i];
+        if (r.getResponseCode() !== 200) continue;
+        const j = JSON.parse(r.getContentText()) as { content?: string; encoding?: string };
+        if (j.encoding !== 'base64' || !j.content) continue;
+        let conteudo = '';
+        try { conteudo = Utilities.newBlob(Utilities.base64Decode(j.content.replace(/\n/g, ''))).getDataAsString(); } catch { continue; }
+        const sha = String(aBuscar[i].sha);
+        conteudos[sha] = conteudo;
+        // CacheService limita 100KB/valor; só cacheia o que cabe (nosso teto por
+        // arquivo já é 15KB, então na prática sempre cabe).
+        if (conteudo.length <= 100000) novos['fcode:' + sha] = conteudo;
+      }
+      try { if (Object.keys(novos).length > 0) cache.putAll(novos, 21600); } catch { /* cache best-effort */ }
+    }
+
+    const partes: string[] = [];
+    let bytes = 0; let truncadoGeral = false; let lidos = 0;
+    for (const f of selecionados) {
+      const conteudo = conteudos[String(f.sha)];
+      if (typeof conteudo !== 'string') continue;
+      const bloco = _codeBloco(f.path, conteudo);
+      partes.push(bloco.texto);
+      bytes += bloco.bytes; lidos++;
+      if (bloco.truncado) truncadoGeral = true;
+      if (bytes >= _CODE_MAX_BYTES_TOTAL) { truncadoGeral = true; break; }
+    }
+
+    const cabecalho = `Repositório GitHub: ${full} (branch ${branch}, commit ${headSha.slice(0, 7)})\nArquivos lidos: ${lidos} (de ${blobs.length} no repo) · ~${Math.round(bytes / 1024)}KB${truncadoGeral ? ' · amostra truncada pelo orçamento' : ''}\n`;
+    return { contexto: cabecalho + partes.join(''), fonte: 'github', arquivos: lidos, bytes, commitSha: headSha.slice(0, 7), truncado: truncadoGeral };
+  } catch (e: unknown) {
+    return { ...vazio, erro: e instanceof Error ? e.message : 'Erro ao ler GitHub' };
+  }
+}
+
+function _lerCodigoGAS(scriptId: string): CodigoContexto {
+  const vazio: CodigoContexto = { contexto: '', fonte: 'gas', arquivos: 0, bytes: 0, commitSha: '', truncado: false };
+  const sid = String(scriptId || '').trim();
+  if (!sid) return { ...vazio, erro: 'Sistema sem scriptId.' };
+  try {
+    const token = ScriptApp.getOAuthToken();
+    const res = UrlFetchApp.fetch(`https://script.googleapis.com/v1/projects/${encodeURIComponent(sid)}/content`, {
+      headers: { Authorization: 'Bearer ' + token },
+      muteHttpExceptions: true,
+    });
+    const code = res.getResponseCode();
+    if (code === 403) return { ...vazio, erro: 'Apps Script API desativada. Ative em script.google.com/home/usersettings.' };
+    if (code !== 200) return { ...vazio, erro: `Apps Script API respondeu ${code}.` };
+    const json = JSON.parse(res.getContentText()) as { files?: Array<{ name: string; type: string; source?: string }> };
+    const arquivos = json.files || [];
+    if (arquivos.length === 0) return { ...vazio, erro: 'Projeto GAS sem arquivos legíveis.' };
+
+    // Mapeia pra "path" com extensão (SERVER_JS→.gs, HTML→.html, JSON→.json).
+    const refs: _CodeFileRef[] = arquivos.map((f) => {
+      const ext = f.type === 'HTML' ? 'html' : f.type === 'JSON' ? 'json' : 'gs';
+      return { path: `${f.name}.${ext}`, size: (f.source || '').length };
+    });
+    const ordenado = refs.sort((a, b) => (_codePrioridade(b.path) - _codePrioridade(a.path)) || (a.size - b.size)).slice(0, _CODE_MAX_ARQUIVOS);
+
+    const partes: string[] = [];
+    let bytes = 0; let truncadoGeral = false; let lidos = 0;
+    for (const ref of ordenado) {
+      const nomeBase = ref.path.replace(/\.(gs|html|json)$/i, '');
+      const orig = arquivos.find((f) => f.name === nomeBase);
+      const bloco = _codeBloco(ref.path, orig?.source || '');
+      partes.push(bloco.texto);
+      bytes += bloco.bytes; lidos++;
+      if (bloco.truncado) truncadoGeral = true;
+      if (bytes >= _CODE_MAX_BYTES_TOTAL) { truncadoGeral = true; break; }
+    }
+    const cabecalho = `Projeto Google Apps Script (scriptId ${sid.slice(0, 10)}…)\nArquivos lidos: ${lidos} de ${arquivos.length} · ~${Math.round(bytes / 1024)}KB${truncadoGeral ? ' · amostra truncada pelo orçamento' : ''}\n`;
+    return { contexto: cabecalho + partes.join(''), fonte: 'gas', arquivos: lidos, bytes, commitSha: '', truncado: truncadoGeral };
+  } catch (e: unknown) {
+    return { ...vazio, erro: e instanceof Error ? e.message : 'Erro ao ler projeto GAS' };
+  }
+}
+
+// Escolhe a melhor fonte de código disponível pro sistema. GitHub tem prioridade
+// (mais rico: histórico, configs); GAS entra quando não há repoUrl.
+function _lerCodigoSistema(sistema: Record<string, unknown>): CodigoContexto | null {
+  const repoUrl = String(sistema.repoUrl || '').trim();
+  const scriptId = String(sistema.scriptId || '').trim();
+  if (repoUrl) return _lerCodigoGitHub(repoUrl);
+  if (scriptId) return _lerCodigoGAS(scriptId);
+  return null;
+}
+
+// Última auditoria de um sistema (linha mais recente) + o commit que foi auditado
+// (lido do fontesJson). Base do incremental: se o HEAD do repo == este commit,
+// nada mudou e não vale gastar LLM.
+function _ultimaAuditoriaCommit(sistemaId: string): { auditoria: Record<string, unknown> | null; commit: string } {
+  const auditorias = (dbGetAll('Auditorias') as Array<Record<string, unknown>>)
+    .filter((a) => String(a.sistemaId || '') === sistemaId)
+    .sort((a, b) => String(b.criadoEm || '').localeCompare(String(a.criadoEm || '')));
+  if (auditorias.length === 0) return { auditoria: null, commit: '' };
+  let commit = '';
+  try { commit = String((JSON.parse(String(auditorias[0].fontesJson || '{}')) as { commitSha?: string }).commitSha || ''); } catch { commit = ''; }
+  return { auditoria: auditorias[0], commit };
+}
+
+// HEAD commit sha (curto, 7) do branch padrão de um repo GitHub. 1 call barata.
+function _ghHeadCommitCurto(full: string, headers: Record<string, string>): string {
+  try {
+    const res = UrlFetchApp.fetch(`https://api.github.com/repos/${full}/commits?per_page=1`, { headers, muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return '';
+    const arr = JSON.parse(res.getContentText()) as Array<{ sha?: string }>;
+    return arr && arr[0] && arr[0].sha ? String(arr[0].sha).slice(0, 7) : '';
+  } catch { return ''; }
+}
+
+interface DiffContexto {
+  contexto: string;
+  arquivos: number;
+  bytes: number;
+  baseCommit: string;
+  headCommit: string;
+  truncado: boolean;
+  lista: string[];
+  erro?: string;
+}
+
+// Lê o DIFF (patches) entre o commit `baseSha` (já auditado) e o HEAD atual via
+// a compare API do GitHub. Diferente de _lerCodigoGitHub (que lê o repo inteiro),
+// aqui só entram os arquivos de código que mudaram — base da auditoria incremental.
+// O `patch` já vem inline na resposta do compare, então não há download de blobs.
+function _lerDiffGitHub(repoUrl: string, baseSha: string): DiffContexto {
+  const base7 = String(baseSha || '').slice(0, 7);
+  const vazio: DiffContexto = { contexto: '', arquivos: 0, bytes: 0, baseCommit: base7, headCommit: '', truncado: false, lista: [] };
+  const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+  if (!token) return { ...vazio, erro: 'GitHub não conectado (sem token).' };
+  const full = _ghFullName(repoUrl);
+  if (!/^[^/]+\/[^/]+$/.test(full)) return { ...vazio, erro: 'repoUrl inválida.' };
+  const headers = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'User-Agent': 'FORJA' };
+  try {
+    const head = _ghHeadCommitCurto(full, headers);
+    if (!head) return { ...vazio, erro: 'Não consegui ler o HEAD do repositório.' };
+    if (head === base7) return { ...vazio, headCommit: head };
+
+    const cmp = UrlFetchApp.fetch(`https://api.github.com/repos/${full}/compare/${base7}...${head}`, { headers, muteHttpExceptions: true });
+    if (cmp.getResponseCode() !== 200) return { ...vazio, headCommit: head, erro: `Não consegui comparar os commits (${cmp.getResponseCode()}).` };
+    const j = JSON.parse(cmp.getContentText()) as { files?: Array<{ filename: string; status: string; additions?: number; deletions?: number; patch?: string }> };
+
+    const arquivos = (j.files || [])
+      .filter((f) => _codeArquivoRelevante(f.filename, 0))
+      .sort((a, b) => _codePrioridade(b.filename) - _codePrioridade(a.filename));
+
+    const partes: string[] = [];
+    let bytes = 0; let truncado = false; let incluidos = 0; const lista: string[] = [];
+    for (const f of arquivos) {
+      if (incluidos >= _CODE_MAX_ARQUIVOS) { truncado = true; break; }
+      if (bytes >= _CODE_MAX_BYTES_TOTAL) { truncado = true; break; }
+      let patch = String(f.patch || '');
+      if (!patch) patch = f.status === 'removed' ? '(arquivo removido)' : '(sem patch textual — binário, renomeação ou diff muito grande)';
+      if (patch.length > _CODE_MAX_BYTES_ARQUIVO) { patch = patch.slice(0, _CODE_MAX_BYTES_ARQUIVO) + '\n… [diff truncado para a auditoria]'; truncado = true; }
+      partes.push(`\n### ${f.filename} (${f.status}, +${f.additions || 0} −${f.deletions || 0})\n\`\`\`diff\n${patch}\n\`\`\`\n`);
+      bytes += patch.length; incluidos++; lista.push(f.filename);
+    }
+    if (incluidos === 0) return { ...vazio, headCommit: head, arquivos: 0 };
+
+    const cabecalho = `Diff do repositório ${full}: ${base7} → ${head}\nArquivos de código alterados: ${incluidos}${truncado ? ' · diff truncado pelo orçamento' : ''}\n`;
+    return { contexto: cabecalho + partes.join(''), arquivos: incluidos, bytes, baseCommit: base7, headCommit: head, truncado, lista };
+  } catch (e: unknown) {
+    return { ...vazio, erro: e instanceof Error ? e.message : 'Erro ao ler o diff' };
+  }
+}
+
+// Status de frescor da auditoria de código: diz se o repositório mudou desde a
+// última auditoria, e quantos/quais arquivos relevantes mudaram. Chamado quando
+// o drawer abre, pra mostrar o banner e decidir se vale re-rodar.
+function getStatusAuditoriaCodigo(sistemaId: string): ServerResult {
+  try {
+    const sistema = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => s.id === sistemaId);
+    if (!sistema) return { ok: false, error: 'Sistema não encontrado' };
+
+    const repoUrl = String(sistema.repoUrl || '').trim();
+    const scriptId = String(sistema.scriptId || '').trim();
+    const temFonte = !!(repoUrl || scriptId);
+
+    const { auditoria, commit: ultimoCommitAuditado } = _ultimaAuditoriaCommit(sistemaId);
+    const nuncaAuditado = !auditoria;
+
+    const data: {
+      temFonte: boolean; fonte: 'github' | 'gas' | '';
+      nuncaAuditado: boolean; ultimoCommitAuditado: string; headCommit: string;
+      mudou: boolean; semDiff: boolean; arquivosMudados: number; listaMudados: string[]; erro?: string;
+      // Detector de "rodada só de docs": quando o repo mudou mas nenhum
+      // arquivo de código (filtro `_codeArquivoRelevante`) foi alterado.
+      // Sinaliza que a IA externa provavelmente só escreveu .md em vez de
+      // implementar correções — a Forja mostra alerta acima do hero.
+      arquivosMudadosTotal: number; mudancasSaoDocsOnly: boolean; listaDocsMudados: string[];
+    } = {
+      temFonte, fonte: repoUrl ? 'github' : (scriptId ? 'gas' : ''),
+      nuncaAuditado, ultimoCommitAuditado, headCommit: '',
+      mudou: true, semDiff: false, arquivosMudados: 0, listaMudados: [],
+      arquivosMudadosTotal: 0, mudancasSaoDocsOnly: false, listaDocsMudados: [],
+    };
+
+    // Sem fonte de código: nada de incremental de código pra reportar.
+    if (!temFonte) { data.mudou = false; return { ok: true, data }; }
+
+    // GAS não tem commit/diff confiável: sempre "pode re-rodar", sem diff.
+    if (!repoUrl && scriptId) { data.semDiff = true; return { ok: true, data }; }
+
+    const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+    if (!token) { data.erro = 'GitHub não conectado (sem token em Configurações).'; data.semDiff = true; return { ok: true, data }; }
+    const full = _ghFullName(repoUrl);
+    if (!/^[^/]+\/[^/]+$/.test(full)) { data.erro = 'repoUrl inválida.'; data.semDiff = true; return { ok: true, data }; }
+    const headers = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'User-Agent': 'FORJA' };
+
+    const head = _ghHeadCommitCurto(full, headers);
+    data.headCommit = head;
+    if (!head) { data.erro = 'Não consegui ler o HEAD do repositório.'; data.semDiff = true; return { ok: true, data }; }
+
+    // Nunca auditado ou sem commit registrado (auditorias antigas): há o que auditar,
+    // mas não dá pra fazer diff confiável.
+    if (nuncaAuditado || !ultimoCommitAuditado) { data.mudou = true; data.semDiff = true; return { ok: true, data }; }
+
+    if (ultimoCommitAuditado === head) { data.mudou = false; data.arquivosMudados = 0; return { ok: true, data }; }
+
+    // Repo mudou: conta/lista os arquivos relevantes alterados via compare API.
+    try {
+      const cmp = UrlFetchApp.fetch(`https://api.github.com/repos/${full}/compare/${ultimoCommitAuditado}...${head}`, { headers, muteHttpExceptions: true });
+      if (cmp.getResponseCode() === 200) {
+        const j = JSON.parse(cmp.getContentText()) as { files?: Array<{ filename: string; status: string }> };
+        const todos = j.files || [];
+        const relevantes = todos.filter((f) => _codeArquivoRelevante(f.filename, 0));
+        const naoRelevantes = todos.filter((f) => !_codeArquivoRelevante(f.filename, 0));
+        data.mudou = true;
+        data.arquivosMudados = relevantes.length;
+        data.listaMudados = relevantes.slice(0, 8).map((f) => f.filename);
+        data.arquivosMudadosTotal = todos.length;
+        // Docs-only: o repo teve mudanças (algum arquivo) mas NENHUM arquivo
+        // de código foi alterado. Padrão clássico de "IA externa só escreveu
+        // .md em vez de implementar". Coleta amostra dos arquivos não-relevantes
+        // pra mostrar exemplos no alerta.
+        if (todos.length > 0 && relevantes.length === 0) {
+          data.mudancasSaoDocsOnly = true;
+          data.listaDocsMudados = naoRelevantes.slice(0, 8).map((f) => f.filename);
+        }
+      } else {
+        // base sumiu (rebase/force-push) ou diff grande demais: muda, mas sem diff.
+        data.mudou = true; data.semDiff = true;
+      }
+    } catch {
+      data.mudou = true; data.semDiff = true;
+    }
+    return { ok: true, data };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao checar status' };
+  }
+}
+
 // Tenta extrair um bloco <AUDIT>...</AUDIT> com JSON estruturado.
 // Se falhar, devolve apenas o texto bruto da IA pra o front renderizar como fallback.
 interface AuditFinding {
@@ -11880,6 +13123,8 @@ interface AuditFinding {
   prompt: string;
   toolSugerida?: string;
   toolParams?: Record<string, unknown>;
+  // Auditoria incremental (Fase 2.5): de onde veio este achado nesta rodada.
+  origem?: 'novo' | 'persiste';
 }
 
 interface AuditPayload {
@@ -11887,6 +13132,8 @@ interface AuditPayload {
   oQueEmpolga: string[];
   proximosPassos: string;
   findings: AuditFinding[];
+  // Títulos de achados anteriores que o diff resolveu (só em auditoria incremental).
+  resolvidos?: string[];
 }
 
 function _parseAuditPayload(resposta: string): { texto: string; payload: AuditPayload | null } {
@@ -11910,6 +13157,7 @@ function _parseAuditPayload(resposta: string): { texto: string; payload: AuditPa
       const item = (f || {}) as Record<string, unknown>;
       const sev = String(item.severidade || 'media').toLowerCase();
       const sevTipada: AuditFinding['severidade'] = (sev === 'alta' || sev === 'baixa') ? sev : 'media';
+      const orig = String(item.origem || '').toLowerCase();
       return {
         id: 'finding-' + (i + 1),
         titulo: String(item.titulo || `Achado #${i + 1}`),
@@ -11921,6 +13169,7 @@ function _parseAuditPayload(resposta: string): { texto: string; payload: AuditPa
         prompt: String(item.prompt || ''),
         toolSugerida: item.toolSugerida ? String(item.toolSugerida) : undefined,
         toolParams: (item.toolParams && typeof item.toolParams === 'object') ? item.toolParams as Record<string, unknown> : undefined,
+        origem: (orig === 'novo' || orig === 'persiste') ? (orig as 'novo' | 'persiste') : undefined,
       };
     });
     const payload: AuditPayload = {
@@ -11928,6 +13177,7 @@ function _parseAuditPayload(resposta: string): { texto: string; payload: AuditPa
       oQueEmpolga: Array.isArray(p.oQueEmpolga) ? p.oQueEmpolga.map((x: unknown) => String(x)) : [],
       proximosPassos: String(p.proximosPassos || ''),
       findings,
+      resolvidos: Array.isArray(p.resolvidos) ? p.resolvidos.map((x: unknown) => String(x)).filter((s) => s.trim()) : undefined,
     };
     return { texto: textoAntes, payload };
   } catch {
@@ -11942,6 +13192,12 @@ interface RegistroFinding {
   registradoEm: string;
 }
 
+interface BacklogFechadoAuto {
+  tipo: string;
+  idCriado: string;
+  titulo: string;
+}
+
 interface AuditResultPayloadServer {
   id: string;
   texto: string;
@@ -11952,15 +13208,540 @@ interface AuditResultPayloadServer {
   duracaoMs: number;
   criadoEm: string;
   registros: Record<string, RegistroFinding>;
+  fechadosAuto?: BacklogFechadoAuto[];
 }
 
-function acaoIAAuditarSistema(sistemaId: string): ServerResult {
+// Fecha automaticamente os itens de backlog (decisão/risco/oportunidade) que
+// foram criados a partir de achados que o diff resolveu. O vínculo achado→item
+// vem do `registrosJson` da auditoria anterior (chaveado por finding.id, que é
+// posicional: "finding-N"). Casamos o título resolvido com o achado anterior,
+// achamos o item criado e mudamos o status pra "fechado".
+function _fecharBacklogResolvidos(
+  prevPayload: AuditPayload,
+  prevRegistros: Record<string, RegistroFinding>,
+  resolvidos: string[],
+): BacklogFechadoAuto[] {
+  const fechados: BacklogFechadoAuto[] = [];
+  if (!resolvidos || resolvidos.length === 0) return fechados;
+  const norm = (s: string) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const resolvidosNorm = resolvidos.map(norm);
+
+  for (let i = 0; i < prevPayload.findings.length; i++) {
+    const f = prevPayload.findings[i];
+    if (resolvidosNorm.indexOf(norm(f.titulo)) < 0) continue;
+    const reg = prevRegistros[f.id || ('finding-' + (i + 1))];
+    if (!reg || !reg.idCriado) continue;
+    const tipo = String(reg.tipo || '').toLowerCase();
+    try {
+      if (tipo === 'decisao') {
+        dbUpdate('Decisoes', reg.idCriado, { status: 'feito' });
+      } else if (tipo === 'risco') {
+        dbUpdate('Riscos', reg.idCriado, { status: 'mitigado' });
+      } else if (tipo === 'oportunidade') {
+        dbUpdate('Oportunidades', reg.idCriado, { estado: 'ganho' });
+      } else {
+        continue;
+      }
+      fechados.push({ tipo, idCriado: reg.idCriado, titulo: f.titulo });
+    } catch { /* best-effort: um item que falha não derruba a auditoria */ }
+  }
+  return fechados;
+}
+
+// Auditoria de onboarding: quando o sistema não tem NENHUM dado (sem código
+// legível, sem repo, sem custos/decisões/riscos/alertas/timeline), uma auditoria
+// com IA só produziria achados genéricos. Em vez disso devolvemos um checklist
+// determinístico (sem gastar LLM) que diz exatamente o que preencher pra destravar
+// auditorias de verdade. Mesmo formato AuditPayload → render/persistência iguais.
+function _auditoriaOnboarding(
+  sistemaId: string,
+  sistema: Record<string, unknown>,
+  fontes: AuditFontes,
+  codigoErro: string,
+): ServerResult {
+  fontes.onboarding = true;
+
+  const findings: AuditFinding[] = [];
+  const add = (f: Partial<AuditFinding> & { titulo: string; problema: string; solucao: string }) => {
+    findings.push({
+      id: 'finding-' + (findings.length + 1),
+      titulo: f.titulo,
+      severidade: f.severidade || 'media',
+      area: f.area || 'governanca',
+      problema: f.problema,
+      evidencia: f.evidencia || 'Dado ausente na ficha do sistema.',
+      solucao: f.solucao,
+      prompt: f.prompt || '',
+      toolSugerida: f.toolSugerida,
+      toolParams: f.toolParams,
+    });
+  };
+
+  const ehGas = !!String(sistema.scriptId || '').trim() && !String(sistema.repoUrl || '').trim();
+
+  // 1. Código ilegível (o bloqueio mais comum em projetos GAS).
+  if (codigoErro && /apps script api/i.test(codigoErro)) {
+    add({
+      titulo: 'Ative a Apps Script API pra IA ler o código',
+      severidade: 'alta',
+      area: 'operacional',
+      problema: 'A IA não conseguiu abrir o código deste projeto Apps Script — a Apps Script API está desativada na sua conta Google.',
+      evidencia: codigoErro,
+      solucao: '1) Abra script.google.com/home/usersettings\n2) Ative "Google Apps Script API"\n3) Volte aqui e rode a auditoria de novo.',
+    });
+  }
+
+  // 2. Repositório — destrava auditoria de código + incremental.
+  if (!fontes.temRepo) {
+    add({
+      titulo: 'Conecte o repositório (GitHub) do sistema',
+      severidade: 'alta',
+      area: 'arquitetura',
+      problema: 'Sem um repoUrl, a IA não lê o código real e a auditoria fica limitada à governança.' + (ehGas ? ' Mesmo sendo um projeto Apps Script, se ele é versionado via clasp no GitHub, conectar o repo desbloqueia leitura de código mais rica + auditoria incremental.' : ''),
+      solucao: '1) Abra a ficha do sistema\n2) Preencha o campo repoUrl com https://github.com/owner/repo\n3) Rode a auditoria no modo "Completa".',
+    });
+  }
+
+  // 3. Propósito.
+  if (!fontes.temProposito) {
+    add({
+      titulo: 'Defina o propósito do sistema',
+      area: 'produto',
+      problema: 'O sistema não tem um propósito documentado — sem isso é difícil priorizar e a auditoria não tem âncora de negócio.',
+      solucao: '1) Abra a ficha do sistema\n2) Escreva 1-2 frases: o que resolve e pra quem.',
+    });
+  }
+
+  // 4. Stack.
+  if (!fontes.temStack) {
+    add({
+      titulo: 'Documente a stack técnica',
+      area: 'arquitetura',
+      problema: 'A stack não está registrada — a IA não sabe quais riscos técnicos (deps, runtime, infra) avaliar.',
+      solucao: '1) Liste linguagem(ns), frameworks e serviços principais na ficha do sistema.',
+    });
+  }
+
+  // 5. URL/domínio de produção.
+  if (!fontes.temUrl) {
+    add({
+      titulo: 'Registre a URL/domínio de produção',
+      area: 'operacional',
+      problema: 'Não há URL de produção nem domínio customizado — não dá pra saber se/onde o sistema está no ar.',
+      solucao: '1) Preencha urlProd (e domínio, se houver) na ficha do sistema.',
+    });
+  }
+
+  // 6. Primeira decisão registrada (com tool pronta).
+  if (fontes.decisoes === 0) {
+    add({
+      titulo: 'Registre a primeira decisão técnica',
+      area: 'governanca',
+      problema: 'O backlog/histórico de decisões está vazio. Registrar decisões cria a memória do sistema.',
+      solucao: '1) Pense numa decisão já tomada (ex.: "usar Sheets como banco")\n2) Registre com justificativa.',
+      toolSugerida: 'registrar_decisao',
+      toolParams: { sistemaId, titulo: '', decisao: '', justificativa: '' },
+    });
+  }
+
+  // 7. Primeiro risco conhecido (com tool pronta).
+  if (fontes.riscos === 0) {
+    add({
+      titulo: 'Registre o primeiro risco conhecido',
+      area: 'governanca',
+      problema: 'Nenhum risco mapeado. Todo sistema tem pelo menos um (custo, dependência, single point of failure).',
+      solucao: '1) Aponte o maior risco atual\n2) Registre com gravidade.',
+      toolSugerida: 'registrar_risco',
+      toolParams: { sistemaId, area: 'operacional', descricao: '', gravidade: 'media' },
+    });
+  }
+
+  const nome = String(sistema.nome || 'Este sistema');
+  const payload: AuditPayload = {
+    estadoGeral: `${nome} está praticamente sem dados na Forja — sem código legível e sem registros de governança. Antes de uma auditoria crítica fazer sentido, vale preencher o básico abaixo. Esta é uma checklist de setup (gerada sem IA), não uma análise crítica.`,
+    oQueEmpolga: [],
+    proximosPassos: 'Comece pelo achado #1. Cada item preenchido destrava uma camada da próxima auditoria — com código conectado, a IA passa a citar arquivo + trecho real.',
+    findings,
+  };
+
+  const saudeAtual = calcularSaudeReal(sistemaId);
+  const saudeScore = (saudeAtual.ok && saudeAtual.data) ? Number((saudeAtual.data as { score: number }).score) : 0;
+
+  const resultadoFinal: AuditResultPayloadServer = {
+    id: '',
+    texto: '',
+    payload,
+    fontes,
+    saudeAtual: saudeAtual.ok ? saudeAtual.data : null,
+    modeloUsado: 'Checklist Forja (sem IA)',
+    duracaoMs: 0,
+    criadoEm: new Date().toISOString(),
+    registros: {},
+  };
+
+  try {
+    const novaLinha = dbCreate('Auditorias', {
+      sistemaId,
+      criadoEm: resultadoFinal.criadoEm,
+      modeloUsado: resultadoFinal.modeloUsado,
+      duracaoMs: 0,
+      scoreNoMomento: saudeScore,
+      numFindings: payload.findings.length,
+      payloadJson: JSON.stringify(payload),
+      fontesJson: JSON.stringify(fontes),
+      registrosJson: '{}',
+    }) as Record<string, unknown>;
+    resultadoFinal.id = String(novaLinha.id || '');
+  } catch { /* persistência é best-effort */ }
+
+  return { ok: true, data: resultadoFinal };
+}
+
+// Similaridade Jaccard entre palavras-chave de 2 títulos, ignorando palavras
+// curtas (<4 chars), acentos e pontuação. >= 0.4 = "mesmo achado" pra fins de
+// reconciliação. Threshold testado contra casos reais: "URL de produção não
+// registrada" vs "URL de produção não registrada na Forja" → 0.66 (mesmo);
+// "Cobertura de testes baixa" vs "Cobertura de testes baixa fora do Authz" →
+// 0.5 (mesmo); "Webapp acessível por ANYONE" vs "Webapp restritivo" → 0.2
+// (diferentes).
+function _similaridadeTitulos(a: string, b: string): number {
+  const norm = (s: string): string[] => {
+    return String(s || '')
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 3);
+  };
+  const wa = norm(a);
+  const wb = norm(b);
+  if (wa.length === 0 || wb.length === 0) return 0;
+  const setA: Record<string, boolean> = {};
+  const setB: Record<string, boolean> = {};
+  wa.forEach((w) => { setA[w] = true; });
+  wb.forEach((w) => { setB[w] = true; });
+  let intersection = 0;
+  const seen: Record<string, boolean> = {};
+  Object.keys(setA).forEach((w) => {
+    if (setB[w]) intersection++;
+    seen[w] = true;
+  });
+  Object.keys(setB).forEach((w) => { seen[w] = true; });
+  const union = Object.keys(seen).length;
+  return union === 0 ? 0 : intersection / union;
+}
+
+// Palavras-chave técnicas que indicam "tema". Quando 2 achados têm a MESMA
+// ÁREA + ≥1 keyword técnica em comum, são considerados mesmo achado mesmo
+// que o Jaccard de palavras seja baixo. Resolve falso negativo real visto na
+// v1.140.0 ("Zero monitoramento/alerting em produção" vs "Sem monitoramento/
+// alertas de erros em produção" — Jaccard 0.09, mas é o mesmo achado).
+const _KEYWORDS_RECONCILIACAO = [
+  'monitoramento', 'alerting', 'alertas', 'observability', 'observabilidade',
+  'backup', 'restore', 'recuperacao',
+  'testes', 'cobertura', 'coverage',
+  'deploy', 'pipeline', 'rollback',
+  'spreadsheet', 'database', 'sheet', 'planilha',
+  'vendor', 'lockin', 'contingencia', 'fallback',
+  'seguranca', 'security', 'autenticacao', 'authz', 'permissao',
+  'dependencia', 'dependencias', 'deps',
+  'lint', 'eslint', 'tipagem', 'typescript',
+  'documentacao', 'readme',
+  'performance', 'latencia', 'escalabilidade',
+  'segredo', 'segredos', 'secret', 'secrets', 'token', 'credencial',
+  'rate', 'limit', 'throttle',
+  'logs', 'logging', 'auditoria',
+  'cron', 'agendamento', 'scheduler',
+  'cors', 'csrf', 'xss', 'sql', 'injection',
+];
+
+function _extrairKeywordsTema(titulo: string): string[] {
+  const norm = String(titulo || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const presentes: string[] = [];
+  _KEYWORDS_RECONCILIACAO.forEach((kw) => {
+    if (norm.indexOf(kw) >= 0) presentes.push(kw);
+  });
+  return presentes;
+}
+
+// Reconciliação semântica em 2 camadas:
+//   1. Jaccard de palavras-chave >= 0.4 (variações textuais óbvias)
+//   2. MESMA ÁREA + ≥1 keyword técnica em comum (reformulações pela IA)
+// Qualquer camada positiva = mesmo achado.
+function _mesmoAchado(prev: AuditFinding, atual: AuditFinding): boolean {
+  const tituloPrev = String(prev.titulo || '');
+  const tituloAtual = String(atual.titulo || '');
+
+  if (_similaridadeTitulos(tituloPrev, tituloAtual) >= 0.4) return true;
+
+  const areaPrev = String(prev.area || '').toLowerCase().trim();
+  const areaAtual = String(atual.area || '').toLowerCase().trim();
+  if (areaPrev && areaPrev === areaAtual) {
+    const keysPrev = _extrairKeywordsTema(tituloPrev);
+    const keysAtual = _extrairKeywordsTema(tituloAtual);
+    if (keysPrev.length > 0 && keysAtual.length > 0) {
+      const comum = keysPrev.filter((k) => keysAtual.indexOf(k) >= 0);
+      if (comum.length >= 1) return true;
+    }
+  }
+
+  return false;
+}
+
+// Reconciliação determinística pós-IA (Fase 2.6): a auditoria completa NÃO passa
+// achados anteriores pra IA (caminho forçado, sem diff de código), então a IA
+// retorna findings do zero — sem origem nem resolvidos. Aqui cruzamos os títulos
+// novos contra os da última auditoria salva pra reconstruir o Antes vs Depois.
+// Resultado: o ComparativoAntesDepois funciona em QUALQUER caminho (incremental
+// ou completo), e o usuário sempre vê "saíram N · entraram M · persistem K".
+function _reconciliarComAnterior(payload: AuditPayload, sistemaId: string): AuditPayload {
+  if (!payload || !Array.isArray(payload.findings)) return payload;
+  // Se a IA já marcou origem nos findings (caminho incremental), respeita.
+  const jaTemOrigem = payload.findings.some((f) => f.origem === 'novo' || f.origem === 'persiste');
+  if (jaTemOrigem && Array.isArray(payload.resolvidos)) return payload;
+
+  const auditorias = (dbGetAll('Auditorias') as Array<Record<string, unknown>>)
+    .filter((a) => String(a.sistemaId || '') === sistemaId)
+    .sort((a, b) => String(b.criadoEm).localeCompare(String(a.criadoEm)));
+  if (auditorias.length === 0) return payload; // primeira auditoria — nada a reconciliar
+
+  let prev: AuditPayload | null = null;
+  try { prev = JSON.parse(String(auditorias[0].payloadJson || 'null')) as AuditPayload; } catch { prev = null; }
+  if (!prev || !Array.isArray(prev.findings) || prev.findings.length === 0) return payload;
+
+  // Reconciliação semântica em 2 camadas (Jaccard + área+keywords). Cobre tanto
+  // variações textuais óbvias quanto reformulações da IA com palavras diferentes.
+  const findingsComOrigem = payload.findings.map((f) => {
+    const temSimilarAnterior = prev!.findings.some((p) => _mesmoAchado(p, f));
+    return Object.assign({}, f, { origem: temSimilarAnterior ? 'persiste' : 'novo' }) as AuditFinding;
+  });
+
+  const resolvidos = prev.findings
+    .filter((p) => !payload.findings.some((a) => _mesmoAchado(p, a)))
+    .map((p) => String(p.titulo || ''))
+    .filter((t) => t.length > 0);
+
+  return Object.assign({}, payload, { findings: findingsComOrigem, resolvidos });
+}
+
+// Auditoria incremental (Fase 2.5): em vez de reler o repo inteiro, manda pro LLM
+// (1) os achados anteriores e (2) só o DIFF desde a última auditoria, pedindo pra
+// RECONCILIAR — o que o diff resolveu, o que persiste e quais problemas novos ele
+// introduziu. Sai no MESMO formato AuditPayload, então persistência/render não mudam.
+function _executarAuditoriaIncremental(
+  sistemaId: string,
+  sistema: Record<string, unknown>,
+  modo: 'codigo' | 'completa',
+  diff: DiffContexto,
+  prevPayload: AuditPayload,
+  prevRegistros: Record<string, RegistroFinding>,
+): ServerResult {
+  const fontes = _coletarFontesAuditoria(sistemaId);
+  fontes.modo = modo;
+  fontes.fonteCodigo = 'github';
+  fontes.incremental = true;
+  fontes.arquivosLidos = diff.arquivos;
+  fontes.bytesCodigo = diff.bytes;
+  fontes.commitSha = diff.headCommit;
+  fontes.baseCommit = diff.baseCommit;
+  fontes.codigoTruncado = diff.truncado;
+
+  const areasPermitidas = 'governanca|arquitetura|seguranca|dependencias|testes|operacional|financeiro|produto|ux|codigo|performance';
+
+  const prevList = prevPayload.findings
+    .map((f, i) => `#${i + 1} [${f.severidade}|${f.area}] ${f.titulo}\n   problema: ${f.problema}\n   evidência: ${f.evidencia}`)
+    .join('\n');
+
+  const promptUser = (
+    `Auditoria INCREMENTAL do sistema "${sistema.nome}" (id=${sistemaId}).\n\n`
+    + 'Já houve uma auditoria anterior. Abaixo estão (1) os ACHADOS ANTERIORES e (2) o DIFF de código (o que mudou no repositório desde então). '
+    + 'Sua tarefa é RECONCILIAR: dizer o que o diff resolveu, o que ainda persiste, e quais problemas NOVOS o diff introduziu.\n\n'
+    + 'Você é um diretor técnico/produto experiente. A saída vira cards individuais, então seja CONCRETO e ACIONÁVEL.\n\n'
+    + 'Responda ESTRITAMENTE neste formato Markdown + bloco JSON ao final:\n\n'
+    + '## Estado geral\n(2-3 frases sobre o impacto do diff: o que melhorou, o que ainda falta.)\n\n'
+    + '## O que mudou\n(1 parágrafo curto resumindo o diff e o que ele resolve/quebra.)\n\n'
+    + '## Próximos passos estratégicos\n(1 parágrafo sobre o que priorizar AGORA. Aponta o achado #N mais importante.)\n\n'
+    + '<AUDIT>\n'
+    + '{\n'
+    + '  "estadoGeral": "<repita Estado geral>",\n'
+    + '  "oQueEmpolga": ["bullet 1", "bullet 2"],\n'
+    + '  "proximosPassos": "<repita Próximos passos>",\n'
+    + '  "resolvidos": ["<título de um achado anterior que o diff resolveu>"],\n'
+    + '  "findings": [\n'
+    + '    {\n'
+    + '      "titulo": "<curto, máx 70 chars>",\n'
+    + '      "severidade": "alta|media|baixa",\n'
+    + '      "area": "' + areasPermitidas + '",\n'
+    + '      "origem": "novo|persiste",\n'
+    + '      "problema": "<O QUE está errado. 1-2 frases.>",\n'
+    + '      "evidencia": "<cite o arquivo + trecho do diff (linhas + ou -). Se inferência, comece com \\"Inferência:\\".>",\n'
+    + '      "solucao": "<COMO resolver. 2-4 passos. Numera 1) 2) 3).>",\n'
+    + '      "prompt": "<texto pronto pra colar no Cursor/Claude.>",\n'
+    + '      "toolSugerida": "registrar_risco|registrar_decisao|registrar_oportunidade",\n'
+    + '      "toolParams": { ...parametros corretos, com sistemaId="' + sistemaId + '"... }\n'
+    + '    }\n'
+    + '  ]\n'
+    + '}\n'
+    + '</AUDIT>\n\n'
+    + 'REGRAS DURAS (qualidade > quantidade):\n'
+    + '- "findings" deve conter: TODOS os achados anteriores que AINDA PERSISTEM (origem="persiste") + os NOVOS achados introduzidos pelo diff (origem="novo"). NÃO inclua achados que o diff resolveu — liste o título deles em "resolvidos".\n'
+    + '- Um achado anterior só é "resolvido" se o DIFF claramente o corrige. Na dúvida, mantenha como "persiste".\n'
+    + '- ⚠ ANTI-DUPLICIDADE (crítico): se um achado está em "resolvidos", você NÃO pode criar um achado NOVO cuja CAUSA-RAIZ seja a mesma do resolvido (mesmo com redação diferente). Exemplo proibido: resolver "URL de produção não registrada" e criar novo "URL de produção não registrada na Forja" → ambos têm a mesma causa-raiz "ausência de URL registrada" → escolha UM dos dois lados (mantém em "persiste" com nota OU deixa só em "resolvidos"). Cada problema lógico aparece em EXATAMENTE 1 lugar.\n'
+    + '- Antes de marcar um achado como NOVO, verifique se ele cobre uma DIMENSÃO genuinamente diferente da que estava nos resolvidos. Se for variação textual, descarta.\n'
+    + '- ⚠ NOVO finding só vale se tiver IMPACTO mensurável (segurança, dinheiro, tempo, manutenibilidade). Se o diff introduziu mudança de estilo/nomenclatura sem risco real, NÃO crie achado.\n'
+    + '- Severidades têm critério OBJETIVO: ALTA=segurança/perda/blocker; MEDIA=dívida técnica que limita evolução, deps com CVE, ausência de testes em código crítico; BAIXA=DX/qualidade que economiza tempo no longo prazo (use COM PARCIMÔNIA).\n'
+    + '- Máximo 8 findings. Não force mínimo — aceito 0 novos findings se o diff só resolveu coisas.\n'
+    + '- Todo achado de CÓDIGO deve citar o ARQUIVO e o trecho literal do diff. Ex: "src/api.ts → + const API_KEY = \'sk-...\'".\n'
+    + '- O JSON dentro de <AUDIT> precisa ser VÁLIDO. Aspas escapadas, sem comentários, sem trailing commas.\n'
+    + '- toolParams perfeito pro tipo: registrar_risco {sistemaId, area, descricao, gravidade}; registrar_decisao {sistemaId, titulo, decisao, justificativa}; registrar_oportunidade {titulo, valorEstimado, proximoPasso}.\n\n'
+    + 'IDs reais: sistemaId="' + sistemaId + '". Não invente outros.\n\n'
+    + '--- ACHADOS ANTERIORES (auditados no commit ' + diff.baseCommit + ') ---\n' + prevList + '\n\n'
+    + (modo === 'completa' ? '--- CONTEXTO DE GOVERNANÇA (metadados, custos, riscos, decisões) ---\n' + _contextoSistemaProfundo(sistemaId) + '\n\n' : '')
+    + '--- DIFF DE CÓDIGO (' + diff.baseCommit + ' → ' + diff.headCommit + ') ---\n' + diff.contexto
+  );
+
+  const messages: LlmMessage[] = [
+    { role: 'system', content: 'Você é um auditor técnico/produto sênior. Seguir o formato exigido é mais importante do que ser eloquente.' },
+    { role: 'user', content: promptUser },
+  ];
+
+  const props = PropertiesService.getScriptProperties();
+  const modeloAuditoria = props.getProperty('LLM_MODEL_AUDITORIA') || '';
+  const modeloEfetivo = modeloAuditoria || props.getProperty('LLM_MODEL') || 'desconhecido';
+
+  const inicio = Date.now();
+  const resposta = forjaCallLLM(messages, 5500, modeloAuditoria, 'auditoria');
+  const duracaoMs = Date.now() - inicio;
+  const parsed = _parseAuditPayload(resposta);
+
+  // Auto-fecha os itens de backlog cujos achados o diff resolveu. Faz ANTES de
+  // calcular a saúde, pra que riscos mitigados/decisões "feito" já reflitam no score.
+  let fechadosAuto: BacklogFechadoAuto[] = [];
+  if (parsed.payload && parsed.payload.resolvidos && parsed.payload.resolvidos.length > 0) {
+    fechadosAuto = _fecharBacklogResolvidos(prevPayload, prevRegistros, parsed.payload.resolvidos);
+  }
+
+  // Passa o payload novo direto pra calcularSaudeReal — assim o score já reflete
+  // os achados RECÉM-RECONCILIADOS (e não os antigos do banco, que ainda não
+  // foram substituídos pela nova auditoria persistida abaixo).
+  const saudeAtual = calcularSaudeReal(sistemaId, parsed.payload || null);
+  const saudeScore = (saudeAtual.ok && saudeAtual.data) ? Number((saudeAtual.data as { score: number }).score) : 0;
+
+  const resultadoFinal: AuditResultPayloadServer = {
+    id: '',
+    texto: parsed.texto || resposta,
+    payload: parsed.payload,
+    fontes,
+    saudeAtual: saudeAtual.ok ? saudeAtual.data : null,
+    modeloUsado: modeloEfetivo,
+    duracaoMs,
+    criadoEm: new Date().toISOString(),
+    registros: {},
+    fechadosAuto,
+  };
+
+  try {
+    if (parsed.payload) {
+      const novaLinha = dbCreate('Auditorias', {
+        sistemaId,
+        criadoEm: resultadoFinal.criadoEm,
+        modeloUsado: modeloEfetivo,
+        duracaoMs,
+        scoreNoMomento: saudeScore,
+        numFindings: parsed.payload.findings.length,
+        payloadJson: JSON.stringify(parsed.payload),
+        fontesJson: JSON.stringify(fontes),
+        registrosJson: '{}',
+      }) as Record<string, unknown>;
+      resultadoFinal.id = String(novaLinha.id || '');
+    }
+  } catch { /* persistência é best-effort */ }
+
+  return { ok: true, data: resultadoFinal };
+}
+
+function acaoIAAuditarSistema(sistemaId: string, modo?: string, forcar?: boolean): ServerResult {
   try {
     const sistema = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => s.id === sistemaId);
     if (!sistema) return { ok: false, error: 'Sistema não encontrado' };
 
+    const modoSolicitado: 'governanca' | 'codigo' | 'completa' =
+      (modo === 'governanca' || modo === 'codigo') ? modo : 'completa';
+
+    // Caminho incremental (GitHub, sem forçar). Uma única ida ao GitHub pega o HEAD:
+    //  - HEAD == commit auditado  → curto-circuito: devolve a auditoria salva (sem LLM).
+    //  - HEAD != commit auditado e há achados anteriores → auditoria INCREMENTAL:
+    //    reconcilia os achados antigos contra o diff (resolvido/persiste) + acha novos.
+    // `forcar` pula tudo isso e roda a auditoria completa do repo.
+    const repoUrlSist = String(sistema.repoUrl || '').trim();
+    if (!forcar && modoSolicitado !== 'governanca' && repoUrlSist) {
+      const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+      const full = _ghFullName(repoUrlSist);
+      if (token && /^[^/]+\/[^/]+$/.test(full)) {
+        const { auditoria: ultAud, commit: lastCommit } = _ultimaAuditoriaCommit(sistemaId);
+        if (lastCommit) {
+          const headers = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'User-Agent': 'FORJA' };
+          const head = _ghHeadCommitCurto(full, headers);
+          if (head && head === lastCommit) {
+            const ult = getUltimaAuditoria(sistemaId);
+            if (ult.ok && ult.data) {
+              return { ok: true, data: Object.assign({}, ult.data, { semMudanca: true }) };
+            }
+          } else if (head && ultAud) {
+            // Repo mudou: tenta auditoria incremental sobre o diff.
+            let prevPayload: AuditPayload | null = null;
+            try { prevPayload = JSON.parse(String(ultAud.payloadJson || 'null')) as AuditPayload; } catch { prevPayload = null; }
+            let prevRegistros: Record<string, RegistroFinding> = {};
+            try { prevRegistros = JSON.parse(String(ultAud.registrosJson || '{}')) || {}; } catch { prevRegistros = {}; }
+            if (prevPayload && Array.isArray(prevPayload.findings) && prevPayload.findings.length > 0) {
+              const diff = _lerDiffGitHub(repoUrlSist, lastCommit);
+              if (!diff.erro && diff.arquivos > 0) {
+                return _executarAuditoriaIncremental(sistemaId, sistema, modoSolicitado, diff, prevPayload, prevRegistros);
+              }
+              // Sem diff utilizável (erro/0 arquivos relevantes) → cai pra completa.
+            }
+          }
+        }
+      }
+    }
+
     const fontes = _coletarFontesAuditoria(sistemaId);
-    const contexto = _contextoSistemaProfundo(sistemaId);
+    fontes.modo = modoSolicitado;
+
+    // Leitura de código (GitHub/GAS) quando o modo pede. Se falhar, degradamos
+    // pra governança em vez de devolver um relatório vazio.
+    const codigo = modoSolicitado !== 'governanca' ? _lerCodigoSistema(sistema) : null;
+    const temCodigo = !!(codigo && codigo.arquivos > 0 && codigo.contexto);
+    const usaGov = modoSolicitado !== 'codigo' || !temCodigo;
+    if (codigo) {
+      fontes.fonteCodigo = codigo.fonte;
+      fontes.arquivosLidos = codigo.arquivos;
+      fontes.bytesCodigo = codigo.bytes;
+      fontes.commitSha = codigo.commitSha;
+      fontes.codigoTruncado = codigo.truncado;
+      if (codigo.erro) fontes.codigoErro = codigo.erro;
+    } else if (modoSolicitado !== 'governanca' && !String(sistema.repoUrl || '').trim() && !String(sistema.scriptId || '').trim()) {
+      fontes.codigoErro = 'Sistema sem repositório (repoUrl) nem scriptId pra auditar código.';
+    }
+
+    // Sistema "faminto de dados": sem código legível, sem repo e sem nenhum registro
+    // de governança. Auditar com IA aqui só geraria achados genéricos — devolvemos um
+    // checklist de setup determinístico (sem gastar LLM).
+    const totalRegistros = fontes.custos + fontes.decisoes + fontes.riscos + fontes.alertas + fontes.timeline;
+    if (!temCodigo && !fontes.temRepo && totalRegistros === 0) {
+      return _auditoriaOnboarding(sistemaId, sistema, fontes, (codigo && codigo.erro) || fontes.codigoErro || '');
+    }
+
+    const blocosCtx: string[] = [];
+    if (usaGov) blocosCtx.push('--- CONTEXTO DE GOVERNANÇA (metadados, custos, riscos, decisões) ---\n' + _contextoSistemaProfundo(sistemaId));
+    if (temCodigo) blocosCtx.push('--- CONTEXTO DE CÓDIGO (repositório real) ---\n' + (codigo as CodigoContexto).contexto);
+    const contexto = blocosCtx.join('\n\n');
+
+    const areasPermitidas = temCodigo
+      ? 'governanca|arquitetura|seguranca|dependencias|testes|operacional|financeiro|produto|ux|codigo|performance'
+      : 'governanca|arquitetura|seguranca|operacional|financeiro|produto|ux';
 
     const promptUser = (
       `Auditoria estruturada do sistema "${sistema.nome}" (id=${sistemaId}).\n\n`
@@ -11981,7 +13762,7 @@ function acaoIAAuditarSistema(sistemaId: string): ServerResult {
       + '    {\n'
       + '      "titulo": "<curto, máx 70 chars, descritivo>",\n'
       + '      "severidade": "alta|media|baixa",\n'
-      + '      "area": "governanca|arquitetura|seguranca|operacional|financeiro|produto|ux",\n'
+      + '      "area": "' + areasPermitidas + '",\n'
       + '      "problema": "<O QUE está errado. 1-2 frases. Sem repetir o título.>",\n'
       + '      "evidencia": "<RASTREABILIDADE: cite literalmente o dado do contexto que sustenta o problema. Ex: \\"0 decisões registradas\\", \\"stack vazia\\", \\"sem urlProd nem dominioCustomizado\\". Se você ESTIVER INFERINDO sem dado direto, comece com \\"Inferência:\\".>",\n'
       + '      "solucao": "<COMO resolver. 2-4 passos concretos. Numera com 1) 2) 3).>",\n'
@@ -11992,10 +13773,17 @@ function acaoIAAuditarSistema(sistemaId: string): ServerResult {
       + '  ]\n'
       + '}\n'
       + '</AUDIT>\n\n'
-      + 'REGRAS DURAS:\n'
-      + '- Mínimo 3, máximo 6 findings. Não invente problemas — se o sistema está bem em algo, não force.\n'
+      + 'REGRAS DURAS (qualidade > quantidade):\n'
+      + '- SEM MÍNIMO. Aceito 0 findings se o sistema realmente não tiver problemas reais. Aceito até ' + (temCodigo ? '8' : '6') + ' findings no máximo.\n'
+      + '- ⚠ ANTES DE LISTAR um finding, pergunte a si mesmo: "Este achado tem IMPACTO mensurável (segurança, dinheiro, tempo, manutenibilidade) OU é nitpicking estético/preferência de estilo?" Se for nitpicking, NÃO LISTE.\n'
+      + '- ⚠ Cada finding DEVE ter um IMPACTO concreto explícito no campo "problema". Não aceito "não está documentado" sozinho — exija "não está documentado, e isso faz X (custo/risco/atraso/dívida) acontecer".\n'
+      + '- Severidades têm critério OBJETIVO:\n'
+      + '  • ALTA: vulnerabilidade de segurança, perda de dados, sistema indisponível, vazamento de PII, custo descontrolado, blocker pra negócio.\n'
+      + '  • MEDIA: dívida técnica que limita evolução, ausência de testes em código crítico, falta de monitoramento em prod, dependência desatualizada com CVE conhecida.\n'
+      + '  • BAIXA: melhorias de DX/qualidade de código que economizam tempo no longo prazo. Use COM PARCIMÔNIA — sistema saudável não precisa ter achados baixos.\n'
       + '- NUNCA repita um problema que já está em DECISÕES PRÉVIAS, RISCOS ABERTOS ou ALERTAS RECENTES.\n'
       + '- Cada finding TEM que ter evidência rastreável ao contexto, ou começar com "Inferência:" e explicar de onde tirou.\n'
+      + (temCodigo ? '- Quando o achado vier do CÓDIGO, a evidência DEVE citar o ARQUIVO e o trecho literal. Ex: "src/config.ts → const API_KEY = \'sk-...\'". Priorize achados de código reais (segredos, deps desatualizadas, falta de testes/CI, arquitetura, código morto) sobre achados de metadados.\n' : '')
       + '- O JSON dentro de <AUDIT> precisa ser VÁLIDO. Aspas escapadas, sem comentários, sem trailing commas.\n'
       + '- toolParams precisa estar PERFEITO pro tipo de tool. Ex: registrar_risco quer {sistemaId, area, descricao, gravidade}; registrar_decisao quer {sistemaId, titulo, decisao, justificativa}; registrar_oportunidade quer {titulo, valorEstimado, proximoPasso}.\n\n'
       + 'IDs reais: sistemaId="' + sistemaId + '". Não invente outros.\n\n'
@@ -12016,7 +13804,34 @@ function acaoIAAuditarSistema(sistemaId: string): ServerResult {
     const duracaoMs = Date.now() - inicio;
     const parsed = _parseAuditPayload(resposta);
 
-    const saudeAtual = calcularSaudeReal(sistemaId);
+    // Reconciliação determinística pós-IA: cruza títulos novos contra os da
+    // última auditoria pra reconstruir "saíram / entraram / persistem" mesmo
+    // quando a IA não passa por reconciliação explícita (caminho completo).
+    if (parsed.payload) {
+      parsed.payload = _reconciliarComAnterior(parsed.payload, sistemaId);
+    }
+
+    // Auto-fecha backlog dos achados que o reconciliador deterministou como
+    // resolvidos. Antes só o incremental fazia isso — agora o completo também,
+    // pra fechar o ciclo de "registrei decisão → próxima auditoria fecha o achado".
+    let fechadosAuto: BacklogFechadoAuto[] = [];
+    if (parsed.payload && parsed.payload.resolvidos && parsed.payload.resolvidos.length > 0) {
+      const auditoriasPrev = (dbGetAll('Auditorias') as Array<Record<string, unknown>>)
+        .filter((a) => String(a.sistemaId || '') === sistemaId)
+        .sort((a, b) => String(b.criadoEm).localeCompare(String(a.criadoEm)));
+      if (auditoriasPrev.length > 0) {
+        try {
+          const prevPayloadParaFechar = JSON.parse(String(auditoriasPrev[0].payloadJson || 'null')) as AuditPayload | null;
+          const prevRegistrosParaFechar = JSON.parse(String(auditoriasPrev[0].registrosJson || '{}')) as Record<string, RegistroFinding>;
+          if (prevPayloadParaFechar) {
+            fechadosAuto = _fecharBacklogResolvidos(prevPayloadParaFechar, prevRegistrosParaFechar, parsed.payload.resolvidos);
+          }
+        } catch { /* ignore */ }
+      }
+    }
+
+    // Score reflete os achados recém-encontrados — não os antigos no banco.
+    const saudeAtual = calcularSaudeReal(sistemaId, parsed.payload || null);
     const saudeScore = (saudeAtual.ok && saudeAtual.data) ? Number((saudeAtual.data as { score: number }).score) : 0;
 
     const resultadoFinal: AuditResultPayloadServer = {
@@ -12029,6 +13844,7 @@ function acaoIAAuditarSistema(sistemaId: string): ServerResult {
       duracaoMs,
       criadoEm: new Date().toISOString(),
       registros: {},
+      fechadosAuto,
     };
 
     // Persiste só se o payload parseou (pra não guardar lixo)
@@ -12093,6 +13909,46 @@ function getUltimaAuditoria(sistemaId: string): ServerResult {
   }
 }
 
+// Linha do tempo das auditorias de um sistema: cada rodada com score, nº de
+// achados, quantos o diff resolveu, modelo e commit. Alimenta a aba Histórico
+// (evolução do score ao longo do tempo). Mais recente primeiro.
+function getHistoricoAuditorias(sistemaId: string): ServerResult {
+  try {
+    const alvo = String(sistemaId || '').trim();
+    const todas = (dbGetAll('Auditorias') as Array<Record<string, unknown>>)
+      .filter((a) => String(a.sistemaId || '').trim() === alvo)
+      .sort((a, b) => String(b.criadoEm || '').localeCompare(String(a.criadoEm || '')));
+    const itens = todas.map((a) => {
+      let resolvidos = 0;
+      let incremental = false;
+      let commitSha = '';
+      try {
+        const p = JSON.parse(String(a.payloadJson || 'null')) as AuditPayload | null;
+        resolvidos = p && Array.isArray(p.resolvidos) ? p.resolvidos.length : 0;
+      } catch { /* ignora payload corrompido */ }
+      try {
+        const f = JSON.parse(String(a.fontesJson || 'null')) as AuditFontes | null;
+        incremental = !!(f && f.incremental);
+        commitSha = f && f.commitSha ? String(f.commitSha) : '';
+      } catch { /* ignora fontes corrompidas */ }
+      return {
+        id: String(a.id || ''),
+        criadoEm: String(a.criadoEm || ''),
+        modeloUsado: String(a.modeloUsado || ''),
+        duracaoMs: Number(a.duracaoMs || 0),
+        scoreNoMomento: Number(a.scoreNoMomento || 0),
+        numFindings: Number(a.numFindings || 0),
+        resolvidos,
+        incremental,
+        commitSha,
+      };
+    });
+    return { ok: true, data: itens };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar histórico' };
+  }
+}
+
 // Marca um finding específico como "já registrado" — atualiza o JSON do registrosJson
 // na linha da Auditorias. Permite que ao reabrir o drawer, o FindingCard mostre
 // "Já registrado" ao invés do botão de ação, evitando duplicações.
@@ -12120,6 +13976,24 @@ function marcarFindingRegistrado(payload: {
     return { ok: true, data: { findingId: payload.findingId, registros } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Apaga TODO o histórico de auditorias de um sistema. Pensado pra testar do zero
+// (ex.: validar mudanças no fluxo de auditoria sem o curto-circuito/incremental
+// reaproveitando rodadas antigas).
+function limparAuditoriasSistema(sistemaId: string): ServerResult {
+  try {
+    const alvo = String(sistemaId || '').trim();
+    if (!alvo) return { ok: false, error: 'sistemaId é obrigatório' };
+    const ids = (dbGetAll('Auditorias') as Array<Record<string, unknown>>)
+      .filter((a) => String(a.sistemaId || '').trim() === alvo)
+      .map((a) => String(a.id || ''))
+      .filter((id) => id);
+    const removidas = ids.length > 0 ? dbDeleteMany('Auditorias', ids) : 0;
+    return { ok: true, data: { removidas } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao limpar auditorias' };
   }
 }
 
@@ -12523,16 +14397,20 @@ function driveInfoConta(): ServerResult {
 
 function driveConnectorsList(): ServerResult {
   try {
-    const linhas = (dbGetAll('DriveConnectors') as Array<Record<string, unknown>>).map((l) => ({
-      id: String(l.id || ''),
-      provedor: String(l.provedor || ''),
-      email: String(l.email || ''),
-      rotulo: String(l.rotulo || ''),
-      status: String(l.status || 'registrada'),
-      pastaRaizId: String(l.pastaRaizId || ''),
-      notas: String(l.notas || ''),
-      criadoEm: String(l.criadoEm || ''),
-    }));
+    const linhas = (dbGetAll('DriveConnectors') as Array<Record<string, unknown>>)
+      // O conector do YouTube (Estudos) usa a mesma tabela, mas não é uma "nuvem
+      // de arquivos" — fica fora do painel Driver pra não confundir.
+      .filter((l) => String(l.provedor || '') !== 'google-youtube')
+      .map((l) => ({
+        id: String(l.id || ''),
+        provedor: String(l.provedor || ''),
+        email: String(l.email || ''),
+        rotulo: String(l.rotulo || ''),
+        status: String(l.status || 'registrada'),
+        pastaRaizId: String(l.pastaRaizId || ''),
+        notas: String(l.notas || ''),
+        criadoEm: String(l.criadoEm || ''),
+      }));
     return { ok: true, data: linhas };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar contas' };
@@ -12631,6 +14509,9 @@ function _normalizarConta(l: Record<string, unknown>): Record<string, unknown> {
     segredoLabel: String(l.segredoLabel || ''),
     tags: String(l.tags || ''),
     notas: String(l.notas || ''),
+    recEmail: String(l.recEmail || ''),
+    recTelefone: String(l.recTelefone || ''),
+    recNotas: String(l.recNotas || ''),
     criadoEm: String(l.criadoEm || ''),
     atualizadoEm: String(l.atualizadoEm || ''),
   };
@@ -12650,6 +14531,7 @@ function contasSave(payload: {
   logins?: Array<{ email?: string; rotulo?: string }>;
   plano?: string; tipoCobranca?: string; custo?: number | string; moeda?: string; formaPagamento?: string;
   proximaCobranca?: string; status?: string; temSegredo?: string; segredoLabel?: string; tags?: string; notas?: string;
+  recEmail?: string; recTelefone?: string; recNotas?: string;
 }): ServerResult {
   try {
     const servico = String(payload.servico || '').trim();
@@ -12681,6 +14563,9 @@ function contasSave(payload: {
       segredoLabel: String(payload.segredoLabel || '').trim(),
       tags: String(payload.tags || '').trim(),
       notas: String(payload.notas || '').trim(),
+      recEmail: String(payload.recEmail || '').trim(),
+      recTelefone: String(payload.recTelefone || '').trim(),
+      recNotas: String(payload.recNotas || '').trim(),
       atualizadoEm: agora,
     };
     if (payload.id) {
@@ -12815,6 +14700,17 @@ const _OAUTH_PROVIDERS: Record<string, OAuthProviderCfg> = {
     authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
     tokenUrl: 'https://oauth2.googleapis.com/token',
     scope: 'https://www.googleapis.com/auth/drive.readonly',
+    extraAuthParams: { access_type: 'offline', prompt: 'consent' },
+    callback: 'authCallbackGoogle',
+  },
+  // Estudos → YouTube. OAuth próprio (Client ID/Secret do usuário, com a YouTube
+  // Data API v3 habilitada). Usar o token do conector via REST evita adicionar o
+  // scope sensível youtube.readonly ao manifesto do app — que, em contas Workspace
+  // de apps não verificados, derruba a autorização (tela branca).
+  'google-youtube': {
+    authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+    tokenUrl: 'https://oauth2.googleapis.com/token',
+    scope: 'https://www.googleapis.com/auth/youtube.readonly',
     extraAuthParams: { access_type: 'offline', prompt: 'consent' },
     callback: 'authCallbackGoogle',
   },
@@ -13148,7 +15044,7 @@ function skillsSave(payload: {
         fonte: payload.fonte || String(existe.fonte || ''),
         tamanhoBytes: tamanho,
         atualizadoEm: agora,
-        ...(conteudoMudou ? { traducaoPt: '' } : {}),
+        ...(conteudoMudou ? { traducaoPt: '', descricaoPt: '', tipoIA: '', adaptacoes: '' } : {}),
       });
       return { ok: true, data: { id: payload.id, nome, descricao, categoria, tags } };
     }
@@ -13237,6 +15133,118 @@ function _parseTraducaoPt(raw: unknown): { conteudo: string; descricao: string; 
   } catch { return null; }
 }
 
+// Traduz para pt-BR APENAS as descrições (uma frase curta) de todas as skills
+// que ainda não têm `descricaoPt`. Barato e idempotente: cacheia por skill e só
+// retraduz com `forcar`. Não toca em `traducaoPt` (tradução completa do drawer).
+function skillsTraduzirDescricoes(forcar?: boolean): ServerResult {
+  try {
+    const linhas = dbGetAll('Skills') as Array<Record<string, unknown>>;
+    const pendentes = linhas.filter((s) => {
+      const desc = String(s.descricao || '').trim();
+      const jaPt = String(s.descricaoPt || '').trim();
+      return desc && (forcar || !jaPt);
+    });
+    if (pendentes.length === 0) {
+      return { ok: true, data: { traduzidas: 0, total: linhas.length } };
+    }
+    let n = 0; let erros = 0;
+    for (const s of pendentes) {
+      const desc = String(s.descricao || '').trim();
+      try {
+        const pt = forjaCallLLM([
+          { role: 'system', content: 'Traduza para português do Brasil em uma única frase, sem aspas, mantendo termos técnicos. Responda somente com a tradução:' },
+          { role: 'user', content: desc },
+        ], 400, undefined, 'traducao');
+        const ptTxt = String(pt || '').trim();
+        if (ptTxt) { dbUpdate('Skills', String(s.id || ''), { descricaoPt: ptTxt }); n++; }
+      } catch { erros++; /* pula esta, segue as outras */ }
+    }
+    return { ok: true, data: { traduzidas: n, total: linhas.length, erros } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao traduzir descrições' };
+  }
+}
+
+// Vocabulário fixo de temas de alto nível. Manter curto e estável pra que os
+// agrupamentos não explodam em dezenas de rótulos. A IA escolhe UM desta lista.
+const SKILL_TEMAS = [
+  'Design', 'Frontend', 'Backend', 'Dados', 'Infra/DevOps', 'Testes',
+  'Segurança', 'IA/Prompts', 'Automação', 'Documentação', 'Revisão de código',
+  'Produtividade', 'Outro',
+];
+
+// Classifica por IA cada skill num tema de alto nível (SKILL_TEMAS) a partir do
+// nome + descrição, persistindo em `tipoIA`. Faz UMA chamada à LLM com todas as
+// pendentes (JSON in/out) pra economizar tokens. Idempotente: só reclassifica
+// quem não tem `tipoIA`, salvo `forcar`.
+function skillsClassificar(forcar?: boolean): ServerResult {
+  try {
+    const linhas = dbGetAll('Skills') as Array<Record<string, unknown>>;
+    const pendentes = linhas.filter((s) => {
+      const temTexto = String(s.nome || '').trim() || String(s.descricao || '').trim();
+      return temTexto && (forcar || !String(s.tipoIA || '').trim());
+    });
+    if (pendentes.length === 0) {
+      return { ok: true, data: { classificadas: 0, total: linhas.length } };
+    }
+    const itens = pendentes.map((s, i) => ({
+      i,
+      id: String(s.id || ''),
+      nome: String(s.nome || ''),
+      desc: String(s.descricaoPt || s.descricao || '').slice(0, 400),
+    }));
+    const sys = 'Você classifica skills de desenvolvimento de software em UM tema de alto nível. '
+      + 'Use EXATAMENTE um destes valores: ' + SKILL_TEMAS.join(', ') + '. '
+      + 'Se nada se encaixar, use "Outro". Responda SOMENTE com um array JSON, sem texto extra, '
+      + 'no formato [{"i":0,"tema":"Design"}, ...] cobrindo todos os itens recebidos.';
+    const userMsg = JSON.stringify(itens.map((x) => ({ i: x.i, nome: x.nome, descricao: x.desc })));
+    const resp = forjaCallLLM(
+      [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
+      1500, undefined, 'traducao',
+    );
+    const mapa = _parseClassificacao(resp);
+    let n = 0;
+    for (const it of itens) {
+      const tema = _temaValido(mapa[it.i]);
+      if (tema) { try { dbUpdate('Skills', it.id, { tipoIA: tema }); n++; } catch { /* segue */ } }
+    }
+    return { ok: true, data: { classificadas: n, total: linhas.length } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao classificar skills' };
+  }
+}
+
+// Normaliza um tema retornado pela IA pro valor canônico de SKILL_TEMAS (case/
+// acento-insensível). Devolve '' se não casar com nada.
+function _temaValido(raw: unknown): string {
+  const txt = String(raw || '').trim().toLowerCase();
+  if (!txt) return '';
+  const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const alvo = norm(txt);
+  for (const tema of SKILL_TEMAS) if (norm(tema) === alvo) return tema;
+  return '';
+}
+
+// Parse defensivo da resposta da IA → { [i]: tema }. Tenta JSON direto; se vier
+// cercado por texto/markdown, extrai o primeiro array JSON.
+function _parseClassificacao(resp: string): Record<number, string> {
+  const out: Record<number, string> = {};
+  let txt = String(resp || '').trim();
+  const ini = txt.indexOf('[');
+  const fim = txt.lastIndexOf(']');
+  if (ini >= 0 && fim > ini) txt = txt.slice(ini, fim + 1);
+  try {
+    const arr = JSON.parse(txt) as Array<Record<string, unknown>>;
+    if (Array.isArray(arr)) {
+      for (const o of arr) {
+        const i = Number(o.i);
+        if (!Number.isNaN(i)) out[i] = String(o.tema || o.tipo || '');
+      }
+    }
+  } catch { /* sem classificação utilizável */ }
+  return out;
+}
+
 // Lista todas as skills com metadados (sem o conteúdo completo, pra ser leve).
 function skillsList(): ServerResult {
   try {
@@ -13245,6 +15253,8 @@ function skillsList(): ServerResult {
         id: String(s.id || ''),
         nome: String(s.nome || ''),
         descricao: String(s.descricao || ''),
+        descricaoPt: String(s.descricaoPt || ''),
+        tipoIA: String(s.tipoIA || ''),
         categoria: String(s.categoria || ''),
         tags: String(s.tags || '').split(',').map((x) => x.trim()).filter(Boolean),
         fonte: String(s.fonte || ''),
@@ -13302,6 +15312,236 @@ function skillsPreviewParse(conteudo: string): ServerResult {
     return { ok: true, data: _parseSkillMd(conteudo || '') };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ─── Fontes (pastas/pacotes) de skills ───────────────────────────────────────
+
+// Slug estável pra usar como prefixo de fonte ("<chave>/<skill>").
+function _slugFonte(s: string): string {
+  return String(s || '')
+    .toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'pacote';
+}
+
+// Mesma regra do front: prefixo antes da "/" é a chave da pasta.
+function _chaveDaFonte(fonte: string): string {
+  const f = String(fonte || '');
+  if (!f) return 'avulsas';
+  const i = f.indexOf('/');
+  return i > 0 ? f.slice(0, i) : 'avulsas';
+}
+
+function _prettifyChave(chave: string): string {
+  if (chave === 'gas-app-kit') return 'GAS App Kit';
+  if (chave === 'avulsas') return 'Avulsas / Importadas';
+  return chave.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Lista as fontes com metadados. Auto-semeia uma linha pra cada prefixo de
+// skill que ainda não tem metadados (exceto o bucket virtual "avulsas"), pra
+// que toda pasta já apareça editável — inclusive a do GAS App Kit.
+function skillFontesList(): ServerResult {
+  try {
+    const fontes = dbGetAll('SkillFontes') as Array<Record<string, unknown>>;
+    const porChave = new Map(fontes.map((f) => [String(f.chave || ''), f]));
+    const skills = dbGetAll('Skills') as Array<Record<string, unknown>>;
+    const prefixos = new Set<string>();
+    for (const s of skills) {
+      const k = _chaveDaFonte(String(s.fonte || ''));
+      if (k && k !== 'avulsas') prefixos.add(k);
+    }
+    const agora = new Date().toISOString();
+    for (const k of prefixos) {
+      if (!porChave.has(k)) {
+        const descPadrao = k === 'gas-app-kit'
+          ? 'Pacote de skills do GAS App Kit (Google Apps Script).' : '';
+        try {
+          const novo = dbCreate('SkillFontes', {
+            chave: k, nome: _prettifyChave(k), descricao: descPadrao, cor: '',
+            criadoEm: agora, atualizadoEm: agora,
+          });
+          porChave.set(k, novo);
+        } catch { /* segue baile */ }
+      }
+    }
+    const lista = Array.from(porChave.values()).map((f) => ({
+      id: String(f.id || ''),
+      chave: String(f.chave || ''),
+      nome: String(f.nome || ''),
+      descricao: String(f.descricao || ''),
+      cor: String(f.cor || ''),
+    }));
+    return { ok: true, data: lista };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar fontes' };
+  }
+}
+
+// Cria/atualiza uma fonte. Na criação, deriva `chave` única do nome (ou da chave
+// passada). Na edição (com id), NÃO muda a chave pra não órfãos as skills.
+function skillFonteSalvar(payload: {
+  id?: string; chave?: string; nome: string; descricao?: string; cor?: string;
+}): ServerResult {
+  try {
+    const nome = String(payload.nome || '').trim();
+    if (!nome) throw new Error('Dê um nome pra pasta/pacote.');
+    const descricao = String(payload.descricao || '').trim();
+    const cor = String(payload.cor || '').trim();
+    const agora = new Date().toISOString();
+    const fontes = dbGetAll('SkillFontes') as Array<Record<string, unknown>>;
+
+    if (payload.id) {
+      const existe = fontes.find((f) => String(f.id || '') === payload.id);
+      if (!existe) throw new Error('Pasta não encontrada.');
+      dbUpdate('SkillFontes', payload.id, { nome, descricao, cor, atualizadoEm: agora });
+      return { ok: true, data: { id: payload.id, chave: String(existe.chave || ''), nome, descricao, cor } };
+    }
+
+    // Nova: garante chave única.
+    const usadas = new Set(fontes.map((f) => String(f.chave || '')));
+    let base = _slugFonte(payload.chave || nome);
+    let chave = base;
+    let n = 2;
+    while (usadas.has(chave) || chave === 'avulsas') { chave = `${base}-${n}`; n++; }
+    const novo = dbCreate('SkillFontes', {
+      chave, nome, descricao, cor, criadoEm: agora, atualizadoEm: agora,
+    });
+    return { ok: true, data: { id: String(novo.id || ''), chave, nome, descricao, cor } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar pasta' };
+  }
+}
+
+// Remove a pasta e MOVE suas skills pra "Avulsas" (tira o prefixo da `fonte`).
+// É preciso mover as skills, senão a pasta se auto-semearia de novo no próximo
+// list (a partir do prefixo ainda existente nas skills).
+function skillFonteRemover(id: string): ServerResult {
+  try {
+    const fontes = dbGetAll('SkillFontes') as Array<Record<string, unknown>>;
+    const f = fontes.find((x) => String(x.id || '') === id);
+    if (!f) throw new Error('Pasta não encontrada.');
+    const chave = String(f.chave || '');
+    const skills = dbGetAll('Skills') as Array<Record<string, unknown>>;
+    let movidas = 0;
+    for (const s of skills) {
+      if (_chaveDaFonte(String(s.fonte || '')) === chave) {
+        const fonteAtual = String(s.fonte || '');
+        const idx = fonteAtual.indexOf('/');
+        const base = idx > 0 ? fonteAtual.slice(idx + 1) : fonteAtual;
+        try { dbUpdate('Skills', String(s.id || ''), { fonte: base }); movidas++; } catch { /* segue */ }
+      }
+    }
+    dbDelete('SkillFontes', id);
+    return { ok: true, data: { id, movidas } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover pasta' };
+  }
+}
+
+// Devolve nome + conteúdo completo das skills pedidas (por id). Usado pra montar
+// o .zip de export no cliente. Mantém a ordem dos ids recebidos.
+function skillsExportar(ids: string[]): ServerResult {
+  try {
+    const linhas = dbGetAll('Skills') as Array<Record<string, unknown>>;
+    const porId = new Map(linhas.map((l) => [String(l.id || ''), l]));
+    const out = (ids || [])
+      .map((id) => porId.get(String(id)))
+      .filter((l): l is Record<string, unknown> => !!l)
+      .map((l) => ({
+        id: String(l.id || ''),
+        nome: String(l.nome || ''),
+        descricao: String(l.descricaoPt || l.descricao || ''),
+        conteudo: String(l.conteudo || ''),
+        fonte: String(l.fonte || ''),
+      }));
+    return { ok: true, data: out };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao exportar skills' };
+  }
+}
+
+// Adapta o conteúdo das skills pedidas para um ambiente (SO/shell/stack) via IA,
+// reescrevendo comandos, caminhos e exemplos sem mudar o propósito. Usado no
+// export "parametrizado". NÃO persiste — devolve o conteúdo adaptado pro cliente
+// montar o .zip. Loop por skill; cada uma é uma chamada à LLM (pode demorar).
+function skillsAdaptar(payload: { ids: string[]; ambiente: string; forcar?: boolean }): ServerResult {
+  try {
+    const linhas = dbGetAll('Skills') as Array<Record<string, unknown>>;
+    const porId = new Map(linhas.map((l) => [String(l.id || ''), l]));
+    const ambiente = String(payload.ambiente || '').trim() || 'o ambiente informado';
+    const chaveAmb = _ambienteKey(ambiente);
+    const sys = 'Você adapta uma skill (arquivo SKILL.md) para um ambiente específico SEM mudar o '
+      + 'propósito dela. Ambiente alvo: ' + ambiente + '. Reescreva comandos de terminal, caminhos de '
+      + 'arquivo, exemplos e instruções para esse ambiente (ex.: bash→PowerShell no Windows, separadores '
+      + 'de caminho, variáveis de ambiente, gerenciador de pacotes). Mantenha a estrutura Markdown e o '
+      + 'frontmatter YAML (NÃO altere a chave "name" nem seu valor). Responda somente com o SKILL.md '
+      + 'adaptado, sem comentários.';
+    let doCache = 0;
+    const out = (payload.ids || [])
+      .map((id) => porId.get(String(id)))
+      .filter((l): l is Record<string, unknown> => !!l)
+      .map((l) => {
+        const id = String(l.id || '');
+        const conteudo = String(l.conteudo || '');
+        const cacheMap = _parseAdaptacoes(l.adaptacoes);
+        let adaptado = conteudo;
+        if (!conteudo.trim()) {
+          // sem conteúdo, nada a adaptar
+        } else if (!payload.forcar && cacheMap[chaveAmb] && cacheMap[chaveAmb].conteudo) {
+          adaptado = cacheMap[chaveAmb].conteudo; doCache++;
+        } else {
+          try {
+            const r = forjaCallLLM([{ role: 'system', content: sys }, { role: 'user', content: conteudo }], 4000, undefined, 'traducao');
+            adaptado = String(r || '').trim() || conteudo;
+            cacheMap[chaveAmb] = { conteudo: adaptado, em: new Date().toISOString() };
+            try { dbUpdate('Skills', id, { adaptacoes: JSON.stringify(cacheMap) }); } catch { /* segue */ }
+          } catch { adaptado = conteudo; }
+        }
+        return {
+          id, nome: String(l.nome || ''),
+          descricao: String(l.descricaoPt || l.descricao || ''),
+          conteudo: adaptado, original: conteudo, fonte: String(l.fonte || ''),
+        };
+      });
+    return { ok: true, data: out, meta: { doCache } } as ServerResult;
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao adaptar skills' };
+  }
+}
+
+// Chave de cache estável pra um ambiente (case/acento/espaço-insensível).
+function _ambienteKey(s: string): string {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ').trim() || 'default';
+}
+
+function _parseAdaptacoes(raw: unknown): Record<string, { conteudo: string; em: string }> {
+  const txt = String(raw || '').trim();
+  if (!txt) return {};
+  try {
+    const o = JSON.parse(txt);
+    return (o && typeof o === 'object') ? o as Record<string, { conteudo: string; em: string }> : {};
+  } catch { return {}; }
+}
+
+// Move uma skill pra outra pasta (troca o prefixo da `fonte`, preservando o nome
+// base). Destino "avulsas" remove o prefixo. Cria a pasta-destino implicitamente
+// (o list auto-semeia metadados pra prefixos novos).
+function skillsMoverFonte(id: string, chaveDestino: string): ServerResult {
+  try {
+    const linhas = dbGetAll('Skills') as Array<Record<string, unknown>>;
+    const s = linhas.find((l) => String(l.id || '') === id);
+    if (!s) throw new Error('Skill não encontrada.');
+    const fonteAtual = String(s.fonte || '');
+    const i = fonteAtual.indexOf('/');
+    const base = (i > 0 ? fonteAtual.slice(i + 1) : fonteAtual) || _slugFonte(String(s.nome || ''));
+    const destino = String(chaveDestino || 'avulsas').trim() || 'avulsas';
+    const novaFonte = destino === 'avulsas' ? base : `${destino}/${base}`;
+    dbUpdate('Skills', id, { fonte: novaFonte });
+    return { ok: true, data: { id, fonte: novaFonte } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao mover skill' };
   }
 }
 
@@ -13910,6 +16150,759 @@ function bookmarksDelete(id: string): ServerResult {
   }
 }
 
+// ─── Estudos (seção de topo) ──────────────────────────────────────────────────
+// Vídeos favoritos do YouTube + caderno de assuntos/dicas. Fase 1: sem OAuth — os
+// metadados do vídeo (título/canal/thumb) vêm do oEmbed público do YouTube.
+
+// Extrai o videoId de várias formas de URL do YouTube (watch, youtu.be, embed,
+// shorts) ou aceita um id cru de 11 chars.
+function _extrairVideoId(input: string): string {
+  const s = String(input || '').trim();
+  if (!s) return '';
+  if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
+  const padroes = [
+    /[?&]v=([A-Za-z0-9_-]{11})/,
+    /youtu\.be\/([A-Za-z0-9_-]{11})/,
+    /\/embed\/([A-Za-z0-9_-]{11})/,
+    /\/shorts\/([A-Za-z0-9_-]{11})/,
+    /\/live\/([A-Za-z0-9_-]{11})/,
+  ];
+  for (const re of padroes) {
+    const m = s.match(re);
+    if (m && m[1]) return m[1];
+  }
+  return '';
+}
+
+// Busca metadados públicos via oEmbed (sem API key). Retorna null se falhar.
+function _youtubeOembed(url: string): { title: string; author: string; thumb: string } | null {
+  try {
+    const r = UrlFetchApp.fetch(
+      'https://www.youtube.com/oembed?format=json&url=' + encodeURIComponent(url),
+      { muteHttpExceptions: true },
+    );
+    if (r.getResponseCode() !== 200) return null;
+    const j = JSON.parse(r.getContentText()) as Record<string, unknown>;
+    return {
+      title: String(j.title || ''),
+      author: String(j.author_name || ''),
+      thumb: String(j.thumbnail_url || ''),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function estudoVideosList(): ServerResult {
+  try {
+    const todos = (dbGetAll('EstudoVideos') as Array<Record<string, unknown>>)
+      .map((v) => ({
+        id: String(v.id || ''),
+        videoId: String(v.videoId || ''),
+        url: String(v.url || ''),
+        titulo: String(v.titulo || ''),
+        canal: String(v.canal || ''),
+        thumb: String(v.thumb || ''),
+        categoria: String(v.categoria || ''),
+        colecaoId: String(v.colecaoId || ''),
+        tags: String(v.tags || '').split(',').map((x) => x.trim()).filter(Boolean),
+        nota: String(v.nota || ''),
+        criadoEm: String(v.criadoEm || ''),
+        atualizadoEm: String(v.atualizadoEm || ''),
+      }))
+      .sort((a, b) => (b.criadoEm).localeCompare(a.criadoEm));
+    return { ok: true, data: todos };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoVideoSave(payload: {
+  id?: string;
+  url: string;
+  titulo?: string;
+  canal?: string;
+  thumb?: string;
+  categoria?: string;
+  colecaoId?: string;
+  tags?: string;
+  nota?: string;
+}): ServerResult {
+  try {
+    const url = String(payload.url || '').trim();
+    if (!url) throw new Error('Cole o link do vídeo do YouTube.');
+    const videoId = _extrairVideoId(url);
+    if (!videoId) throw new Error('Não reconheci um link/ID de vídeo do YouTube válido.');
+    const urlCanonica = 'https://www.youtube.com/watch?v=' + videoId;
+    const agora = new Date().toISOString();
+
+    let titulo = String(payload.titulo || '').trim();
+    let canal = String(payload.canal || '').trim();
+    let thumb = String(payload.thumb || '').trim();
+    // Completa metadados faltantes via oEmbed público.
+    if (!titulo || !canal || !thumb) {
+      const meta = _youtubeOembed(urlCanonica);
+      if (meta) {
+        if (!titulo) titulo = meta.title;
+        if (!canal) canal = meta.author;
+        if (!thumb) thumb = meta.thumb;
+      }
+    }
+    if (!thumb) thumb = 'https://i.ytimg.com/vi/' + videoId + '/hqdefault.jpg';
+    if (!titulo) titulo = urlCanonica;
+
+    const dados = {
+      videoId,
+      url: urlCanonica,
+      titulo,
+      canal,
+      thumb,
+      categoria: String(payload.categoria || '').trim(),
+      colecaoId: String(payload.colecaoId || '').trim(),
+      tags: String(payload.tags || '').trim(),
+      nota: String(payload.nota || '').trim(),
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('EstudoVideos', payload.id, dados);
+      return { ok: true, data: { id: payload.id, ...dados } };
+    }
+    // Trava de duplicados: o mesmo vídeo (videoId) só entra uma vez nos Favoritos.
+    const existente = (dbGetAll('EstudoVideos') as Array<Record<string, unknown>>)
+      .find((v) => String(v.videoId || '') === videoId);
+    if (existente) {
+      return { ok: true, data: { id: String(existente.id || ''), ...dados, duplicado: true } };
+    }
+    const novo = dbCreate('EstudoVideos', { ...dados, criadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoVideoDelete(id: string): ServerResult {
+  try {
+    dbDelete('EstudoVideos', id);
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ── Estúdio: rascunho de anotações por vídeo ──────────────────────────────────
+function estudoVideoNotaGet(videoId: string): ServerResult {
+  try {
+    const vid = String(videoId || '').trim();
+    if (!vid) return { ok: true, data: { videoId: '', texto: '', atualizadoEm: '' } };
+    const linha = (dbGetAll('EstudoVideoNotas') as Array<Record<string, unknown>>)
+      .find((n) => String(n.videoId || '') === vid);
+    return {
+      ok: true,
+      data: {
+        videoId: vid,
+        texto: linha ? String(linha.texto || '') : '',
+        atualizadoEm: linha ? String(linha.atualizadoEm || '') : '',
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoVideoNotaSave(payload: { videoId: string; texto: string }): ServerResult {
+  try {
+    const vid = String(payload.videoId || '').trim();
+    if (!vid) throw new Error('Vídeo inválido.');
+    const texto = String(payload.texto || '');
+    const agora = new Date().toISOString();
+    const existente = (dbGetAll('EstudoVideoNotas') as Array<Record<string, unknown>>)
+      .find((n) => String(n.videoId || '') === vid);
+    // Texto vazio: remove o registro pra não deixar lixo.
+    if (!texto.trim()) {
+      if (existente) dbDelete('EstudoVideoNotas', String(existente.id));
+      return { ok: true, data: { videoId: vid, texto: '', atualizadoEm: agora } };
+    }
+    if (existente) {
+      dbUpdate('EstudoVideoNotas', String(existente.id), { videoId: vid, texto, atualizadoEm: agora });
+      return { ok: true, data: { id: String(existente.id), videoId: vid, texto, atualizadoEm: agora } };
+    }
+    const novo = dbCreate('EstudoVideoNotas', { videoId: vid, texto, criadoEm: agora, atualizadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ── Estúdio: histórico "continuar assistindo" ─────────────────────────────────
+function estudoHistoricoList(): ServerResult {
+  try {
+    const todos = (dbGetAll('EstudoHistorico') as Array<Record<string, unknown>>)
+      .map((h) => ({
+        id: String(h.id || ''),
+        videoId: String(h.videoId || ''),
+        titulo: String(h.titulo || ''),
+        canal: String(h.canal || ''),
+        thumb: String(h.thumb || ''),
+        url: String(h.url || ''),
+        visto: String(h.visto || ''),
+      }))
+      .sort((a, b) => b.visto.localeCompare(a.visto))
+      .slice(0, 12);
+    return { ok: true, data: todos };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoHistoricoAdd(payload: { videoId: string; titulo?: string; canal?: string; thumb?: string; url?: string }): ServerResult {
+  try {
+    const vid = String(payload.videoId || '').trim();
+    if (!vid) return { ok: true, data: {} };
+    const agora = new Date().toISOString();
+    const linhas = dbGetAll('EstudoHistorico') as Array<Record<string, unknown>>;
+    const existente = linhas.find((h) => String(h.videoId || '') === vid);
+    const titulo = String(payload.titulo || '').trim() || (existente ? String(existente.titulo || '') : '');
+    const canal = String(payload.canal || '').trim() || (existente ? String(existente.canal || '') : '');
+    let thumb = String(payload.thumb || '').trim() || (existente ? String(existente.thumb || '') : '');
+    if (!thumb) thumb = 'https://i.ytimg.com/vi/' + vid + '/hqdefault.jpg';
+    const url = String(payload.url || '').trim() || 'https://www.youtube.com/watch?v=' + vid;
+    const dados = { videoId: vid, titulo, canal, thumb, url, visto: agora };
+    if (existente) {
+      dbUpdate('EstudoHistorico', String(existente.id), dados);
+    } else {
+      dbCreate('EstudoHistorico', { ...dados, criadoEm: agora });
+      // Poda: mantém só os 30 mais recentes.
+      const atualizados = (dbGetAll('EstudoHistorico') as Array<Record<string, unknown>>)
+        .sort((a, b) => String(b.visto || '').localeCompare(String(a.visto || '')));
+      for (let i = 30; i < atualizados.length; i++) dbDelete('EstudoHistorico', String(atualizados[i].id));
+    }
+    return { ok: true, data: { videoId: vid } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoHistoricoClear(): ServerResult {
+  try {
+    const todos = dbGetAll('EstudoHistorico') as Array<Record<string, unknown>>;
+    for (const h of todos) if (h.id) dbDelete('EstudoHistorico', String(h.id));
+    return { ok: true, data: {} };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ── Trilhas de estudo ─────────────────────────────────────────────────────────
+function estudoTrilhasList(): ServerResult {
+  try {
+    const itens = dbGetAll('EstudoTrilhaItens') as Array<Record<string, unknown>>;
+    const trilhas = (dbGetAll('EstudoTrilhas') as Array<Record<string, unknown>>)
+      .map((tr) => {
+        const meus = itens.filter((i) => String(i.trilhaId || '') === String(tr.id || ''));
+        const feitos = meus.filter((i) => String(i.feito || '') === '1').length;
+        return {
+          id: String(tr.id || ''),
+          titulo: String(tr.titulo || ''),
+          objetivo: String(tr.objetivo || ''),
+          status: String(tr.status || 'planejando'),
+          prioridade: String(tr.prioridade || 'media'),
+          cor: String(tr.cor || 'peach'),
+          ordem: Number(tr.ordem || 0),
+          totalItens: meus.length,
+          itensFeitos: feitos,
+          totalVideos: meus.filter((i) => String(i.tipo || '') === 'video').length,
+          criadoEm: String(tr.criadoEm || ''),
+          atualizadoEm: String(tr.atualizadoEm || ''),
+        };
+      })
+      .sort((a, b) => (a.ordem - b.ordem) || a.criadoEm.localeCompare(b.criadoEm));
+    return { ok: true, data: trilhas };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoTrilhaSave(payload: {
+  id?: string; titulo: string; objetivo?: string; status?: string; prioridade?: string; cor?: string;
+}): ServerResult {
+  try {
+    const titulo = String(payload.titulo || '').trim();
+    if (!titulo) throw new Error('Dê um nome pra trilha.');
+    const agora = new Date().toISOString();
+    const dados = {
+      titulo,
+      objetivo: String(payload.objetivo || '').trim(),
+      status: String(payload.status || 'planejando').trim(),
+      prioridade: String(payload.prioridade || 'media').trim(),
+      cor: String(payload.cor || 'peach').trim(),
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('EstudoTrilhas', payload.id, dados);
+      return { ok: true, data: { id: payload.id, ...dados } };
+    }
+    const existentes = dbGetAll('EstudoTrilhas') as Array<Record<string, unknown>>;
+    const novo = dbCreate('EstudoTrilhas', { ...dados, ordem: existentes.length, criadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoTrilhaDelete(id: string): ServerResult {
+  try {
+    const tid = String(id || '');
+    const itens = (dbGetAll('EstudoTrilhaItens') as Array<Record<string, unknown>>)
+      .filter((i) => String(i.trilhaId || '') === tid);
+    for (const i of itens) dbDelete('EstudoTrilhaItens', String(i.id));
+    dbDelete('EstudoTrilhas', tid);
+    return { ok: true, data: { id: tid } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoTrilhaItensList(trilhaId: string): ServerResult {
+  try {
+    const tid = String(trilhaId || '');
+    const itens = (dbGetAll('EstudoTrilhaItens') as Array<Record<string, unknown>>)
+      .filter((i) => String(i.trilhaId || '') === tid)
+      .map((i) => ({
+        id: String(i.id || ''),
+        trilhaId: tid,
+        tipo: String(i.tipo || 'tarefa'),
+        titulo: String(i.titulo || ''),
+        descricao: String(i.descricao || ''),
+        videoId: String(i.videoId || ''),
+        url: String(i.url || ''),
+        canal: String(i.canal || ''),
+        thumb: String(i.thumb || ''),
+        feito: String(i.feito || '') === '1',
+        ordem: Number(i.ordem || 0),
+        criadoEm: String(i.criadoEm || ''),
+      }))
+      .sort((a, b) => (a.ordem - b.ordem) || a.criadoEm.localeCompare(b.criadoEm));
+    return { ok: true, data: itens };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoTrilhaItemSave(payload: {
+  id?: string; trilhaId: string; tipo: string; titulo?: string; descricao?: string; url?: string;
+  videoId?: string; canal?: string; thumb?: string;
+}): ServerResult {
+  try {
+    const tid = String(payload.trilhaId || '').trim();
+    if (!tid) throw new Error('Trilha inválida.');
+    const tipo = String(payload.tipo || 'tarefa').trim();
+    const agora = new Date().toISOString();
+
+    let videoId = String(payload.videoId || '').trim();
+    let url = String(payload.url || '').trim();
+    let titulo = String(payload.titulo || '').trim();
+    let canal = String(payload.canal || '').trim();
+    let thumb = String(payload.thumb || '').trim();
+
+    if (tipo === 'video') {
+      if (!videoId) videoId = _extrairVideoId(url);
+      if (!videoId) throw new Error('Não reconheci um link/ID de vídeo do YouTube válido.');
+      url = 'https://www.youtube.com/watch?v=' + videoId;
+      if (!titulo || !canal || !thumb) {
+        const meta = _youtubeOembed(url);
+        if (meta) {
+          if (!titulo) titulo = meta.title;
+          if (!canal) canal = meta.author;
+          if (!thumb) thumb = meta.thumb;
+        }
+      }
+      if (!thumb) thumb = 'https://i.ytimg.com/vi/' + videoId + '/hqdefault.jpg';
+      if (!titulo) titulo = url;
+    } else if (!titulo) {
+      throw new Error('Escreva a tarefa.');
+    }
+
+    const dados = {
+      trilhaId: tid, tipo, titulo, descricao: String(payload.descricao || '').trim(),
+      videoId, url, canal, thumb, atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('EstudoTrilhaItens', payload.id, dados);
+      return { ok: true, data: { id: payload.id, ...dados } };
+    }
+    const existentes = (dbGetAll('EstudoTrilhaItens') as Array<Record<string, unknown>>)
+      .filter((i) => String(i.trilhaId || '') === tid);
+    const novo = dbCreate('EstudoTrilhaItens', { ...dados, feito: '', ordem: existentes.length, criadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoTrilhaItemToggle(id: string, feito: boolean): ServerResult {
+  try {
+    dbUpdate('EstudoTrilhaItens', String(id), { feito: feito ? '1' : '', atualizadoEm: new Date().toISOString() });
+    return { ok: true, data: { id, feito } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoTrilhaItemDelete(id: string): ServerResult {
+  try {
+    dbDelete('EstudoTrilhaItens', String(id));
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ── Pastas: playlists do YouTube acompanhadas ─────────────────────────────────
+function estudoPlaylistsSeguidas(): ServerResult {
+  try {
+    const linhas = (dbGetAll('EstudoPlaylists') as Array<Record<string, unknown>>)
+      .map((l) => ({
+        id: String(l.id || ''),
+        playlistId: String(l.playlistId || ''),
+        titulo: String(l.titulo || ''),
+        canal: String(l.canal || ''),
+        thumb: String(l.thumb || ''),
+        qtd: Number(l.qtd || 0),
+        ordem: Number(l.ordem || 0),
+      }))
+      .sort((a, b) => (a.ordem - b.ordem) || a.titulo.localeCompare(b.titulo));
+    return { ok: true, data: linhas };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoPlaylistSeguir(payload: { playlistId: string; titulo?: string; canal?: string; thumb?: string; qtd?: number }): ServerResult {
+  try {
+    const playlistId = String(payload.playlistId || '').trim();
+    if (!playlistId) throw new Error('Playlist inválida.');
+    const existentes = dbGetAll('EstudoPlaylists') as Array<Record<string, unknown>>;
+    const jaTem = existentes.find((l) => String(l.playlistId || '') === playlistId);
+    const agora = new Date().toISOString();
+    const base = {
+      playlistId,
+      titulo: String(payload.titulo || '').trim(),
+      canal: String(payload.canal || '').trim(),
+      thumb: String(payload.thumb || '').trim(),
+      qtd: Number(payload.qtd || 0),
+      atualizadoEm: agora,
+    };
+    if (jaTem) {
+      dbUpdate('EstudoPlaylists', String(jaTem.id), base);
+      return { ok: true, data: { id: String(jaTem.id), ...base } };
+    }
+    const novo = dbCreate('EstudoPlaylists', { ...base, ordem: existentes.length, criadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Deixa de acompanhar uma pasta. Aceita o id da linha OU o playlistId.
+function estudoPlaylistRemover(idOuPlaylistId: string): ServerResult {
+  try {
+    const alvo = String(idOuPlaylistId || '');
+    const linhas = dbGetAll('EstudoPlaylists') as Array<Record<string, unknown>>;
+    const linha = linhas.find((l) => String(l.id || '') === alvo || String(l.playlistId || '') === alvo);
+    if (linha) dbDelete('EstudoPlaylists', String(linha.id));
+    return { ok: true, data: { id: linha ? String(linha.id) : '' } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoNotasList(): ServerResult {
+  try {
+    const ordemStatus: Record<string, number> = { 'a-rever': 0, aprofundando: 1, dominado: 2 };
+    const ordemPrio: Record<string, number> = { alta: 0, media: 1, baixa: 2 };
+    const todos = (dbGetAll('EstudoNotas') as Array<Record<string, unknown>>)
+      .map((n) => ({
+        id: String(n.id || ''),
+        titulo: String(n.titulo || ''),
+        tipo: String(n.tipo || 'outro'),
+        descricao: String(n.descricao || ''),
+        prioridade: String(n.prioridade || 'media'),
+        status: String(n.status || 'a-rever'),
+        tags: String(n.tags || '').split(',').map((x) => x.trim()).filter(Boolean),
+        url: String(n.url || ''),
+        criadoEm: String(n.criadoEm || ''),
+        atualizadoEm: String(n.atualizadoEm || ''),
+      }))
+      .sort((a, b) =>
+        (ordemStatus[a.status] ?? 9) - (ordemStatus[b.status] ?? 9)
+        || (ordemPrio[a.prioridade] ?? 9) - (ordemPrio[b.prioridade] ?? 9)
+        || b.criadoEm.localeCompare(a.criadoEm));
+    return { ok: true, data: todos };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoNotaSave(payload: {
+  id?: string;
+  titulo: string;
+  tipo?: string;
+  descricao?: string;
+  prioridade?: string;
+  status?: string;
+  tags?: string;
+  url?: string;
+}): ServerResult {
+  try {
+    if (!payload.titulo || !payload.titulo.trim()) throw new Error('Dê um título ao assunto.');
+    const agora = new Date().toISOString();
+    const dados = {
+      titulo: payload.titulo.trim(),
+      tipo: String(payload.tipo || 'outro').trim(),
+      descricao: String(payload.descricao || '').trim(),
+      prioridade: String(payload.prioridade || 'media').trim(),
+      status: String(payload.status || 'a-rever').trim(),
+      tags: String(payload.tags || '').trim(),
+      url: String(payload.url || '').trim(),
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('EstudoNotas', payload.id, dados);
+      return { ok: true, data: { id: payload.id, ...dados } };
+    }
+    const novo = dbCreate('EstudoNotas', { ...dados, criadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoNotaDelete(id: string): ServerResult {
+  try {
+    dbDelete('EstudoNotas', id);
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ─── Estudos → YouTube (Fase 2) ───────────────────────────────────────────────
+// Conta conectada via OAuth PRÓPRIO do usuário (Client ID/Secret com a YouTube
+// Data API v3 habilitada), reaproveitando a infra de conectores OAuth do Driver
+// (biblioteca OAuth2, provedor 'google-youtube'). Chamamos a API via REST com o
+// token do conector — assim NÃO precisamos do scope sensível youtube.readonly no
+// manifesto do app, que em contas Workspace de apps não verificados derruba a
+// autorização (tela branca). O conector fica numa linha de DriveConnectors com
+// provedor 'google-youtube' (filtrada do painel Driver).
+
+interface _YtSnippet {
+  title?: string;
+  channelTitle?: string;
+  videoOwnerChannelTitle?: string;
+  publishedAt?: string;
+  thumbnails?: unknown;
+  resourceId?: { videoId?: string };
+}
+interface _YtItem {
+  id?: string;
+  snippet?: _YtSnippet;
+  contentDetails?: { videoId?: string; videoPublishedAt?: string; itemCount?: number; relatedPlaylists?: { likes?: string } };
+}
+interface _YtListResp { items?: _YtItem[]; nextPageToken?: string }
+interface _YtSearchItem { id?: { videoId?: string }; snippet?: _YtSnippet }
+interface _YtSearchResp { items?: _YtSearchItem[]; nextPageToken?: string }
+
+function _ytThumb(thumbs: unknown, videoId: string): string {
+  const tt = thumbs as { medium?: { url?: string }; high?: { url?: string }; default?: { url?: string } } | undefined;
+  const u = tt && ((tt.medium && tt.medium.url) || (tt.high && tt.high.url) || (tt.default && tt.default.url));
+  if (u) return u;
+  return videoId ? 'https://i.ytimg.com/vi/' + videoId + '/hqdefault.jpg' : '';
+}
+
+// Títulos da API vêm com entidades HTML (&amp;, &#39;…). Decodifica as comuns.
+function _ytDecode(s: string): string {
+  return String(s || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}
+
+function _ytMapPlaylistItens(resp: _YtListResp): { itens: unknown[]; nextPageToken: string } {
+  const itens = (resp.items || []).map((it) => {
+    const sn = it.snippet || {};
+    const cd = it.contentDetails || {};
+    const videoId = String(cd.videoId || (sn.resourceId && sn.resourceId.videoId) || '');
+    return {
+      videoId,
+      titulo: _ytDecode(String(sn.title || '')),
+      canal: _ytDecode(String(sn.videoOwnerChannelTitle || sn.channelTitle || '')),
+      thumb: _ytThumb(sn.thumbnails, videoId),
+      publicado: String(sn.publishedAt || cd.videoPublishedAt || ''),
+    };
+  }).filter((x) => x.videoId && x.titulo !== 'Private video' && x.titulo !== 'Deleted video');
+  return { itens, nextPageToken: String(resp.nextPageToken || '') };
+}
+
+// Acha o conector dedicado do YouTube (provedor 'google-youtube'), se existir.
+function _ytConnector(): Record<string, unknown> | null {
+  const linhas = dbGetAll('DriveConnectors') as Array<Record<string, unknown>>;
+  return linhas.find((l) => String(l.provedor || '') === 'google-youtube') || null;
+}
+
+// Chama a YouTube Data API v3 via REST com o token do conector OAuth conectado.
+// Lança 'NOT_CONNECTED' (sem conta), 'AUTH_NEEDED' (token inválido/sem permissão)
+// ou 'API_DISABLED' (YouTube Data API não habilitada no projeto do usuário).
+function _ytApi(path: string, params: Record<string, string | number>): Record<string, unknown> {
+  const conn = _ytConnector();
+  if (!conn) throw new Error('NOT_CONNECTED');
+  const svc = _oauthService(String(conn.id), 'google-youtube');
+  if (!svc.hasAccess()) throw new Error('NOT_CONNECTED');
+  const token = svc.getAccessToken();
+  const qs = Object.keys(params).map((k) => k + '=' + encodeURIComponent(String(params[k]))).join('&');
+  const url = 'https://www.googleapis.com/youtube/v3/' + path + '?' + qs;
+  const resp = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
+  const code = resp.getResponseCode();
+  const body = resp.getContentText();
+  if (code >= 400) {
+    if (/accessNotConfigured|has not been used|SERVICE_DISABLED|is disabled/i.test(body)) throw new Error('API_DISABLED');
+    if (code === 401 || code === 403) throw new Error('AUTH_NEEDED');
+    throw new Error('YouTube ' + code + ': ' + body.slice(0, 200));
+  }
+  return JSON.parse(body) as Record<string, unknown>;
+}
+
+function _ytErroResult(e: unknown): ServerResult {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (msg === 'NOT_CONNECTED' || msg === 'AUTH_NEEDED' || msg === 'API_DISABLED') return { ok: false, error: msg };
+  return { ok: false, error: 'YouTube: ' + msg };
+}
+
+// ── Conexão da conta ──────────────────────────────────────────────────────────
+
+function estudoYoutubeStatus(): ServerResult {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const credConfigured = !!(props.getProperty('oauth_google-youtube_client_id') && props.getProperty('oauth_google-youtube_client_secret'));
+    let redirectUri = '';
+    try { redirectUri = OAuth2.getRedirectUri(); } catch { redirectUri = 'https://script.google.com/macros/d/' + ScriptApp.getScriptId() + '/usercallback'; }
+    const conn = _ytConnector();
+    const connectorId = conn ? String(conn.id) : '';
+    let conectado = false;
+    if (conn) {
+      try { conectado = _oauthService(connectorId, 'google-youtube').hasAccess(); } catch { conectado = false; }
+    }
+    let canal = '';
+    let foto = '';
+    if (conectado) {
+      try {
+        const data = _ytApi('channels', { part: 'snippet', mine: 'true', maxResults: 1 });
+        const items = (data.items as Array<Record<string, unknown>>) || [];
+        const sn = (items[0] && (items[0].snippet as Record<string, unknown>)) || {};
+        canal = _ytDecode(String(sn.title || ''));
+        foto = _ytThumb(sn.thumbnails, '');
+      } catch { /* token ok mas /channels falhou — segue conectado */ }
+    }
+    return { ok: true, data: { conectado, credConfigured, connectorId, redirectUri, canal, foto } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Salva as credenciais OAuth do provedor 'google-youtube' (reusa a infra do Driver).
+function estudoYoutubeSetCred(payload: { clientId: string; clientSecret: string }): ServerResult {
+  return driveOAuthSetCredenciais({ provedor: 'google-youtube', clientId: payload.clientId, clientSecret: payload.clientSecret });
+}
+
+// Garante um conector do YouTube e devolve a URL de consentimento (ou authorized:true).
+function estudoYoutubeConectarUrl(): ServerResult {
+  try {
+    let conn = _ytConnector();
+    if (!conn) {
+      const agora = new Date().toISOString();
+      conn = dbCreate('DriveConnectors', {
+        provedor: 'google-youtube', email: '', rotulo: 'YouTube', status: 'registrada',
+        pastaRaizId: '', notas: '', criadoEm: agora, atualizadoEm: agora,
+      }) as Record<string, unknown>;
+    }
+    return driveOAuthAuthorizeUrl(String(conn.id));
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao iniciar conexão' };
+  }
+}
+
+function estudoYoutubeDesconectar(): ServerResult {
+  try {
+    const conn = _ytConnector();
+    if (!conn) return { ok: true };
+    return driveOAuthDesconectar(String(conn.id));
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao desconectar' };
+  }
+}
+
+// ── Dados (via token do conector) ─────────────────────────────────────────────
+
+function estudoYoutubePlaylists(pageToken?: string): ServerResult {
+  try {
+    const params: Record<string, string | number> = { part: 'snippet,contentDetails', mine: 'true', maxResults: 24 };
+    if (pageToken) params.pageToken = pageToken;
+    const resp = _ytApi('playlists', params) as unknown as _YtListResp;
+    const itens = (resp.items || []).map((it) => {
+      const sn = it.snippet || {};
+      const cd = it.contentDetails || {};
+      return {
+        playlistId: String(it.id || ''),
+        titulo: _ytDecode(String(sn.title || '')),
+        canal: _ytDecode(String(sn.channelTitle || '')),
+        thumb: _ytThumb(sn.thumbnails, ''),
+        qtd: Number(cd.itemCount || 0),
+      };
+    }).filter((x) => x.playlistId);
+    return { ok: true, data: { itens, nextPageToken: String(resp.nextPageToken || '') } };
+  } catch (e: unknown) {
+    return _ytErroResult(e);
+  }
+}
+
+function estudoYoutubePlaylistItens(playlistId: string, pageToken?: string): ServerResult {
+  try {
+    const pid = String(playlistId || '').trim();
+    if (!pid) throw new Error('Playlist inválida.');
+    const params: Record<string, string | number> = { part: 'snippet,contentDetails', playlistId: pid, maxResults: 24 };
+    if (pageToken) params.pageToken = pageToken;
+    const resp = _ytApi('playlistItems', params) as unknown as _YtListResp;
+    return { ok: true, data: _ytMapPlaylistItens(resp) };
+  } catch (e: unknown) {
+    return _ytErroResult(e);
+  }
+}
+
+function estudoYoutubeBuscar(query: string, pageToken?: string): ServerResult {
+  try {
+    const q = String(query || '').trim();
+    if (!q) throw new Error('Digite algo pra buscar.');
+    const params: Record<string, string | number> = { part: 'snippet', type: 'video', q, maxResults: 24 };
+    if (pageToken) params.pageToken = pageToken;
+    const resp = _ytApi('search', params) as unknown as _YtSearchResp;
+    const itens = (resp.items || []).map((it) => {
+      const sn = it.snippet || {};
+      const videoId = String((it.id && it.id.videoId) || '');
+      return {
+        videoId,
+        titulo: _ytDecode(String(sn.title || '')),
+        canal: _ytDecode(String(sn.channelTitle || '')),
+        thumb: _ytThumb(sn.thumbnails, videoId),
+        publicado: String(sn.publishedAt || ''),
+      };
+    }).filter((x) => x.videoId);
+    return { ok: true, data: { itens, nextPageToken: String(resp.nextPageToken || '') } };
+  } catch (e: unknown) {
+    return _ytErroResult(e);
+  }
+}
+
 // PERIGO: reset apaga TUDO do cofre. Usado quando o user esquece a senha-mestra.
 function cofreReset(): ServerResult {
   try {
@@ -14059,6 +17052,109 @@ function snapshotCliente(pessoaId: string): ServerResult {
     }
     proximasCobrancas.sort((a, b) => a.data.localeCompare(b.data));
 
+    // ─── Histórico financeiro estimado ────────────────────────────────────────
+    // O schema atual de Receitas não loga eventos de pagamento individuais; cada
+    // linha é uma assinatura/contrato com `inicio`, `recorrencia`, `valor`,
+    // `proximaCobranca` e `canceladaEm` opcional. Pra dar visibilidade de LTV +
+    // histórico no snapshot, GERAMOS uma timeline presumida de cobranças a
+    // partir desses campos. É claramente uma estimativa (UI marca como "est.").
+    //
+    // Status de cada cobrança gerada:
+    //   • paga    — data passada E é anterior a `proximaCobranca` (já rodou)
+    //   • atrasada— é a `proximaCobranca` mas está no passado e assinatura ativa
+    //   • futura  — datas a partir de `proximaCobranca` em diante
+    type HistItem = {
+      receitaId: string; plano: string; sistemaId: string;
+      data: string; valor: number; recorrencia: string;
+      status: 'paga' | 'atrasada' | 'futura';
+    };
+    const historicoCobrancas: HistItem[] = [];
+    const hoje = Date.now();
+    const horizonteFuturo = hoje + 365 * 86400000; // mostra até 1 ano à frente
+    for (const r of receitas) {
+      const valor = Number(r.valor || 0);
+      const rec = String(r.recorrencia || '').toLowerCase();
+      const inicio = String(r.inicio || '');
+      const proximaStr = String(r.proximaCobranca || '');
+      const canceladaStr = String(r.canceladaEm || '');
+      const statusReceita = String(r.status || '').toLowerCase();
+      if (!inicio || (rec !== 'mensal' && rec !== 'anual') || valor <= 0) continue;
+
+      const tIni = new Date(inicio).getTime();
+      if (Number.isNaN(tIni)) continue;
+      const tProx = proximaStr ? new Date(proximaStr).getTime() : NaN;
+      const tCanc = canceladaStr ? new Date(canceladaStr).getTime() : NaN;
+      const tLimite = !Number.isNaN(tCanc) ? tCanc : Math.min(horizonteFuturo, hoje + 365 * 86400000);
+
+      // Gera as cobranças incrementando por mês ou ano
+      const cursor = new Date(tIni);
+      let safety = 0;
+      while (cursor.getTime() <= tLimite && safety < 240) {
+        const dataIso = cursor.toISOString().split('T')[0];
+        const t = cursor.getTime();
+        let status: 'paga' | 'atrasada' | 'futura';
+        if (t < hoje) {
+          // Passou. Se for igual a proximaCobranca e assinatura ainda ativa → atrasada
+          if (!Number.isNaN(tProx) && Math.abs(t - tProx) < 86400000 && statusReceita === 'ativa') {
+            status = 'atrasada';
+          } else {
+            status = 'paga';
+          }
+        } else {
+          status = 'futura';
+        }
+        historicoCobrancas.push({
+          receitaId: String(r.id || ''),
+          plano: String(r.plano || 'Assinatura'),
+          sistemaId: String(r.sistemaId || ''),
+          data: dataIso,
+          valor,
+          recorrencia: rec,
+          status,
+        });
+        if (rec === 'mensal') cursor.setMonth(cursor.getMonth() + 1);
+        else cursor.setFullYear(cursor.getFullYear() + 1);
+        safety++;
+      }
+    }
+    historicoCobrancas.sort((a, b) => b.data.localeCompare(a.data));
+
+    // LTV estimado = soma de todas as cobranças com status "paga"
+    const ltvEstimado = historicoCobrancas
+      .filter((h) => h.status === 'paga')
+      .reduce((acc, h) => acc + h.valor, 0);
+
+    const cobPagas = historicoCobrancas.filter((h) => h.status === 'paga');
+    const ticketMedio = cobPagas.length > 0 ? ltvEstimado / cobPagas.length : 0;
+
+    // Cliente desde = data da cobrança mais antiga (= inicio mais antigo)
+    const datasInicio = receitas
+      .map((r) => String(r.inicio || ''))
+      .filter((s) => !!s)
+      .sort();
+    const clienteDesde = datasInicio.length > 0 ? datasInicio[0] : '';
+
+    // Pendências em aberto = cobranças atrasadas (qtd + soma)
+    const cobAtrasadas = historicoCobrancas.filter((h) => h.status === 'atrasada');
+    const pendenciasAbertas = {
+      qtd: cobAtrasadas.length,
+      valorTotal: cobAtrasadas.reduce((acc, h) => acc + h.valor, 0),
+    };
+
+    // Score de saúde do cliente (derivado das pendências) — usado na FASE 2 também
+    let saude: 'em_dia' | 'atencao' | 'inadimplente' | 'sem_historico' = 'sem_historico';
+    if (receitas.length === 0) {
+      saude = 'sem_historico';
+    } else if (pendenciasAbertas.qtd === 0) {
+      saude = 'em_dia';
+    } else {
+      // Pega a atrasada mais antiga e mede em dias
+      const maisAntigaAtrasada = cobAtrasadas.reduce((mais, h) => h.data < mais ? h.data : mais, cobAtrasadas[0].data);
+      const diasAtraso = Math.floor((hoje - new Date(maisAntigaAtrasada).getTime()) / 86400000);
+      if (diasAtraso > 15 || pendenciasAbertas.qtd >= 3) saude = 'inadimplente';
+      else saude = 'atencao';
+    }
+
     return {
       ok: true,
       data: {
@@ -14079,7 +17175,15 @@ function snapshotCliente(pessoaId: string): ServerResult {
           oportunidadesAbertas: oportunidades.filter((o) => String(o.estado || '').toLowerCase() !== 'ganhou' && String(o.estado || '').toLowerCase() !== 'perdeu').length,
           entrevistas: entrevistas.length,
           alertas30d: alertas.length,
+          // Novos KPIs financeiros estimados (Histórico) — FASE 1
+          ltvEstimado: Math.round(ltvEstimado * 100) / 100,
+          ticketMedio: Math.round(ticketMedio * 100) / 100,
+          clienteDesde,
+          pendenciasQtd: pendenciasAbertas.qtd,
+          pendenciasValor: Math.round(pendenciasAbertas.valorTotal * 100) / 100,
+          saude,
         },
+        historicoCobrancas,
         sistemas: porSistema,
         receitas: receitas.map((r) => ({
           id: r.id, sistemaId: r.sistemaId, plano: r.plano, valor: Number(r.valor || 0),
@@ -14395,10 +17499,14 @@ function getDashboardOperacional(): ServerResult {
     }));
 
     // Counts agregados (preview rápido sem listar tudo)
+    // Status "fechados" do Kanban/ADR — itens nesses estados NÃO contam como
+    // "em aberto". Inclui 'feito' (coluna Feito do backlog), que antes faltava e
+    // fazia tarefas concluídas continuarem aparecendo no contador da Home.
+    const STATUS_FECHADOS = ['concluido', 'concluído', 'feito', 'done', 'cancelado', 'descartado', 'revertida'];
     const decisoesAbertas = (dbGetAll('Decisoes') as Array<Record<string, unknown>>)
       .filter((d) => {
-        const st = String(d['status'] || 'novo').toLowerCase();
-        return st !== 'concluido' && st !== 'cancelado' && st !== 'concluído';
+        const st = String(d['status'] || 'novo').toLowerCase().trim();
+        return !STATUS_FECHADOS.includes(st);
       }).length;
 
     // AuditFindings open

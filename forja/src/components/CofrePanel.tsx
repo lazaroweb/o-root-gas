@@ -65,7 +65,7 @@ function forcaSenha(s: string): { score: number; label: string; cor: string } {
   return { score: p, label: 'forte', cor: '#7B9B7E' };
 }
 
-export default function CofrePanel(): React.ReactElement {
+export default function CofrePanel({ initialFiltro = '' }: { initialFiltro?: string } = {}): React.ReactElement {
   const t = useTokens();
   const { message, modal } = AntApp.useApp();
 
@@ -82,7 +82,11 @@ export default function CofrePanel(): React.ReactElement {
   const [itens, setItens] = useState<ItemCofreCifrado[]>([]);
   const [carregandoItens, setCarregandoItens] = useState(false);
   const [revelados, setRevelados] = useState<Record<string, string>>({});
-  const [filtro, setFiltro] = useState('');
+  const [filtro, setFiltro] = useState(initialFiltro);
+
+  // Quando aberto via atalho (ex.: card de Conta → "Abrir no Cofre"), já cai
+  // filtrado pelo label do segredo associado.
+  useEffect(() => { if (initialFiltro) setFiltro(initialFiltro); }, [initialFiltro]);
 
   // Modal add/edit
   const [formOpen, setFormOpen] = useState(false);

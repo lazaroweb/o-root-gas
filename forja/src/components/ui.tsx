@@ -104,12 +104,14 @@ interface PanelProps {
   padding?: number;
   style?: React.CSSProperties;
   bodyStyle?: React.CSSProperties;
+  className?: string;
 }
 
-export function Panel({ children, title, extra, padding = 22, style, bodyStyle }: PanelProps): React.ReactElement {
+export function Panel({ children, title, extra, padding = 22, style, bodyStyle, className }: PanelProps): React.ReactElement {
   const t = useTokens();
   return (
     <div
+      className={className}
       style={{
         background: t.surface,
         border: `1px solid ${t.border}`,
@@ -217,7 +219,7 @@ export function RingProgress({ value, size = 132, stroke = 11, color, label, sub
         <circle
           cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke}
           strokeLinecap="round" strokeDasharray={c} strokeDashoffset={off}
-          style={{ transition: 'stroke-dashoffset 0.8s cubic-bezier(0.4,0,0.2,1)' }}
+          style={{ transition: 'stroke-dashoffset 0.8s cubic-bezier(0.4,0,0.2,1)', filter: `drop-shadow(0 0 5px ${color}59)` }}
         />
       </svg>
       <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>

@@ -13,6 +13,7 @@ import { Plus, Download, Copy, Edit3, Trash2, ArrowRight, ArrowLeft, Sparkles, G
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
+import IdeiasFaixa from '../components/IdeiasFaixa';
 import type { Decisao, ServerResult } from '../types';
 
 const { Text, Paragraph } = Typography;
@@ -288,6 +289,10 @@ export default function BacklogPanel({ sistemaId, sistemaNome }: BacklogPanelPro
 
   return (
     <div>
+      {/* Faixa de ideias: captura rápida de melhorias deste sistema, separada
+          do Kanban acionável. Promover → IA refina + dedup → vira "A fazer". */}
+      <IdeiasFaixa sistemaId={sistemaId} sistemaNome={sistemaNome} onPromovido={carregar} />
+
       {/* Header com resumo + ações */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>

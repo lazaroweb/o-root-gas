@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Segmented, Button, Row, Col, Spin, Alert, Space, App as AntApp, Popconfirm } from 'antd';
-import { Plus, FileCode, RefreshCw, CloudOff, Trash2 } from 'lucide-react';
+import { Plus, FileCode, RefreshCw, CloudOff, Trash2, GitBranch } from 'lucide-react';
 import SystemCard, { type BacklogSumarioItem } from '../components/SystemCard';
+import ConectarReposModal from '../components/ConectarReposModal';
 import { PageHeader, EmptyArt } from '../components/ui';
 import callServer from '../gas-client';
 import { useTokens } from '../themeContext';
@@ -56,6 +57,9 @@ export default function Bancada({ onSelectSistema, onNewSistema, onImportGAS, re
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [sync, setSync] = useState<SyncResult | null>(null);
+  const [conectarReposOpen, setConectarReposOpen] = useState(false);
+
+  const semRepo = useMemo(() => sistemas.filter((s) => !String(s.repoUrl || '').trim()).length, [sistemas]);
 
   const carregarSistemas = useCallback(() => {
     return callServer<ServerResponse<Sistema[]>>('getSistemas')
@@ -140,6 +144,7 @@ export default function Bancada({ onSelectSistema, onNewSistema, onImportGAS, re
         extra={
           <Space>
             <Button icon={<RefreshCw size={15} />} loading={syncing} onClick={() => sincronizar(false)}>Sincronizar</Button>
+            {semRepo > 0 && <Button icon={<GitBranch size={15} />} onClick={() => setConectarReposOpen(true)}>Conectar repos ({semRepo})</Button>}
             {onImportGAS && <Button icon={<FileCode size={16} />} onClick={onImportGAS}>Importar do GAS</Button>}
             <Button type="primary" icon={<Plus size={16} />} onClick={onNewSistema}>Novo sistema</Button>
           </Space>
@@ -268,6 +273,12 @@ export default function Bancada({ onSelectSistema, onNewSistema, onImportGAS, re
           ))}
         </Row>
       )}
+
+      <ConectarReposModal
+        open={conectarReposOpen}
+        onClose={() => setConectarReposOpen(false)}
+        onDone={() => carregar()}
+      />
     </div>
   );
 }

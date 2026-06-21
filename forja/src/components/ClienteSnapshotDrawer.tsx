@@ -1,13 +1,27 @@
-import React, { useEffect, useState } from 'react';
-import { Drawer, Skeleton, Empty, Tag, Button, App as AntApp, Tooltip } from 'antd';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Drawer, Skeleton, Empty, Tag, Button, App as AntApp, Tooltip, Segmented, Select } from 'antd';
 import {
   User, Boxes, AlertCircle, Calendar, MessageSquare, Sparkles, TrendingUp, TrendingDown,
-  Printer, ExternalLink, Phone, Mail, Briefcase, Wallet,
+  Download, Phone, Mail, Briefcase, Wallet, Compass, Coins, History, AlertTriangle,
+  CheckCircle2, Clock,
 } from 'lucide-react';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
-import type { ServerResult } from '../types';
+import Discovery from '../views/Discovery';
+import type { ServerResult, DiscoveryForm, DiscoveryResposta, ServerResponse } from '../types';
+
+export type SaudeCliente = 'em_dia' | 'atencao' | 'inadimplente' | 'sem_historico';
+
+export interface HistoricoCobranca {
+  receitaId: string;
+  plano: string;
+  sistemaId: string;
+  data: string;
+  valor: number;
+  recorrencia: string;
+  status: 'paga' | 'atrasada' | 'futura';
+}
 
 interface ClienteSnapshotPayload {
   pessoa: { id: string; nome: string; contato: string; papel: string; notas: string };
@@ -15,6 +29,13 @@ interface ClienteSnapshotPayload {
     mrrCliente: number; custoMensalAlocado: number; lucroMensal: number; margem: number;
     sistemasAtivos: number; receitasAtivas: number; oportunidadesAbertas: number;
     entrevistas: number; alertas30d: number;
+    // Novos KPIs (FASE 1 — histórico financeiro estimado)
+    ltvEstimado: number;
+    ticketMedio: number;
+    clienteDesde: string;
+    pendenciasQtd: number;
+    pendenciasValor: number;
+    saude: SaudeCliente;
   };
   sistemas: Array<{
     id: string; nome: string; codinome: string; estagio: string; urlProd: string;
@@ -26,6 +47,7 @@ interface ClienteSnapshotPayload {
   oportunidades: Array<{ id: string; titulo: string; valorEstimado: number; estado: string; proximoPasso: string }>;
   alertas: Array<{ id: string; tipo: string; severidade: string; titulo: string; mensagem: string; criadoEm: string; sistemaId: string }>;
   proximasCobrancas: Array<{ tipo: string; nome: string; valor: number; data: string; dias: number }>;
+  historicoCobrancas: HistoricoCobranca[];
   geradoEm: string;
 }
 
@@ -33,45 +55,52 @@ interface Props {
   pessoaId: string | null;
   pessoaNome?: string;
   onClose: () => void;
+  initialTab?: 'snapshot' | 'discovery';
 }
 
 const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2 });
 
-export default function ClienteSnapshotDrawer({ pessoaId, pessoaNome, onClose }: Props): React.ReactElement {
+export default function ClienteSnapshotDrawer({ pessoaId, pessoaNome, onClose, initialTab = 'snapshot' }: Props): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ClienteSnapshotPayload | null>(null);
+  const [aba, setAba] = useState<'snapshot' | 'discovery'>(initialTab);
 
   useEffect(() => {
     if (!pessoaId) { setData(null); return; }
+    setAba(initialTab);
     setLoading(true);
     callServer<ServerResult>('snapshotCliente', pessoaId)
       .then((r) => { if (r.ok && r.data) setData(r.data as ClienteSnapshotPayload); else message.error(r.error || 'Erro'); })
       .catch(() => message.error('Falha ao carregar snapshot'))
       .finally(() => setLoading(false));
-  }, [pessoaId, message]);
+  }, [pessoaId, message, initialTab]);
 
-  const imprimir = () => {
-    // Marca a página com classe pra CSS imprimir só o drawer
-    document.body.classList.add('forja-print-cliente-snapshot');
-    setTimeout(() => {
-      window.print();
-      document.body.classList.remove('forja-print-cliente-snapshot');
-    }, 100);
-  };
+  const [baixandoBriefing, setBaixandoBriefing] = useState(false);
 
-  const baixarMd = () => {
-    if (!data) return;
-    const md = gerarMarkdown(data);
-    const blob = new Blob([md], { type: 'text/markdown' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    const slug = data.pessoa.nome.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    a.href = url; a.download = `cliente-${slug}-${new Date().toISOString().slice(0, 10)}.md`;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    message.success('Snapshot baixado');
+  const baixarBriefing = async () => {
+    if (!data || !pessoaId) return;
+    setBaixandoBriefing(true);
+    try {
+      // Busca discoveries e respostas em paralelo pra incluir no briefing.
+      const [rf, rr] = await Promise.all([
+        callServer<ServerResponse<DiscoveryForm[]>>('getDiscoveryForms').catch(() => ({ ok: false } as ServerResponse<DiscoveryForm[]>)),
+        callServer<ServerResponse<DiscoveryResposta[]>>('getRespostasDiscovery').catch(() => ({ ok: false } as ServerResponse<DiscoveryResposta[]>)),
+      ]);
+      const forms = (rf.ok && rf.data ? rf.data : []).filter((f) => f.pessoaId === pessoaId);
+      const respostas = (rr.ok && rr.data ? rr.data : []).filter((r) => r.pessoaId === pessoaId);
+      const md = gerarBriefing(data, forms, respostas);
+      const blob = new Blob([md], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const slug = data.pessoa.nome.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      a.href = url; a.download = `briefing-${slug}-${new Date().toISOString().slice(0, 10)}.md`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      message.success('Briefing baixado');
+    } catch { message.error('Falha ao gerar briefing'); }
+    finally { setBaixandoBriefing(false); }
   };
 
   return (
@@ -85,26 +114,38 @@ export default function ClienteSnapshotDrawer({ pessoaId, pessoaNome, onClose }:
             <User size={16} strokeWidth={1.7} />
           </span>
           <div>
-            <div style={{ fontFamily: FONTS.display, fontWeight: 600, fontSize: 16, lineHeight: 1.2 }}>
-              {data?.pessoa.nome || pessoaNome || 'Cliente'}
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontFamily: FONTS.display, fontWeight: 600, fontSize: 16, lineHeight: 1.2 }}>
+                {data?.pessoa.nome || pessoaNome || 'Cliente'}
+              </span>
+              {data?.kpis.saude && <SaudeBadgeHeader saude={data.kpis.saude} qtd={data.kpis.pendenciasQtd} valor={data.kpis.pendenciasValor} />}
             </div>
-            <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary }}>Snapshot completo</div>
+            <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary }}>Ficha completa · Snapshot + Discovery</div>
           </div>
         </span>
       }
       extra={
-        <div style={{ display: 'flex', gap: 6 }}>
-          <Tooltip title="Imprimir / salvar como PDF (use a opção do navegador)">
-            <Button icon={<Printer size={14} />} onClick={imprimir} disabled={!data}>Imprimir</Button>
-          </Tooltip>
-          <Tooltip title="Baixar como .md (Markdown)">
-            <Button icon={<ExternalLink size={14} />} onClick={baixarMd} disabled={!data}>Baixar .md</Button>
-          </Tooltip>
-        </div>
+        <Tooltip title="Baixa um .md completo: snapshot + roteiros de discovery + respostas do cliente. Ideal pra colar numa IA quando for construir o app.">
+          <Button type="primary" icon={<Download size={14} />} onClick={baixarBriefing} loading={baixandoBriefing} disabled={!data}>
+            Baixar briefing
+          </Button>
+        </Tooltip>
       }
-      classNames={{ wrapper: 'forja-cliente-snapshot-print' }}
     >
-      {loading ? (
+      <div className="forja-snapshot-tabs" style={{ marginBottom: 18 }}>
+        <Segmented
+          value={aba}
+          onChange={(v) => setAba(v as 'snapshot' | 'discovery')}
+          options={[
+            { value: 'snapshot', label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><User size={13} /> Snapshot</span> },
+            { value: 'discovery', label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Compass size={13} /> Discovery</span> },
+          ]}
+        />
+      </div>
+
+      {aba === 'discovery' ? (
+        <Discovery pessoaId={pessoaId || undefined} pessoaNome={data?.pessoa.nome || pessoaNome} />
+      ) : loading ? (
         <Skeleton active paragraph={{ rows: 8 }} />
       ) : !data ? (
         <Empty description="Sem dados pra este cliente" />
@@ -132,6 +173,9 @@ export default function ClienteSnapshotDrawer({ pessoaId, pessoaNome, onClose }:
               <KpiCard cor={t.accents.blue} icon={<Boxes size={14} />} label="Sistemas ativos" valor={String(data.kpis.sistemasAtivos)} />
             </div>
           </Section>
+
+          {/* Histórico financeiro estimado — FASE 1 */}
+          <HistoricoFinanceiroSection data={data} />
 
           {/* Sistemas */}
           {data.sistemas.length > 0 && (
@@ -261,7 +305,7 @@ export default function ClienteSnapshotDrawer({ pessoaId, pessoaNome, onClose }:
   );
 }
 
-function Section({ icon, cor, titulo, children }: { icon: React.ReactNode; cor: string; titulo: string; children: React.ReactNode }): React.ReactElement {
+function Section({ icon, cor, titulo, children }: { icon: React.ReactNode; cor: string; titulo: React.ReactNode; children: React.ReactNode }): React.ReactElement {
   const t = useTokens();
   return (
     <div style={{ marginBottom: 22 }}>
@@ -302,59 +346,362 @@ function KpiCard({ cor, icon, label, valor, subtitulo }: { cor: string; icon: Re
   );
 }
 
-// Gera versão markdown do snapshot pra baixar / colar em outro lugar
-function gerarMarkdown(d: ClienteSnapshotPayload): string {
+// Badge compacto de saúde financeira pra header do drawer. Tem a mesma cor
+// e semântica do badge usado em PessoasView, mas em formato mais leve pro
+// título do drawer (sem retângulo de fundo cheio).
+function SaudeBadgeHeader({ saude, qtd, valor }: { saude: SaudeCliente; qtd: number; valor: number }): React.ReactElement | null {
+  const t = useTokens();
+  if (saude === 'sem_historico') return null;
+
+  const map: Record<SaudeCliente, { cor: string; label: string; icon: React.ReactNode }> = {
+    em_dia: { cor: t.accents.sage, label: 'Em dia', icon: <CheckCircle2 size={12} /> },
+    atencao: { cor: t.accents.peach, label: `${qtd} em atraso`, icon: <Clock size={12} /> },
+    inadimplente: { cor: t.accents.rose, label: `${qtd} em atraso (${brl(valor)})`, icon: <AlertTriangle size={12} /> },
+    sem_historico: { cor: t.textTertiary, label: 'Sem hist.', icon: null },
+  };
+  const v = map[saude];
+  return (
+    <Tooltip
+      title={saude === 'em_dia'
+        ? 'Cliente sem cobranças atrasadas.'
+        : saude === 'atencao'
+          ? `${qtd} cobrança(s) atrasada(s), no máximo 15 dias.`
+          : `${qtd} cobrança(s) atrasada(s) somando ${brl(valor)}; pelo menos uma com mais de 15 dias.`}
+    >
+      <span style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        padding: '2px 8px',
+        borderRadius: 999,
+        background: `${v.cor}1f`,
+        color: v.cor,
+        fontFamily: FONTS.ui,
+        fontWeight: 600,
+        fontSize: 11,
+        lineHeight: '16px',
+      }}>
+        {v.icon}
+        {v.label}
+      </span>
+    </Tooltip>
+  );
+}
+
+// ─── Histórico financeiro do cliente — FASE 1 ─────────────────────────────────
+// Mostra: 4 KPIs (LTV est., ticket médio, cliente desde, pendências) + uma
+// lista de cobranças filtráveis por status (todas/pagas/atrasadas/futuras) e
+// por ano. Tudo marcado como "estimado" porque o schema atual não loga eventos
+// de pagamento — derivamos a timeline de inicio + recorrencia + canceladaEm.
+function HistoricoFinanceiroSection({ data }: { data: ClienteSnapshotPayload }): React.ReactElement | null {
+  const t = useTokens();
+  const [filtroStatus, setFiltroStatus] = useState<'todas' | 'paga' | 'atrasada' | 'futura'>('todas');
+  const [filtroAno, setFiltroAno] = useState<string>('todos');
+
+  const hist = data.historicoCobrancas || [];
+  if (hist.length === 0 && data.receitas.length === 0) return null;
+
+  const anos = useMemo(() => {
+    const set = new Set<string>();
+    for (const h of hist) {
+      const a = h.data.slice(0, 4);
+      if (a) set.add(a);
+    }
+    return Array.from(set).sort((a, b) => b.localeCompare(a));
+  }, [hist]);
+
+  const filtradas = useMemo(() => {
+    return hist.filter((h) => {
+      if (filtroStatus !== 'todas' && h.status !== filtroStatus) return false;
+      if (filtroAno !== 'todos' && !h.data.startsWith(filtroAno)) return false;
+      return true;
+    });
+  }, [hist, filtroStatus, filtroAno]);
+
+  const fmtData = (iso: string): string => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
+  };
+
+  const fmtClienteDesde = (iso: string): string => {
+    if (!iso) return 'Sem histórico';
+    const inicio = new Date(iso);
+    if (Number.isNaN(inicio.getTime())) return iso;
+    const meses = Math.max(0, Math.floor((Date.now() - inicio.getTime()) / (30.44 * 86400000)));
+    if (meses === 0) return 'há menos de 1 mês';
+    if (meses < 12) return `há ${meses} ${meses === 1 ? 'mês' : 'meses'}`;
+    const anos = Math.floor(meses / 12);
+    const restoMeses = meses % 12;
+    if (restoMeses === 0) return `há ${anos} ${anos === 1 ? 'ano' : 'anos'}`;
+    return `há ${anos}a ${restoMeses}m`;
+  };
+
+  const corStatus = (s: 'paga' | 'atrasada' | 'futura'): string => {
+    if (s === 'paga') return t.accents.sage;
+    if (s === 'atrasada') return t.accents.rose;
+    return t.accents.blue;
+  };
+  const iconStatus = (s: 'paga' | 'atrasada' | 'futura'): React.ReactNode => {
+    if (s === 'paga') return <CheckCircle2 size={12} />;
+    if (s === 'atrasada') return <AlertTriangle size={12} />;
+    return <Clock size={12} />;
+  };
+  const labelStatus = (s: 'paga' | 'atrasada' | 'futura'): string => {
+    if (s === 'paga') return 'paga';
+    if (s === 'atrasada') return 'atrasada';
+    return 'futura';
+  };
+
+  const titulo = (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      Histórico financeiro
+      <Tooltip title="Calculado a partir do início, recorrência e cancelamento das assinaturas. Não é o registro real de pagamentos — é uma projeção do que deveria ter sido cobrado.">
+        <Tag style={{ fontSize: 9, marginRight: 0, padding: '0 5px', lineHeight: '16px', borderRadius: 3, color: t.textTertiary, background: t.surfaceMuted, borderColor: t.borderSoft }}>
+          estimado
+        </Tag>
+      </Tooltip>
+    </span>
+  );
+
+  return (
+    <Section icon={<History size={14} />} cor={t.accents.clay} titulo={titulo}>
+      {/* 4 KPIs */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginBottom: 14 }}>
+        <KpiCard cor={t.accents.sage} icon={<Coins size={14} />} label="LTV estimado" valor={brl(data.kpis.ltvEstimado)} subtitulo={data.historicoCobrancas.filter((h) => h.status === 'paga').length + ' cobranças'} />
+        <KpiCard cor={t.accents.peach} icon={<TrendingUp size={14} />} label="Ticket médio" valor={brl(data.kpis.ticketMedio)} />
+        <KpiCard cor={t.accents.blue} icon={<Calendar size={14} />} label="Cliente desde" valor={data.kpis.clienteDesde ? fmtData(data.kpis.clienteDesde) : '—'} subtitulo={fmtClienteDesde(data.kpis.clienteDesde)} />
+        <KpiCard
+          cor={data.kpis.pendenciasQtd > 0 ? t.accents.rose : t.accents.sage}
+          icon={data.kpis.pendenciasQtd > 0 ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
+          label="Pendências"
+          valor={data.kpis.pendenciasQtd > 0 ? brl(data.kpis.pendenciasValor) : 'Em dia'}
+          subtitulo={data.kpis.pendenciasQtd > 0 ? `${data.kpis.pendenciasQtd} ${data.kpis.pendenciasQtd === 1 ? 'cobrança' : 'cobranças'} atrasada${data.kpis.pendenciasQtd === 1 ? '' : 's'}` : 'sem atrasos'}
+        />
+      </div>
+
+      {/* Filtros + lista */}
+      {hist.length > 0 && (
+        <>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            <Segmented
+              size="small"
+              value={filtroStatus}
+              onChange={(v) => setFiltroStatus(v as typeof filtroStatus)}
+              options={[
+                { value: 'todas', label: `Todas (${hist.length})` },
+                { value: 'paga', label: `Pagas (${hist.filter((h) => h.status === 'paga').length})` },
+                { value: 'atrasada', label: `Atrasadas (${hist.filter((h) => h.status === 'atrasada').length})` },
+                { value: 'futura', label: `Futuras (${hist.filter((h) => h.status === 'futura').length})` },
+              ]}
+            />
+            {anos.length > 1 && (
+              <Select
+                size="small"
+                value={filtroAno}
+                onChange={setFiltroAno}
+                style={{ minWidth: 100 }}
+                options={[{ value: 'todos', label: 'Todos os anos' }, ...anos.map((a) => ({ value: a, label: a }))]}
+              />
+            )}
+            <span style={{ marginLeft: 'auto', fontFamily: FONTS.mono, fontSize: 11, color: t.textTertiary }}>
+              {filtradas.length} {filtradas.length === 1 ? 'cobrança' : 'cobranças'}
+            </span>
+          </div>
+
+          <div style={{
+            maxHeight: 280,
+            overflowY: 'auto',
+            border: `1px solid ${t.borderSoft}`,
+            borderRadius: 10,
+            background: t.surface,
+          }}>
+            {filtradas.length === 0 ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span style={{ color: t.textTertiary, fontSize: 12 }}>Nenhuma cobrança neste filtro</span>} style={{ padding: 20 }} />
+            ) : (
+              filtradas.map((h, i) => (
+                <div
+                  key={`${h.receitaId}-${h.data}-${i}`}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '8px 12px',
+                    borderBottom: i < filtradas.length - 1 ? `1px solid ${t.borderSoft}` : 'none',
+                    fontFamily: FONTS.ui,
+                    fontSize: 12.5,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+                    <span style={{ color: corStatus(h.status), display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, fontFamily: FONTS.mono, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, fontWeight: 600 }}>
+                      {iconStatus(h.status)}
+                      {labelStatus(h.status)}
+                    </span>
+                    <span style={{ color: t.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.plano || 'Assinatura'}</span>
+                  </div>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 14, flexShrink: 0 }}>
+                    <span style={{ fontFamily: FONTS.mono, fontSize: 11, color: t.textTertiary, minWidth: 88, textAlign: 'right' }}>{fmtData(h.data)}</span>
+                    <span style={{ fontFamily: FONTS.mono, fontWeight: 600, color: t.text, minWidth: 84, textAlign: 'right' }}>
+                      {brl(h.valor)}
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </>
+      )}
+    </Section>
+  );
+}
+
+// Briefing completo do cliente: snapshot + roteiros de discovery + respostas.
+// Foco: dar à IA tudo que ela precisa pra propor / construir o app do cliente.
+function gerarBriefing(
+  d: ClienteSnapshotPayload,
+  forms: DiscoveryForm[],
+  respostas: DiscoveryResposta[],
+): string {
   const linhas: string[] = [];
-  linhas.push(`# Snapshot — ${d.pessoa.nome}`);
+  const stamp = new Date().toLocaleString('pt-BR');
+  linhas.push(`# Briefing do cliente — ${d.pessoa.nome}`);
   linhas.push('');
-  linhas.push(`_Gerado em ${new Date(d.geradoEm).toLocaleString('pt-BR')} pela Forja_`);
+  linhas.push(`_Gerado em ${stamp} pela Forja · Inteligência de Negócios_`);
   linhas.push('');
-  linhas.push('## Identidade');
+  linhas.push('> Este documento é uma fotografia completa do cliente: identidade, situação financeira, sistemas em uso, e — o mais importante — o que a Forja descobriu na fase de Discovery (roteiros aplicados e respostas do próprio cliente). Use como base para propor e construir o app sob medida.');
+  linhas.push('');
+
+  linhas.push('## 1. Identidade');
   linhas.push(`- **Papel:** ${d.pessoa.papel || '—'}`);
   linhas.push(`- **Contato:** ${d.pessoa.contato || '—'}`);
   if (d.pessoa.notas) linhas.push(`- **Notas:** ${d.pessoa.notas}`);
   linhas.push('');
-  linhas.push('## Financeiro');
+
+  linhas.push('## 2. Financeiro com a Forja');
   linhas.push(`- **MRR:** ${brl(d.kpis.mrrCliente)}`);
   linhas.push(`- **Custo alocado:** ${brl(d.kpis.custoMensalAlocado)}`);
   linhas.push(`- **Lucro mensal:** ${brl(d.kpis.lucroMensal)} (margem ${d.kpis.margem}%)`);
   linhas.push('');
+
   if (d.sistemas.length > 0) {
-    linhas.push(`## Sistemas (${d.sistemas.length})`);
+    linhas.push(`## 3. Sistemas em operação (${d.sistemas.length})`);
     for (const s of d.sistemas) {
       linhas.push(`- **${s.nome}** _(${s.estagio})_ — ${brl(s.mrr)} MRR · custo ${brl(s.custo)} · lucro ${brl(s.lucro)}${s.urlProd ? ` · <${s.urlProd}>` : ''}`);
     }
     linhas.push('');
   }
+
   if (d.proximasCobrancas.length > 0) {
-    linhas.push('## Próximos 45 dias');
+    linhas.push('## 4. Próximos 45 dias');
     for (const c of d.proximasCobrancas.slice(0, 15)) {
       linhas.push(`- ${c.tipo === 'receita' ? '+' : '−'} **${c.nome}** — ${brl(Math.abs(c.valor))} em ${c.data} (em ${c.dias}d)`);
     }
     linhas.push('');
   }
+
   if (d.oportunidades.length > 0) {
-    linhas.push(`## Oportunidades (${d.oportunidades.length})`);
+    linhas.push(`## 5. Oportunidades em aberto (${d.oportunidades.length})`);
     for (const o of d.oportunidades) {
       linhas.push(`- **${o.titulo}** _(${o.estado})_ — ${brl(o.valorEstimado)}`);
       if (o.proximoPasso) linhas.push(`  - próximo passo: ${o.proximoPasso}`);
     }
     linhas.push('');
   }
+
   if (d.entrevistas.length > 0) {
-    linhas.push(`## Entrevistas (${d.kpis.entrevistas})`);
+    linhas.push(`## 6. Entrevistas registradas (${d.kpis.entrevistas})`);
     for (const e of d.entrevistas.slice(0, 5)) {
       linhas.push(`- **${e.data}** (${e.tipo || 'discovery'})`);
-      if (e.resumoIA) linhas.push(`  ${e.resumoIA.slice(0, 300)}${e.resumoIA.length > 300 ? '…' : ''}`);
+      if (e.resumoIA) linhas.push(`  ${e.resumoIA.slice(0, 400)}${e.resumoIA.length > 400 ? '…' : ''}`);
     }
     linhas.push('');
   }
+
+  // ─── Discovery: roteiros + respostas (parte mais rica pra construir o app) ────
+  if (forms.length > 0 || respostas.length > 0) {
+    linhas.push(`## 7. Discovery — roteiros aplicados e respostas`);
+    linhas.push('');
+
+    if (forms.length > 0) {
+      linhas.push(`### 7.1 Roteiros (${forms.length})`);
+      for (const f of forms) {
+        linhas.push('');
+        linhas.push(`#### ${f.titulo || 'Roteiro'} _(${f.status})_`);
+        const meta: string[] = [];
+        if (f.criadoEm) meta.push(`criado em ${new Date(f.criadoEm).toLocaleString('pt-BR')}`);
+        if (f.publicadoEm) meta.push(`publicado em ${new Date(f.publicadoEm).toLocaleString('pt-BR')}`);
+        if (f.segmento) meta.push(`segmento: ${f.segmento}`);
+        if (meta.length) linhas.push(`_${meta.join(' · ')}_`);
+        linhas.push('');
+        for (const bloco of (f.blocos || [])) {
+          linhas.push(`**${bloco.tema || 'Bloco'}**`);
+          for (const p of (bloco.perguntas || [])) {
+            const texto = typeof p === 'string' ? p : (p && (p as { texto?: string }).texto) || '';
+            if (texto) linhas.push(`- ${texto}`);
+          }
+          linhas.push('');
+        }
+      }
+    }
+
+    if (respostas.length > 0) {
+      linhas.push(`### 7.2 Respostas do cliente (${respostas.length})`);
+      linhas.push('');
+      // Ordena por score decrescente — a melhor oportunidade primeiro.
+      const ordenadas = [...respostas].sort((a, b) => (b.score || 0) - (a.score || 0));
+      for (const r of ordenadas) {
+        linhas.push(`#### Resposta — score ${r.score}/100`);
+        const cab: string[] = [];
+        if (r.nome) cab.push(`**${r.nome}**`);
+        if (r.emailRespondente) cab.push(`<${r.emailRespondente}>`);
+        if (r.criadoEm) cab.push(`em ${new Date(r.criadoEm).toLocaleString('pt-BR')}`);
+        if (cab.length) linhas.push(cab.join(' · '));
+        if (r.querAmostra) linhas.push(`- **Quer amostra:** sim${r.agendaPref ? ` (${r.agendaPref})` : ''}`);
+        if (r.ferramentas && r.ferramentas.length > 0) linhas.push(`- **Ferramentas em uso:** ${r.ferramentas.join(', ')}`);
+        linhas.push('');
+        // Respostas pergunta-a-pergunta: tenta casar com o roteiro pra ter o enunciado.
+        const formDaResposta = forms.find((f) => f.id === r.formId);
+        const indice: Record<string, string> = {};
+        if (formDaResposta) {
+          for (const b of (formDaResposta.blocos || [])) {
+            for (const p of (b.perguntas || [])) {
+              const obj = (typeof p === 'object' && p) ? p as { id?: string; texto?: string } : null;
+              if (obj && obj.id) indice[obj.id] = obj.texto || '';
+            }
+          }
+        }
+        const respObj = (r.respostas && typeof r.respostas === 'object') ? r.respostas as Record<string, unknown> : {};
+        const chaves = Object.keys(respObj);
+        if (chaves.length > 0) {
+          linhas.push('**Respostas:**');
+          for (const k of chaves) {
+            const pergunta = indice[k] || k;
+            const v = respObj[k];
+            const valorTxt = Array.isArray(v) ? v.join('; ') : String(v ?? '');
+            if (valorTxt.trim()) {
+              linhas.push(`- _${pergunta}_`);
+              linhas.push(`  → ${valorTxt}`);
+            }
+          }
+        }
+        linhas.push('');
+      }
+    }
+  }
+
   if (d.alertas.length > 0) {
-    linhas.push(`## Alertas (últimos 30 dias)`);
+    linhas.push(`## 8. Alertas (últimos 30 dias)`);
     for (const a of d.alertas.slice(0, 10)) {
       linhas.push(`- **[${a.severidade}]** ${a.titulo} — ${a.mensagem}`);
     }
     linhas.push('');
   }
+
+  linhas.push('---');
+  linhas.push('');
+  linhas.push('### Como usar este briefing');
+  linhas.push('Cole este documento no chat da IA que vai construir o app sob medida. Os blocos 7.1 e 7.2 são a base mais rica: roteiros aplicados ao cliente e respostas literais que ele deu — use-os para definir telas, fluxos e funcionalidades do novo sistema.');
+  linhas.push('');
   return linhas.join('\n');
 }

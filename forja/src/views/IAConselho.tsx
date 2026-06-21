@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Button, Empty, Spin, App as AntApp, Row, Col } from 'antd';
+import { Button, Spin, App as AntApp, Row, Col } from 'antd';
 import { Users, Sparkles, ThumbsUp, AlertTriangle, Lightbulb, Flag } from 'lucide-react';
 import { Panel } from '../components/ui';
+import PremiumEmpty from '../components/PremiumEmpty';
 import ContextoPicker, { type Contexto } from '../components/ContextoPicker';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -73,7 +74,7 @@ export default function IAConselho({ ideias, sistemas }: { ideias: Ideia[]; sist
               const cor = t.accents[PERSONA_COR[p.persona] || 'blue'];
               return (
                 <Col xs={24} lg={12} key={i}>
-                  <Panel padding={18} style={{ height: '100%' }}>
+                  <Panel padding={18} className="forja-lift" style={{ height: '100%', borderTop: `2px solid ${cor}` }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
                       <span style={{ width: 34, height: 34, borderRadius: 9, background: `${cor}22`, color: cor, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONTS.display, fontWeight: 600, fontSize: 14 }}>{p.persona.charAt(0)}</span>
                       <span style={{ fontFamily: FONTS.display, fontSize: 16, fontWeight: 600, color: t.text }}>{p.persona}</span>
@@ -100,7 +101,16 @@ export default function IAConselho({ ideias, sistemas }: { ideias: Ideia[]; sist
         </div>
       )}
 
-      {!loading && !result && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Escolha um contexto e reúna o conselho" style={{ marginTop: 40 }} />}
+      {!loading && !result && (
+        <div style={{ marginTop: 18 }}>
+          <PremiumEmpty
+            icon={<Users size={26} strokeWidth={1.5} />}
+            accent={t.accents.lavender}
+            title="Seu conselho está pronto pra reunir"
+            subtitle="Escolha um contexto acima e clique em Reunir conselho. Cinco especialistas — Product/BA, UX, UI, Arquitetura e Engenharia — analisam e entregam uma recomendação única."
+          />
+        </div>
+      )}
     </div>
   );
 }

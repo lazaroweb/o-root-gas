@@ -65,6 +65,24 @@
 ## Fila
 
 ### Próximos candidatos
+
+#### Auditoria Forja IA — alta prioridade
+
+- **Leitura paginada de repositórios grandes (resolver `DIFF TRUNCADO`)**
+  - Hoje: quando repo passa de ~60-80KB, a IA vê só uma fatia e um alerta peach "DIFF TRUNCADO — IA NÃO VIU TUDO" é mostrado. Achados variam de rodada pra rodada porque a fatia muda. Frustrante e sem tratativa.
+  - Proposta: dividir leitura em 2-3 batches (por pasta/módulo, ordenando por relevância — `src/` antes de `tests/` etc.), rodar a IA em cada batch, mesclar achados via reconciliação determinística (Jaccard de títulos, já implementada na v1.140.0), descartando duplicatas.
+  - Estimativa: 30-45 min de implementação. Resolve definitivamente o alerta de truncamento.
+  - Trigger: usuário rodou v1.140.0 com `one-colmeia-app` (~85KB) e o alerta apareceu.
+
+- **Caminho de tratativa explícito em TODO alerta da Forja** (princípio "alerta sem ação proibido")
+  - Hoje: alguns alertas (DIFF TRUNCADO, frescor, docs-only) já têm CTA. Mas existem alertas/banners sem caminho claro.
+  - Proposta: audit interno (varrer todos os componentes `Alert`, `Tag`, banners), garantir que cada um tenha: (a) ação primária acionável OU (b) link "saiba mais / por que isso aparece" OU (c) botão pra dispensar com nota.
+  - Estimativa: 1-2 horas de audit + correções.
+
+- ~~**Reconciliação semântica de achados**~~ — **ENTREGUE v1.140.1** (opção A): nova função `_mesmoAchado` com 2 camadas (Jaccard ≥ 0.4 + área igual + ≥1 keyword técnica em comum). Whitelist de ~40 keywords técnicas. Resolve os 3 falso-negativos vistos no `one-colmeia-app`. Opção B (LLM pra reconciliação) fica como reserva pra casos mais complexos no futuro.
+
+#### Backlog geral
+
 - **Dunning automático**: alerta/e-mail de inadimplência quando uma cobrança
   vence sem recebimento (integrar ao motor de automações existente)
 - **Anexar PDF ao e-mail**: recibo/fatura/relatório como anexo no digest
@@ -83,3 +101,4 @@
 3. **Zero-knowledge onde fizer sentido** — Vault e dados sensíveis criptografados no cliente.
 4. **GAS-friendly** — bundle ≤ 1.5MB, fatiado em chunks, ≤ 9 scripts inline.
 5. **Acionável** — toda análise da Forja IA termina em prompt ou ação executável.
+6. **Alerta sem tratativa é proibido** — todo alerta/aviso/badge visível pro usuário precisa ter um caminho claro de resolução (CTA, explicação ou descarte com nota). Princípio elevado em 2026-06-21 após observação direta do usuário: *"Eu não aceito alerta de nada sem tratativa"*.

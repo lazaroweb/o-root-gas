@@ -76,9 +76,28 @@ function IconePorMime({ item, size = 18 }: { item: DriveItem; size?: number }): 
   return <FileText size={size} color={t.textTertiary} strokeWidth={1.7} />;
 }
 
+// Traduz erros crus de OAuth (do provedor ou do servidor) em mensagem humana
+// com a causa provável e a próxima ação. Mantém o detalhe técnico só no fallback.
+function erroOAuthAmigavel(raw?: string): { titulo: string; dica: string; retryFaz: boolean } {
+  const e = String(raw || '').toLowerCase();
+  if (e.indexOf('redirect_uri_mismatch') >= 0)
+    return { titulo: 'A Redirect URI não bate', dica: 'A URI registrada no provedor precisa ser idêntica à mostrada em "Credenciais OAuth". Copie pelo botão e cole de novo no app OAuth do provedor.', retryFaz: false };
+  if (e.indexOf('access_denied') >= 0 || e.indexOf('consent') >= 0 || e.indexOf('denied') >= 0)
+    return { titulo: 'Acesso não autorizado', dica: 'O consentimento foi recusado ou a conta não tem permissão. Aceite as permissões na janela. No Google, publique o app ou adicione sua conta em "Test users".', retryFaz: true };
+  if (e.indexOf('invalid_client') >= 0 || e.indexOf('unauthorized_client') >= 0 || e.indexOf('invalid_grant') >= 0 || e.indexOf('invalid_request') >= 0)
+    return { titulo: 'Credenciais inválidas', dica: 'O Client ID ou Secret pode estar errado/expirado. Reabra "Credenciais OAuth" e cole de novo. No OneDrive, use o Value do secret (não o Secret ID).', retryFaz: false };
+  if (e.indexOf('not_configured') >= 0 || e.indexOf('no_cred') >= 0 || e.indexOf('credenc') >= 0)
+    return { titulo: 'Faltam as credenciais OAuth', dica: 'Registre o app no provedor e salve Client ID + Secret em "Credenciais OAuth" antes de conectar.', retryFaz: false };
+  if (e.indexOf('popup') >= 0 || e.indexOf('block') >= 0)
+    return { titulo: 'A janela foi bloqueada', dica: 'Seu navegador bloqueou o pop-up de autorização. Permita pop-ups para este site e tente de novo.', retryFaz: true };
+  if (e.indexOf('timeout') >= 0 || e.indexOf('tempo') >= 0)
+    return { titulo: 'Não confirmei a conexão a tempo', dica: 'Você concluiu o consentimento na janela? Se sim, dê "Tentar de novo" — às vezes leva alguns segundos. Se a janela não abriu ou deu erro, confira o passo a passo.', retryFaz: true };
+  return { titulo: 'Não consegui concluir a conexão', dica: raw ? `Tente de novo. Se persistir, confira o passo a passo. (Detalhe técnico: ${raw})` : 'Tente de novo. Se persistir, confira o passo a passo em "Como conectar".', retryFaz: true };
+}
+
 export default function DriverPanel(): React.ReactElement {
   const t = useTokens();
-  const { message } = AntApp.useApp();
+  const { message, modal } = AntApp.useApp();
   const [tab, setTab] = useState<'arquivos' | 'contas' | 'manual'>('arquivos');
 
   // ─── Contas (carregadas no mount: alimentam o seletor de fonte e a aba) ───
@@ -223,6 +242,21 @@ export default function DriverPanel(): React.ReactElement {
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
+  // Diálogo de falha: explica a causa provável + oferece reabrir o fluxo ou o
+  // passo a passo. Bem mais útil que um toast de erro cru sumindo na tela.
+  const mostrarFalhaConexao = (c: Connector, raw?: string) => {
+    const { titulo, dica, retryFaz } = erroOAuthAmigavel(raw);
+    modal.confirm({
+      title: titulo,
+      content: dica,
+      icon: null,
+      okText: retryFaz ? 'Tentar de novo' : 'Abrir credenciais',
+      cancelText: 'Ver passo a passo',
+      onOk: () => { if (retryFaz) { void conectar(c); } else { abrirCredenciais(c.provedor); } },
+      onCancel: () => setTab('manual'),
+    });
+  };
+
   const conectar = async (c: Connector) => {
     if (!credStatus[c.provedor]) {
       message.warning('Configure as credenciais OAuth deste provedor primeiro.');
@@ -232,10 +266,20 @@ export default function DriverPanel(): React.ReactElement {
     setConectandoId(c.id);
     try {
       const r = await callServer<ServerResult>('driveOAuthAuthorizeUrl', c.id);
-      if (!r.ok) { message.error(r.error || 'Erro ao iniciar autorização'); setConectandoId(''); return; }
+      if (!r.ok || !(r.data as { url?: string } | undefined)?.url && !(r.data as { authorized?: boolean } | undefined)?.authorized) {
+        setConectandoId('');
+        mostrarFalhaConexao(c, r.error || 'Não recebi a URL de autorização');
+        return;
+      }
       const data = r.data as { authorized?: boolean; url?: string };
       if (data.authorized) { message.success('Conta já conectada!'); setConectandoId(''); carregarContas(); return; }
-      window.open(data.url, '_blank', 'width=560,height=680,noopener');
+      const win = window.open(data.url, '_blank', 'width=560,height=680,noopener');
+      if (!win) {
+        // Pop-up bloqueado pelo navegador — sem janela, não tem como consentir.
+        setConectandoId('');
+        mostrarFalhaConexao(c, 'popup_blocked');
+        return;
+      }
       message.info('Conclua o consentimento na nova janela. Vou verificar automaticamente.');
       let tentativas = 0;
       if (pollRef.current) clearInterval(pollRef.current);
@@ -243,16 +287,18 @@ export default function DriverPanel(): React.ReactElement {
         tentativas += 1;
         callServer<ServerResult>('driveOAuthStatus', c.id).then((s) => {
           const conectada = !!(s.ok && (s.data as { conectada?: boolean })?.conectada);
+          const erroStatus = s.ok ? '' : (s.error || '');
           if (conectada || tentativas > 40) {
             if (pollRef.current) clearInterval(pollRef.current);
             setConectandoId('');
             if (conectada) { message.success('Conta conectada!'); carregarContas(); }
+            else mostrarFalhaConexao(c, erroStatus || 'timeout');
           }
-        });
+        }).catch(() => { /* tentativa isolada falhou; segue o poll até o limite */ });
       }, 3000);
     } catch (e) {
-      message.error(e instanceof Error ? e.message : 'Erro');
       setConectandoId('');
+      mostrarFalhaConexao(c, e instanceof Error ? e.message : '');
     }
   };
 

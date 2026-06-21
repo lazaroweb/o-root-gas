@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat, Compass, HardDrive, Wallet } from 'lucide-react';
+import { BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat, Compass, HardDrive, Wallet, Hammer } from 'lucide-react';
 import { PageHeader } from '../components/ui';
 import { useForja, useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -42,6 +42,9 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
   const t = useTokens();
   const { mode } = useForja();
   const [tab, setTab] = useState<AtelierTab>(initialTab);
+  // Filtro inicial do Cofre quando aberto via atalho (card de Conta com segredo).
+  const [cofreFiltro, setCofreFiltro] = useState('');
+  const abrirCofre = (label?: string) => { setCofreFiltro(label || ''); setTab('cofre'); };
 
   // Definição das estações. Pra adicionar uma nova: 1) cria o painel componente,
   // 2) adiciona aqui na lista, 3) adiciona o case no renderConteudo abaixo.
@@ -162,7 +165,7 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
       case 'driver':
         return wrapCard(<DriverPanel />);
       case 'contas':
-        return wrapCard(<ContasPanel />);
+        return wrapCard(<ContasPanel onAbrirCofre={abrirCofre} />);
       case 'codex':
         return wrapCard(<CodexPanel />);
       case 'receituario':
@@ -170,7 +173,7 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
       case 'hospedagem':
         return wrapCard(<HospedagemPanel />);
       case 'cofre':
-        return wrapCard(<CofrePanel />);
+        return wrapCard(<CofrePanel initialFiltro={cofreFiltro} />);
       default:
         return null;
     }
@@ -186,7 +189,7 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
 
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="forja-view" style={{ padding: '36px 40px', maxWidth: 1240, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
+    <div className="forja-view" style={{ padding: '36px 40px', maxWidth: 1440, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
       <PageHeader
         title="Atelier"
         subtitle="O kit de bancada do vibe coder. Tudo ao toque dos dedos."
@@ -196,10 +199,23 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
         display: 'grid',
         gridTemplateColumns: '210px 1fr',
         gap: 24,
-        alignItems: 'start',
+        alignItems: 'stretch',
         marginTop: 4,
       }}>
-        {/* ─── Sub-nav vertical (sticky) ────────────────────────────────────── */}
+        {/* ─── Sub-nav vertical ──────────────────────────────────────────────
+            A moldura estica até o fim do conteúdo (colunas alinhadas), mas a
+            lista de botões fica sticky no topo pra continuar visível ao rolar. */}
+        <div
+          style={{
+            alignSelf: 'stretch',
+            display: 'flex',
+            flexDirection: 'column',
+            padding: '6px',
+            background: mode === 'luz' ? '#FBF8F2' : '#1B1D21',
+            border: `1px solid ${t.borderSoft}`,
+            borderRadius: 14,
+          }}
+        >
         <nav
           aria-label="Estações do Atelier"
           style={{
@@ -208,10 +224,6 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
             display: 'flex',
             flexDirection: 'column',
             gap: 2,
-            padding: '6px',
-            background: mode === 'luz' ? '#FBF8F2' : '#1B1D21',
-            border: `1px solid ${t.borderSoft}`,
-            borderRadius: 14,
           }}
         >
           {ESTACOES.map((e) => {
@@ -265,6 +277,40 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
             );
           })}
         </nav>
+
+        {/* Selo de bancada — preenche o rodapé da moldura com um toque clássico,
+            ancorado embaixo (marginTop auto). Escondido no mobile (faixa horizontal). */}
+        <div
+          className="forja-atelier-mark"
+          aria-hidden="true"
+          style={{
+            marginTop: 'auto',
+            paddingTop: 18,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 7,
+            opacity: 0.4,
+            userSelect: 'none',
+          }}
+        >
+          <span style={{
+            width: 30, height: 30, borderRadius: '50%',
+            border: `1px solid ${t.borderSoft}`,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            color: t.textTertiary,
+          }}>
+            <Hammer size={14} strokeWidth={1.6} />
+          </span>
+          <span style={{
+            fontFamily: FONTS.display, fontSize: 10.5,
+            letterSpacing: '0.22em', textTransform: 'uppercase',
+            color: t.textTertiary,
+          }}>
+            Forja
+          </span>
+        </div>
+        </div>
 
         {/* ─── Conteúdo da estação ativa ────────────────────────────────────── */}
         <div style={{ minWidth: 0 /* evita overflow horizontal de tabelas */ }}>

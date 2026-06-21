@@ -119,9 +119,9 @@ export default function LandingPage({ onEnter }: LandingPageProps): React.ReactE
               fontFamily: FONTS.display,
               fontSize: 'clamp(48px, 9vw, 96px)',
               fontWeight: 600,
-              letterSpacing: '0.26em',
+              letterSpacing: '0.18em',
               color: corTexto,
-              paddingLeft: '0.26em', // compensa o letter-spacing pra centralizar
+              paddingLeft: '0.18em', // compensa o letter-spacing pra centralizar
               animation: 'forjaWordIn 1.1s cubic-bezier(0.22,1,0.36,1) both',
             }}
           >
@@ -174,17 +174,33 @@ export default function LandingPage({ onEnter }: LandingPageProps): React.ReactE
           </span>
         </div>
 
+        {/* Filete dourado — ancora a marca e separa o wordmark do slogan,
+            tratamento "Opção B" aplicado consistentemente em todas as superfícies */}
+        <div
+          aria-hidden
+          style={{
+            marginTop: 24,
+            height: 2,
+            width: 'clamp(90px, 14vw, 160px)',
+            background: `linear-gradient(90deg, transparent, ${ember}, ${ember}99 78%, transparent)`,
+            borderRadius: 2,
+            animation: 'forjaSloganIn 0.9s ease 0.4s both',
+            zIndex: 2,
+            boxShadow: `0 0 12px ${ember}55`,
+          }}
+        />
+
         {/* Slogan */}
         <div
           style={{
-            marginTop: 26,
+            marginTop: 18,
             fontFamily: FONTS.display,
             fontStyle: 'italic',
             fontSize: 'clamp(17px, 2.6vw, 24px)',
             fontWeight: 400,
             color: corSub,
             letterSpacing: '0.01em',
-            animation: 'forjaSloganIn 0.9s ease 0.5s both',
+            animation: 'forjaSloganIn 0.9s ease 0.55s both',
             zIndex: 2,
           }}
         >

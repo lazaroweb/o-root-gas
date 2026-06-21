@@ -189,12 +189,12 @@ const FORJA_EXEMPLOS: ExemploMermaid[] = [
     C -->|Nao| D[Refinar com chat IA]
     D --> B
     C -->|Sim| E[Forja: dev em andamento]
-    E --> F[Tempera: refinamento]
-    F --> G{Health score >= 80?}
+    E --> G{Health score >= 80?}
     G -->|Nao| H[Auditoria IA]
-    H --> F
-    G -->|Sim| I[Prateleira: producao]
-    I --> J[Monitoramento + alertas]`,
+    H --> E
+    G -->|Sim| F[Tempera: no ar / producao]
+    F --> J[Monitoramento + alertas]
+    J --> I[Prateleira: aposentado/pausa]`,
   },
   {
     id: 'forja-sequence-callserver',

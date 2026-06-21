@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   Modal, Button, Input, Tag, App as AntApp, Empty, Spin, Tooltip, Drawer, Upload,
-  Popconfirm, Tabs, Form, Skeleton, Segmented,
+  Popconfirm, Tabs, Form, Skeleton, Segmented, Collapse, Dropdown, Checkbox,
 } from 'antd';
 import {
   BookMarked, Plus, Upload as UploadIcon, Copy, Trash2, Download, Search, Tag as TagIcon,
-  ExternalLink, Sparkles, Eye, FileText, Save, X, FolderOpen, CheckCircle2, Info, Languages,
+  ExternalLink, Sparkles, Eye, FileText, Save, X, FolderOpen, Folder, FolderPlus, Pencil,
+  FolderInput, Palette, Check, CheckCircle2, Info, Languages, Package, Archive, ListChecks,
 } from 'lucide-react';
+import { criarZipBlob, baixarBlob, type ZipEntry } from '../zip';
 import ModeloBadge from './ModeloBadge';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -18,12 +20,40 @@ interface SkillSummary {
   id: string;
   nome: string;
   descricao: string;
+  descricaoPt?: string;
+  tipoIA?: string;
   categoria: string;
   tags: string[];
   fonte: string;
   tamanhoBytes: number;
   criadoEm: string;
   atualizadoEm: string;
+}
+
+// ─── Fontes (pastas) ──────────────────────────────────────────────────────────
+// A `fonte` segue a convenção "<pack>/<skill>" (ex.: "gas-app-kit/review-bugbot").
+// Skills sem "/" (uploads avulsos) caem em "avulsas". Assim, ao importar novos
+// packs no futuro, cada um vira sua própria pasta automaticamente.
+const FONTE_META: Record<string, { label: string }> = {
+  'gas-app-kit': { label: 'GAS App Kit' },
+  avulsas: { label: 'Avulsas / Importadas' },
+};
+function fonteKey(fonte: string): string {
+  if (!fonte) return 'avulsas';
+  const i = fonte.indexOf('/');
+  return i > 0 ? fonte.slice(0, i) : 'avulsas';
+}
+function fonteLabel(key: string): string {
+  if (FONTE_META[key]) return FONTE_META[key].label;
+  return key.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+interface SkillFonte {
+  id: string;
+  chave: string;
+  nome: string;
+  descricao: string;
+  cor: string;
 }
 
 interface Traducao { conteudo: string; descricao: string; idioma?: string; em?: string }
@@ -62,6 +92,74 @@ function relTempo(iso: string): string {
   return new Date(iso).toLocaleDateString('pt-BR');
 }
 
+interface ExportSkill { id: string; nome: string; descricao?: string; conteudo: string; original?: string; fonte: string }
+
+type ExportTarget = 'generic' | 'cursor' | 'claude';
+
+// Lembra a última config de export (IDE/SO/shell/opções) entre sessões.
+const EXPORT_CFG_KEY = 'forja_export_cfg';
+interface ExportCfg { target: ExportTarget; so: string; shell: string; contexto: boolean; adaptar: boolean }
+function carregarExportCfg(): Partial<ExportCfg> | null {
+  try { return JSON.parse(localStorage.getItem(EXPORT_CFG_KEY) || 'null'); } catch { return null; }
+}
+function salvarExportCfg(cfg: ExportCfg): void {
+  try { localStorage.setItem(EXPORT_CFG_KEY, JSON.stringify(cfg)); } catch { /* sem storage */ }
+}
+
+function slugSkill(s: string): string {
+  return String(s || '')
+    .toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'skill';
+}
+
+function umaLinha(s: string): string {
+  return String(s || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+}
+
+// Onde cada destino coloca os arquivos + como o projeto os lê.
+const TARGET_INFO: Record<ExportTarget, { label: string; pasta: (slug: string) => string; instrucao: string }> = {
+  generic: { label: 'Genérico / Claude.ai', pasta: (s) => `skills/${s}/SKILL.md`, instrucao: 'Coloque a pasta `skills/` na raiz do projeto.' },
+  cursor: { label: 'Cursor', pasta: (s) => `.cursor/rules/${s}.mdc`, instrucao: 'Coloque a pasta `.cursor/` na raiz do projeto — o Cursor carrega as rules automaticamente.' },
+  claude: { label: 'Claude Code', pasta: (s) => `.claude/skills/${s}/SKILL.md`, instrucao: 'Coloque a pasta `.claude/` na raiz do projeto.' },
+};
+
+// Empacota um conjunto de skills num .zip no layout do destino escolhido +
+// README. Se `ambienteTexto` vier, injeta cabeçalho de contexto em cada arquivo
+// e um AGENTS.md (opção A). No destino Cursor, gera `.mdc` com frontmatter.
+function baixarKitZip(nomeKit: string, skills: ExportSkill[], ambienteTexto?: string, target: ExportTarget = 'generic'): void {
+  const ctx = (ambienteTexto || '').trim();
+  const info = TARGET_INFO[target];
+  const cabecalho = ctx ? `> **Contexto do ambiente:** ${ctx}\n>\n> _Adapte comandos e caminhos a este ambiente._\n\n` : '';
+  const usados = new Set<string>();
+  const entries: ZipEntry[] = [];
+  const linhas: string[] = [];
+  for (const s of skills) {
+    const base = slugSkill(s.nome);
+    let u = base; let n = 2;
+    while (usados.has(u)) { u = `${base}-${n}`; n++; }
+    usados.add(u);
+    const path = info.pasta(u);
+    let content = cabecalho + s.conteudo;
+    if (target === 'cursor') {
+      const fm = `---\ndescription: ${umaLinha(s.descricao || s.nome)}\nalwaysApply: false\n---\n\n`;
+      content = fm + content;
+    }
+    entries.push({ path, content });
+    linhas.push(`- **${s.nome || u}** — \`${path}\``);
+  }
+  const readme = `# ${nomeKit}\n\nKit de skills exportado do Forja — destino: **${info.label}**.\n\n`
+    + (ctx ? `**Ambiente alvo:** ${ctx}\n\n` : '')
+    + `## Skills (${skills.length})\n\n${linhas.join('\n')}\n\n---\n\n${info.instrucao}\n`;
+  entries.unshift({ path: 'README.md', content: readme });
+  if (ctx) {
+    const agents = `# Contexto do projeto\n\n**Ambiente alvo:** ${ctx}\n\n`
+      + 'Ao usar as skills deste kit, assuma este ambiente para comandos de terminal, '
+      + 'caminhos de arquivo e exemplos.\n\n## Skills\n\n' + linhas.join('\n') + '\n';
+    entries.push({ path: 'AGENTS.md', content: agents });
+  }
+  baixarBlob(criarZipBlob(entries), `${slugSkill(nomeKit)}.zip`);
+}
+
 // Lê um arquivo .md (ou .txt) como string usando FileReader.
 function lerArquivoComoTexto(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -77,8 +175,119 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
   const { message } = AntApp.useApp();
   const [tab, setTab] = useState<'lista' | 'adicionar'>('lista');
   const [skills, setSkills] = useState<SkillSummary[]>([]);
+  const [fontes, setFontes] = useState<SkillFonte[]>([]);
   const [loading, setLoading] = useState(false);
   const [filtro, setFiltro] = useState('');
+  const [openSources, setOpenSources] = useState<string[]>([]);
+  // Categorias abertas por pasta: { [chaveDaPasta]: string[] }. Tudo recolhido
+  // por padrão; o usuário expande só o tema que quer ver.
+  const [openCats, setOpenCats] = useState<Record<string, string[]>>({});
+  const [traduzindoTudo, setTraduzindoTudo] = useState(false);
+  const [classificando, setClassificando] = useState(false);
+
+  // Editar metadados de uma pasta/fonte
+  const [editandoFonte, setEditandoFonte] = useState<SkillFonte | null>(null);
+  const [fonteNome, setFonteNome] = useState('');
+  const [fonteDesc, setFonteDesc] = useState('');
+  const [fonteCor, setFonteCor] = useState('');
+  const [salvandoFonte, setSalvandoFonte] = useState(false);
+  const [removendoFonte, setRemovendoFonte] = useState(false);
+  const [movendo, setMovendo] = useState(false);
+
+  // Importar pacote (vários .md sob um nome)
+  const [importOpen, setImportOpen] = useState(false);
+  const [impNome, setImpNome] = useState('');
+  const [impDesc, setImpDesc] = useState('');
+  const [impArquivos, setImpArquivos] = useState<{ nome: string; conteudo: string }[]>([]);
+  const [importando, setImportando] = useState(false);
+
+  // Exportar pasta + montar kit custom (modo seleção)
+  const [selMode, setSelMode] = useState(false);
+  const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
+
+  // Modal de export unificado (pasta ou kit custom) com parametrização
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportIds, setExportIds] = useState<string[]>([]);
+  const [kitNome, setKitNome] = useState('Meu Kit');
+  const [expSO, setExpSO] = useState('—');
+  const [expShell, setExpShell] = useState('—');
+  const [expExtra, setExpExtra] = useState('');
+  const [expTarget, setExpTarget] = useState<ExportTarget>('generic');
+  const [expContexto, setExpContexto] = useState(true);   // A
+  const [expAdaptar, setExpAdaptar] = useState(false);    // B
+  const [gerando, setGerando] = useState(false);
+  const [expFase, setExpFase] = useState<'config' | 'preview'>('config');
+  const [expResultado, setExpResultado] = useState<ExportSkill[]>([]);
+  const [previewVer, setPreviewVer] = useState<Record<string, 'adaptado' | 'original'>>({});
+
+  const toggleSelecionado = (id: string) => {
+    setSelecionados((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const abrirExport = (nome: string, ids: string[]) => {
+    if (ids.length === 0) { message.warning('Nada pra exportar aqui.'); return; }
+    setExportIds(ids);
+    setKitNome(nome || 'Meu Kit');
+    const cfg = carregarExportCfg();
+    setExpSO(cfg?.so ?? '—');
+    setExpShell(cfg?.shell ?? '—');
+    setExpExtra('');
+    setExpTarget(cfg?.target ?? 'generic');
+    setExpContexto(cfg?.contexto ?? true);
+    setExpAdaptar(cfg?.adaptar ?? false);
+    setExpFase('config');
+    setExpResultado([]);
+    setPreviewVer({});
+    setExportOpen(true);
+  };
+
+  const persistirCfg = () => {
+    salvarExportCfg({ target: expTarget, so: expSO, shell: expShell, contexto: expContexto, adaptar: expAdaptar });
+  };
+
+  const ambienteTexto = (): string => {
+    const partes: string[] = [];
+    if (expSO !== '—') partes.push(expSO);
+    if (expShell !== '—') partes.push(expShell);
+    return [partes.join(' · '), expExtra.trim()].filter(Boolean).join(' — ');
+  };
+
+  const finalizarDownload = (lista: ExportSkill[]) => {
+    baixarKitZip(kitNome, lista, expContexto ? ambienteTexto() : '', expTarget);
+    persistirCfg();
+    message.success(`"${kitNome}" gerado com ${lista.length} skill(s).`);
+    setExportOpen(false);
+    if (selMode) { setSelMode(false); setSelecionados(new Set()); }
+  };
+
+  const confirmarExport = async () => {
+    if (!kitNome.trim()) { message.warning('Dê um nome ao kit.'); return; }
+    if (exportIds.length === 0) { message.warning('Nada selecionado.'); return; }
+    setGerando(true);
+    const hide = message.loading(expAdaptar ? 'Adaptando skills com IA…' : 'Montando o .zip…', 0);
+    try {
+      if (expAdaptar) {
+        // Fase B: adapta e mostra preview antes de baixar.
+        const r = await callServer<ServerResult>('skillsAdaptar', { ids: exportIds, ambiente: ambienteTexto() });
+        if (r.ok && r.data) {
+          const lista = r.data as ExportSkill[];
+          setExpResultado(lista);
+          setPreviewVer(Object.fromEntries(lista.map((s) => [s.id, 'adaptado' as const])));
+          setExpFase('preview');
+        } else message.error(r.error || 'Erro ao adaptar');
+      } else {
+        const r = await callServer<ServerResult>('skillsExportar', exportIds);
+        if (r.ok && r.data) finalizarDownload(r.data as ExportSkill[]);
+        else message.error(r.error || 'Erro ao gerar');
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro');
+    } finally { hide(); setGerando(false); }
+  };
 
   // Drawer de detalhe
   const [aberta, setAberta] = useState<SkillFull | null>(null);
@@ -104,8 +313,14 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
 
   const carregar = useCallback(() => {
     setLoading(true);
-    callServer<ServerResult>('skillsList')
-      .then((r) => { if (r.ok && r.data) setSkills(r.data as SkillSummary[]); })
+    Promise.all([
+      callServer<ServerResult>('skillsList'),
+      callServer<ServerResult>('skillFontesList'),
+    ])
+      .then(([rs, rf]) => {
+        if (rs.ok && rs.data) setSkills(rs.data as SkillSummary[]);
+        if (rf.ok && rf.data) setFontes(rf.data as SkillFonte[]);
+      })
       .catch(() => { /* preview */ })
       .finally(() => setLoading(false));
   }, []);
@@ -303,10 +518,178 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
     return skills.filter((s) =>
       s.nome.toLowerCase().indexOf(q) >= 0 ||
       s.descricao.toLowerCase().indexOf(q) >= 0 ||
+      (s.descricaoPt || '').toLowerCase().indexOf(q) >= 0 ||
       s.categoria.toLowerCase().indexOf(q) >= 0 ||
       s.tags.some((tag) => tag.toLowerCase().indexOf(q) >= 0),
     );
   }, [skills, filtro]);
+
+  const fonteMeta = useMemo(() => {
+    const m: Record<string, SkillFonte> = {};
+    for (const f of fontes) m[f.chave] = f;
+    return m;
+  }, [fontes]);
+
+  // Agrupa: fonte (pasta) → categoria (seção). Pastas colapsadas por padrão.
+  const grupos = useMemo(() => {
+    const nomeDe = (k: string) => fonteMeta[k]?.nome || fonteLabel(k);
+    const porFonte: Record<string, SkillSummary[]> = {};
+    for (const s of filtradas) (porFonte[fonteKey(s.fonte)] = porFonte[fonteKey(s.fonte)] || []).push(s);
+    const chaves = Object.keys(porFonte).sort((a, b) => {
+      // gas-app-kit primeiro, avulsas por último, resto alfabético
+      const peso = (k: string) => (k === 'gas-app-kit' ? 0 : k === 'avulsas' ? 2 : 1);
+      return peso(a) - peso(b) || nomeDe(a).localeCompare(nomeDe(b));
+    });
+    return chaves.map((k) => {
+      const lista = porFonte[k];
+      const meta = fonteMeta[k];
+      const bytes = lista.reduce((acc, s) => acc + (s.tamanhoBytes || 0), 0);
+      // Subgrupos por tema (IA) com fallback pra categoria do frontmatter.
+      const porCat: Record<string, SkillSummary[]> = {};
+      for (const s of lista) {
+        const cat = (s.tipoIA || s.categoria || '').trim() || '—';
+        (porCat[cat] = porCat[cat] || []).push(s);
+      }
+      const categorias = Object.keys(porCat)
+        .sort((a, b) => (a === '—' ? 1 : b === '—' ? -1 : a.localeCompare(b)))
+        .map((cat) => ({ cat, skills: porCat[cat].sort((a, b) => (a.nome || '').localeCompare(b.nome || '')) }));
+      return {
+        key: k,
+        label: meta?.nome || fonteLabel(k),
+        descricao: meta?.descricao || '',
+        meta: meta || null,
+        total: lista.length,
+        bytes,
+        categorias,
+      };
+    });
+  }, [filtradas, fonteMeta]);
+
+  // Com filtro ativo, expande tudo pra revelar os matches; senão respeita o
+  // que o usuário abriu (tudo colapsado por padrão).
+  const activeSources = filtro.trim() ? grupos.map((g) => g.key) : openSources;
+
+  const traduzirDescricoes = async () => {
+    setTraduzindoTudo(true);
+    const hide = message.loading('Traduzindo descrições para português…', 0);
+    try {
+      const r = await callServer<ServerResult>('skillsTraduzirDescricoes');
+      if (r.ok) {
+        const d = (r.data as { traduzidas: number }) || { traduzidas: 0 };
+        message.success(d.traduzidas > 0 ? `${d.traduzidas} descrição(ões) traduzida(s) para pt-BR.` : 'Todas as descrições já estavam traduzidas.');
+        carregar();
+      } else {
+        message.error(r.error || 'Não consegui traduzir');
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro ao traduzir');
+    } finally { hide(); setTraduzindoTudo(false); }
+  };
+
+  const classificarSkills = async () => {
+    setClassificando(true);
+    const hide = message.loading('Classificando skills por tema (IA)…', 0);
+    try {
+      const r = await callServer<ServerResult>('skillsClassificar');
+      if (r.ok) {
+        const d = (r.data as { classificadas: number }) || { classificadas: 0 };
+        message.success(d.classificadas > 0 ? `${d.classificadas} skill(s) classificada(s) por tema.` : 'Todas as skills já estavam classificadas.');
+        carregar();
+      } else {
+        message.error(r.error || 'Não consegui classificar');
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro ao classificar');
+    } finally { hide(); setClassificando(false); }
+  };
+
+  const abrirEditarFonte = (f: SkillFonte) => {
+    setEditandoFonte(f);
+    setFonteNome(f.nome);
+    setFonteDesc(f.descricao);
+    setFonteCor(f.cor || '');
+  };
+
+  const salvarFonte = async () => {
+    if (!fonteNome.trim()) { message.warning('Dê um nome pra pasta.'); return; }
+    setSalvandoFonte(true);
+    try {
+      const r = await callServer<ServerResult>('skillFonteSalvar', {
+        id: editandoFonte?.id, nome: fonteNome, descricao: fonteDesc, cor: fonteCor,
+      });
+      if (r.ok) { message.success('Pasta atualizada.'); setEditandoFonte(null); carregar(); }
+      else message.error(r.error || 'Erro ao salvar');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro');
+    } finally { setSalvandoFonte(false); }
+  };
+
+  const removerFonte = async () => {
+    if (!editandoFonte) return;
+    setRemovendoFonte(true);
+    try {
+      const r = await callServer<ServerResult>('skillFonteRemover', editandoFonte.id);
+      if (r.ok) {
+        const d = (r.data as { movidas: number }) || { movidas: 0 };
+        message.success(`Pasta removida. ${d.movidas} skill(s) movida(s) para "Avulsas".`);
+        setEditandoFonte(null);
+        carregar();
+      } else message.error(r.error || 'Erro ao remover');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro');
+    } finally { setRemovendoFonte(false); }
+  };
+
+  const moverSkill = async (chaveDestino: string) => {
+    if (!aberta) return;
+    setMovendo(true);
+    try {
+      const r = await callServer<ServerResult>('skillsMoverFonte', aberta.id, chaveDestino);
+      if (r.ok && r.data) {
+        const nova = (r.data as { fonte: string }).fonte;
+        setAberta((prev) => (prev ? { ...prev, fonte: nova } : prev));
+        message.success('Skill movida.');
+        carregar();
+      } else message.error(r.error || 'Erro ao mover');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro');
+    } finally { setMovendo(false); }
+  };
+
+  const onUploadPacote = async (file: File) => {
+    try {
+      const texto = await lerArquivoComoTexto(file);
+      setImpArquivos((a) => [...a, { nome: file.name, conteudo: texto }]);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro ao ler arquivo');
+    }
+    return false; // impede upload automático
+  };
+
+  const importarPacote = async () => {
+    if (!impNome.trim()) { message.warning('Dê um nome ao pacote.'); return; }
+    if (impArquivos.length === 0) { message.warning('Suba pelo menos um arquivo .md.'); return; }
+    setImportando(true);
+    const hide = message.loading(`Importando ${impArquivos.length} skill(s)…`, 0);
+    try {
+      const rf = await callServer<ServerResult>('skillFonteSalvar', { nome: impNome, descricao: impDesc });
+      if (!rf.ok || !rf.data) { message.error(rf.error || 'Erro ao criar a pasta'); return; }
+      const chave = (rf.data as { chave: string }).chave;
+      let n = 0; let erros = 0;
+      for (const a of impArquivos) {
+        const slug = a.nome.replace(/\.(md|markdown|txt)$/i, '');
+        // eslint-disable-next-line no-await-in-loop
+        const r = await callServer<ServerResult>('skillsSave', { conteudo: a.conteudo, fonte: `${chave}/${slug}` });
+        if (r.ok) n++; else erros++;
+      }
+      message.success(`Pacote "${impNome}" — ${n} skill(s) importada(s)${erros ? `, ${erros} com erro` : ''}.`);
+      setImportOpen(false); setImpNome(''); setImpDesc(''); setImpArquivos([]);
+      setOpenSources((prev) => (prev.includes(chave) ? prev : [...prev, chave]));
+      carregar();
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro ao importar');
+    } finally { hide(); setImportando(false); }
+  };
 
   const tabsEl = (
     <Tabs
@@ -345,6 +728,20 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                       allowClear
                       style={{ flex: 1, minWidth: 240 }}
                     />
+                    {skills.length > 0 && (
+                      <Tooltip title="Traduz para português as descrições ainda no original (fica guardado — não re-gasta tokens nas próximas).">
+                        <Button icon={<Languages size={14} />} loading={traduzindoTudo} onClick={traduzirDescricoes}>
+                          Traduzir descrições
+                        </Button>
+                      </Tooltip>
+                    )}
+                    {skills.length > 0 && (
+                      <Tooltip title="A IA lê nome + descrição e agrupa cada skill num tema de alto nível (Design, Frontend, Backend…). Fica guardado — não re-gasta tokens.">
+                        <Button icon={<Sparkles size={14} />} loading={classificando} onClick={classificarSkills}>
+                          Classificar por tema
+                        </Button>
+                      </Tooltip>
+                    )}
                     {GAS_APP_KIT_SKILLS.length > 0 && (
                       <Tooltip title={`Adiciona as ${GAS_APP_KIT_SKILLS.length} skills do GAS App Kit à sua biblioteca. Reimportar atualiza, não duplica.`}>
                         <Button icon={<Download size={14} />} loading={importandoKit} onClick={importarKit}>
@@ -352,10 +749,53 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                         </Button>
                       </Tooltip>
                     )}
+                    <Tooltip title="Crie uma pasta com nome e descrição e suba vários .md de uma vez — tudo entra sob esse pacote.">
+                      <Button icon={<FolderPlus size={14} />} onClick={() => setImportOpen(true)}>
+                        Importar pacote
+                      </Button>
+                    </Tooltip>
+                    {skills.length > 0 && (
+                      <Tooltip title="Selecione skills de qualquer pasta e gere um .zip pronto pra levar pro seu projeto.">
+                        <Button
+                          icon={<ListChecks size={14} />}
+                          type={selMode ? 'primary' : 'default'}
+                          ghost={selMode}
+                          onClick={() => { setSelMode((v) => !v); setSelecionados(new Set()); }}
+                        >
+                          {selMode ? 'Cancelar seleção' : 'Montar kit'}
+                        </Button>
+                      </Tooltip>
+                    )}
                     <Button type="primary" icon={<Plus size={14} />} onClick={() => { resetForm(); setTab('adicionar'); }}>
                       Adicionar skill
                     </Button>
                   </div>
+
+                  {selMode && (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14,
+                      padding: '10px 14px', borderRadius: 12,
+                      background: `${t.accents.lavender}12`, border: `1px solid ${t.accents.lavender}3a`,
+                      position: 'sticky', top: 0, zIndex: 3,
+                    }}>
+                      <ListChecks size={16} color={t.accents.lavender} />
+                      <span style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.text }}>
+                        <strong>{selecionados.size}</strong> skill(s) selecionada(s)
+                      </span>
+                      <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                        {selecionados.size > 0 && (
+                          <Button size="small" onClick={() => setSelecionados(new Set())}>Limpar</Button>
+                        )}
+                        <Button
+                          size="small" type="primary" icon={<Archive size={13} />}
+                          disabled={selecionados.size === 0}
+                          onClick={() => abrirExport('Meu Kit', Array.from(selecionados))}
+                        >
+                          Gerar kit
+                        </Button>
+                      </span>
+                    </div>
+                  )}
 
                   {loading && skills.length === 0 ? (
                     <Skeleton active paragraph={{ rows: 4 }} />
@@ -377,15 +817,101 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                       )}
                     </Empty>
                   ) : (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
-                      {filtradas.map((s) => (
-                        <SkillCard
-                          key={s.id}
-                          skill={s}
-                          onOpen={() => abrirSkill(s.id)}
-                        />
-                      ))}
-                    </div>
+                    <Collapse
+                      bordered={false}
+                      activeKey={activeSources}
+                      onChange={(k) => setOpenSources(Array.isArray(k) ? (k as string[]) : [k as string])}
+                      style={{ background: 'transparent' }}
+                      items={grupos.map((g) => ({
+                        key: g.key,
+                        style: { background: t.surface, border: `1px solid ${t.border}`, borderRadius: 12, marginBottom: 10, overflow: 'hidden' },
+                        label: (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <span style={{ width: 30, height: 30, borderRadius: 8, background: `${g.meta?.cor || t.accents.lavender}1a`, color: g.meta?.cor || t.accents.lavender, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                              {g.key === 'avulsas' ? <Folder size={15} /> : <Package size={15} />}
+                            </span>
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ fontFamily: FONTS.display, fontSize: 14.5, fontWeight: 600, color: t.text }}>{g.label}</span>
+                                <span style={{ fontFamily: FONTS.ui, fontSize: 11, fontWeight: 600, color: t.textTertiary, background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 999, padding: '0 8px', lineHeight: '18px' }}>
+                                  {g.total} {g.total === 1 ? 'skill' : 'skills'}
+                                </span>
+                              </div>
+                              {g.descricao && (
+                                <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, lineHeight: 1.4, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {g.descricao}
+                                </div>
+                              )}
+                            </div>
+                            <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, flexShrink: 0 }}>{bytesHumano(g.bytes)}</span>
+                            <Tooltip title="Exportar pasta como .zip (skills/<nome>/SKILL.md) pra levar pro projeto">
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<Archive size={13} />}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  abrirExport(g.label, g.categorias.flatMap((c) => c.skills.map((s) => s.id)));
+                                }}
+                              />
+                            </Tooltip>
+                            {g.meta && (
+                              <Tooltip title="Editar nome e descrição da pasta">
+                                <Button
+                                  type="text"
+                                  size="small"
+                                  icon={<Pencil size={13} />}
+                                  onClick={(e) => { e.stopPropagation(); abrirEditarFonte(g.meta as SkillFonte); }}
+                                />
+                              </Tooltip>
+                            )}
+                          </div>
+                        ),
+                        children: (
+                          <Collapse
+                            bordered={false}
+                            ghost
+                            activeKey={filtro.trim() ? g.categorias.map((c) => c.cat) : (openCats[g.key] || [])}
+                            onChange={(k) => setOpenCats((prev) => ({ ...prev, [g.key]: Array.isArray(k) ? (k as string[]) : [k as string] }))}
+                            items={g.categorias.map((cg) => ({
+                              key: cg.cat,
+                              style: { borderBottom: `1px solid ${t.borderSoft}` },
+                              label: (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                                  <span style={{
+                                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                                    fontFamily: FONTS.ui, fontSize: 11.5, fontWeight: 600,
+                                    color: t.accents.lavender, background: `${t.accents.lavender}14`,
+                                    border: `1px solid ${t.accents.lavender}33`, borderRadius: 999, padding: '2px 10px',
+                                    textTransform: 'capitalize',
+                                  }}>
+                                    <TagIcon size={11} />
+                                    {cg.cat === '—' ? 'Sem categoria' : cg.cat}
+                                  </span>
+                                  <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary }}>
+                                    {cg.skills.length} {cg.skills.length === 1 ? 'skill' : 'skills'}
+                                  </span>
+                                </span>
+                              ),
+                              children: (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
+                                  {cg.skills.map((s) => (
+                                    <SkillCard
+                                      key={s.id}
+                                      skill={s}
+                                      onOpen={() => abrirSkill(s.id)}
+                                      selMode={selMode}
+                                      selecionado={selecionados.has(s.id)}
+                                      onToggleSel={() => toggleSelecionado(s.id)}
+                                    />
+                                  ))}
+                                </div>
+                              ),
+                            }))}
+                          />
+                        ),
+                      }))}
+                    />
                   )}
                 </div>
               ),
@@ -560,6 +1086,20 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                   </Button>
                 </Tooltip>
               )}
+              <Dropdown
+                trigger={['click']}
+                menu={{
+                  items: [
+                    ...fontes.map((f) => ({ key: f.chave, label: f.nome })),
+                    { key: 'avulsas', label: 'Avulsas / Importadas' },
+                  ].filter((o) => o.key !== fonteKey(aberta.fonte))
+                    .map((o) => ({ key: o.key, label: o.label, onClick: () => moverSkill(o.key) })),
+                }}
+              >
+                <Tooltip title="Mover para outra pasta">
+                  <Button icon={<FolderInput size={14} />} loading={movendo}>Mover</Button>
+                </Tooltip>
+              </Dropdown>
               <Button icon={<Sparkles size={14} />} onClick={() => editarSkill(aberta)}>Editar</Button>
               <Popconfirm
                 title="Remover essa skill?"
@@ -659,19 +1199,328 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
           </>
         )}
       </Drawer>
+
+      {/* Modal: editar nome/descrição/cor de uma pasta */}
+      <Modal
+        open={!!editandoFonte}
+        onCancel={() => setEditandoFonte(null)}
+        onOk={salvarFonte}
+        confirmLoading={salvandoFonte}
+        okText="Salvar"
+        cancelText="Cancelar"
+        title={
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <Package size={16} color={fonteCor || t.accents.lavender} />
+            <span style={{ fontFamily: FONTS.display, fontWeight: 500 }}>Editar pasta</span>
+          </span>
+        }
+      >
+        <Form layout="vertical" style={{ marginTop: 8 }}>
+          <Form.Item label="Nome da pasta">
+            <Input value={fonteNome} onChange={(e) => setFonteNome(e.target.value)} placeholder="ex.: GAS App Kit" />
+          </Form.Item>
+          <Form.Item label="Descrição">
+            <Input.TextArea
+              value={fonteDesc}
+              onChange={(e) => setFonteDesc(e.target.value)}
+              placeholder="Pra que serve esse pacote, de onde veio…"
+              rows={3}
+            />
+          </Form.Item>
+          <Form.Item label={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Palette size={13} /> Cor da pasta</span>} style={{ marginBottom: 0 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {Object.values(t.accents).map((c) => {
+                const cor = String(c);
+                const sel = fonteCor === cor;
+                return (
+                  <button
+                    key={cor}
+                    type="button"
+                    onClick={() => setFonteCor(cor)}
+                    title={cor}
+                    style={{
+                      width: 28, height: 28, borderRadius: 8, cursor: 'pointer',
+                      background: cor, border: `2px solid ${sel ? t.text : 'transparent'}`,
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                      boxShadow: t.shadowSoft,
+                    }}
+                  >
+                    {sel && <Check size={14} color="#fff" />}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => setFonteCor('')}
+                title="Padrão"
+                style={{
+                  height: 28, padding: '0 10px', borderRadius: 8, cursor: 'pointer',
+                  background: t.surfaceMuted, border: `1.5px solid ${fonteCor === '' ? t.text : t.border}`,
+                  fontFamily: FONTS.ui, fontSize: 11, color: t.textSecondary,
+                }}
+              >
+                Padrão
+              </button>
+            </div>
+          </Form.Item>
+        </Form>
+
+        <div style={{ borderTop: `1px solid ${t.borderSoft}`, marginTop: 18, paddingTop: 14 }}>
+          <Popconfirm
+            title="Remover esta pasta?"
+            description="As skills dela vão para 'Avulsas' (não são apagadas)."
+            onConfirm={removerFonte}
+            okText="Remover" cancelText="Cancelar" okButtonProps={{ danger: true }}
+          >
+            <Button danger icon={<Trash2 size={14} />} loading={removendoFonte}>Remover pasta</Button>
+          </Popconfirm>
+        </div>
+      </Modal>
+
+      {/* Modal: importar pacote (vários .md sob um nome) */}
+      <Modal
+        open={importOpen}
+        onCancel={() => { if (!importando) { setImportOpen(false); } }}
+        onOk={importarPacote}
+        confirmLoading={importando}
+        okText={impArquivos.length > 0 ? `Importar ${impArquivos.length} skill(s)` : 'Importar'}
+        cancelText="Cancelar"
+        title={
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <FolderPlus size={16} color={t.accents.lavender} />
+            <span style={{ fontFamily: FONTS.display, fontWeight: 500 }}>Importar pacote</span>
+          </span>
+        }
+      >
+        <Form layout="vertical" style={{ marginTop: 8 }}>
+          <Form.Item label="Nome do pacote" required>
+            <Input value={impNome} onChange={(e) => setImpNome(e.target.value)} placeholder="ex.: Anthropic Cookbook" />
+          </Form.Item>
+          <Form.Item label="Descrição (opcional)">
+            <Input.TextArea
+              value={impDesc}
+              onChange={(e) => setImpDesc(e.target.value)}
+              placeholder="De quem é, pra que serve, link da fonte…"
+              rows={2}
+            />
+          </Form.Item>
+          <Form.Item label="Arquivos da skill (.md)" style={{ marginBottom: 0 }}>
+            <Upload.Dragger
+              accept=".md,.markdown,.txt"
+              multiple
+              showUploadList={false}
+              beforeUpload={onUploadPacote}
+              style={{ background: t.surfaceMuted }}
+            >
+              <p style={{ margin: 0 }}>
+                <UploadIcon size={26} color={t.accents.lavender} style={{ display: 'inline-block', marginBottom: 6 }} />
+              </p>
+              <p style={{ fontFamily: FONTS.ui, color: t.text, margin: '4px 0', fontSize: 13.5 }}>
+                Arraste os <code style={{ fontFamily: FONTS.mono, fontSize: 12 }}>.md</code> do pacote aqui (pode vários)
+              </p>
+            </Upload.Dragger>
+            {impArquivos.length > 0 && (
+              <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {impArquivos.map((a, i) => (
+                  <Tag
+                    key={`${a.nome}-${i}`}
+                    closable
+                    onClose={() => setImpArquivos((arr) => arr.filter((_, j) => j !== i))}
+                    icon={<FileText size={11} style={{ marginRight: 4 }} />}
+                    style={{ fontFamily: FONTS.mono, fontSize: 11 }}
+                  >
+                    {a.nome}
+                  </Tag>
+                ))}
+              </div>
+            )}
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* Modal: exportar (.zip) com parametrização de ambiente */}
+      <Modal
+        open={exportOpen}
+        onCancel={() => { if (!gerando) setExportOpen(false); }}
+        width={expFase === 'preview' ? 720 : 560}
+        title={
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <Archive size={16} color={t.accents.lavender} />
+            <span style={{ fontFamily: FONTS.display, fontWeight: 500 }}>
+              {expFase === 'preview' ? 'Revisar o que a IA mudou' : 'Exportar kit'}
+            </span>
+          </span>
+        }
+        footer={expFase === 'preview' ? [
+          <Button key="voltar" onClick={() => setExpFase('config')} disabled={gerando}>Voltar</Button>,
+          <Button key="baixar" type="primary" icon={<Archive size={14} />} onClick={() => finalizarDownload(expResultado)}>
+            Baixar .zip
+          </Button>,
+        ] : [
+          <Button key="cancelar" onClick={() => setExportOpen(false)} disabled={gerando}>Cancelar</Button>,
+          <Button key="ok" type="primary" loading={gerando} onClick={confirmarExport}>
+            {expAdaptar ? 'Pré-visualizar' : 'Gerar .zip'}
+          </Button>,
+        ]}
+      >
+        {expFase === 'preview' ? (
+          <div style={{ maxHeight: '64vh', overflow: 'auto' }}>
+            <p style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, marginTop: 4 }}>
+              A IA adaptou {expResultado.length} skill(s) para <strong>{ambienteTexto() || 'o ambiente'}</strong>.
+              Revise abaixo e baixe quando estiver ok. As skills originais no Forja não são alteradas.
+            </p>
+            <Collapse
+              accordion
+              bordered={false}
+              items={expResultado.map((s) => {
+                const mudou = (s.original || '') !== s.conteudo;
+                const ver = previewVer[s.id] || 'adaptado';
+                return {
+                  key: s.id,
+                  style: { background: t.surface, border: `1px solid ${t.border}`, borderRadius: 10, marginBottom: 8, overflow: 'hidden' },
+                  label: (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                      <FileText size={14} color={t.accents.lavender} />
+                      <span style={{ fontFamily: FONTS.ui, fontSize: 13, fontWeight: 600, color: t.text }}>{s.nome}</span>
+                      {mudou ? (
+                        <Tag color="purple" style={{ marginInlineEnd: 0 }}>adaptada</Tag>
+                      ) : (
+                        <Tag style={{ marginInlineEnd: 0 }}>sem mudança</Tag>
+                      )}
+                    </span>
+                  ),
+                  children: (
+                    <div>
+                      <Segmented
+                        size="small"
+                        value={ver}
+                        onChange={(v) => setPreviewVer((prev) => ({ ...prev, [s.id]: v as 'adaptado' | 'original' }))}
+                        options={[{ label: 'Adaptado', value: 'adaptado' }, { label: 'Original', value: 'original' }]}
+                        style={{ marginBottom: 8 }}
+                      />
+                      <pre style={{
+                        background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 8,
+                        padding: 12, fontFamily: FONTS.mono, fontSize: 11.5, color: t.text, lineHeight: 1.5,
+                        whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 360, overflow: 'auto', margin: 0,
+                      }}>
+                        {ver === 'original' ? (s.original || '') : s.conteudo}
+                      </pre>
+                    </div>
+                  ),
+                };
+              })}
+            />
+          </div>
+        ) : (
+        <>
+        <p style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, marginTop: 4 }}>
+          {exportIds.length} skill(s) → <code style={{ fontFamily: FONTS.mono }}>skills/&lt;nome&gt;/SKILL.md</code> + README,
+          pronto pra extrair na raiz do projeto.
+        </p>
+        <Form layout="vertical" style={{ marginTop: 4 }}>
+          <Form.Item label="Nome do kit">
+            <Input value={kitNome} onChange={(e) => setKitNome(e.target.value)} placeholder="ex.: Kit Windows" />
+          </Form.Item>
+
+          <Form.Item label="Onde vai usar (IDE)" style={{ marginBottom: 12 }}>
+            <Segmented
+              block
+              value={expTarget}
+              onChange={(v) => setExpTarget(v as ExportTarget)}
+              options={[
+                { label: 'Cursor', value: 'cursor' },
+                { label: 'Claude Code', value: 'claude' },
+                { label: 'Genérico', value: 'generic' },
+              ]}
+            />
+            <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, marginTop: 6 }}>
+              {expTarget === 'cursor' && 'Gera .cursor/rules/<skill>.mdc (com frontmatter) — extrai na raiz e o Cursor lê sozinho.'}
+              {expTarget === 'claude' && 'Gera .claude/skills/<skill>/SKILL.md — extrai na raiz do projeto.'}
+              {expTarget === 'generic' && 'Gera skills/<skill>/SKILL.md — formato padrão de agent-skills (Claude.ai e outras).'}
+            </div>
+          </Form.Item>
+
+          <Form.Item label="Ambiente alvo (opcional)" style={{ marginBottom: 8 }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+              <Button size="small" onClick={() => { setExpSO('Windows'); setExpShell('PowerShell'); }}>Windows + PowerShell</Button>
+              <Button size="small" onClick={() => { setExpSO('macOS'); setExpShell('zsh'); }}>macOS + zsh</Button>
+              <Button size="small" onClick={() => { setExpSO('Linux'); setExpShell('bash'); }}>Linux + bash</Button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div>
+                <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginBottom: 4 }}>Sistema</div>
+                <Segmented
+                  block
+                  size="small"
+                  value={expSO}
+                  onChange={(v) => setExpSO(v as string)}
+                  options={['—', 'Windows', 'macOS', 'Linux']}
+                />
+              </div>
+              <div>
+                <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginBottom: 4 }}>Shell</div>
+                <Segmented
+                  block
+                  size="small"
+                  value={expShell}
+                  onChange={(v) => setExpShell(v as string)}
+                  options={['—', 'PowerShell', 'bash', 'zsh', 'cmd']}
+                />
+              </div>
+            </div>
+            <Input.TextArea
+              value={expExtra}
+              onChange={(e) => setExpExtra(e.target.value)}
+              placeholder="Contexto extra: stack, IDE, regras do projeto… (ex.: Node 20, monorepo, usar pnpm)"
+              rows={2}
+              style={{ marginTop: 10 }}
+            />
+          </Form.Item>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 10, padding: 12 }}>
+            <Checkbox checked={expContexto} onChange={(e) => setExpContexto(e.target.checked)}>
+              <span style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.text }}>Incluir contexto do ambiente</span>
+              <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, marginLeft: 24 }}>
+                Adiciona um <code style={{ fontFamily: FONTS.mono }}>AGENTS.md</code> e um cabeçalho em cada SKILL.md. Grátis, instantâneo.
+              </div>
+            </Checkbox>
+            <Checkbox checked={expAdaptar} onChange={(e) => setExpAdaptar(e.target.checked)}>
+              <span style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.text }}>
+                Adaptar o conteúdo com IA <Sparkles size={12} style={{ display: 'inline', verticalAlign: 'middle' }} color={t.accents.lavender} />
+              </span>
+              <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, marginLeft: 24 }}>
+                Reescreve comandos/caminhos pro ambiente (bash→PowerShell etc.). Usa tokens e demora mais.
+              </div>
+            </Checkbox>
+            {expAdaptar && !ambienteTexto() && (
+              <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.accents.peach, marginLeft: 24 }}>
+                Defina o ambiente acima pra IA saber pra onde adaptar.
+              </div>
+            )}
+          </div>
+        </Form>
+        </>
+        )}
+      </Modal>
     </>
   );
 }
 
 // ─── Sub-componente: card de uma skill na lista ───────────────────────────
-function SkillCard({ skill, onOpen }: { skill: SkillSummary; onOpen: () => void }): React.ReactElement {
+function SkillCard({ skill, onOpen, selMode = false, selecionado = false, onToggleSel }: {
+  skill: SkillSummary;
+  onOpen: () => void;
+  selMode?: boolean;
+  selecionado?: boolean;
+  onToggleSel?: () => void;
+}): React.ReactElement {
   const t = useTokens();
   return (
     <div
-      onClick={onOpen}
+      onClick={() => { if (selMode) { onToggleSel?.(); } else { onOpen(); } }}
       style={{
-        background: t.surface,
-        border: `1px solid ${t.border}`,
+        background: selMode && selecionado ? `${t.accents.lavender}10` : t.surface,
+        border: `1.5px solid ${selMode && selecionado ? t.accents.lavender : t.border}`,
         borderRadius: 12,
         padding: 14,
         cursor: 'pointer',
@@ -687,34 +1536,35 @@ function SkillCard({ skill, onOpen }: { skill: SkillSummary; onOpen: () => void 
         e.currentTarget.style.boxShadow = `0 4px 14px ${t.shadowSoft || 'rgba(0,0,0,0.05)'}`;
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = t.border;
+        e.currentTarget.style.borderColor = selMode && selecionado ? t.accents.lavender : t.border;
         e.currentTarget.style.transform = 'translateY(0)';
         e.currentTarget.style.boxShadow = 'none';
       }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-        <div style={{ width: 30, height: 30, borderRadius: 8, background: `${t.accents.lavender}1a`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <BookMarked size={15} color={t.accents.lavender} />
-        </div>
+        {selMode ? (
+          <div style={{ width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Checkbox checked={selecionado} />
+          </div>
+        ) : (
+          <div style={{ width: 30, height: 30, borderRadius: 8, background: `${t.accents.lavender}1a`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <BookMarked size={15} color={t.accents.lavender} />
+          </div>
+        )}
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ fontFamily: FONTS.display, fontSize: 14, fontWeight: 600, color: t.text, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {skill.nome || '(sem nome)'}
           </div>
-          {skill.categoria && (
-            <div style={{ fontFamily: FONTS.mono, fontSize: 10, color: t.accents.lavender, marginTop: 2 }}>
-              {skill.categoria}
-            </div>
-          )}
         </div>
       </div>
 
-      {skill.descricao && (
+      {(skill.descricaoPt || skill.descricao) && (
         <p style={{
           margin: 0, fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary,
           lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box',
           WebkitLineClamp: 3, WebkitBoxOrient: 'vertical' as const,
         }}>
-          {skill.descricao}
+          {skill.descricaoPt || skill.descricao}
         </p>
       )}
 

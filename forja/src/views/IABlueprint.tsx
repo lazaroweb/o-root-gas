@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Button, Empty, Spin, Input, App as AntApp, Popconfirm, Tooltip } from 'antd';
+import { Button, Spin, Input, App as AntApp, Popconfirm, Tooltip } from 'antd';
 import { FileText, Sparkles, Trash2, Flame, Pin, PinOff, Clock, AlertTriangle } from 'lucide-react';
 import { Panel, CopyBlock } from '../components/ui';
+import PremiumEmpty from '../components/PremiumEmpty';
 import ContextoPicker, { type Contexto } from '../components/ContextoPicker';
 import CodexToggle from '../components/CodexToggle';
 import ForjaSobreForja from '../components/ForjaSobreForja';
@@ -253,7 +254,16 @@ export default function IABlueprint({ ideias, sistemas }: { ideias: Ideia[]; sis
         </div>
       )}
 
-      {!loading && !result && historico.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Gere seu primeiro blueprint" style={{ marginTop: 40 }} />}
+      {!loading && !result && historico.length === 0 && (
+        <div style={{ marginTop: 18 }}>
+          <PremiumEmpty
+            icon={<FileText size={26} strokeWidth={1.5} />}
+            accent={t.accents.blue}
+            title="Gere seu primeiro blueprint"
+            subtitle="Escolha um contexto, ajuste a stack se quiser, e a Forja transforma a ideia num blueprint completo com prompts prontos pra Cursor, Claude e ChatGPT."
+          />
+        </div>
+      )}
     </div>
   );
 }

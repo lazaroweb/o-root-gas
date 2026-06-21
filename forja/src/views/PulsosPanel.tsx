@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Modal, Form, Input, Space, message, Typography, Tag, Popconfirm } from 'antd';
-import { Plus, Trash2, Wifi } from 'lucide-react';
+import { Table, Button, Modal, Form, Input, Space, message, Typography, Tag, Popconfirm, Tooltip } from 'antd';
+import { Plus, Trash2, Wifi, RefreshCw } from 'lucide-react';
 const PlusOutlined = (p: any) => <Plus size={16} {...p} />;
 const DeleteOutlined = (p: any) => <Trash2 size={16} {...p} />;
 const WifiOutlined = (p: any) => <Wifi size={16} {...p} />;
@@ -23,6 +23,13 @@ const MOCK_PULSOS: Pulso[] = [
   { id: 'pu2', sistemaId: '', urlCheck: 'https://api.clientflow.app/health', ultimoStatus: 200, latenciaMs: 89 },
 ];
 
+// Trunca no meio (início + fim), igual exibição de chaves de API, pra liberar
+// espaço pras colunas de status/latência. A URL completa fica no tooltip.
+function truncMeio(url: string, inicio = 26, fim = 12): string {
+  if (url.length <= inicio + fim + 1) return url;
+  return `${url.slice(0, inicio)}…${url.slice(-fim)}`;
+}
+
 function getStatusTag(status: number): React.ReactElement {
   if (status === 0) return <Tag color="#5C5E6A">Sem dados</Tag>;
   if (status >= 200 && status < 300) return <Tag color="#52C97F">{status} OK</Tag>;
@@ -37,6 +44,7 @@ export default function PulsosPanel({ sistemaId }: PulsosPanelProps): React.Reac
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [verificando, setVerificando] = useState(false);
   const [form] = Form.useForm<FormValues>();
 
   const loadPulsos = () => {
@@ -64,6 +72,20 @@ export default function PulsosPanel({ sistemaId }: PulsosPanelProps): React.Reac
     }
   };
 
+  const verificarAgora = async () => {
+    if (pulsos.length === 0) { message.info('Adicione uma URL antes de verificar.'); return; }
+    setVerificando(true);
+    try {
+      const r = await callServer<ServerResponse<Pulso[]>>('verificarPulsosSistema', sistemaId);
+      if (r.ok && r.data) { setPulsos(r.data); message.success('Verificação concluída'); }
+      else message.error('Erro ao verificar');
+    } catch {
+      message.error('Erro ao verificar');
+    } finally {
+      setVerificando(false);
+    }
+  };
+
   const handleDelete = async (id: string) => {
     try {
       await callServer('deletePulso', id);
@@ -79,10 +101,13 @@ export default function PulsosPanel({ sistemaId }: PulsosPanelProps): React.Reac
       title: 'URL',
       dataIndex: 'urlCheck',
       key: 'urlCheck',
+      ellipsis: true,
       render: (url: string) => (
-        <a href={url} target="_blank" rel="noopener noreferrer" style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 12, color: '#4A9EFF' }}>
-          {url}
-        </a>
+        <Tooltip title={url}>
+          <a href={url} target="_blank" rel="noopener noreferrer" style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 12, color: '#4A9EFF', whiteSpace: 'nowrap' }}>
+            {truncMeio(url)}
+          </a>
+        </Tooltip>
       ),
     },
     {
@@ -122,7 +147,10 @@ export default function PulsosPanel({ sistemaId }: PulsosPanelProps): React.Reac
           <WifiOutlined style={{ marginRight: 8 }} />
           Monitoramento de Pulso
         </Title>
-        <Button size="small" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>Monitorar URL</Button>
+        <Space size={6}>
+          <Button size="small" icon={<RefreshCw size={14} className={verificando ? 'forja-spin' : undefined} />} loading={verificando} onClick={verificarAgora}>Verificar agora</Button>
+          <Button size="small" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>Monitorar URL</Button>
+        </Space>
       </div>
 
       <Table

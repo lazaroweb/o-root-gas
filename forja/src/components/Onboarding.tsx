@@ -74,11 +74,24 @@ export default function Onboarding({ open, onClose, onNavigate, onImportGAS }: O
 
   return (
     <Modal open={open} onCancel={fechar} footer={null} width={580} styles={{ body: { padding: 0 } }} style={{ top: 70 }}>
-      {/* Cabeçalho */}
+      {/* Cabeçalho — marca tratamento Opção B (wordmark + filete + assinatura) */}
       <div style={{ padding: '26px 28px 18px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-          <span style={{ fontFamily: FONTS.display, fontSize: 24, fontWeight: 600, letterSpacing: '0.18em', color: t.text }}>FORJA</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+          <span style={{ fontFamily: FONTS.display, fontSize: 22, fontWeight: 600, letterSpacing: '0.08em', color: t.text, lineHeight: 1 }}>FORJA</span>
           <span style={{ width: 7, height: 7, borderRadius: '50%', background: t.accents.peach, boxShadow: `0 0 8px ${t.accents.peach}` }} />
+        </div>
+        <div
+          aria-hidden
+          style={{
+            height: 1.5,
+            width: 56,
+            background: `linear-gradient(90deg, ${t.accents.peach}, ${t.accents.peach}66 70%, transparent)`,
+            borderRadius: 1,
+            marginBottom: 8,
+          }}
+        />
+        <div style={{ fontSize: 9, fontWeight: 600, color: t.textTertiary, letterSpacing: '0.28em', textTransform: 'uppercase', marginBottom: 28, lineHeight: 1 }}>
+          Inteligência de Negócios
         </div>
         <h2 style={{ fontFamily: FONTS.display, fontWeight: 500, fontSize: 22, margin: '4px 0 6px', color: t.text }}>
           Bem-vindo ao seu QG

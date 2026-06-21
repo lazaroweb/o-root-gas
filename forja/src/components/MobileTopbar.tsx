@@ -69,11 +69,23 @@ export default function MobileTopbar({ saudeMedia, naoLidos, usuario, onMenuOpen
         onClick={onLogoClick}
         title="Voltar pra página de abertura"
         style={{
-          display: 'flex', alignItems: 'center', gap: 9, padding: '0 4px', flex: 1,
+          display: 'flex', alignItems: 'center', gap: 8, padding: '0 4px', flex: 1,
           border: 'none', background: 'transparent', cursor: onLogoClick ? 'pointer' : 'default',
         }}
       >
-        <span style={{ fontFamily: FONTS.display, fontSize: 18, fontWeight: 600, letterSpacing: '0.22em', color: t.text }}>FORJA</span>
+        {/* Wordmark com filete dourado embaixo — tratamento Opção B compacto. */}
+        <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+          <span style={{ fontFamily: FONTS.display, fontSize: 18, fontWeight: 600, letterSpacing: '0.08em', color: t.text, lineHeight: 1 }}>FORJA</span>
+          <span
+            aria-hidden
+            style={{
+              height: 1.5,
+              width: 36,
+              background: `linear-gradient(90deg, ${t.accents.peach}, ${t.accents.peach}66 70%, transparent)`,
+              borderRadius: 1,
+            }}
+          />
+        </span>
         <BrasaIndicator marca size={8} qtdFagulhas={8} />
       </button>
       <button onClick={onSearchOpen} style={btn} aria-label="Buscar">
