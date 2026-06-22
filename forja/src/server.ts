@@ -43,7 +43,9 @@ const SCHEMA: SheetSchema[] = [
   // produto novo → vira Sistema via Gênese, comportamento legado/default) e
   // 'melhoria' (incremento num sistema que já existe → vira item de Backlog).
   // `sistemaId` só é usado quando tipo='melhoria' (vazio = ainda não destinada).
-  { name: 'Ideias', columns: ['id', 'titulo', 'descricao', 'notaImpacto', 'notaEsforco', 'estado', 'tipo', 'sistemaId', 'prioridade', 'criadoEm', 'atualizadoEm'] },
+  // Ideias: `concluidaEm` (v1.142.0) append-only — preenchida quando a ideia
+  // vira estado 'concluida'. Permite mostrar quando foi feita + filtrar histórico.
+  { name: 'Ideias', columns: ['id', 'titulo', 'descricao', 'notaImpacto', 'notaEsforco', 'estado', 'tipo', 'sistemaId', 'prioridade', 'criadoEm', 'atualizadoEm', 'concluidaEm'] },
   // Centelha (v1.141.0): caixa global de captura zero-fricção. Você joga ideias,
   // pendências, percepções aqui sem amarras (sem sistema/cliente/categoria) — só
   // título + Enter — e depois TRIA com calma: classifica, vincula a sistema/
@@ -312,7 +314,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.64-centelha';
+const SCHEMA_VERSION = 'v1.65-ideias-lifecycle';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -2047,6 +2049,79 @@ function updateIdeia(id: string, data: Record<string, unknown>): ServerResult {
     return { ok: true, data: updated };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atualizar ideia' };
+  }
+}
+
+// Lifecycle actions (v1.142.0): ações dedicadas pro fluxo Nova → Validando →
+// Em andamento → Concluída → (Arquivada / Descartada). Concluir e reabrir
+// gerenciam o campo `concluidaEm` pra histórico.
+
+function deleteIdeia(id: string): ServerResult {
+  try {
+    if (!id) return { ok: false, error: 'id é obrigatório' };
+    const ok = dbDelete('Ideias', id);
+    if (!ok) return { ok: false, error: 'Ideia não encontrada' };
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover ideia' };
+  }
+}
+
+function concluirIdeia(id: string): ServerResult {
+  try {
+    if (!id) return { ok: false, error: 'id é obrigatório' };
+    const updated = dbUpdate('Ideias', id, {
+      estado: 'concluida',
+      concluidaEm: new Date().toISOString(),
+      atualizadoEm: new Date().toISOString(),
+    });
+    if (!updated) return { ok: false, error: 'Ideia não encontrada' };
+    return { ok: true, data: updated };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao concluir ideia' };
+  }
+}
+
+function reabrirIdeia(id: string): ServerResult {
+  try {
+    if (!id) return { ok: false, error: 'id é obrigatório' };
+    const updated = dbUpdate('Ideias', id, {
+      estado: 'em andamento',
+      concluidaEm: '',
+      atualizadoEm: new Date().toISOString(),
+    });
+    if (!updated) return { ok: false, error: 'Ideia não encontrada' };
+    return { ok: true, data: updated };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao reabrir ideia' };
+  }
+}
+
+function arquivarIdeia(id: string): ServerResult {
+  try {
+    if (!id) return { ok: false, error: 'id é obrigatório' };
+    const updated = dbUpdate('Ideias', id, {
+      estado: 'arquivada',
+      atualizadoEm: new Date().toISOString(),
+    });
+    if (!updated) return { ok: false, error: 'Ideia não encontrada' };
+    return { ok: true, data: updated };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao arquivar ideia' };
+  }
+}
+
+function descartarIdeia(id: string): ServerResult {
+  try {
+    if (!id) return { ok: false, error: 'id é obrigatório' };
+    const updated = dbUpdate('Ideias', id, {
+      estado: 'descartada',
+      atualizadoEm: new Date().toISOString(),
+    });
+    if (!updated) return { ok: false, error: 'Ideia não encontrada' };
+    return { ok: true, data: updated };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao descartar ideia' };
   }
 }
 

@@ -9,3 +9,11 @@ node_modules/
 dist/
 .clasp.json
 .gas-app/
+
+# Arquivos zipados/comprimidos (política de não commitar artefatos binários)
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z

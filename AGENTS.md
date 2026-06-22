@@ -2,7 +2,7 @@
 
 > **Você é um novo agente IA assumindo este repositório.** Leia este arquivo INTEIRO antes de tocar em qualquer código. Ele te dá em 5-7 minutos tudo que um agente anterior aprendeu trabalhando aqui por meses.
 
-**Última atualização**: 2026-06-22 · **Versão atual da Forja**: `v1.141.0` · **Branch**: `master`
+**Última atualização**: 2026-06-22 · **Versão atual da Forja**: `v1.142.0` · **Branch**: `master`
 
 ---
 
@@ -66,10 +66,11 @@ o-root-gas/
 
 ## 4. Estado atual em 2026-06-22
 
-### O que foi feito hoje (1 release grande)
+### O que foi feito hoje
 
 | Versão | Foco |
 |---|---|
+| **1.142.0** | **Ideias com lifecycle completo** — concluir, reabrir, arquivar, descartar, apagar, filtros, timestamps |
 | **1.141.0** | **Centelha** — caixa global de captura zero-fricção (Inbox/GTD-style) |
 
 ### Sessão Centelha (v1.141.0) — entendimento rápido pro próximo agente

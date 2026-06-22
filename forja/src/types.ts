@@ -360,6 +360,8 @@ export interface Ideia {
   descricao: string;
   notaImpacto: number;
   notaEsforco: number;
+  // Estados (v1.142.0): nova → validando → em andamento → concluida → arquivada
+  // (ou descartada). 'promovida' = legado (virou item de backlog via PromoverIdeiaModal).
   estado: string;
   // 'sistema' = faísca de produto novo (→ Gênese). 'melhoria' = incremento num
   // sistema existente (→ Backlog). Ausente em ideias legadas = tratar como 'sistema'.
@@ -368,6 +370,7 @@ export interface Ideia {
   prioridade?: string;
   criadoEm?: string;
   atualizadoEm?: string;
+  concluidaEm?: string;
 }
 
 export type CentelhaEstado = 'capturada' | 'triada' | 'promovida' | 'arquivada' | 'descartada';

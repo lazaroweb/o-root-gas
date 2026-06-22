@@ -70,6 +70,15 @@
 - Conceito: GTD (capture → process → organize) + Personal Kanban
 - Nova tabela `Centelhas`, SCHEMA_VERSION → `v1.64-centelha`
 
+### v1.142 — Ideias com lifecycle completo
+- Botão Concluir + carimbo `concluidaEm` pro histórico
+- Botão Reabrir (volta pra "em andamento")
+- Menu ⋯ por ideia: Arquivar / Descartar / Apagar (com confirmação)
+- Filtro por estado: Ativas / Concluídas / Arquivadas / Descartadas / Todas
+- Indicador visual de concluída (título riscado, faixa lateral, ícone ✓)
+- Timestamps relativos ("há 3d") com data completa no tooltip
+- SCHEMA_VERSION → `v1.65-ideias-lifecycle` (col `concluidaEm` append-only)
+
 ---
 
 ## Fila

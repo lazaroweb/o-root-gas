@@ -36,6 +36,44 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.142.0] — 2026-06-22
+
+### Adicionado — Lifecycle completo da sessão Ideias
+
+- **Botão "Concluir"** em cada ideia ativa: marca como `concluida` e carimba
+  `concluidaEm` pra histórico (a Forja agora sabe QUANDO virou realidade).
+- **Botão "Reabrir"** em ideias concluídas/arquivadas: volta pra `em andamento`
+  e limpa `concluidaEm` (engano humano não é fim de mundo).
+- **Menu "mais"** (`⋯`) por ideia: arquivar (preserva histórico) · descartar
+  (não vai acontecer) · apagar permanentemente (com confirmação dupla).
+- **Filtro por estado** (Segmented com badges): Ativas / Concluídas /
+  Arquivadas / Descartadas / Todas. Default = Ativas (foca no que importa).
+- **Indicador visual** de concluída: título riscado, ícone ✓ sage, cards com
+  opacidade reduzida em arquivadas/descartadas.
+- **Faixa lateral colorida** em cada card no tom do estado (leitura rápida).
+- **Timestamps relativos**: "concluída há 3d", "criada há 2h" (tooltip mostra
+  data completa). Histórico fica visível sem virar tabela carregada.
+
+### Mudado — Backend
+
+- `SCHEMA_VERSION` bump pra `v1.65-ideias-lifecycle`.
+- Coluna `concluidaEm` adicionada à tabela `Ideias` (append-only, dados antigos
+  preservados).
+- 5 funções server novas: `deleteIdeia`, `concluirIdeia`, `reabrirIdeia`,
+  `arquivarIdeia`, `descartarIdeia`.
+
+### Por que existe (motivação do usuário)
+
+> "Tudo ok, mas eu não consigo apagar uma ideia que eu lancei nem tipo
+> colocar como concluído feito, e ter um histórico disso seria importante."
+
+A sessão Ideias era um cemitério: você lançava algo, nunca apagava, nunca
+fechava. Agora cada ideia tem ciclo de vida real, com histórico preservado e
+botão pra cada ação. Alinhado com princípio #6 (alerta sem tratativa proibido):
+toda ideia tem um caminho de saída claro.
+
+---
+
 ## [1.141.0] — 2026-06-22
 
 ### Adicionado — Centelha: caixa de captura zero-fricção (Inbox/GTD-style)
