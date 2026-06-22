@@ -18,7 +18,8 @@ import type { InputRef } from 'antd';
 import {
   Plus, Sparkles, Pencil, Lightbulb, Rocket, Check, Trash2, Archive,
   RotateCcw, MoreHorizontal, XCircle, Clock, Flame, Inbox, Target,
-  CheckCheck, Box, Filter, Zap, ListChecks,
+  CheckCheck, Box, Filter, Zap, ListChecks, Bug, Settings2, User,
+  Hourglass, Play, CircleDot,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui';
 import { useTokens } from '../themeContext';
@@ -62,6 +63,26 @@ const ESTADO_LABEL: Record<string, string> = {
   nova: 'Nova', validando: 'Validando', 'em andamento': 'Em andamento',
   concluida: 'Concluída', promovida: 'Promovida', arquivada: 'Arquivada',
   descartada: 'Descartada',
+};
+
+// Ícone semântico por estado — dá personalidade visual sem perder minimalismo.
+const ESTADO_ICON: Record<string, React.ReactNode> = {
+  nova: <CircleDot size={11} />,
+  validando: <Hourglass size={11} />,
+  'em andamento': <Play size={11} />,
+  concluida: <Check size={11} />,
+  arquivada: <Archive size={11} />,
+  descartada: <XCircle size={11} />,
+};
+
+// Ícone semântico por categoria.
+const CATEGORIA_ICON: Record<string, React.ReactNode> = {
+  feature: <Zap size={10} />,
+  bug: <Bug size={10} />,
+  melhoria: <Lightbulb size={10} />,
+  sistema_novo: <Rocket size={10} />,
+  processo: <Settings2 size={10} />,
+  pessoal: <User size={10} />,
 };
 
 const ATIVAS = new Set(['nova', 'validando', 'em andamento', '']);
@@ -591,9 +612,23 @@ function IdeiaCard({
   const inativa = arquivada || descartada;
   const bruta = ehBruta(ideia);
   const corEstado = estadoColor(estado);
+  const corCategoria = ideia.categoria && categoriaCor[ideia.categoria] ? categoriaCor[ideia.categoria] : null;
+  const corPrioridade = ideia.prioridade === 'alta' ? t.accents.rose
+    : ideia.prioridade === 'media' ? t.accents.clay
+    : ideia.prioridade === 'baixa' ? t.accents.blue : null;
 
-  // Mini-barra visual impacto/esforço.
-  const impactoBar = '■'.repeat(Math.min(10, Math.max(0, ideia.notaImpacto || 0))) + '░'.repeat(10 - Math.min(10, Math.max(0, ideia.notaImpacto || 0)));
+  // Mini-barra visual impacto/esforço (sage = bom score, clay = médio, rose = ruim).
+  const score = (ideia.notaImpacto || 0) - (ideia.notaEsforco || 0);
+  const barPreenchido = Math.max(0, Math.min(10, Math.round(score + 5)));
+  const barVazio = 10 - barPreenchido;
+
+  // Cor primária do CTA conforme tipo (Gênese = peach, Promover melhoria = clay).
+  const ctaCor = tipo === 'melhoria' ? t.accents.clay : t.accents.peach;
+  const ctaLabel = tipo === 'melhoria' ? 'Promover' : 'Gênese';
+  const ctaIcon = tipo === 'melhoria' ? <ListChecks size={11} /> : <Sparkles size={11} />;
+  const ctaTooltip = tipo === 'melhoria'
+    ? (sistemaNome ? `Promover melhoria pro backlog${sistemaNome ? ' de ' + sistemaNome : ''}` : 'Promover (define o sistema antes)')
+    : 'Levar pra Gênese (virar sistema novo)';
 
   return (
     <div
@@ -602,27 +637,38 @@ function IdeiaCard({
       onClick={onTriar}
       style={{
         background: t.surface,
-        border: `1px solid ${hover ? t.border : t.borderSoft}`,
+        // Borda: cor do estado bem sutil ao hover (mais identidade)
+        border: `1px solid ${hover ? `${corEstado}55` : t.borderSoft}`,
         borderRadius: 14,
         boxShadow: hover ? t.shadow : t.shadowSoft,
-        padding: '16px 18px',
+        padding: '14px 16px 12px 18px',
         position: 'relative',
         cursor: 'pointer',
-        transition: 'all 0.18s ease',
+        transition: 'all 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
         transform: hover ? 'translateY(-2px)' : 'translateY(0)',
-        opacity: inativa ? 0.7 : 1,
-        minHeight: 130,
+        opacity: inativa ? 0.72 : 1,
+        minHeight: 138,
         display: 'flex', flexDirection: 'column', gap: 10,
+        overflow: 'hidden',
       }}
     >
-      {/* Faixa lateral colorida no estado */}
+      {/* Hover wash: banho super sutil da cor do estado quando passa o mouse. */}
       <div style={{
-        position: 'absolute', left: 0, top: 18, bottom: 18, width: 3,
-        background: corEstado, borderRadius: 999,
+        position: 'absolute', inset: 0,
+        background: hover ? `linear-gradient(135deg, ${corEstado}0a 0%, transparent 60%)` : 'transparent',
+        pointerEvents: 'none',
+        transition: 'background 0.25s ease',
       }} />
 
-      {/* Linha 1: título + estado (pill) */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+      {/* Faixa lateral: gradiente vertical na cor do estado (vivo mas sutil) */}
+      <div style={{
+        position: 'absolute', left: 0, top: 12, bottom: 12, width: 3,
+        background: `linear-gradient(180deg, ${corEstado} 0%, ${corEstado}66 100%)`,
+        borderRadius: 999,
+      }} />
+
+      {/* Linha 1: título + pill de estado expressiva (ícone + label) */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, position: 'relative' }}>
         <Text strong style={{
           color: t.text,
           fontSize: 15,
@@ -630,88 +676,105 @@ function IdeiaCard({
           fontWeight: 600,
           lineHeight: 1.3,
           textDecoration: concluida ? 'line-through' : 'none',
+          flex: 1, minWidth: 0,
         }}>
-          {bruta && <Inbox size={13} color={t.accents.peach} style={{ marginRight: 6, verticalAlign: -1 }} />}
+          {bruta && (
+            <Tooltip title="No inbox — sem categoria nem sistema. Tria pra organizar.">
+              <Inbox size={13} color={t.accents.peach} style={{ marginRight: 6, verticalAlign: -1 }} />
+            </Tooltip>
+          )}
           {ideia.titulo}
         </Text>
-        <Tag bordered={false} style={{
-          background: `${corEstado}1f`, color: corEstado, fontSize: 10,
-          borderRadius: 999, margin: 0, textTransform: 'capitalize', fontWeight: 600,
+        {/* Pill de estado: ícone semântico + label + cor viva */}
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4,
+          background: `${corEstado}1f`,
+          color: corEstado,
+          fontSize: 10.5, fontWeight: 600,
+          padding: '3px 9px 3px 7px',
+          borderRadius: 999,
+          flexShrink: 0,
+          border: `1px solid ${corEstado}33`,
+          textTransform: 'capitalize',
+          lineHeight: 1.3,
         }}>
-          {concluida && <Check size={10} style={{ verticalAlign: -1, marginRight: 3 }} />}
+          {ESTADO_ICON[estado] || <CircleDot size={11} />}
           {ESTADO_LABEL[estado] || estado}
-        </Tag>
+        </div>
       </div>
 
-      {/* Linha 2: tags semânticas (categoria, tipo, sistema) */}
-      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center' }}>
-        {ideia.categoria && categoriaCor[ideia.categoria] && (
-          <Tag bordered={false} style={{
-            background: `${categoriaCor[ideia.categoria]}1f`,
-            color: categoriaCor[ideia.categoria],
-            fontSize: 10, borderRadius: 999, margin: 0, fontWeight: 500,
-          }}>
-            {CATEGORIA_LABEL[ideia.categoria] || ideia.categoria}
-          </Tag>
+      {/* Linha 2: chips semânticos (categoria, tipo, prioridade) — todos com ícone */}
+      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center', position: 'relative' }}>
+        {corCategoria && (
+          <ChipSemantico
+            cor={corCategoria}
+            icon={CATEGORIA_ICON[ideia.categoria || ''] || <Sparkles size={10} />}
+            label={CATEGORIA_LABEL[ideia.categoria || ''] || ideia.categoria || ''}
+          />
         )}
         {tipo === 'melhoria' && (
-          <Tag bordered={false} icon={<Lightbulb size={10} style={{ marginRight: 3, verticalAlign: -1 }} />}
-            style={{ background: `${t.accents.clay}1f`, color: t.accents.clay, fontSize: 10, borderRadius: 999, margin: 0 }}>
-            Melhoria{sistemaNome ? ` · ${sistemaNome}` : ''}
-          </Tag>
+          <ChipSemantico
+            cor={t.accents.clay}
+            icon={<Lightbulb size={10} />}
+            label={`Melhoria${sistemaNome ? ' · ' + sistemaNome : ''}`}
+          />
         )}
         {tipo === 'sistema' && !ideia.categoria && (
-          <Tag bordered={false} icon={<Rocket size={10} style={{ marginRight: 3, verticalAlign: -1 }} />}
-            style={{ background: `${t.accents.peach}1f`, color: t.accents.peach, fontSize: 10, borderRadius: 999, margin: 0 }}>
-            Sistema
-          </Tag>
+          <ChipSemantico
+            cor={t.accents.peach}
+            icon={<Rocket size={10} />}
+            label="Novo sistema"
+          />
         )}
-        {ideia.prioridade && (
-          <Tag bordered={false} style={{
-            background: `${ideia.prioridade === 'alta' ? t.accents.rose : ideia.prioridade === 'media' ? t.accents.clay : t.accents.blue}1f`,
-            color: ideia.prioridade === 'alta' ? t.accents.rose : ideia.prioridade === 'media' ? t.accents.clay : t.accents.blue,
-            fontSize: 10, borderRadius: 999, margin: 0, textTransform: 'capitalize', fontWeight: 500,
-          }}>
-            {ideia.prioridade}
-          </Tag>
+        {corPrioridade && (
+          <ChipSemantico
+            cor={corPrioridade}
+            icon={<Flame size={10} />}
+            label={ideia.prioridade || ''}
+            sutil
+          />
         )}
       </div>
 
-      {/* Descrição */}
+      {/* Descrição (max 2 linhas) */}
       {ideia.descricao && (
         <Paragraph style={{
           color: t.textSecondary,
           fontSize: 13,
           margin: 0,
+          lineHeight: 1.5,
           textDecoration: concluida ? 'line-through' : 'none',
+          position: 'relative',
         }} ellipsis={{ rows: 2 }}>
           {ideia.descricao}
         </Paragraph>
       )}
 
-      {/* Score visual (mini-barra impacto/esforço) — só pra sistema/quando tem score */}
+      {/* Score visual: mini-barra impacto-esforço com tooltip */}
       {tipo === 'sistema' && !inativa && !concluida && (ideia.notaImpacto > 0 || ideia.notaEsforco > 0) && (
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', fontSize: 11, color: t.textTertiary }}>
-          <Tooltip title={`Impacto ${ideia.notaImpacto || 0}/10 · Esforço ${ideia.notaEsforco || 0}/10`}>
-            <span style={{ fontFamily: FONTS.mono, color: prio.color }}>
-              {impactoBar.slice(0, Math.max(0, (ideia.notaImpacto || 0) - (ideia.notaEsforco || 0) + 5))}
+        <Tooltip title={`Impacto ${ideia.notaImpacto || 0}/10 · Esforço ${ideia.notaEsforco || 0}/10 · Score ${score >= 0 ? '+' : ''}${score}`}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: t.textTertiary, position: 'relative' }}>
+            <span style={{ fontFamily: FONTS.mono, color: prio.color, letterSpacing: -1 }}>
+              {'■'.repeat(barPreenchido)}<span style={{ color: t.borderSoft }}>{'■'.repeat(barVazio)}</span>
             </span>
-          </Tooltip>
-          <span>{prio.label}</span>
-        </div>
+            <span style={{ color: prio.color, fontWeight: 500 }}>{prio.label}</span>
+          </div>
+        </Tooltip>
       )}
 
-      {/* Rodapé: tempo + ações ao hover */}
+      {/* Rodapé: tempo (esquerda) + ações sempre visíveis (direita) */}
       <div style={{
         marginTop: 'auto', paddingTop: 8,
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6,
         borderTop: `1px solid ${t.borderSoft}`,
+        position: 'relative',
       }}>
-        <div style={{ fontSize: 11, color: t.textTertiary, display: 'flex', alignItems: 'center', gap: 4 }}>
+        {/* Timestamp + ícone */}
+        <div style={{ fontSize: 11, color: t.textTertiary, display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, flex: '0 1 auto' }}>
           {concluida && ideia.concluidaEm ? (
             <Tooltip title={new Date(ideia.concluidaEm).toLocaleString('pt-BR')}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                <Check size={11} /> concluída {tempoRelativo(ideia.concluidaEm)}
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: t.accents.sage }}>
+                <CheckCheck size={11} /> {tempoRelativo(ideia.concluidaEm)}
               </span>
             </Tooltip>
           ) : ideia.criadoEm ? (
@@ -723,75 +786,178 @@ function IdeiaCard({
           ) : null}
         </div>
 
-        {/* Ações ao hover */}
+        {/* Ações: chips primários SEMPRE visíveis (Concluir / Gênese-Promover),
+            ações secundárias (editar / ⋯) só ao hover. Click stopPropagation
+            pra não disparar onTriar do card inteiro. */}
         <div
-          style={{
-            display: 'flex', gap: 2,
+          style={{ display: 'flex', gap: 4, alignItems: 'center' }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Chip primário "Concluir" — só pra ideias ativas e não-concluídas */}
+          {!inativa && !concluida && (
+            <ChipAcao
+              label="Concluir"
+              icon={<Check size={11} />}
+              cor={t.accents.sage}
+              tooltip="Marcar como concluída"
+              onClick={onConcluir}
+              ativo={hover}
+            />
+          )}
+
+          {/* Chip primário "Reabrir" — pra concluídas/inativas */}
+          {(concluida || inativa) && (
+            <ChipAcao
+              label="Reabrir"
+              icon={<RotateCcw size={11} />}
+              cor={t.accents.blue}
+              tooltip="Voltar pra 'em andamento'"
+              onClick={onReabrir}
+              ativo={hover}
+            />
+          )}
+
+          {/* Chip primário CTA: Gênese (sistema) ou Promover (melhoria) */}
+          {!concluida && !inativa && (
+            <ChipAcao
+              label={ctaLabel}
+              icon={ctaIcon}
+              cor={ctaCor}
+              tooltip={ctaTooltip}
+              onClick={tipo === 'melhoria' ? onTriar : onGenese}
+              ativo={hover}
+            />
+          )}
+
+          {/* Botões secundários só aparecem ao hover */}
+          <div style={{
+            display: 'flex', gap: 0,
             opacity: hover ? 1 : 0,
             transition: 'opacity 0.18s ease',
             pointerEvents: hover ? 'auto' : 'none',
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {!inativa && !concluida && (
-            <Tooltip title="Marcar como concluída">
-              <Button size="small" type="text" icon={<Check size={13} />} onClick={onConcluir} style={{ color: t.accents.sage }} />
+          }}>
+            <Tooltip title="Triar / editar">
+              <Button size="small" type="text" icon={<Pencil size={12} />} onClick={onTriar} />
             </Tooltip>
-          )}
-          {(concluida || inativa) && (
-            <Tooltip title="Reabrir">
-              <Button size="small" type="text" icon={<RotateCcw size={13} />} onClick={onReabrir} />
-            </Tooltip>
-          )}
-          {tipo === 'sistema' && !concluida && !inativa && (
-            <Tooltip title="Levar pra Gênese (virar sistema)">
-              <Button size="small" type="text" icon={<Sparkles size={13} />} onClick={onGenese} style={{ color: t.accents.peach }} />
-            </Tooltip>
-          )}
-          <Tooltip title="Triar / editar">
-            <Button size="small" type="text" icon={<Pencil size={13} />} onClick={onTriar} />
-          </Tooltip>
-          <Dropdown
-            menu={{
-              items: [
-                !arquivada && !concluida && {
-                  key: 'arquivar',
-                  icon: <Archive size={13} />,
-                  label: 'Arquivar (mantém histórico)',
-                  onClick: onArquivar,
-                },
-                !descartada && {
-                  key: 'descartar',
-                  icon: <XCircle size={13} />,
-                  label: 'Descartar',
-                  onClick: onDescartar,
-                },
-                { type: 'divider' as const },
-                {
-                  key: 'apagar',
-                  icon: <Trash2 size={13} />,
-                  danger: true,
-                  label: (
-                    <Popconfirm
-                      title="Apagar permanentemente?"
-                      description="Diferente de descartar, isso some sem histórico."
-                      onConfirm={onApagar}
-                      okText="Apagar"
-                      cancelText="Cancelar"
-                      okButtonProps={{ danger: true }}
-                    >
-                      <span>Apagar permanentemente</span>
-                    </Popconfirm>
-                  ),
-                },
-              ].filter(Boolean) as Array<{ key: string }>,
-            }}
-            trigger={['click']}
-          >
-            <Button size="small" type="text" icon={<MoreHorizontal size={13} />} />
-          </Dropdown>
+            <Dropdown
+              menu={{
+                items: [
+                  !arquivada && !concluida && {
+                    key: 'arquivar',
+                    icon: <Archive size={13} />,
+                    label: 'Arquivar (mantém histórico)',
+                    onClick: onArquivar,
+                  },
+                  !descartada && {
+                    key: 'descartar',
+                    icon: <XCircle size={13} />,
+                    label: 'Descartar',
+                    onClick: onDescartar,
+                  },
+                  { type: 'divider' as const },
+                  {
+                    key: 'apagar',
+                    icon: <Trash2 size={13} />,
+                    danger: true,
+                    label: (
+                      <Popconfirm
+                        title="Apagar permanentemente?"
+                        description="Diferente de descartar, isso some sem histórico."
+                        onConfirm={onApagar}
+                        okText="Apagar"
+                        cancelText="Cancelar"
+                        okButtonProps={{ danger: true }}
+                      >
+                        <span>Apagar permanentemente</span>
+                      </Popconfirm>
+                    ),
+                  },
+                ].filter(Boolean) as Array<{ key: string }>,
+              }}
+              trigger={['click']}
+            >
+              <Button size="small" type="text" icon={<MoreHorizontal size={12} />} />
+            </Dropdown>
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+// ─── Sub-componentes visuais ─────────────────────────────────────────────────
+
+// Chip semântico (categoria, tipo, prioridade) — pill colorido com ícone.
+function ChipSemantico({
+  cor, icon, label, sutil = false,
+}: {
+  cor: string;
+  icon: React.ReactNode;
+  label: string;
+  sutil?: boolean;
+}): React.ReactElement {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      background: `${cor}${sutil ? '14' : '1f'}`,
+      color: cor,
+      border: `1px solid ${cor}${sutil ? '22' : '33'}`,
+      fontSize: 10.5, fontWeight: 500,
+      padding: '2px 8px',
+      borderRadius: 999,
+      textTransform: 'capitalize',
+      lineHeight: 1.4,
+    }}>
+      {icon}
+      {label}
+    </span>
+  );
+}
+
+// Chip de ação no rodapé — pill colorido sempre visível, intensifica ao hover.
+// Inspirado em Linear/Things: ação primária discreta no "estado calmo",
+// mas com presença suficiente pra ser notada e clicável.
+function ChipAcao({
+  label, icon, cor, tooltip, onClick, ativo,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  cor: string;
+  tooltip: string;
+  onClick: () => void;
+  ativo: boolean; // true quando o card está em hover
+}): React.ReactElement {
+  const [self, setSelf] = useState(false);
+  // 3 estados visuais:
+  // - Repouso (card sem hover): chip bem sutil, mais discreto
+  // - Card hover: chip mais vivo, com borda colorida
+  // - Chip hover: cor cheia, texto branco/inverso, "convite ao clique"
+  const isStrong = self;
+  return (
+    <Tooltip title={tooltip}>
+      <button
+        onClick={(e) => { e.stopPropagation(); onClick(); }}
+        onMouseEnter={() => setSelf(true)}
+        onMouseLeave={() => setSelf(false)}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4,
+          background: isStrong ? cor : ativo ? `${cor}24` : `${cor}14`,
+          color: isStrong ? '#fff' : cor,
+          border: `1px solid ${isStrong ? cor : ativo ? `${cor}55` : `${cor}33`}`,
+          fontSize: 11, fontWeight: 500,
+          padding: '3px 9px',
+          borderRadius: 999,
+          cursor: 'pointer',
+          transition: 'all 0.16s ease',
+          lineHeight: 1.4,
+          fontFamily: 'inherit',
+          transform: isStrong ? 'translateY(-1px)' : 'translateY(0)',
+          boxShadow: isStrong ? `0 2px 6px ${cor}44` : 'none',
+        }}
+      >
+        {icon}
+        {label}
+      </button>
+    </Tooltip>
   );
 }
