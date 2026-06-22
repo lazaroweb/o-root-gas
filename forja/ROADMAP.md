@@ -60,6 +60,16 @@
 - **Comprovante** e **relatório de despesas** em PDF; relatório mensal em PDF
 - **Resumo financeiro por e-mail** (envio manual + agendado diário)
 
+### v1.141 — Centelha (caixa global de captura)
+- Nova sessão entre Ideias e Sistemas, ícone 🔥
+- Captura zero-fricção (1 input + Enter), 3 visões (Capturadas/Triadas/Resolvidas)
+- Triagem rica: categoria, prioridade, sistema, contexto, tags
+- 4 destinos: → Ideia, → Backlog (sistema), Arquivar, Descartar
+- IA refina + detecta duplicata cruzando com Ideias + Decisões
+- Hotkey global `g+x` + badge no Dashboard ("N pra triar", clicável)
+- Conceito: GTD (capture → process → organize) + Personal Kanban
+- Nova tabela `Centelhas`, SCHEMA_VERSION → `v1.64-centelha`
+
 ---
 
 ## Fila

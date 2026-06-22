@@ -44,6 +44,19 @@ const SCHEMA: SheetSchema[] = [
   // 'melhoria' (incremento num sistema que já existe → vira item de Backlog).
   // `sistemaId` só é usado quando tipo='melhoria' (vazio = ainda não destinada).
   { name: 'Ideias', columns: ['id', 'titulo', 'descricao', 'notaImpacto', 'notaEsforco', 'estado', 'tipo', 'sistemaId', 'prioridade', 'criadoEm', 'atualizadoEm'] },
+  // Centelha (v1.141.0): caixa global de captura zero-fricção. Você joga ideias,
+  // pendências, percepções aqui sem amarras (sem sistema/cliente/categoria) — só
+  // título + Enter — e depois TRIA com calma: classifica, vincula a sistema/
+  // cliente, decide se vira Ideia, vira item de Backlog, arquiva ou descarta.
+  // Inspirado no Inbox do GTD + Personal Kanban (capture → process → organize).
+  // `estado`: capturada (recém-criada, não triada) | triada (categorizada mas
+  // ainda não decidida) | promovida (virou Ideia/Decisão) | arquivada (guarda
+  // histórico) | descartada (lixo).
+  // `categoria`: feature | bug | melhoria | sistema_novo | processo | pessoal |
+  // ''. Livre — sem rigidez. Usada pra filtrar e sugerir destino na promoção.
+  // `promovidaPara`: 'ideia:<id>' ou 'decisao:<id>' — rastreabilidade pós-promoção.
+  // `contexto`: texto livre opcional (cola PRD, link, transcrição, o que vier).
+  { name: 'Centelhas', columns: ['id', 'titulo', 'contexto', 'estado', 'categoria', 'sistemaId', 'clienteId', 'promovidaPara', 'tags', 'prioridade', 'criadoEm', 'triadoEm', 'decididoEm'] },
   { name: 'Oportunidades', columns: ['id', 'titulo', 'pessoaId', 'valorEstimado', 'estado', 'proximoPasso'] },
   { name: 'Pessoas', columns: [
     'id', 'nome', 'contato', 'papel', 'notas', 'email',
@@ -299,7 +312,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.63-pessoa-ficha-rica';
+const SCHEMA_VERSION = 'v1.64-centelha';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -2157,6 +2170,254 @@ function confirmarPromocaoIdeia(payload: {
     return { ok: true, data: { decisao: created } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao promover ideia' };
+  }
+}
+
+// ─── Centelha (v1.141.0) ─────────────────────────────────────────────────────
+//
+// Caixa global de captura zero-fricção. Filosofia: tudo que aparece na cabeça
+// durante o dia entra aqui sem amarra — depois você processa em lotes (princípio
+// GTD: capture first, organize later). Cada Centelha pode virar Ideia (sistema
+// novo), virar Decisão (item de backlog de um sistema existente), ser arquivada
+// pra histórico ou descartada como ruído.
+
+function getCentelhas(): ServerResult {
+  try {
+    const todas = dbGetAll('Centelhas') as Array<Record<string, unknown>>;
+    todas.sort((a, b) => String(b.criadoEm || '').localeCompare(String(a.criadoEm || '')));
+    return { ok: true, data: todas };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar centelhas' };
+  }
+}
+
+// Conta só as não-triadas — usado pelo Dashboard pra badge "tem X esperando triagem".
+function getCentelhasNaoTriadasCount(): ServerResult {
+  try {
+    const todas = dbGetAll('Centelhas') as Array<Record<string, unknown>>;
+    const pendentes = todas.filter((c) => String(c.estado || 'capturada') === 'capturada').length;
+    return { ok: true, data: { pendentes } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao contar centelhas' };
+  }
+}
+
+function createCentelha(data: Record<string, unknown>): ServerResult {
+  try {
+    const titulo = String((data && data.titulo) || '').trim();
+    if (!titulo) return { ok: false, error: 'Título é obrigatório' };
+    // MVP: zero-fricção. Só `titulo` é obrigatório. O resto entra na triagem.
+    const created = dbCreate('Centelhas', {
+      titulo,
+      contexto: String(data.contexto || ''),
+      estado: 'capturada',
+      categoria: String(data.categoria || ''),
+      sistemaId: String(data.sistemaId || ''),
+      clienteId: String(data.clienteId || ''),
+      promovidaPara: '',
+      tags: String(data.tags || ''),
+      prioridade: String(data.prioridade || ''),
+      criadoEm: new Date().toISOString(),
+      triadoEm: '',
+      decididoEm: '',
+    });
+    return { ok: true, data: created };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao criar centelha' };
+  }
+}
+
+function updateCentelha(id: string, data: Record<string, unknown>): ServerResult {
+  try {
+    if (!id) return { ok: false, error: 'id é obrigatório' };
+    // Triagem: se vier campo de categoria/sistemaId/clienteId/prioridade e ainda
+    // está no estado 'capturada', auto-promove pra 'triada' e marca `triadoEm`.
+    const atual = dbGetById('Centelhas', id) as Record<string, unknown> | null;
+    if (!atual) return { ok: false, error: 'Centelha não encontrada' };
+    const merged = { ...data } as Record<string, unknown>;
+    if (String(atual.estado || 'capturada') === 'capturada') {
+      const triou = data.categoria || data.sistemaId || data.clienteId || data.prioridade;
+      if (triou && !data.estado) {
+        merged.estado = 'triada';
+        merged.triadoEm = new Date().toISOString();
+      }
+    }
+    const updated = dbUpdate('Centelhas', id, merged);
+    if (!updated) return { ok: false, error: 'Centelha não encontrada' };
+    return { ok: true, data: updated };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atualizar centelha' };
+  }
+}
+
+function deleteCentelha(id: string): ServerResult {
+  try {
+    if (!id) return { ok: false, error: 'id é obrigatório' };
+    const ok = dbDelete('Centelhas', id);
+    if (!ok) return { ok: false, error: 'Centelha não encontrada' };
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover centelha' };
+  }
+}
+
+function arquivarCentelha(id: string): ServerResult {
+  try {
+    const updated = dbUpdate('Centelhas', id, { estado: 'arquivada', decididoEm: new Date().toISOString() });
+    if (!updated) return { ok: false, error: 'Centelha não encontrada' };
+    return { ok: true, data: updated };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao arquivar centelha' };
+  }
+}
+
+function descartarCentelha(id: string): ServerResult {
+  try {
+    const updated = dbUpdate('Centelhas', id, { estado: 'descartada', decididoEm: new Date().toISOString() });
+    if (!updated) return { ok: false, error: 'Centelha não encontrada' };
+    return { ok: true, data: updated };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao descartar centelha' };
+  }
+}
+
+// Promove uma Centelha pra Ideia (banco de ideias global). Aceita override dos
+// campos editados pela UI na hora da promoção. Marca a Centelha como
+// 'promovida' com `promovidaPara='ideia:<id>'` pra rastreabilidade.
+function promoverCentelhaParaIdeia(payload: {
+  centelhaId: string;
+  ideia: { titulo: string; descricao?: string; notaImpacto?: number; notaEsforco?: number; tipo?: string; sistemaId?: string; prioridade?: string };
+}): ServerResult {
+  try {
+    if (!payload || !payload.centelhaId) return { ok: false, error: 'centelhaId é obrigatório' };
+    const centelha = dbGetById('Centelhas', payload.centelhaId) as Record<string, unknown> | null;
+    if (!centelha) return { ok: false, error: 'Centelha não encontrada' };
+    const ideia = payload.ideia || ({} as Record<string, unknown>);
+    if (!ideia.titulo) return { ok: false, error: 'Título da ideia é obrigatório' };
+    const novaIdeia = dbCreate('Ideias', {
+      titulo: String(ideia.titulo),
+      descricao: String(ideia.descricao || centelha.contexto || ''),
+      notaImpacto: Number(ideia.notaImpacto || 5),
+      notaEsforco: Number(ideia.notaEsforco || 5),
+      estado: 'nova',
+      tipo: String(ideia.tipo || 'sistema'),
+      sistemaId: String(ideia.sistemaId || ''),
+      prioridade: String(ideia.prioridade || 'media'),
+      criadoEm: new Date().toISOString(),
+    }) as Record<string, unknown>;
+    dbUpdate('Centelhas', payload.centelhaId, {
+      estado: 'promovida',
+      promovidaPara: 'ideia:' + String(novaIdeia.id || ''),
+      decididoEm: new Date().toISOString(),
+    });
+    return { ok: true, data: { ideia: novaIdeia } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao promover centelha pra ideia' };
+  }
+}
+
+// Promove uma Centelha direto pra item de Backlog (Decisões) de um sistema.
+function promoverCentelhaParaBacklog(payload: {
+  centelhaId: string;
+  decisao: { sistemaId: string; titulo: string; decisao?: string; justificativa?: string; prioridade?: string; tags?: string; estimativa?: string };
+}): ServerResult {
+  try {
+    if (!payload || !payload.centelhaId) return { ok: false, error: 'centelhaId é obrigatório' };
+    const centelha = dbGetById('Centelhas', payload.centelhaId) as Record<string, unknown> | null;
+    if (!centelha) return { ok: false, error: 'Centelha não encontrada' };
+    const d = payload.decisao || ({} as Record<string, unknown>);
+    if (!d.sistemaId) return { ok: false, error: 'Sistema é obrigatório pra promover ao backlog' };
+    if (!d.titulo) return { ok: false, error: 'Título é obrigatório' };
+    const novaDecisao = dbCreate('Decisoes', {
+      sistemaId: String(d.sistemaId),
+      data: new Date().toISOString().slice(0, 10),
+      titulo: String(d.titulo),
+      decisao: String(d.decisao || centelha.contexto || ''),
+      justificativa: String(d.justificativa || ''),
+      status: 'backlog',
+      prioridade: String(d.prioridade || 'media'),
+      tags: String(d.tags || ''),
+      estimativa: String(d.estimativa || ''),
+    }) as Record<string, unknown>;
+    dbUpdate('Centelhas', payload.centelhaId, {
+      estado: 'promovida',
+      promovidaPara: 'decisao:' + String(novaDecisao.id || ''),
+      decididoEm: new Date().toISOString(),
+    });
+    return { ok: true, data: { decisao: novaDecisao } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao promover centelha pro backlog' };
+  }
+}
+
+// Refina uma Centelha com IA: sugere categoria, prioridade, sistema vinculado e
+// detecta duplicata cruzando com Ideias + Decisões existentes. NÃO grava nada;
+// a UI mostra a proposta e o usuário decide.
+function refinarCentelhaComIA(payload: { centelhaId: string }): ServerResult {
+  try {
+    if (!payload || !payload.centelhaId) return { ok: false, error: 'centelhaId é obrigatório' };
+    const centelha = dbGetById('Centelhas', payload.centelhaId) as Record<string, unknown> | null;
+    if (!centelha) return { ok: false, error: 'Centelha não encontrada' };
+
+    const sistemas = (dbGetAll('Sistemas') as Array<Record<string, unknown>>)
+      .map((s) => ({ id: String(s.id), nome: String(s.nome || ''), proposito: String(s.proposito || '').slice(0, 100) }));
+    const ideiasExist = (dbGetAll('Ideias') as Array<Record<string, unknown>>)
+      .filter((i) => String(i.estado || '') !== 'descartada')
+      .map((i) => ({ id: 'ideia:' + String(i.id), titulo: String(i.titulo || ''), resumo: String(i.descricao || '').slice(0, 120) }));
+    const decisoesExist = (dbGetAll('Decisoes') as Array<Record<string, unknown>>)
+      .filter((d) => String(d.status || '') !== 'cancelado' && String(d.status || '') !== 'feito')
+      .map((d) => ({ id: 'decisao:' + String(d.id), titulo: String(d.titulo || ''), resumo: String(d.decisao || '').slice(0, 120) }));
+
+    const listaSistemas = sistemas.length
+      ? sistemas.map((s) => `- ${s.id}: ${s.nome} (${s.proposito || 'sem propósito'})`).join('\n')
+      : '(sem sistemas cadastrados)';
+    const universoDup = [...ideiasExist, ...decisoesExist];
+    const listaDup = universoDup.length
+      ? universoDup.slice(0, 60).map((d, i) => `${i + 1}. [${d.id}] ${d.titulo} — ${d.resumo}`).join('\n')
+      : '(sem itens ainda)';
+
+    const sys = 'Você é um PM técnico ajudando a triar uma anotação rápida. '
+      + 'Responda SOMENTE com JSON válido, sem markdown, no formato exato:\n'
+      + '{"categoria": "feature"|"bug"|"melhoria"|"sistema_novo"|"processo"|"pessoal"|"", '
+      + '"prioridade": "alta"|"media"|"baixa", '
+      + '"sistemaIdSugerido": string, "tituloSugerido": string, "contextoSugerido": string, '
+      + '"destino": "ideia"|"backlog"|"arquivar"|"descartar", '
+      + '"justificativa": string, '
+      + '"duplicado": {"id": string|null, "titulo": string|null, "motivo": string|null}}\n'
+      + '- categoria: classifica a natureza.\n'
+      + '- prioridade: chute pragmático.\n'
+      + '- sistemaIdSugerido: id de um sistema da lista (vazio se for ideia nova ou pessoal).\n'
+      + '- destino: pra qual fluxo levar (ideia=banco de ideias global; backlog=item acionável de um sistema; arquivar=relevante mas sem ação agora; descartar=ruído).\n'
+      + '- duplicado: se já existir item igual no universo (ideia: ou decisao:), preencha id/titulo/motivo; senão null em todos.';
+
+    const userMsg = `Centelha capturada:\nTítulo: ${String(centelha.titulo || '')}\n`
+      + `Contexto: ${String(centelha.contexto || '(vazio)')}\n\n`
+      + `Sistemas existentes:\n${listaSistemas}\n\n`
+      + `Universo de duplicatas (ideias + backlog ativo):\n${listaDup}`;
+
+    const resposta = forjaCallLLM(
+      [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
+      900, undefined, 'acoes',
+    );
+    const parsed = extrairJson(resposta) as Record<string, unknown>;
+    const dupRaw = (parsed.duplicado || {}) as Record<string, unknown>;
+    const duplicado = dupRaw && dupRaw.id
+      ? { id: String(dupRaw.id), titulo: String(dupRaw.titulo || ''), motivo: String(dupRaw.motivo || '') }
+      : null;
+
+    const proposta = {
+      categoria: String(parsed.categoria || ''),
+      prioridade: ['alta', 'media', 'baixa'].includes(String(parsed.prioridade)) ? String(parsed.prioridade) : 'media',
+      sistemaIdSugerido: String(parsed.sistemaIdSugerido || ''),
+      tituloSugerido: String(parsed.tituloSugerido || centelha.titulo || ''),
+      contextoSugerido: String(parsed.contextoSugerido || centelha.contexto || ''),
+      destino: ['ideia', 'backlog', 'arquivar', 'descartar'].includes(String(parsed.destino)) ? String(parsed.destino) : 'ideia',
+      justificativa: String(parsed.justificativa || ''),
+    };
+
+    return { ok: true, data: { proposta, duplicado } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao refinar centelha' };
   }
 }
 

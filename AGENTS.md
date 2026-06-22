@@ -2,7 +2,7 @@
 
 > **Você é um novo agente IA assumindo este repositório.** Leia este arquivo INTEIRO antes de tocar em qualquer código. Ele te dá em 5-7 minutos tudo que um agente anterior aprendeu trabalhando aqui por meses.
 
-**Última atualização**: 2026-06-21 · **Versão atual da Forja**: `v1.140.1 @310` · **Branch**: `master`
+**Última atualização**: 2026-06-22 · **Versão atual da Forja**: `v1.141.0` · **Branch**: `master`
 
 ---
 
@@ -64,33 +64,49 @@ o-root-gas/
 
 ---
 
-## 4. Estado atual em 2026-06-21 (fim do dia)
+## 4. Estado atual em 2026-06-22
 
-### O que foi feito HOJE (7 versões em sequência)
+### O que foi feito hoje (1 release grande)
 
-Saímos de `v1.137.0` pela manhã chegamos em `v1.140.1` à tarde, atacando uma jornada longa de bugs e melhorias na **Auditoria Forja IA**. Resumo:
+| Versão | Foco |
+|---|---|
+| **1.141.0** | **Centelha** — caixa global de captura zero-fricção (Inbox/GTD-style) |
 
-| Versão | Deploy | Foco |
+### Sessão Centelha (v1.141.0) — entendimento rápido pro próximo agente
+
+- **Onde fica**: sidebar entre Ideias e Sistemas, ícone 🔥, hotkey `g+x`.
+- **O que é**: caixa onde o usuário joga qualquer pensamento bruto sem fricção
+  (1 input + Enter). Depois ele tria com calma (categoria, sistema, prioridade,
+  contexto, tags) e decide o destino.
+- **4 destinos possíveis**:
+  - **→ Ideia**: cria entrada no banco global `Ideias`.
+  - **→ Backlog**: cria entrada em `Decisoes` de um sistema específico.
+  - **Arquivar**: preserva histórico sem poluir o Inbox.
+  - **Descartar**: marca como ruído.
+- **IA**: botão "Refinar com IA" no modal de triagem sugere categoria/prioridade/
+  sistema E detecta duplicata cruzando com Ideias + Decisões existentes.
+- **Tabela nova**: `Centelhas` (13 colunas). `SCHEMA_VERSION` bumpou pra
+  `v1.64-centelha` (força re-init nos clientes).
+
+### Histórico recente (releases anteriores)
+
+| Versão | Data | Foco |
 |---|---|---|
-| 1.137.0 | @304 | Detector docs-only + .md fortalecidos pra IA externa |
-| 1.138.0 | @305 | Score reflete achados de auditoria (fator novo, max 15) |
-| 1.139.0 | @306 | Rebalanceamento: soft cap perdoa 2 leves, penalizações suaves |
-| 1.139.1 | @307 | "Rodar de novo" passa a forçar (não usa cache) |
-| 1.139.2 | @308 | Label do botão corrigido (era "Nova auditoria" após hard-refresh) |
-| 1.140.0 | @309 | Reconciliação determinística pós-IA (Antes vs Depois sempre funciona) |
-| 1.140.1 | @310 | Reconciliação semântica 2 camadas (Jaccard + área+keywords) |
+| 1.140.1 | 21/06 | Reconciliação semântica 2 camadas (Jaccard + área+keywords) |
+| 1.140.0 | 21/06 | Reconciliação determinística pós-IA (Antes vs Depois sempre) |
+| 1.139.2 | 21/06 | Label "Rodar de novo" estável após hard-refresh |
+| 1.139.1 | 21/06 | "Rodar de novo" força re-análise (sem cache) |
+| 1.139.0 | 21/06 | Soft cap perdoa 2 leves, penalizações rebalanceadas |
+| 1.138.0 | 21/06 | Score reflete achados de auditoria |
+| 1.137.0 | 21/06 | Detector docs-only + .md fortalecidos |
 
-**Detalhes completos**: leia `forja/CHANGELOG.md` da seção `[1.140.1]` até `[1.137.0]` (em ordem inversa). Cada entrada explica causa-raiz + solução + por que foi feita.
-
-### Resultado prático
-
-Score do sistema `one-colmeia-app` saiu de **73 → 79** ao longo do dia, com trabalho real (Cursor implementou 4 fixes de segurança/testes/lint) e ajustes estruturais na própria Forja pra que o score finalmente refletisse o trabalho.
+**Detalhes completos**: `forja/CHANGELOG.md`.
 
 ---
 
 ## 5. Roadmap — o que vem por aí
 
-Leia `forja/ROADMAP.md` na seção **"Fila > Auditoria Forja IA — alta prioridade"**. Resumo dos 2 itens prioritários **não entregues**:
+Leia `forja/ROADMAP.md` na seção **"Fila > Auditoria Forja IA — alta prioridade"**. Resumo dos 2 itens prioritários **ainda não entregues** (já estavam pendentes desde 21/06):
 
 ### 5.1. Leitura paginada de repositórios grandes (resolver `DIFF TRUNCADO`)
 

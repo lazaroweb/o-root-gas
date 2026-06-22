@@ -23,6 +23,7 @@ import Bancada from './views/Bancada';
 import SistemaForm from './views/SistemaForm';
 import SistemaDetail from './views/SistemaDetail';
 import IdeiasView from './views/IdeiasView';
+import Centelha from './views/Centelha';
 import OportunidadesView from './views/OportunidadesView';
 import Clientes from './views/Clientes';
 import GeneseWizard from './views/GeneseWizard';
@@ -35,7 +36,8 @@ const { Content } = Layout;
 
 // Rótulo amigável de cada seção — passado pra Lume saber "onde" o usuário está.
 const VIEW_LABELS: Record<ViewName, string> = {
-  dashboard: 'Dashboard', clientes: 'Clientes', ideias: 'Ideias', sistemas: 'Sistemas (Bancada)',
+  dashboard: 'Dashboard', clientes: 'Clientes', ideias: 'Ideias', centelha: 'Centelha (Inbox)',
+  sistemas: 'Sistemas (Bancada)',
   operacoes: 'Operações', financeiro: 'Financeiro', 'forja-ia': 'Forja IA', relatorios: 'Relatórios',
   atelier: 'Atelier', estudos: 'Estudos', configuracoes: 'Configurações', 'sistema-form': 'Criar/editar sistema',
   'sistema-detail': 'Detalhe do sistema', oportunidades: 'Oportunidades', genese: 'Gênese (kickoff)',
@@ -116,6 +118,8 @@ export default function App(): React.ReactElement {
       d: 'dashboard', c: 'clientes', i: 'ideias', s: 'sistemas',
       o: 'operacoes', f: 'financeiro', a: 'forja-ia', r: 'relatorios',
       v: 'atelier', e: 'estudos', ',': 'configuracoes',
+      // 'x' de captura (centelha) — 'c' já é clientes, 'i' já é ideias.
+      x: 'centelha',
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -236,6 +240,8 @@ export default function App(): React.ReactElement {
         return <Clientes />;
       case 'ideias':
         return <IdeiasView onGenese={handleGenese} />;
+      case 'centelha':
+        return <Centelha />;
       case 'sistemas':
         return <Bancada onSelectSistema={handleSelectSistema} onNewSistema={() => setCurrentView('sistema-form')} onImportGAS={() => setImportGASOpen(true)} refreshKey={sistemasRefresh} />;
       case 'operacoes':

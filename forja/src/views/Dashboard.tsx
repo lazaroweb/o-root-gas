@@ -12,7 +12,7 @@ import type { DashboardData, StatusGeral, DashboardOperacional, ServerResponse }
 
 interface DashboardProps {
   onSelectSistema: (id: string) => void;
-  onNavigate: (view: 'financeiro' | 'sistemas' | 'operacoes' | 'relatorios') => void;
+  onNavigate: (view: 'financeiro' | 'sistemas' | 'operacoes' | 'relatorios' | 'centelha') => void;
   onImportGAS?: () => void;
   // v1.4.4: abre o drawer de alertas (controlado em App.tsx). Quando ausente
   // (preview local), o link de "ver alertas" não aparece.
@@ -65,6 +65,7 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
   const [ops, setOps] = useState<DashboardOperacional | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [centelhasPendentes, setCentelhasPendentes] = useState<number>(0);
 
   useEffect(() => {
     callServer<ServerResponse<DashboardData>>('getDashboardData')
@@ -80,6 +81,10 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
     callServer<ServerResponse<DashboardOperacional>>('getDashboardOperacional')
       .then(res => { if (res.ok && res.data) setOps(res.data as DashboardOperacional); })
       .catch(() => { /* preview local */ });
+    // Centelhas não-triadas (princípio #6: alerta sem tratativa proibido — o badge tem clique).
+    callServer<ServerResponse<{ pendentes: number }>>('getCentelhasNaoTriadasCount')
+      .then((res) => { if (res.ok && res.data) setCentelhasPendentes(res.data.pendentes || 0); })
+      .catch(() => { /* preview */ });
     // Sync silencioso com o GAS: se algo mudou (novo/removido), recarrega o painel.
     callServer<ServerResponse<{ novos: number; removidos: unknown[]; renomeados: unknown[]; restaurados: number; selfVinculado?: boolean }>>('sincronizarGAS')
       .then(res => {
@@ -260,14 +265,25 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
             </Row>
 
             {/* Linha de counts operacionais (rodapé do hero) */}
-            {(ops && (ops.decisoesAbertas > 0 || ops.findingsAbertos > 0 || ops.alertasNaoLidos > 0)) && (
+            {((ops && (ops.decisoesAbertas > 0 || ops.findingsAbertos > 0 || ops.alertasNaoLidos > 0)) || centelhasPendentes > 0) && (
               <div style={{
                 marginTop: 22, paddingTop: 16,
                 borderTop: `1px solid ${t.borderSoft}`,
                 display: 'flex', gap: 20, flexWrap: 'wrap',
                 fontSize: 12.5, color: t.textTertiary,
               }}>
-                {ops.decisoesAbertas > 0 && (
+                {centelhasPendentes > 0 && (
+                  <Tooltip title={<TipBox titulo="Centelhas não-triadas" dica="Ideias capturadas no Inbox que ainda não foram classificadas. Ação: clique pra abrir a Centelha e triar (promover pra Ideia/Backlog, arquivar ou descartar)." />}>
+                    <span
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}
+                      onClick={() => onNavigate('centelha')}
+                    >
+                      <Flame size={13} color={t.accents.peach} />
+                      <strong style={{ color: t.text, fontVariantNumeric: 'tabular-nums' }}>{centelhasPendentes}</strong> centelha{centelhasPendentes !== 1 ? 's' : ''} pra triar
+                    </span>
+                  </Tooltip>
+                )}
+                {ops && ops.decisoesAbertas > 0 && (
                   <Tooltip title={<TipBox titulo="Decisões em aberto" dica="Itens no backlog ainda não concluídos. Ação: abra o sistema → aba Backlog e mova pra 'Feito' o que já resolveu." />}>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'help' }}>
                       <ListChecks size={13} color={t.accents.lavender} />
@@ -275,7 +291,7 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
                     </span>
                   </Tooltip>
                 )}
-                {ops.findingsAbertos > 0 && (
+                {ops && ops.findingsAbertos > 0 && (
                   <Tooltip title={<TipBox titulo="Findings de auditoria" dica="Achados da Forja IA ainda não tratados. Ação: abra o sistema, resolva (ou registre como risco/decisão) — um por dia já mantém a casa em ordem." />}>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'help' }}>
                       <AlertTriangle size={13} color={t.accents.peach} />
@@ -283,7 +299,7 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
                     </span>
                   </Tooltip>
                 )}
-                {ops.alertasNaoLidos > 0 && onOpenAlertas && (
+                {ops && ops.alertasNaoLidos > 0 && onOpenAlertas && (
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }} onClick={onOpenAlertas}>
                     <AlertCircle size={13} color={t.accents.rose} />
                     <strong style={{ color: t.text, fontVariantNumeric: 'tabular-nums' }}>{ops.alertasNaoLidos}</strong> alertas não lidos

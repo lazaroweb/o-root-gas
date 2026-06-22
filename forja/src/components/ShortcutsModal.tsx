@@ -25,6 +25,7 @@ const GRUPOS: Grupo[] = [
       { keys: ['G', 'D'], label: 'Dashboard' },
       { keys: ['G', 'C'], label: 'Clientes' },
       { keys: ['G', 'I'], label: 'Ideias' },
+      { keys: ['G', 'X'], label: 'Centelha (caixa de captura)' },
       { keys: ['G', 'S'], label: 'Sistemas' },
       { keys: ['G', 'O'], label: 'Operações' },
       { keys: ['G', 'F'], label: 'Financeiro' },

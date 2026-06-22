@@ -370,6 +370,38 @@ export interface Ideia {
   atualizadoEm?: string;
 }
 
+export type CentelhaEstado = 'capturada' | 'triada' | 'promovida' | 'arquivada' | 'descartada';
+export type CentelhaCategoria = 'feature' | 'bug' | 'melhoria' | 'sistema_novo' | 'processo' | 'pessoal' | '';
+
+export interface Centelha {
+  id: string;
+  titulo: string;
+  contexto?: string;
+  estado: CentelhaEstado;
+  categoria?: CentelhaCategoria;
+  sistemaId?: string;
+  clienteId?: string;
+  // 'ideia:<id>' ou 'decisao:<id>' quando promovida. Vazio nos demais estados.
+  promovidaPara?: string;
+  tags?: string;
+  prioridade?: 'alta' | 'media' | 'baixa' | '';
+  criadoEm?: string;
+  triadoEm?: string;
+  decididoEm?: string;
+}
+
+// Proposta da IA refinando uma Centelha. Usada pelo CentelhaTriagemModal pra
+// pré-preencher os campos de triagem antes do usuário confirmar.
+export interface CentelhaPropostaIA {
+  categoria: CentelhaCategoria;
+  prioridade: 'alta' | 'media' | 'baixa';
+  sistemaIdSugerido: string;
+  tituloSugerido: string;
+  contextoSugerido: string;
+  destino: 'ideia' | 'backlog' | 'arquivar' | 'descartar';
+  justificativa: string;
+}
+
 export interface Oportunidade {
   id: string;
   titulo: string;
@@ -1382,6 +1414,7 @@ export interface DashboardStats {
 export type ViewName =
   | 'dashboard'
   | 'clientes'
+  | 'centelha'
   | 'ideias'
   | 'sistemas'
   | 'operacoes'

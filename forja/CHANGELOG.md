@@ -36,6 +36,59 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.141.0] — 2026-06-22
+
+### Adicionado — Centelha: caixa de captura zero-fricção (Inbox/GTD-style)
+
+- **Nova sessão na sidebar** (entre Ideias e Sistemas) com ícone 🔥. Conceito:
+  o "antes da Ideia" — pensamento bruto antes de virar algo refinado. Inspirado
+  em GTD (capture → process → organize) + Personal Kanban.
+- **Captura zero-fricção**: 1 input gigante no topo + Enter salva e mantém o foco
+  pro próximo (captura em rajada). Auto-foco ao entrar na tela.
+- **Hotkey global `g+x`**: navega pra Centelha de qualquer tela.
+- **3 visões**: Capturadas 🔥 (não triadas), Triadas 🪵 (classificadas mas sem
+  decisão), Resolvidas ✅ (promovidas/arquivadas/descartadas).
+- **Modal de triagem rico**: título, contexto, categoria (feature/bug/melhoria/
+  sistema novo/processo/pessoal), prioridade, sistema vinculado, tags.
+- **Promoção dirigida**:
+  - **→ Ideia**: cria entrada no banco global de Ideias.
+  - **→ Backlog**: cria entrada em Decisões de um sistema específico.
+  - **Arquivar**: preserva histórico sem poluir.
+  - **Descartar**: marca como ruído.
+  Em todos os casos, a Centelha vira `estado=promovida/arquivada/descartada` com
+  `promovidaPara='ideia:<id>'` ou `'decisao:<id>'` pra rastreabilidade.
+- **Refinar com IA** (Forja IA): sugere categoria, prioridade, sistema vinculado
+  E detecta duplicata cruzando com Ideias + Decisões existentes (anti-redundância
+  herdada da v1.140.1). Proposta cai nos campos pra você editar antes de confirmar.
+- **Badge no Dashboard**: "N centelhas pra triar" no rodapé do hero, clicável,
+  alinhado com princípio #6 ("alerta sem tratativa proibido").
+
+### Mudado — Backend
+
+- `SCHEMA_VERSION` bump pra `v1.64-centelha`. Nova tabela `Centelhas` no SheetDB
+  com 13 colunas: `id, titulo, contexto, estado, categoria, sistemaId, clienteId,
+  promovidaPara, tags, prioridade, criadoEm, triadoEm, decididoEm`.
+- Novas funções server: `getCentelhas`, `getCentelhasNaoTriadasCount`,
+  `createCentelha`, `updateCentelha`, `deleteCentelha`, `arquivarCentelha`,
+  `descartarCentelha`, `promoverCentelhaParaIdeia`, `promoverCentelhaParaBacklog`,
+  `refinarCentelhaComIA`.
+- `updateCentelha` tem auto-transição: se você preencher categoria/sistema/
+  prioridade enquanto está em `capturada`, move pra `triada` automaticamente
+  e marca `triadoEm`.
+
+### Por que existe (motivação do usuário)
+
+> "Eu estou trabalhando e vem várias coisas que preciso fazer que são pendências
+> [...] pensei em ter uma sessão onde eu possa cadastrar todas as minhas ideias e
+> isso possa de alguma forma depois ser refinada e entrar ou não para um backlog,
+> um conceito de caixa onde coloco tudo e depois classifico"
+
+A Forja já tinha `IdeiasView` (modal pesado, mistura sistema-novo com melhoria) e
+`IdeiasFaixa` (zero-fricção mas amarrada a 1 sistema). Faltava o **equivalente
+global, com fluxo de triagem e decisão**. Centelha resolve.
+
+---
+
 ## [1.140.1] — 2026-06-21
 
 ### Mudado — Reconciliação semântica em 2 camadas (Jaccard + área+keywords)
