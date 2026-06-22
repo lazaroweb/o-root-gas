@@ -79,6 +79,28 @@
 - Timestamps relativos ("há 3d") com data completa no tooltip
 - SCHEMA_VERSION → `v1.65-ideias-lifecycle` (col `concluidaEm` append-only)
 
+### v1.143 — Fusão Centelha em Ideias + Design System docs
+- **Fusão**: Centelha foi fundida em Ideias (eram 80% sobrepostas). Sem mais
+  confusão de "onde lanço cada coisa". UI/sidebar/atalho atualizados.
+- **Captura zero-fricção**: input sticky inline em Ideias + modal flutuante
+  global `g+x` (`IdeiaCapturaQuick`) acessível de qualquer tela.
+- **5 visões inteligentes**: Inbox / Foco / Ativas / Concluídas / Arquivo
+  (cada uma com lógica própria de filtro + agrupamento por tempo).
+- **Modo Foco** (`IdeiaTriagemBatch`): triagem em batch estilo Superhuman.
+  1 ideia gigante por vez, navega ← →, decide com 1 tecla (C/A/D/G/T).
+- **Drawer de triagem rica** (`IdeiaTriagemDrawer`): substitui modal pesado,
+  sliders visuais pra impacto/esforço, "Refinar com IA" sugere TODOS os
+  campos + detecta duplicata.
+- **Cards modernos**: hover sutil, ações inline, categoria como pill colorida,
+  score visual em mini-barra `■■■■■░░░░░`, agrupamento por tempo.
+- **Backend**: `categoria` + `arquivadaEm` em Ideias (append-only),
+  `refinarIdeiaComIA`, `getIdeiasInboxCount`. Centelhas mantidas pra
+  back-compat (zero perda de dado).
+- **Design System docs**: Cursor Rule auto-aplicada
+  ([`.cursor/rules/forja-design-system.mdc`](../.cursor/rules/forja-design-system.mdc))
+  + Skill humana ([`forja/docs/SKILL_design-system.md`](docs/SKILL_design-system.md))
+  garantem consistência visual em toda mudança futura.
+
 ---
 
 ## Fila

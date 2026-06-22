@@ -45,7 +45,11 @@ const SCHEMA: SheetSchema[] = [
   // `sistemaId` só é usado quando tipo='melhoria' (vazio = ainda não destinada).
   // Ideias: `concluidaEm` (v1.142.0) append-only — preenchida quando a ideia
   // vira estado 'concluida'. Permite mostrar quando foi feita + filtrar histórico.
-  { name: 'Ideias', columns: ['id', 'titulo', 'descricao', 'notaImpacto', 'notaEsforco', 'estado', 'tipo', 'sistemaId', 'prioridade', 'criadoEm', 'atualizadoEm', 'concluidaEm'] },
+  // v1.143.0 (fusão Centelha): `categoria` (feature|bug|melhoria|sistema_novo|
+  // processo|pessoal) classifica intenção da ideia além do `tipo` (que continua
+  // separando 'sistema'/'melhoria' pra manter compat com gênese). `arquivadaEm`
+  // marca quando virou arquivo/descarte (distinto de concluidaEm que é "feito").
+  { name: 'Ideias', columns: ['id', 'titulo', 'descricao', 'notaImpacto', 'notaEsforco', 'estado', 'tipo', 'sistemaId', 'prioridade', 'criadoEm', 'atualizadoEm', 'concluidaEm', 'categoria', 'arquivadaEm'] },
   // Centelha (v1.141.0): caixa global de captura zero-fricção. Você joga ideias,
   // pendências, percepções aqui sem amarras (sem sistema/cliente/categoria) — só
   // título + Enter — e depois TRIA com calma: classifica, vincula a sistema/
@@ -314,7 +318,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.65-ideias-lifecycle';
+const SCHEMA_VERSION = 'v1.66-ideias-fusao';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -2035,10 +2039,47 @@ function getIdeias(): ServerResult {
 
 function createIdeia(data: Record<string, unknown>): ServerResult {
   try {
-    const created = dbCreate('Ideias', data);
+    // v1.143.0 (fusão Centelha): zero-fricção — só `titulo` é obrigatório.
+    // Tudo mais pode entrar depois via triagem (drawer ou modo batch).
+    const titulo = String((data && data.titulo) || '').trim();
+    if (!titulo) return { ok: false, error: 'Título é obrigatório' };
+    const created = dbCreate('Ideias', {
+      titulo,
+      descricao: String(data.descricao || ''),
+      notaImpacto: Number(data.notaImpacto || 0),
+      notaEsforco: Number(data.notaEsforco || 0),
+      estado: String(data.estado || 'nova'),
+      tipo: String(data.tipo || ''),
+      sistemaId: String(data.sistemaId || ''),
+      prioridade: String(data.prioridade || ''),
+      criadoEm: String(data.criadoEm || new Date().toISOString()),
+      atualizadoEm: '',
+      concluidaEm: '',
+      categoria: String(data.categoria || ''),
+      arquivadaEm: '',
+    });
     return { ok: true, data: created };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao criar ideia' };
+  }
+}
+
+// Conta as ideias no inbox (zero-fricção): estado=nova SEM categoria E SEM
+// sistemaId — ou seja, capturada bruta esperando triagem. Usado pelo Dashboard
+// pra badge "tem X esperando ser triada" e pelo CTA "Modo Triagem" na IdeiasView.
+function getIdeiasInboxCount(): ServerResult {
+  try {
+    const todas = dbGetAll('Ideias') as Array<Record<string, unknown>>;
+    const pendentes = todas.filter((i) => {
+      const estado = String(i.estado || 'nova').toLowerCase();
+      if (estado !== 'nova') return false;
+      const cat = String(i.categoria || '').trim();
+      const sis = String(i.sistemaId || '').trim();
+      return !cat && !sis; // bruta = sem categoria E sem sistema
+    }).length;
+    return { ok: true, data: { pendentes } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao contar inbox de ideias' };
   }
 }
 
@@ -2100,9 +2141,11 @@ function reabrirIdeia(id: string): ServerResult {
 function arquivarIdeia(id: string): ServerResult {
   try {
     if (!id) return { ok: false, error: 'id é obrigatório' };
+    const agora = new Date().toISOString();
     const updated = dbUpdate('Ideias', id, {
       estado: 'arquivada',
-      atualizadoEm: new Date().toISOString(),
+      arquivadaEm: agora,
+      atualizadoEm: agora,
     });
     if (!updated) return { ok: false, error: 'Ideia não encontrada' };
     return { ok: true, data: updated };
@@ -2114,14 +2157,104 @@ function arquivarIdeia(id: string): ServerResult {
 function descartarIdeia(id: string): ServerResult {
   try {
     if (!id) return { ok: false, error: 'id é obrigatório' };
+    const agora = new Date().toISOString();
     const updated = dbUpdate('Ideias', id, {
       estado: 'descartada',
-      atualizadoEm: new Date().toISOString(),
+      arquivadaEm: agora, // descartar também marca arquivadaEm pra agrupar como "fora do fluxo"
+      atualizadoEm: agora,
     });
     if (!updated) return { ok: false, error: 'Ideia não encontrada' };
     return { ok: true, data: updated };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao descartar ideia' };
+  }
+}
+
+// Refina uma Ideia genérica com IA: sugere categoria, prioridade, sistema
+// vinculado, título limpo, contexto enriquecido e detecta duplicata cruzando com
+// Ideias ativas + Decisões abertas. NÃO grava nada; a UI mostra a proposta
+// dentro do IdeiaTriagemDrawer e o usuário decide o que aplicar.
+// (v1.143.0: substitui refinarCentelhaComIA — Centelha foi fundida em Ideias.)
+function refinarIdeiaComIA(payload: { ideiaId: string }): ServerResult {
+  try {
+    if (!payload || !payload.ideiaId) return { ok: false, error: 'ideiaId é obrigatório' };
+    const ideia = dbGetById('Ideias', payload.ideiaId) as Record<string, unknown> | null;
+    if (!ideia) return { ok: false, error: 'Ideia não encontrada' };
+
+    const sistemas = (dbGetAll('Sistemas') as Array<Record<string, unknown>>)
+      .map((s) => ({ id: String(s.id), nome: String(s.nome || ''), proposito: String(s.proposito || '').slice(0, 100) }));
+    // Universo de duplicatas: outras ideias ativas (não esta) + decisões abertas.
+    const ideiasExist = (dbGetAll('Ideias') as Array<Record<string, unknown>>)
+      .filter((i) => String(i.id) !== String(ideia.id))
+      .filter((i) => {
+        const e = String(i.estado || '').toLowerCase();
+        return e !== 'descartada' && e !== 'arquivada' && e !== 'concluida';
+      })
+      .map((i) => ({ id: 'ideia:' + String(i.id), titulo: String(i.titulo || ''), resumo: String(i.descricao || '').slice(0, 120) }));
+    const decisoesExist = (dbGetAll('Decisoes') as Array<Record<string, unknown>>)
+      .filter((d) => {
+        const s = String(d.status || '').toLowerCase();
+        return s !== 'cancelado' && s !== 'feito';
+      })
+      .map((d) => ({ id: 'decisao:' + String(d.id), titulo: String(d.titulo || ''), resumo: String(d.decisao || '').slice(0, 120) }));
+
+    const listaSistemas = sistemas.length
+      ? sistemas.map((s) => `- ${s.id}: ${s.nome} (${s.proposito || 'sem propósito'})`).join('\n')
+      : '(sem sistemas cadastrados)';
+    const universoDup = [...ideiasExist, ...decisoesExist];
+    const listaDup = universoDup.length
+      ? universoDup.slice(0, 60).map((d, i) => `${i + 1}. [${d.id}] ${d.titulo} — ${d.resumo}`).join('\n')
+      : '(sem itens ainda)';
+
+    const sys = 'Você é um PM técnico ajudando a triar uma ideia capturada de forma bruta. '
+      + 'Responda SOMENTE com JSON válido, sem markdown, no formato exato:\n'
+      + '{"categoria": "feature"|"bug"|"melhoria"|"sistema_novo"|"processo"|"pessoal"|"", '
+      + '"prioridade": "alta"|"media"|"baixa", '
+      + '"sistemaIdSugerido": string, "tituloSugerido": string, "descricaoSugerida": string, '
+      + '"notaImpactoSugerida": number, "notaEsforcoSugerida": number, '
+      + '"destino": "ideia"|"backlog"|"arquivar"|"descartar", '
+      + '"justificativa": string, '
+      + '"duplicado": {"id": string|null, "titulo": string|null, "motivo": string|null}}\n'
+      + '- categoria: classifica a natureza da ideia.\n'
+      + '- prioridade: alta/media/baixa baseado em urgência e impacto declarado.\n'
+      + '- sistemaIdSugerido: id de um sistema da lista (vazio se for ideia nova ou pessoal).\n'
+      + '- tituloSugerido: título mais claro e acionável (em formato verbo+objeto se possível).\n'
+      + '- descricaoSugerida: contexto expandido com o que faz sentido inferir.\n'
+      + '- notaImpactoSugerida / notaEsforcoSugerida: chute de 1 a 10 (1=baixo, 10=alto).\n'
+      + '- destino: pra qual fluxo levar (ideia=banco de ideias global; backlog=item acionável de um sistema; arquivar=relevante mas sem ação agora; descartar=ruído).\n'
+      + '- duplicado: se já existir item igual no universo (ideia: ou decisao:), preencha id/titulo/motivo; senão null em todos.';
+
+    const userMsg = `Ideia capturada:\nTítulo: ${String(ideia.titulo || '')}\n`
+      + `Descrição: ${String(ideia.descricao || '(vazio)')}\n`
+      + `Sistema vinculado atual: ${String(ideia.sistemaId || '(nenhum)')}\n\n`
+      + `Sistemas existentes:\n${listaSistemas}\n\n`
+      + `Universo de duplicatas (ideias ativas + backlog aberto):\n${listaDup}`;
+
+    const resposta = forjaCallLLM(
+      [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
+      900, undefined, 'acoes',
+    );
+    const parsed = extrairJson(resposta) as Record<string, unknown>;
+    const dupRaw = (parsed.duplicado || {}) as Record<string, unknown>;
+    const duplicado = dupRaw && dupRaw.id
+      ? { id: String(dupRaw.id), titulo: String(dupRaw.titulo || ''), motivo: String(dupRaw.motivo || '') }
+      : null;
+
+    const proposta = {
+      categoria: String(parsed.categoria || ''),
+      prioridade: ['alta', 'media', 'baixa'].includes(String(parsed.prioridade)) ? String(parsed.prioridade) : 'media',
+      sistemaIdSugerido: String(parsed.sistemaIdSugerido || ''),
+      tituloSugerido: String(parsed.tituloSugerido || ideia.titulo || ''),
+      descricaoSugerida: String(parsed.descricaoSugerida || ideia.descricao || ''),
+      notaImpactoSugerida: Number(parsed.notaImpactoSugerida || 5),
+      notaEsforcoSugerida: Number(parsed.notaEsforcoSugerida || 5),
+      destino: ['ideia', 'backlog', 'arquivar', 'descartar'].includes(String(parsed.destino)) ? String(parsed.destino) : 'ideia',
+      justificativa: String(parsed.justificativa || ''),
+    };
+
+    return { ok: true, data: { proposta, duplicado } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao refinar ideia' };
   }
 }
 

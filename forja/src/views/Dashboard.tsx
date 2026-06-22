@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Row, Col, Alert, Tag, Tooltip, Button } from 'antd';
 import {
   HeartPulse, Sparkles, GitBranch, Server, Plus, AppWindow, Flame, FileCode, FileText,
-  AlertTriangle, AlertCircle, Info, ListChecks, GitCommit, ChevronRight, CloudOff,
+  AlertTriangle, AlertCircle, Info, ListChecks, GitCommit, ChevronRight, CloudOff, Inbox,
 } from 'lucide-react';
 import { Panel, Skeleton, RingProgress, LiveDot, EmptyArt, useCountUp } from '../components/ui';
 import { useTokens } from '../themeContext';
@@ -12,7 +12,7 @@ import type { DashboardData, StatusGeral, DashboardOperacional, ServerResponse }
 
 interface DashboardProps {
   onSelectSistema: (id: string) => void;
-  onNavigate: (view: 'financeiro' | 'sistemas' | 'operacoes' | 'relatorios' | 'centelha') => void;
+  onNavigate: (view: 'financeiro' | 'sistemas' | 'operacoes' | 'relatorios' | 'ideias') => void;
   onImportGAS?: () => void;
   // v1.4.4: abre o drawer de alertas (controlado em App.tsx). Quando ausente
   // (preview local), o link de "ver alertas" não aparece.
@@ -65,7 +65,9 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
   const [ops, setOps] = useState<DashboardOperacional | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [centelhasPendentes, setCentelhasPendentes] = useState<number>(0);
+  // v1.143.0 (fusão Centelha): substituído por contagem do inbox de Ideias —
+  // mesma semântica (captura bruta esperando triagem), feature unificada.
+  const [ideiasInbox, setIdeiasInbox] = useState<number>(0);
 
   useEffect(() => {
     callServer<ServerResponse<DashboardData>>('getDashboardData')
@@ -81,9 +83,9 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
     callServer<ServerResponse<DashboardOperacional>>('getDashboardOperacional')
       .then(res => { if (res.ok && res.data) setOps(res.data as DashboardOperacional); })
       .catch(() => { /* preview local */ });
-    // Centelhas não-triadas (princípio #6: alerta sem tratativa proibido — o badge tem clique).
-    callServer<ServerResponse<{ pendentes: number }>>('getCentelhasNaoTriadasCount')
-      .then((res) => { if (res.ok && res.data) setCentelhasPendentes(res.data.pendentes || 0); })
+    // Ideias no inbox (princípio #6: alerta sem tratativa proibido — o badge tem clique).
+    callServer<ServerResponse<{ pendentes: number }>>('getIdeiasInboxCount')
+      .then((res) => { if (res.ok && res.data) setIdeiasInbox(res.data.pendentes || 0); })
       .catch(() => { /* preview */ });
     // Sync silencioso com o GAS: se algo mudou (novo/removido), recarrega o painel.
     callServer<ServerResponse<{ novos: number; removidos: unknown[]; renomeados: unknown[]; restaurados: number; selfVinculado?: boolean }>>('sincronizarGAS')
@@ -265,21 +267,21 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
             </Row>
 
             {/* Linha de counts operacionais (rodapé do hero) */}
-            {((ops && (ops.decisoesAbertas > 0 || ops.findingsAbertos > 0 || ops.alertasNaoLidos > 0)) || centelhasPendentes > 0) && (
+            {((ops && (ops.decisoesAbertas > 0 || ops.findingsAbertos > 0 || ops.alertasNaoLidos > 0)) || ideiasInbox > 0) && (
               <div style={{
                 marginTop: 22, paddingTop: 16,
                 borderTop: `1px solid ${t.borderSoft}`,
                 display: 'flex', gap: 20, flexWrap: 'wrap',
                 fontSize: 12.5, color: t.textTertiary,
               }}>
-                {centelhasPendentes > 0 && (
-                  <Tooltip title={<TipBox titulo="Centelhas não-triadas" dica="Ideias capturadas no Inbox que ainda não foram classificadas. Ação: clique pra abrir a Centelha e triar (promover pra Ideia/Backlog, arquivar ou descartar)." />}>
+                {ideiasInbox > 0 && (
+                  <Tooltip title={<TipBox titulo="Ideias no inbox" dica="Ideias capturadas brutas (sem categoria nem sistema). Ação: clique pra abrir Ideias na visão Inbox — você pode triar uma por uma ou entrar no Modo Foco pra despachar em batch." />}>
                     <span
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}
-                      onClick={() => onNavigate('centelha')}
+                      onClick={() => onNavigate('ideias')}
                     >
-                      <Flame size={13} color={t.accents.peach} />
-                      <strong style={{ color: t.text, fontVariantNumeric: 'tabular-nums' }}>{centelhasPendentes}</strong> centelha{centelhasPendentes !== 1 ? 's' : ''} pra triar
+                      <Inbox size={13} color={t.accents.peach} />
+                      <strong style={{ color: t.text, fontVariantNumeric: 'tabular-nums' }}>{ideiasInbox}</strong> ideia{ideiasInbox !== 1 ? 's' : ''} no inbox
                     </span>
                   </Tooltip>
                 )}

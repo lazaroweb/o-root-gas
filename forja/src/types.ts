@@ -354,6 +354,11 @@ export interface Risco {
   status?: string;
 }
 
+// Categoria (v1.143.0 fusão Centelha): classifica a natureza da ideia, ortogonal
+// ao `tipo` (que separa 'sistema' de 'melhoria' pra gênese). String vazia em
+// ideias legadas ou ainda não-triadas (no inbox).
+export type IdeiaCategoria = 'feature' | 'bug' | 'melhoria' | 'sistema_novo' | 'processo' | 'pessoal' | '';
+
 export interface Ideia {
   id: string;
   titulo: string;
@@ -371,6 +376,26 @@ export interface Ideia {
   criadoEm?: string;
   atualizadoEm?: string;
   concluidaEm?: string;
+  // v1.143.0 (fusão Centelha):
+  // - `categoria`: classifica natureza (bug/feature/processo/pessoal/etc).
+  //   Vazia = "no inbox, ainda não triada".
+  // - `arquivadaEm`: timestamp ISO de quando virou arquivada/descartada.
+  categoria?: IdeiaCategoria;
+  arquivadaEm?: string;
+}
+
+// Proposta da IA refinando uma Ideia (v1.143.0). Usada pelo IdeiaTriagemDrawer
+// pra pré-preencher campos antes do usuário confirmar.
+export interface IdeiaPropostaIA {
+  categoria: IdeiaCategoria;
+  prioridade: 'alta' | 'media' | 'baixa';
+  sistemaIdSugerido: string;
+  tituloSugerido: string;
+  descricaoSugerida: string;
+  notaImpactoSugerida: number;
+  notaEsforcoSugerida: number;
+  destino: 'ideia' | 'backlog' | 'arquivar' | 'descartar';
+  justificativa: string;
 }
 
 export type CentelhaEstado = 'capturada' | 'triada' | 'promovida' | 'arquivada' | 'descartada';
@@ -1417,7 +1442,6 @@ export interface DashboardStats {
 export type ViewName =
   | 'dashboard'
   | 'clientes'
-  | 'centelha'
   | 'ideias'
   | 'sistemas'
   | 'operacoes'

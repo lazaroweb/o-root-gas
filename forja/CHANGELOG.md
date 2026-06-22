@@ -36,6 +36,99 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.143.0] — 2026-06-22
+
+### Mudado — Fusão Centelha em Ideias (caixa única)
+
+Diagnosticando o app em uso, ficou evidente que Centelha (Inbox bruto, v1.141.0)
+e Ideias (banco maduro) tinham ~80% de sobreposição. Resultado: o usuário ficava
+em dúvida onde lançar cada coisa, e a sessão "Centelha" recém-criada já tinha
+um bug de padding (faltou wrapper `forja-view` — relato real: "tomei até um
+susto"). **Solução**: fundir Centelha em Ideias com 3 features que tornam Ideias
+a melhor de ambos os mundos.
+
+#### Adicionado
+
+- **Captura zero-fricção em Ideias**: input sticky no topo (igual era na
+  Centelha), 1 campo + Enter salva e mantém foco pra rajada. Aparece nas
+  visões de trabalho ativo (Inbox/Foco/Ativas).
+- **Captura global flutuante** (modal `IdeiaCapturaQuick`): hotkey `g+x` em
+  qualquer tela abre um modal grande pra capturar uma ideia sem trocar de
+  contexto. Esc fecha, Enter salva e mantém aberto pra rajada, contador "3
+  capturadas ✓" mostra o ritmo.
+- **5 visões inteligentes** (substituem filtros chatos):
+  - **Inbox 🔥** — capturadas brutas (sem categoria/sistema). Esperando triagem.
+  - **Foco 🎯** — alta prioridade OU criadas nos últimos 3 dias. Atenção primeiro.
+  - **Ativas 💡** — em movimento e já triadas.
+  - **Concluídas ✅** — histórico, agrupado por mês.
+  - **Arquivo 📦** — arquivadas + descartadas.
+- **Modo Foco** (`IdeiaTriagemBatch`): quando Inbox tem 3+ itens, surge um CTA
+  "Triar N no Foco" — modal fullscreen, 1 ideia por vez, navega com ← →,
+  decide com 1 tecla (C=concluir, A=arquivar, D=descartar, G=gênese, T=drawer
+  detalhado, Esc=sai). Inspirado em Superhuman / Things 3.
+- **Drawer de triagem** (`IdeiaTriagemDrawer`): lateral 520px (não mais modal
+  pesado). Campos com slider visual pra impacto/esforço, segmented pra tipo
+  (Novo sistema / Melhoria), categoria (feature/bug/melhoria/sistema_novo/
+  processo/pessoal) e prioridade. **Refinar com IA** sugere TODOS os campos
+  E detecta duplicata cruzando com Ideias ativas + Decisões abertas.
+- **Cards modernos**: hover com `translateY(-2px)` e sombra maior, ações
+  inline ao hover (não poluem a leitura), faixa lateral colorida pelo estado,
+  agrupamento por tempo nas visões de histórico ("Hoje", "Esta semana",
+  "Este mês", "Antigas"), score visual em mini-barra `■■■■■░░░░░`.
+- **Categoria como pill colorida** (feature azul, bug rosa, melhoria
+  mostarda, sistema_novo pêssego, processo lavanda, pessoal sage).
+
+#### Backend
+
+- `SCHEMA_VERSION` bump pra `v1.66-ideias-fusao`.
+- Tabela `Ideias` ganhou colunas `categoria` e `arquivadaEm` (append-only).
+- Nova função `refinarIdeiaComIA(payload)` — substitui `refinarCentelhaComIA`
+  com lógica equivalente + sugere `notaImpacto`/`notaEsforco` (extra
+  vs. Centelha).
+- Nova função `getIdeiasInboxCount()` — conta ideias `estado=nova` sem
+  categoria E sem sistema. Substitui `getCentelhasNaoTriadasCount` no
+  badge do Dashboard.
+- `arquivarIdeia`/`descartarIdeia` agora preenchem `arquivadaEm`.
+- Tabela `Centelhas` + funções server **mantidas** pra back-compat (dados
+  capturados antes do v1.143.0 não se perdem). UI consome zero delas.
+
+#### Removido (da UI; back-compat preservada no backend)
+
+- View `forja/src/views/Centelha.tsx` — deletada.
+- Componente `forja/src/components/CentelhaTriagemModal.tsx` — deletado.
+- Item "Centelha" da sidebar — removido (estética unificada).
+- Tipo `'centelha'` de `ViewName` — removido.
+- Badge "N centelhas pra triar" no Dashboard → "N ideias no inbox" (mesma
+  semântica, agora aponta pra Ideias com visão Inbox).
+
+#### Adicionado — Design System docs (pra nunca mais quebrar consistência)
+
+- [`.cursor/rules/forja-design-system.mdc`](../.cursor/rules/forja-design-system.mdc)
+  — Cursor Rule **auto-aplicada** em toda view/componente. Garante o wrapper
+  `forja-view`, maxWidth por densidade, PageHeader, tokens semânticos,
+  escala de espaçamento, Drawer > Modal, Popconfirm em destrutivos,
+  princípio #6 (alerta sem CTA proibido), hover state, etc.
+- [`forja/docs/SKILL_design-system.md`](docs/SKILL_design-system.md) — Skill
+  humana com paleta completa, tipografia (Fraunces/Inter/JetBrains),
+  raios de borda, sombras, padrões de componente, anti-padrões com
+  exemplos ❌ × ✅, inspirações (Notion/Linear/Things 3/Superhuman/Stripe).
+
+### Motivação
+
+> "Eu nao achei nada moderna essa visao... e ai fiquei pensando se nao estamos
+> criando algo que ja tinhamos que é a sessao de Ideias e poderiamos apenas
+> melhorar ela... faca uma analise profunda como um especialista em produto e
+> design de UX/UI, nao economize nas features, quero algo impactante que me
+> deixar viajar." — Lazaro Filho, 2026-06-22
+
+A Forja precisa ser uma jornada coesa, não um caleidoscópio de seções
+sobrepostas. Ideias agora é **uma só casa**: captura zero-fricção, triagem
+rica, modo foco pra despachar batch, lifecycle completo, design moderno.
+E o Design System documentado garante que essa coesão se mantém em tudo que
+vier depois.
+
+---
+
 ## [1.142.0] — 2026-06-22
 
 ### Adicionado — Lifecycle completo da sessão Ideias

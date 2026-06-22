@@ -23,7 +23,7 @@ import Bancada from './views/Bancada';
 import SistemaForm from './views/SistemaForm';
 import SistemaDetail from './views/SistemaDetail';
 import IdeiasView from './views/IdeiasView';
-import Centelha from './views/Centelha';
+import IdeiaCapturaQuick from './components/IdeiaCapturaQuick';
 import OportunidadesView from './views/OportunidadesView';
 import Clientes from './views/Clientes';
 import GeneseWizard from './views/GeneseWizard';
@@ -36,7 +36,7 @@ const { Content } = Layout;
 
 // Rótulo amigável de cada seção — passado pra Lume saber "onde" o usuário está.
 const VIEW_LABELS: Record<ViewName, string> = {
-  dashboard: 'Dashboard', clientes: 'Clientes', ideias: 'Ideias', centelha: 'Centelha (Inbox)',
+  dashboard: 'Dashboard', clientes: 'Clientes', ideias: 'Ideias',
   sistemas: 'Sistemas (Bancada)',
   operacoes: 'Operações', financeiro: 'Financeiro', 'forja-ia': 'Forja IA', relatorios: 'Relatórios',
   atelier: 'Atelier', estudos: 'Estudos', configuracoes: 'Configurações', 'sistema-form': 'Criar/editar sistema',
@@ -91,6 +91,9 @@ export default function App(): React.ReactElement {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [importGASOpen, setImportGASOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
+  // Captura quick (v1.143.0): modal flutuante global aberto pelo hotkey g+x
+  // (substitui a view antiga Centelha — agora fundida em Ideias).
+  const [capturaQuickOpen, setCapturaQuickOpen] = useState(false);
   const [sistemasRefresh, setSistemasRefresh] = useState(0);
   const [saudeMedia, setSaudeMedia] = useState(0);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
@@ -118,8 +121,6 @@ export default function App(): React.ReactElement {
       d: 'dashboard', c: 'clientes', i: 'ideias', s: 'sistemas',
       o: 'operacoes', f: 'financeiro', a: 'forja-ia', r: 'relatorios',
       v: 'atelier', e: 'estudos', ',': 'configuracoes',
-      // 'x' de captura (centelha) — 'c' já é clientes, 'i' já é ideias.
-      x: 'centelha',
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -138,6 +139,11 @@ export default function App(): React.ReactElement {
           // g + k → Skills modal (atalho de quick-access; o caminho completo é Atelier)
           e.preventDefault();
           setSkillsOpen(true);
+        } else if (k === 'x') {
+          // g + x → Captura rápida de ideia (modal flutuante global).
+          // v1.143.0: substitui a antiga view Centelha (fundida em Ideias).
+          e.preventDefault();
+          setCapturaQuickOpen(true);
         } else if (navMap[k]) {
           e.preventDefault();
           setCurrentView(navMap[k]);
@@ -240,8 +246,6 @@ export default function App(): React.ReactElement {
         return <Clientes />;
       case 'ideias':
         return <IdeiasView onGenese={handleGenese} />;
-      case 'centelha':
-        return <Centelha />;
       case 'sistemas':
         return <Bancada onSelectSistema={handleSelectSistema} onNewSistema={() => setCurrentView('sistema-form')} onImportGAS={() => setImportGASOpen(true)} refreshKey={sistemasRefresh} />;
       case 'operacoes':
@@ -362,6 +366,13 @@ export default function App(): React.ReactElement {
       <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       <ImportGASModal open={importGASOpen} onClose={() => setImportGASOpen(false)} onImported={handleImported} />
       <SkillsHubModal open={skillsOpen} onClose={() => setSkillsOpen(false)} />
+      {/* Captura quick (g+x) — modal flutuante global de captura zero-fricção
+          de ideias. Substitui a antiga view Centelha (fundida em Ideias). */}
+      <IdeiaCapturaQuick
+        open={capturaQuickOpen}
+        onClose={() => setCapturaQuickOpen(false)}
+        onIrParaIdeias={() => handleNavigate('ideias')}
+      />
       {/* Lume — copiloto de IA global (FAB + drawer), em todas as telas. */}
       <LumeAssistant viewLabel={VIEW_LABELS[currentView] || 'app'} />
     </Layout>

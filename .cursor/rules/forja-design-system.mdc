@@ -1,0 +1,252 @@
+---
+description: Padrões de layout, tipografia, espaçamento e UX obrigatórios em todas as views e componentes da Forja
+globs: forja/src/views/**/*.tsx, forja/src/components/**/*.tsx
+alwaysApply: true
+---
+
+# Design System — Forja
+
+A Forja tem estética **Premium Minimal** com identidade própria. **TODA** view nova precisa respeitar os padrões abaixo. Sem isso, a UI fica colada na sidebar, sem respiro, sem hierarquia — e o usuário "toma susto" (relato real após bug em v1.141.0).
+
+> Esta regra é complementar a `theme-contrast.mdc` (cores via tokens). Aqui cobrimos **layout, tipografia, espaçamento e padrões de UX**.
+
+---
+
+## 1. Wrapper de view (OBRIGATÓRIO em toda nova view)
+
+```tsx
+// ✅ SEMPRE
+<div className="forja-view" style={{
+  padding: '36px 40px',
+  maxWidth: <X>,
+  margin: '0 auto',
+  animation: 'forjaFadeIn 0.3s ease',
+}}>
+  <PageHeader title="..." subtitle="..." extra={...} />
+  {/* conteúdo */}
+</div>
+```
+
+**Sem isso, a view cola na sidebar, fica sem largura máxima e sem fade-in. NÃO COMITE view sem wrapper.**
+
+### MaxWidth por densidade (regra de bolso)
+
+| Tipo de view | maxWidth | Exemplo |
+|---|---|---|
+| Form focado (1 coluna) | `640` | `SistemaForm.tsx` |
+| Wizard | `720` | `GeneseWizard.tsx` |
+| Lista média (cards 2-col) | `1040` | `IdeiasView.tsx` |
+| Multi-coluna leve | `1180` | `Clientes.tsx`, `Operacoes.tsx` |
+| Bancada (cards 3-col) | `1240` | `Bancada.tsx` |
+| Dashboard | `1280` | `Dashboard.tsx` |
+| Atelier (grids densos) | `1440` | `Atelier.tsx` |
+
+Quando criar view nova: olhe a view mais parecida e copie o `maxWidth`. Não invente número aleatório.
+
+---
+
+## 2. Header (PageHeader é padrão)
+
+```tsx
+import { PageHeader } from '../components/ui';
+
+<PageHeader
+  title="Ideias"
+  subtitle="Banco maduro: nova → validando → concluída."
+  extra={<Button type="primary" icon={<Plus size={16} />}>Nova ideia</Button>}
+/>
+```
+
+- **NÃO** use `<h1>` cru — quebra hierarquia tipográfica
+- `title` usa `FONTS.display` automaticamente
+- `extra` aceita 1+ botões/ações, alinhados à direita
+- Margem inferior já vem inclusa (28px)
+
+---
+
+## 3. Tipografia
+
+```tsx
+import { FONTS } from '../theme';
+
+// Headings, títulos de card, números grandes
+style={{ fontFamily: FONTS.display }}
+
+// Textos de UI, parágrafos, labels
+style={{ fontFamily: FONTS.ui }}
+
+// IDs, hashes, código, atalhos de teclado, valores monoespaçados
+style={{ fontFamily: FONTS.mono }}
+```
+
+**Tamanhos comuns** (use os mesmos pra manter ritmo):
+- Page title: `30px / weight 500 / line-height 1.1`
+- Section title: `18-20px / weight 600`
+- Card title: `15px / weight 600`
+- Body: `13-14px / weight 400`
+- Caption / metadata: `11-12px / weight 400 / color textTertiary`
+
+---
+
+## 4. Cores (delegado pra `theme-contrast.mdc`)
+
+Resumo curto:
+- **SEMPRE** `useTokens()` — nunca hex hardcoded
+- Superfícies coloridas: `${t.accents.X}1f` (fundo), `${t.accents.X}55` (borda)
+- Acentos disponíveis: `sage` (verde-ok), `peach` (laranja-faísca), `blue`, `clay` (amarelo-mostarda), `lavender`, `rose` (vermelho-aviso)
+- Hex SÓ em `theme.ts` (a paleta)
+
+---
+
+## 5. Espaçamento (escala fixa)
+
+Use **somente** estes valores em `gap`, `padding`, `margin`:
+
+```
+4 · 6 · 8 · 10 · 12 · 16 · 20 · 24 · 28 · 32 · 40 · 48 · 64
+```
+
+❌ Nunca: 7, 13, 22, 35, números aleatórios.
+✅ Espaçamento interno de card: 14-20px
+✅ Gap entre cards: 12-18px
+✅ Gap entre seções: 24-32px
+
+---
+
+## 6. Componentes base (use sempre estes)
+
+```tsx
+import {
+  Panel,        // superfície com borda fina + sombra suave
+  PageHeader,   // header de view
+  CopyBlock,    // bloco de texto monoespaçado com botão copiar
+  Skeleton,     // loading skeleton
+  RingProgress, // anel de progresso (saúde, score)
+  LiveDot,      // dot animado (status online)
+  EmptyArt,     // empty state visual rico
+  useCountUp,   // contador animado
+} from '../components/ui';
+```
+
+Antd components que estão no padrão Forja (não estilize, use direto):
+- `Button` (default + primary + dashed + text + danger)
+- `Tag` (com `bordered={false}` + style custom de pill: `borderRadius: 999`)
+- `Tooltip`, `Popconfirm`, `Modal`, `Drawer`, `Segmented`, `Dropdown`, `Spin`, `Empty`
+- `Input`, `Select`, `Form`, `DatePicker`
+
+---
+
+## 7. Padrões de UX (princípios duros)
+
+### 7.1. Drawer > Modal pra edição rica
+
+```tsx
+// ❌ Modal pesado pra editar entidade complexa
+<Modal width={680}>...</Modal>
+
+// ✅ Drawer lateral, 480-560px
+<Drawer width={480} placement="right">...</Drawer>
+```
+
+Modais bloqueiam tela inteira. Drawers deixam o contexto visível. Use Modal só pra confirmações curtas, captura express, ou paywall.
+
+### 7.2. Popconfirm pra ações destrutivas
+
+```tsx
+<Popconfirm
+  title="Apagar permanentemente?"
+  description="Isso não pode ser desfeito."
+  onConfirm={...}
+  okText="Apagar"
+  okButtonProps={{ danger: true }}
+>
+  <Button danger icon={<Trash2 />}>Apagar</Button>
+</Popconfirm>
+```
+
+### 7.3. Princípio #6 — alerta sem tratativa proibido
+
+**TODO alerta/badge/Tag visível pro usuário PRECISA ter:**
+- Ação primária acionável, OU
+- Link/tooltip explicando "por que isso aparece", OU
+- Botão pra dispensar com nota
+
+Sem CTA = alerta inútil = usuário fica perdido. Veja `forja/ROADMAP.md` princípio #6.
+
+### 7.4. Empty states ricos
+
+```tsx
+// ❌ Sem instrução do que fazer
+<Empty description="Nada aqui" />
+
+// ✅ Diz o que falta + como fazer
+<Empty
+  description="Inbox vazio. Capture algo no input acima ou aperte g+x."
+  image={Empty.PRESENTED_IMAGE_SIMPLE}
+/>
+```
+
+### 7.5. Hover states visíveis
+
+Cards devem REAGIR ao mouse: leve `translateY(-2px)`, `boxShadow` aumenta. Sinaliza "isto é clicável".
+
+### 7.6. Filtros com badges de contagem
+
+```tsx
+const labelComBadge = (label: string, n: number) => (
+  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+    {label}
+    <span style={{
+      background: t.surfaceMuted, color: t.textSecondary, fontSize: 10,
+      padding: '1px 6px', borderRadius: 999, fontVariantNumeric: 'tabular-nums',
+    }}>{n}</span>
+  </span>
+);
+```
+
+Filtro sem contagem = usuário não sabe se vale clicar. Sempre mostre o quanto cabe lá.
+
+---
+
+## 8. Animações
+
+```css
+/* Em styles.css (já existe) */
+@keyframes forjaFadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+```
+
+- **Entrada de view**: `animation: 'forjaFadeIn 0.3s ease'` (no wrapper)
+- **Hover de card**: `transition: 'all 0.18s ease'` + `transform: translateY(-2px)` + shadow maior
+- **Mudança de estado**: fade-in/out de 200ms
+- **Botão primário ao clicar**: já vem do antd, não estilize
+
+---
+
+## 9. Ícones (Lucide React)
+
+```tsx
+import { Plus, Trash2, Edit3, ... } from 'lucide-react';
+```
+
+- **NÃO** use `@ant-design/icons` (exceto em casos muito raros)
+- Tamanhos padrão: 12-14 (inline), 16-18 (botões), 20-24 (destaques)
+- `strokeWidth={1.6}` pra ícones grandes (mais elegante)
+
+---
+
+## 10. Antes de finalizar QUALQUER view nova ou modificada
+
+Checklist mental obrigatório:
+
+- [ ] Tem `<div className="forja-view" style={{ padding, maxWidth, margin, animation }}>`?
+- [ ] Usa `<PageHeader>` no topo?
+- [ ] Cores via `useTokens()`, sem hex hardcoded?
+- [ ] Espaçamento na escala (4/8/12/16/20/24/28/32)?
+- [ ] Tipografia: display em headings, ui em texto, mono em códigos?
+- [ ] Empty states com instrução do que fazer?
+- [ ] Edição rica usa Drawer (não Modal pesado)?
+- [ ] Ações destrutivas com Popconfirm?
+- [ ] Cards têm hover state?
+- [ ] Funciona nos 2 temas (claro + noturno)?
+
+Se respondeu "não" pra alguma, **corrige antes de comitar**.

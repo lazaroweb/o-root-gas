@@ -19,7 +19,6 @@ import {
   Sun,
   Moon,
   GraduationCap,
-  Flame,
 } from 'lucide-react';
 import BrasaIndicator from './BrasaIndicator';
 import { useForja } from '../themeContext';
@@ -47,11 +46,9 @@ interface AppSidebarProps {
 const ITEMS: Array<{ key: ViewName; icon: React.ReactNode; label: string }> = [
   { key: 'dashboard', icon: <LayoutDashboard size={18} strokeWidth={1.6} />, label: 'Dashboard' },
   { key: 'clientes', icon: <Users size={18} strokeWidth={1.6} />, label: 'Clientes' },
+  // Ideias (v1.143.0): caixa única — fundiu Centelha (inbox bruto) com banco
+  // maduro. Captura zero-fricção, triagem rica, lifecycle completo, modo foco.
   { key: 'ideias', icon: <Lightbulb size={18} strokeWidth={1.6} />, label: 'Ideias' },
-  // Centelha (v1.141.0): inbox global de captura zero-fricção. Fica entre Ideias
-  // (banco maduro) e Sistemas (execução). Conceitualmente é o "antes da Ideia":
-  // pensamento bruto antes de virar algo refinado.
-  { key: 'centelha', icon: <Flame size={18} strokeWidth={1.6} />, label: 'Centelha' },
   { key: 'sistemas', icon: <Boxes size={18} strokeWidth={1.6} />, label: 'Sistemas' },
   { key: 'operacoes', icon: <Activity size={18} strokeWidth={1.6} />, label: 'Operações' },
   { key: 'financeiro', icon: <Wallet size={18} strokeWidth={1.6} />, label: 'Financeiro' },

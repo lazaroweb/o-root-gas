@@ -2,7 +2,7 @@
 
 > **Você é um novo agente IA assumindo este repositório.** Leia este arquivo INTEIRO antes de tocar em qualquer código. Ele te dá em 5-7 minutos tudo que um agente anterior aprendeu trabalhando aqui por meses.
 
-**Última atualização**: 2026-06-22 · **Versão atual da Forja**: `v1.142.0` · **Branch**: `master`
+**Última atualização**: 2026-06-22 · **Versão atual da Forja**: `v1.143.0` · **Branch**: `master`
 
 ---
 
@@ -35,7 +35,7 @@ o-root-gas/
 ├── README.md                  ← README público (atualizado v1.140.1)
 ├── AGENTS.md                  ← este arquivo (handoff pro próximo agente)
 ├── forja/                     ← APP PRINCIPAL — React 18 + GAS, privado (acesso só pro usuário)
-│   ├── package.json           (v1.140.1)
+│   ├── package.json           (v1.143.0)
 │   ├── ROADMAP.md             ← O QUE VEM POR AÍ. Leia primeiro.
 │   ├── CHANGELOG.md           ← histórico detalhado de todas as versões
 │   ├── ARCHITECTURE.md        ← SheetDB engine, chunking, fluxo GAS↔React
@@ -70,29 +70,56 @@ o-root-gas/
 
 | Versão | Foco |
 |---|---|
-| **1.142.0** | **Ideias com lifecycle completo** — concluir, reabrir, arquivar, descartar, apagar, filtros, timestamps |
-| **1.141.0** | **Centelha** — caixa global de captura zero-fricção (Inbox/GTD-style) |
+| **1.143.0** | **Fusão Centelha em Ideias + Design System docs** — Centelha some, tudo vira Ideias (caixa única) com captura zero-fricção, 5 visões inteligentes, Modo Foco, drawer rico, design moderno |
+| 1.142.0 | Ideias com lifecycle completo — concluir, reabrir, arquivar, descartar, apagar, filtros, timestamps |
+| 1.141.0 | Centelha — caixa global de captura zero-fricção (DEPRECATED em 1.143; fundida em Ideias) |
 
-### Sessão Centelha (v1.141.0) — entendimento rápido pro próximo agente
+### Sessão Ideias (v1.143.0) — entendimento rápido pro próximo agente
 
-- **Onde fica**: sidebar entre Ideias e Sistemas, ícone 🔥, hotkey `g+x`.
-- **O que é**: caixa onde o usuário joga qualquer pensamento bruto sem fricção
-  (1 input + Enter). Depois ele tria com calma (categoria, sistema, prioridade,
-  contexto, tags) e decide o destino.
-- **4 destinos possíveis**:
-  - **→ Ideia**: cria entrada no banco global `Ideias`.
-  - **→ Backlog**: cria entrada em `Decisoes` de um sistema específico.
-  - **Arquivar**: preserva histórico sem poluir o Inbox.
-  - **Descartar**: marca como ruído.
-- **IA**: botão "Refinar com IA" no modal de triagem sugere categoria/prioridade/
-  sistema E detecta duplicata cruzando com Ideias + Decisões existentes.
-- **Tabela nova**: `Centelhas` (13 colunas). `SCHEMA_VERSION` bumpou pra
-  `v1.64-centelha` (força re-init nos clientes).
+- **Onde fica**: sidebar, ícone 💡 (Lightbulb), hotkey `g+i` pra abrir a view,
+  `g+x` em qualquer tela abre modal de **captura rápida** (sem trocar contexto).
+- **O que é**: caixa única que substitui Centelha + banco antigo de Ideias.
+  Captura zero-fricção, triagem rica, lifecycle completo, modo foco pra batch.
+- **5 visões inteligentes** (Segmented no topo, com badge de contagem):
+  - **Inbox** — `estado=nova` SEM categoria/sistema (capturada bruta). Quando
+    Inbox tem 3+ itens, surge CTA "Triar N no Foco" pra batch.
+  - **Foco** — alta prioridade OU criadas nos últimos 3 dias.
+  - **Ativas** — em movimento (nova/validando/em andamento) já triadas.
+  - **Concluídas** — agrupadas por "Hoje/Esta semana/Este mês/...".
+  - **Arquivo** — arquivadas + descartadas (agrupado por tempo).
+- **3 componentes novos**:
+  - `IdeiaCapturaQuick` (modal flutuante global, hotkey `g+x`).
+  - `IdeiaTriagemDrawer` (lateral 520px, sliders visuais, botão "Refinar com
+    IA" que sugere TODOS os campos + detecta duplicata).
+  - `IdeiaTriagemBatch` (modo Foco fullscreen, hotkeys C/A/D/G/T, navegação
+    ← →, contador "5 de 12"). Inspirado em Superhuman/Things 3.
+- **Backend**: tabela `Ideias` ganhou `categoria` + `arquivadaEm` (`SCHEMA_VERSION`
+  bumpou pra `v1.66-ideias-fusao`). Novas funções: `refinarIdeiaComIA`,
+  `getIdeiasInboxCount`. Tabela `Centelhas` + funções `*Centelha*` **mantidas
+  no server** pra back-compat (dados antigos não se perdem), mas sem UI
+  consumindo. Pode ser removida em release futura.
+
+### Design System docs (v1.143.0) — leia antes de criar view nova
+
+- **Cursor Rule auto-aplicada**: [`.cursor/rules/forja-design-system.mdc`](.cursor/rules/forja-design-system.mdc)
+  — `globs: forja/src/views/**/*.tsx, forja/src/components/**/*.tsx`,
+  `alwaysApply: true`. Garante wrapper `forja-view`, maxWidth por densidade,
+  PageHeader, tokens semânticos, escala de espaçamento, Drawer > Modal,
+  Popconfirm em destrutivos, hover state, princípio #6 (alerta sem CTA proibido).
+- **Skill humana de referência**: [`forja/docs/SKILL_design-system.md`](forja/docs/SKILL_design-system.md)
+  — paleta completa (sage, peach, blue, clay, lavender, rose), tipografia
+  (Fraunces/Inter/JetBrains), raios de borda, sombras, padrões de componente,
+  anti-padrões com exemplos ❌ × ✅, inspirações (Notion/Linear/Things 3/Superhuman).
+- **Motivação**: relato real do usuário após bug visual em 1.141.0:
+  "tomei até um susto" porque a Centelha não tinha o wrapper padrão e colou
+  na sidebar. As docs garantem que nunca mais.
 
 ### Histórico recente (releases anteriores)
 
 | Versão | Data | Foco |
 |---|---|---|
+| 1.142.0 | 22/06 | Ideias com lifecycle completo (concluir/reabrir/arquivar/descartar) |
+| 1.141.0 | 22/06 | Centelha (DEPRECATED em 1.143) — inbox global de captura |
 | 1.140.1 | 21/06 | Reconciliação semântica 2 camadas (Jaccard + área+keywords) |
 | 1.140.0 | 21/06 | Reconciliação determinística pós-IA (Antes vs Depois sempre) |
 | 1.139.2 | 21/06 | Label "Rodar de novo" estável após hard-refresh |
