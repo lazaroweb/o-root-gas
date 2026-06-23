@@ -1477,6 +1477,47 @@ export interface Receita {
   atualizadoEm?: string;
 }
 
+// ─── Dívida técnica (v1.147.0) ───────────────────────────────────────────────
+
+// Cada item de dívida ou TODO ancorado em um arquivo do repo.
+// `tipo='debt'` veio do formato estruturado `// DEBT(area,sev): desc`.
+// `tipo='todo'|'fixme'|'hack'` veio de texto livre — sem `area` nem `severidade`.
+export type DebitoTipo = 'debt' | 'todo' | 'fixme' | 'hack';
+export type DebitoStatus = 'ativo' | 'pago' | 'promovido';
+export type DebitoArea = 'governanca' | 'arquitetura' | 'seguranca' | 'dependencias' | 'testes' | 'operacional' | 'performance' | 'ux' | 'codigo';
+export type DebitoSeveridade = 'alta' | 'media' | 'baixa';
+
+export interface DebitoTecnico {
+  id: string;
+  sistemaId: string;
+  tipo: DebitoTipo;
+  area?: DebitoArea;          // só pra tipo='debt'
+  severidade?: DebitoSeveridade; // só pra tipo='debt'
+  descricao: string;
+  arquivo: string;
+  linha: number;
+  hash: string;
+  status: DebitoStatus;
+  backlogId?: string;         // FK quando promovido pra backlog
+  criadoEm: string;
+  atualizadoEm: string;
+  pagoEm?: string;
+  promovidoEm?: string;
+  ultimoScanSha: string;      // HEAD do último scan que confirmou este item
+}
+
+// Resultado da sincronização — usado pela UI pra mostrar diff visual.
+export interface DebitoSyncResult {
+  scanSha: string;
+  itensAtuais: DebitoTecnico[];
+  novos: number;
+  pagosAuto: number;
+  inalterados: number;
+  // Quando true, sync foi pulado porque HEAD não mudou desde último scan.
+  semMudanca?: boolean;
+  erro?: string;
+}
+
 // ─── Dashboard Stats ─────────────────────────────────────────────────────────
 
 export interface DashboardStats {

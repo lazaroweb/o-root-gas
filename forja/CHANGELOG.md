@@ -36,6 +36,97 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.148.0] — 2026-06-23
+
+### Adicionado — Dívida técnica + TODO list lidos do código
+
+Cada Sistema agora tem uma aba **Dívida** que escaneia o repositório GitHub
+procurando 4 padrões em comentários e os apresenta como itens vivos. O usuário
+deixou de ter "vontade de lembrar onde marcou tal coisa pra arrumar depois" —
+o código vira a fonte da verdade, e a Forja vira o painel de controle.
+
+**Backend (`forja/src/server.ts`)**
+
+- Nova tabela `DebitoTecnico` (sistemaId, tipo, area, severidade, descrição,
+  arquivo, linha, hash, status, backlogId, datas, ultimoScanSha). SCHEMA_VERSION
+  bumped pra `v1.70-debito-tecnico`.
+- `_scanRepoTodos(repoUrl)`: lê tree do GitHub, filtra arquivos relevantes
+  (reusa `_codeArquivoRelevante` da auditoria — skipa node_modules, dist, gerados),
+  baixa blobs em paralelo via `fetchAll`, cacheia por SHA, parseia linha-a-linha
+  procurando 4 padrões.
+- 4 marcadores reconhecidos:
+  - `// DEBT(area,severidade): desc` → estruturado (área + severidade)
+  - `// TODO:`, `// FIXME:`, `// HACK:` → texto livre
+  - Prefixos `//`, `#`, `--`, `<!-- -->`. Case-insensitive. Trunca em 280 chars.
+- `sincronizarDebitos(sistemaId)`: roda scan e faz **diff inteligente** com
+  o que tem na tabela — adiciona novos, marca como `pago` automaticamente os
+  ativos que sumiram do código, preserva `promovido` (que tem vida própria),
+  atualiza linha quando o item moveu. Hash determinístico em
+  tipo+arquivo+descricao resiste a deslocamento por edição.
+- **Otimização escondida**: antes de fazer o scan completo, um `_ghHeadShaSeguro`
+  faz um GET barato (~200ms) só do HEAD commit. Se HEAD não mudou desde último
+  scan → retorna cache instantaneamente com `semMudanca: true`. Em 95% das
+  aberturas, sai apenas 1 chamada barata em vez de N pesadas.
+- RPCs expostos: `sincronizarDebitos`, `getDebitosTecnicos`, `getDebitosResumo`
+  (resumo pro badge da aba), `promoverDebitoParaBacklog`, `marcarDebitoComoPago`.
+
+**Frontend**
+
+- `forja/src/components/DividaTecnicaPanel.tsx`: painel completo com header de
+  contadores, filtros segmented (Ativos / Dívida / TODO+FIXME+HACK / Promovidos /
+  Pagos), busca por arquivo/descrição/área, lista de cards com tipo + severidade +
+  arquivo:linha, ações **Promover pra Backlog** + **Abrir no GitHub** (link
+  permanente pra arquivo:linha no branch default) + **Marcar como pago**
+  manualmente (escape hatch). Auto-sync acontece 250ms depois do render inicial.
+- `forja/src/views/SistemaDetail.tsx`: nova sub-aba **Dívida** (ícone Bug) entre
+  Backlog e Decisões, com badge mostrando contagem total + flag de urgente quando
+  tem severidade alta. Widget compacto `DividaWidgetCompacto` no resumo do
+  Sistema (entre Saúde e Graduação) aparece **só quando tem débito ativo**;
+  clique abre a aba já com escopo.
+- Tipos novos em `forja/src/types.ts`: `DebitoTecnico`, `DebitoSyncResult`,
+  `DebitoTipo`, `DebitoStatus`, `DebitoArea`, `DebitoSeveridade`.
+
+**Skill pra agentes de IA**
+
+- `gas-app-kit/skills/forja-debt-tracking/SKILL.md`: skill que ensina o agente
+  (Cursor, Claude, etc.) a usar os 4 marcadores corretamente. Tabela de uso,
+  9 áreas válidas, 3 severidades, exemplos práticos, regras de comportamento
+  (não refatorar dívida silenciosamente; não duplicar; não marcar em testes;
+  descrição acionável; usar `DEBT` formal quando user fala "vou pagar depois").
+- `.cursor/rules/forja-debt-tracking.mdc`: versão Cursor-rule da skill,
+  `alwaysApply: true` em arquivos de código. Quando você abre Cursor neste repo,
+  o agente já sabe o padrão sem você precisar ensinar.
+
+**Por quê**
+
+- Backlog ≠ Dívida técnica. Backlog é trabalho planejado; dívida é atalho
+  consciente que fica meses parado sem deixar de existir. Misturar perde
+  visibilidade dos 2 lados.
+- Hoje os agentes de IA (Cursor, Claude) podem identificar problemas durante
+  implementação mas não tinham canal padronizado pra registrá-los. Resultado:
+  ou refatoravam silenciosamente (perigoso, fora do escopo) ou esqueciam.
+  Agora têm: marca `// DEBT(...)`, segue a tarefa, aparece na Forja.
+- TODO/FIXME no código é coisa antiga, mas geralmente vira lixo invisível —
+  ninguém lê de novo. Trazer pro painel central com tipo, contador, severidade
+  e link direto pro arquivo transforma em superfície ativa de manutenção.
+- Sincronia automática via Git (apaga do código → some do app) resolve o
+  problema clássico de TODO list desatualizada — não tem o que sincronizar
+  porque o código É a fonte.
+
+**Como usar**
+
+1. Adicione `// DEBT(seguranca,alta): credenciais hardcoded` (ou TODO/FIXME/HACK)
+   no código onde mora a dívida.
+2. Commit + push pro branch default.
+3. Abra o Sistema na Forja → aba **Dívida**. O scan roda automático ao abrir.
+4. Use **Promover pra Backlog** quando for hora de pagar; **Abrir no GitHub**
+   pra pular direto pro arquivo:linha; **Sincronizar** força um re-scan ignorando
+   cache.
+5. Pra fechar: apague o comentário do código + faça commit. Próximo sync marca
+   como **pago auto**.
+
+---
+
 ## [1.147.0] — 2026-06-23
 
 ### Resolvido — DIFF TRUNCADO (auditoria com IA agora cobre repos grandes)

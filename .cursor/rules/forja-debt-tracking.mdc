@@ -1,0 +1,83 @@
+---
+description: Como marcar débito técnico, TODOs, FIXMEs e HACKs no código pra Forja capturar na aba "Dívida técnica" do Sistema.
+globs: forja/src/**/*.ts, forja/src/**/*.tsx, **/*.ts, **/*.tsx, **/*.js, **/*.jsx, **/*.py, **/*.go, **/*.rs, **/*.rb, **/*.java, **/*.sh, **/*.sql, **/*.md
+alwaysApply: true
+---
+
+# Débito Técnico & TODOs — Forja
+
+Forja escaneia este repositório procurando 4 padrões em comentários. Cada match vira um item na aba **Dívida técnica** do Sistema correspondente. Apagar o comentário do código (com commit) fecha o item automaticamente.
+
+## Marcadores
+
+| Marcador | Use quando | Vira na Forja |
+|----------|------------|---------------|
+| `// DEBT(area,severidade): desc` | Dívida técnica formal (atalho consciente, decisão de "pago depois") | Card **estruturado** com categoria e prioridade |
+| `// TODO: desc` | Tarefa pequena sem categoria clara | Item na lista de TODOs |
+| `// FIXME: desc` | Bug conhecido que ainda não foi consertado | Item na lista (visual de rosa) |
+| `// HACK: desc` | Gambiarra consciente que funciona mas vai voltar a morder | Item na lista (visual de peach) |
+
+**Prefira `DEBT(...)` sempre que conseguir classificar.** Os outros 3 são pra rascunho rápido.
+
+## Áreas válidas para `DEBT(area, ...)`
+
+`governanca` · `arquitetura` · `seguranca` · `dependencias` · `testes` · `operacional` · `performance` · `ux` · `codigo`
+
+## Severidades válidas para `DEBT(..., sev)`
+
+`alta` · `media` · `baixa`
+
+## Exemplos
+
+```ts
+// DEBT(seguranca,alta): API key em texto plano — mover pro PropertiesService
+const KEY = "sk-proj-...";
+
+// DEBT(testes,baixa): sem teste de boundary pra mês 13/mês 0
+function mesAnterior(m: number) { return m - 1; }
+
+// TODO: extrair esse mapping pra util compartilhado
+const map = { ... };
+
+// FIXME: scroll perde posição quando data muda
+// HACK: hardcoded ENV por ora — backend não expõe esse campo
+```
+
+## Sintaxe aceita
+
+- Prefixos: `//`, `#`, `--`, `<!-- ... -->`
+- Case-insensitive: `// TODO:`, `// todo:`, `// Todo:` valem
+- Descrição máx: 280 caracteres (trunca além)
+
+## Regras pro agente de IA (Cursor, Claude, etc.)
+
+1. **Antes de refatorar dívida silenciosamente, marque-a primeiro.** Identificou problema fora do escopo da tarefa? Insere `// DEBT(...)` e segue. Não tente "consertar de bônus" — o user perde controle do PR.
+
+2. **Não use `DEBT(...)` pra coisas triviais resolvíveis na hora.** Renomear, formatar, ajustar 3 linhas? Conserte. `DEBT` é pra coisa que **fica** porque dá trabalho ou precisa de decisão.
+
+3. **Não duplique.** Antes de marcar, verifique se já existe `TODO`/`FIXME`/`DEBT` no mesmo contexto. Se sim, atualize a descrição em vez de criar novo.
+
+4. **Não marque em testes, arquivos gerados, ou vendor/lib.** Forja filtra `node_modules`, `dist`, `build`, `.min.`, mas seja consciente: dívida fica em código de produção.
+
+5. **Descrição curta, acionável, no infinitivo.**
+   - ❌ `// TODO: melhorar`
+   - ✅ `// TODO: extrair validação pra schema Zod compartilhado`
+   - ❌ `// DEBT(codigo,baixa): tá feio`
+   - ✅ `// DEBT(arquitetura,media): essa fn faz fetch + parse + escrita — quebrar em 3`
+
+6. **Quando user fala "registra essa dívida" ou "vou pagar depois", use `DEBT(area,sev)`**, não `TODO:`.
+
+## O que NÃO fazer
+
+- Inventar áreas/severidades fora da lista (Forja normaliza pra `codigo`/`media` mas perde categorização).
+- Usar `DEBT` pra feature em backlog — feature vai pro **Backlog do Sistema** na Forja, não é dívida.
+- Deixar linha em branco entre `// DEBT(...)` e o código que descreve.
+- Deixar `// TODO` sem descrição — Forja ignora.
+
+## Resumo de bolso
+
+> Resolver **agora**? Resolva.
+> Resolver **depois**? `// DEBT(area,sev): ...`
+> Tarefinha **trivial**? `// TODO: ...`
+> Bug **conhecido**? `// FIXME: ...`
+> Gambiarra **consciente**? `// HACK: ...`

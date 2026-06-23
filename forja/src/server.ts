@@ -184,6 +184,18 @@ const SCHEMA: SheetSchema[] = [
   // cloud que vendem infra). `paths` \u00e9 JSON com {config, logs, data, etc}.
   // `cofreLabel` referencia um item do Cofre quando o servidor tem API key/senha.
   { name: 'Servidores', columns: ['id', 'nome', 'tipo', 'descricao', 'status', 'host', 'porta', 'url', 'ambiente', 'tecnologia', 'sistemaId', 'comandoStart', 'paths', 'dependencias', 'recursos', 'custoMensal', 'moeda', 'docsUrl', 'cofreLabel', 'tags', 'notas', 'criadoEm', 'atualizadoEm'] },
+  // v1.147.0: DebitoTecnico — dívida técnica + TODO/FIXME/HACK detectados via
+  // scan do repositório GitHub. Cada item é ancorado em arquivo:linha.
+  // - tipo: 'debt' (estruturado via comentário `// DEBT(area,sev): desc`)
+  //        | 'todo' | 'fixme' | 'hack' (texto livre)
+  // - status: 'ativo' (existe no código atual)
+  //         | 'pago' (sumiu do código — auto-fechado pelo sync)
+  //         | 'promovido' (virou card no Backlog; referência em backlogId)
+  // - hash: SHA-1 curto de tipo+arquivo+linha+descricao pra dedup entre syncs.
+  // - ultimoScanSha: commit SHA do último HEAD que escaneou esse item — usado
+  //   pra cache (não re-escanear se HEAD não mudou) e pra evitar marcar como
+  //   "pago" um item que ainda está em outro batch que não foi escaneado.
+  { name: 'DebitoTecnico', columns: ['id', 'sistemaId', 'tipo', 'area', 'severidade', 'descricao', 'arquivo', 'linha', 'hash', 'status', 'backlogId', 'criadoEm', 'atualizadoEm', 'pagoEm', 'promovidoEm', 'ultimoScanSha'] },
   // ─── Finanças pessoais (v1.3) ──────────────────────────────────────────────
   // FinPessoalLancamentos: cada despesa/entrada pessoal. `valor` sempre positivo
   // — o `tipo` ('despesa'|'entrada') é quem dita o sinal nos cálculos.
@@ -332,7 +344,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.69-servidores';
+const SCHEMA_VERSION = 'v1.70-debito-tecnico';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -15591,6 +15603,418 @@ function contasDelete(id: string): ServerResult {
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover conta' };
   }
+}
+
+// ─── Dívida técnica (v1.147.0) ────────────────────────────────────────────────
+// Scan automático do repositório GitHub procurando 4 padrões em comentários:
+//   `// TODO:`, `// FIXME:`, `// HACK:` (texto livre)
+//   `// DEBT(area,sev): descrição` (estruturado — vem da "skill" colocada no repo)
+// Cada match vira um item de DebitoTecnico ancorado em arquivo:linha.
+//
+// Sincronização: ao chamar `sincronizarDebitos`, faz scan do HEAD atual e:
+// 1. Adiciona itens NOVOS (hash inédito)
+// 2. Marca como `pago` itens ATIVOS que sumiram do código (limpeza automática)
+// 3. Preserva itens já PROMOVIDOS (eles têm vida própria no backlog)
+//
+// Cache duplo:
+// - Por commit SHA: se HEAD não mudou desde último scan → retorna instant
+//   (a UI mostra "sincronizado · sem mudanças")
+// - Por blob SHA: reusa o cache de blobs já existente da auditoria (`fcode:`)
+//
+// `_codeArquivoRelevante` (já existe) cuida do filtro de arquivos.
+
+interface DebitoMatchRaw {
+  tipo: DebitoTipoServer;
+  arquivo: string;
+  linha: number;
+  descricao: string;
+  area?: string;
+  severidade?: string;
+}
+
+type DebitoTipoServer = 'debt' | 'todo' | 'fixme' | 'hack';
+type DebitoStatusServer = 'ativo' | 'pago' | 'promovido';
+
+const _DEBT_AREAS_VALIDAS = ['governanca', 'arquitetura', 'seguranca', 'dependencias', 'testes', 'operacional', 'performance', 'ux', 'codigo'];
+const _DEBT_SEV_VALIDAS = ['alta', 'media', 'baixa'];
+
+// Parseia uma linha de código procurando por TODO/FIXME/HACK/DEBT.
+// Aceita prefixos: `//`, `#`, `--`, `<!--` (basta o marcador). Case-insensitive.
+function _parseLinhaDebito(linha: string, arquivo: string, numLinha: number): DebitoMatchRaw | null {
+  const debtMatch = linha.match(/(?:\/\/|#|--|<!--)\s*DEBT\s*\(\s*([a-z]+)\s*,\s*(alta|media|baixa)\s*\)\s*:?\s*(.+?)(?:-->)?\s*$/i);
+  if (debtMatch) {
+    const area = String(debtMatch[1] || '').toLowerCase();
+    const sev = String(debtMatch[2] || 'media').toLowerCase();
+    return {
+      tipo: 'debt',
+      arquivo,
+      linha: numLinha,
+      descricao: String(debtMatch[3] || '').trim().slice(0, 280),
+      area: _DEBT_AREAS_VALIDAS.indexOf(area) >= 0 ? area : 'codigo',
+      severidade: _DEBT_SEV_VALIDAS.indexOf(sev) >= 0 ? sev : 'media',
+    };
+  }
+  const livreMatch = linha.match(/(?:\/\/|#|--|<!--)\s*(TODO|FIXME|HACK)\s*[:\-]?\s*(.+?)(?:-->)?\s*$/i);
+  if (livreMatch) {
+    const tipo = String(livreMatch[1] || '').toLowerCase() as 'todo' | 'fixme' | 'hack';
+    const desc = String(livreMatch[2] || '').trim();
+    if (desc.length < 3) return null; // ignora "// TODO" sem descrição
+    return { tipo, arquivo, linha: numLinha, descricao: desc.slice(0, 280) };
+  }
+  return null;
+}
+
+// Hash determinístico curto pra dedup entre syncs.
+// Usa tipo+arquivo+descricao (sem linha) pra resistir a deslocamento por edição.
+function _hashDebito(tipo: string, arquivo: string, descricao: string): string {
+  const raw = `${tipo}|${arquivo}|${descricao.toLowerCase().trim().slice(0, 200)}`;
+  // Hash leve (não-cripto) — suficiente pra dedup de strings curtas.
+  let h = 0;
+  for (let i = 0; i < raw.length; i++) { h = ((h << 5) - h) + raw.charCodeAt(i); h |= 0; }
+  return Math.abs(h).toString(36).slice(0, 10);
+}
+
+// Pega só HEAD commit (1 chamada barata). Usado pra checar se mudou desde
+// último scan ANTES de fazer o scan completo (otimização do "sempre fresco").
+function _ghHeadShaSeguro(repoUrl: string): string {
+  const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+  if (!token) return '';
+  const full = _ghFullName(repoUrl);
+  if (!/^[^/]+\/[^/]+$/.test(full)) return '';
+  const headers = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'User-Agent': 'FORJA' };
+  return _ghHeadCommitCurto(full, headers);
+}
+
+// Scan completo: lê tree do repo, baixa blobs (cache por SHA), parseia.
+// Retorna lista de matches com SHA do HEAD scaneado.
+function _scanRepoTodos(repoUrl: string): { sha: string; matches: DebitoMatchRaw[]; erro?: string } {
+  const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+  if (!token) return { sha: '', matches: [], erro: 'GitHub não conectado (sem token).' };
+  const full = _ghFullName(repoUrl);
+  if (!/^[^/]+\/[^/]+$/.test(full)) return { sha: '', matches: [], erro: 'repoUrl inválida.' };
+  const headers = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'User-Agent': 'FORJA' };
+  try {
+    const branchRes = UrlFetchApp.fetch(`https://api.github.com/repos/${full}`, { headers, muteHttpExceptions: true });
+    if (branchRes.getResponseCode() !== 200) return { sha: '', matches: [], erro: `Erro ao ler o repo (${branchRes.getResponseCode()}).` };
+    const branch = String((JSON.parse(branchRes.getContentText()) as { default_branch?: string }).default_branch || 'main');
+
+    let headSha = '';
+    try {
+      const commitRes = UrlFetchApp.fetch(`https://api.github.com/repos/${full}/commits/${encodeURIComponent(branch)}`, { headers, muteHttpExceptions: true });
+      if (commitRes.getResponseCode() === 200) headSha = String((JSON.parse(commitRes.getContentText()) as { sha?: string }).sha || '').slice(0, 7);
+    } catch { /* segue com tree */ }
+
+    const treeRes = UrlFetchApp.fetch(`https://api.github.com/repos/${full}/git/trees/${encodeURIComponent(branch)}?recursive=1`, { headers, muteHttpExceptions: true });
+    if (treeRes.getResponseCode() !== 200) return { sha: headSha, matches: [], erro: `Erro ao ler a árvore (${treeRes.getResponseCode()}).` };
+    const treeJson = JSON.parse(treeRes.getContentText()) as { sha?: string; tree?: Array<{ path: string; type: string; size?: number; sha: string }> };
+    if (!headSha) headSha = String(treeJson.sha || '').slice(0, 7);
+
+    const blobs = (treeJson.tree || []).filter((n) => n.type === 'blob');
+    // Mesmo filtro da auditoria (skipa node_modules, dist, etc).
+    const refs = blobs.filter((b) => _codeArquivoRelevante(b.path, b.size || 0));
+    // Cap defensivo: max 200 arquivos por scan (TODOs cabem em qualquer canto;
+    // mais que isso vira sopa e estoura quota).
+    const selecionados = refs.slice(0, 200);
+
+    // Cache de blobs (reusa o "fcode:" da auditoria — mesmo conteúdo, mesmo SHA).
+    const cache = CacheService.getScriptCache();
+    const cacheKeys = selecionados.map((f) => 'fcode:' + f.sha);
+    let cacheados: Record<string, string | null> = {};
+    try { cacheados = cache.getAll(cacheKeys) as Record<string, string | null>; } catch { cacheados = {}; }
+
+    const conteudos: Record<string, string> = {};
+    const aBuscar = selecionados.filter((f) => {
+      const hit = cacheados['fcode:' + f.sha];
+      if (typeof hit === 'string') { conteudos[String(f.sha)] = hit; return false; }
+      return true;
+    });
+
+    if (aBuscar.length > 0) {
+      const requests = aBuscar.map((f) => ({ url: `https://api.github.com/repos/${full}/git/blobs/${f.sha}`, headers, muteHttpExceptions: true }));
+      for (let i = 0; i < requests.length; i += 50) {
+        const slice = requests.slice(i, i + 50);
+        const sliceArqs = aBuscar.slice(i, i + 50);
+        const res = UrlFetchApp.fetchAll(slice);
+        const novosCache: Record<string, string> = {};
+        for (let j = 0; j < res.length; j++) {
+          const r = res[j];
+          if (r.getResponseCode() !== 200) continue;
+          try {
+            const blob = JSON.parse(r.getContentText()) as { content?: string; encoding?: string };
+            if (blob.encoding !== 'base64' || !blob.content) continue;
+            const decoded = Utilities.newBlob(Utilities.base64Decode(blob.content)).getDataAsString();
+            conteudos[String(sliceArqs[j].sha)] = decoded;
+            novosCache['fcode:' + sliceArqs[j].sha] = decoded;
+          } catch { /* arquivo binário/erro de parse — ignora */ }
+        }
+        try { cache.putAll(novosCache, 21600); } catch { /* cache cheio: ok */ } // 6h TTL
+      }
+    }
+
+    // Parseia conteúdos linha-a-linha.
+    const matches: DebitoMatchRaw[] = [];
+    for (const f of selecionados) {
+      const conteudo = conteudos[String(f.sha)];
+      if (!conteudo) continue;
+      const linhas = conteudo.split('\n');
+      for (let i = 0; i < linhas.length; i++) {
+        const m = _parseLinhaDebito(linhas[i], f.path, i + 1);
+        if (m) matches.push(m);
+      }
+    }
+
+    return { sha: headSha, matches };
+  } catch (e: unknown) {
+    return { sha: '', matches: [], erro: e instanceof Error ? e.message : 'Erro ao escanear repo' };
+  }
+}
+
+// Sincroniza dívidas do sistema com o estado atual do repo.
+// 1. Checa se HEAD mudou desde último scan — se igual, retorna cache (semMudanca).
+// 2. Roda _scanRepoTodos.
+// 3. Diff: novos vs existentes (hash); marca como pago os ativos que sumiram.
+// 4. Preserva status='promovido' (não desfaz ligação com backlog).
+function sincronizarDebitos(sistemaId: string, forcar?: boolean): ServerResult {
+  try {
+    const sistema = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => s.id === sistemaId);
+    if (!sistema) return { ok: false, error: 'Sistema não encontrado' };
+    const repoUrl = String(sistema.repoUrl || '').trim();
+    if (!repoUrl) return { ok: false, error: 'Sistema sem repoUrl — sem como escanear.' };
+
+    const debitosAtuais = (dbGetAll('DebitoTecnico') as Array<Record<string, unknown>>).filter((d) => String(d.sistemaId || '') === sistemaId);
+    const ultimoScanSha = debitosAtuais.length > 0
+      ? String(debitosAtuais[0].ultimoScanSha || '').slice(0, 7)
+      : '';
+
+    // Otimização: HEAD check barato antes do scan pesado.
+    if (!forcar && ultimoScanSha) {
+      const headAtual = _ghHeadShaSeguro(repoUrl);
+      if (headAtual && headAtual.slice(0, 7) === ultimoScanSha) {
+        return {
+          ok: true,
+          data: {
+            scanSha: ultimoScanSha,
+            itensAtuais: debitosAtuais.map(_debitoToView),
+            novos: 0,
+            pagosAuto: 0,
+            inalterados: debitosAtuais.filter((d) => d.status === 'ativo').length,
+            semMudanca: true,
+          },
+        };
+      }
+    }
+
+    const scan = _scanRepoTodos(repoUrl);
+    if (scan.erro) return { ok: false, error: scan.erro };
+    const novoSha = scan.sha.slice(0, 7);
+
+    // Index dos atuais por hash, tirando os já promovidos (eles têm vida própria).
+    const ativosByHash: Record<string, Record<string, unknown>> = {};
+    const promovidos: Record<string, Record<string, unknown>> = {};
+    for (const d of debitosAtuais) {
+      const h = String(d.hash || '');
+      if (d.status === 'promovido') promovidos[h] = d;
+      else if (d.status === 'ativo') ativosByHash[h] = d;
+    }
+
+    // Index dos matches do scan por hash.
+    const matchByHash: Record<string, DebitoMatchRaw> = {};
+    for (const m of scan.matches) {
+      const h = _hashDebito(m.tipo, m.arquivo, m.descricao);
+      if (!matchByHash[h]) matchByHash[h] = m; // primeira ocorrência ganha (caso raro de hash colidir)
+    }
+
+    const agora = new Date().toISOString();
+    let novos = 0, pagosAuto = 0, inalterados = 0;
+
+    // 1. Adiciona novos (hash que não existe nem como ativo nem como promovido).
+    for (const h in matchByHash) {
+      if (ativosByHash[h] || promovidos[h]) continue;
+      const m = matchByHash[h];
+      dbCreate('DebitoTecnico', {
+        sistemaId,
+        tipo: m.tipo,
+        area: m.area || '',
+        severidade: m.severidade || '',
+        descricao: m.descricao,
+        arquivo: m.arquivo,
+        linha: m.linha,
+        hash: h,
+        status: 'ativo',
+        backlogId: '',
+        criadoEm: agora,
+        atualizadoEm: agora,
+        pagoEm: '',
+        promovidoEm: '',
+        ultimoScanSha: novoSha,
+      });
+      novos++;
+    }
+
+    // 2. Atualiza ativos que continuam existindo (preserva criação, atualiza linha + sha).
+    for (const h in ativosByHash) {
+      const d = ativosByHash[h];
+      const m = matchByHash[h];
+      if (m) {
+        // Sumiu? não — só atualiza linha (pode ter movido) + sha.
+        dbUpdate('DebitoTecnico', String(d.id), {
+          linha: m.linha,
+          arquivo: m.arquivo,
+          atualizadoEm: agora,
+          ultimoScanSha: novoSha,
+        });
+        inalterados++;
+      } else {
+        // Sumiu do código → auto-pago.
+        dbUpdate('DebitoTecnico', String(d.id), {
+          status: 'pago',
+          atualizadoEm: agora,
+          pagoEm: agora,
+          ultimoScanSha: novoSha,
+        });
+        pagosAuto++;
+      }
+    }
+
+    // Atualiza ultimoScanSha dos promovidos também (referência de "último que viu").
+    for (const h in promovidos) {
+      dbUpdate('DebitoTecnico', String(promovidos[h].id), { ultimoScanSha: novoSha });
+    }
+
+    // Releitura dos atuais pra devolver no payload.
+    const finais = (dbGetAll('DebitoTecnico') as Array<Record<string, unknown>>).filter((d) => String(d.sistemaId || '') === sistemaId);
+
+    return {
+      ok: true,
+      data: {
+        scanSha: novoSha,
+        itensAtuais: finais.map(_debitoToView),
+        novos,
+        pagosAuto,
+        inalterados,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao sincronizar dívidas' };
+  }
+}
+
+// Lista dívidas atuais (sem sincronizar). Usado pelo render inicial da aba.
+function getDebitosTecnicos(sistemaId: string): ServerResult {
+  try {
+    const itens = (dbGetAll('DebitoTecnico') as Array<Record<string, unknown>>)
+      .filter((d) => String(d.sistemaId || '') === sistemaId)
+      .map(_debitoToView);
+    return { ok: true, data: itens };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar dívidas' };
+  }
+}
+
+// Promove débito para o Backlog (cria card e linka). Mantém débito como
+// 'promovido' pra não recriar no próximo sync. Quando o user concluir o card
+// no backlog, débito não volta pra 'ativo' automaticamente — ele tem que apagar
+// do código (ou marcar como 'pago' manualmente).
+function promoverDebitoParaBacklog(debitoId: string): ServerResult {
+  try {
+    const todos = dbGetAll('DebitoTecnico') as Array<Record<string, unknown>>;
+    const d = todos.find((x) => String(x.id) === debitoId);
+    if (!d) return { ok: false, error: 'Débito não encontrado' };
+    if (d.status === 'promovido' && d.backlogId) return { ok: false, error: 'Já promovido pra backlog.' };
+
+    const sistemaId = String(d.sistemaId || '');
+    const tipoLabel: Record<string, string> = { debt: 'Dívida', todo: 'TODO', fixme: 'FIXME', hack: 'HACK' };
+    const titulo = `[${tipoLabel[String(d.tipo)] || 'Dívida'}] ${String(d.descricao).slice(0, 80)}`;
+    const corpo = (
+      `Origem: dívida técnica detectada no código.\n`
+      + `Arquivo: \`${d.arquivo}:${d.linha}\`\n`
+      + (d.area ? `Área: ${d.area} · Severidade: ${d.severidade}\n` : '')
+      + `\n${d.descricao}\n\n`
+      + `Pra fechar este card: apague o comentário do código E faça commit. A Forja vai detectar a remoção na próxima sincronização e o débito vai pra "pago" automaticamente.`
+    );
+
+    // Cria decisão no backlog (Decisoes é a tabela do kanban — coluna `status` controla a coluna).
+    const novoCard = dbCreate('Decisoes', {
+      sistemaId,
+      titulo,
+      decisao: corpo,
+      justificativa: `Promovido do scan de dívida técnica (hash ${d.hash}).`,
+      status: 'aFazer',
+      gravidade: d.severidade || 'media',
+      area: d.area || 'codigo',
+      criadoEm: new Date().toISOString(),
+    }) as Record<string, unknown>;
+
+    const agora = new Date().toISOString();
+    dbUpdate('DebitoTecnico', debitoId, {
+      status: 'promovido',
+      backlogId: String(novoCard.id || ''),
+      promovidoEm: agora,
+      atualizadoEm: agora,
+    });
+
+    return { ok: true, data: { backlogId: String(novoCard.id || '') } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao promover dívida' };
+  }
+}
+
+// Marca débito como pago manualmente (escape hatch: user removeu do código fora
+// do branch default ou refatorou de outro jeito que o scan não detectou).
+function marcarDebitoComoPago(debitoId: string): ServerResult {
+  try {
+    const agora = new Date().toISOString();
+    dbUpdate('DebitoTecnico', debitoId, { status: 'pago', pagoEm: agora, atualizadoEm: agora });
+    return { ok: true, data: { ok: true } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Resumo compacto pro widget no resumo do sistema. Lê só os ativos.
+function getDebitosResumo(sistemaId: string): ServerResult {
+  try {
+    const itens = (dbGetAll('DebitoTecnico') as Array<Record<string, unknown>>)
+      .filter((d) => String(d.sistemaId || '') === sistemaId && d.status === 'ativo');
+    let debts = 0, todos = 0, fixmes = 0, hacks = 0;
+    let alta = 0, media = 0, baixa = 0;
+    for (const d of itens) {
+      const tipo = String(d.tipo);
+      if (tipo === 'debt') debts++;
+      else if (tipo === 'todo') todos++;
+      else if (tipo === 'fixme') fixmes++;
+      else if (tipo === 'hack') hacks++;
+      const sev = String(d.severidade || '');
+      if (sev === 'alta') alta++;
+      else if (sev === 'media') media++;
+      else if (sev === 'baixa') baixa++;
+    }
+    const ultimoScanSha = itens.length > 0 ? String(itens[0].ultimoScanSha || '') : '';
+    return { ok: true, data: { total: itens.length, debts, todos, fixmes, hacks, alta, media, baixa, ultimoScanSha } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function _debitoToView(d: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: String(d.id || ''),
+    sistemaId: String(d.sistemaId || ''),
+    tipo: String(d.tipo || 'todo'),
+    area: d.area ? String(d.area) : undefined,
+    severidade: d.severidade ? String(d.severidade) : undefined,
+    descricao: String(d.descricao || ''),
+    arquivo: String(d.arquivo || ''),
+    linha: Number(d.linha || 0),
+    hash: String(d.hash || ''),
+    status: (String(d.status || 'ativo') as DebitoStatusServer),
+    backlogId: d.backlogId ? String(d.backlogId) : undefined,
+    criadoEm: String(d.criadoEm || ''),
+    atualizadoEm: String(d.atualizadoEm || ''),
+    pagoEm: d.pagoEm ? String(d.pagoEm) : undefined,
+    promovidoEm: d.promovidoEm ? String(d.promovidoEm) : undefined,
+    ultimoScanSha: String(d.ultimoScanSha || ''),
+  };
 }
 
 // ─── Servidores (v1.146.0) ────────────────────────────────────────────────────

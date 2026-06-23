@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Typography, Button, Space, Spin, Alert, Descriptions, Divider, Tabs, App as AntApp, Tooltip, Popover, Progress } from 'antd';
-import { ArrowLeft, Pencil, ExternalLink, GitBranch, RefreshCw, FileCode, Wand2, Globe2, CheckCircle2, XCircle, HeartPulse, Info, Plug, ClipboardList, ShieldAlert, Receipt, Activity, Layers } from 'lucide-react';
+import { ArrowLeft, Pencil, ExternalLink, GitBranch, RefreshCw, FileCode, Wand2, Globe2, CheckCircle2, XCircle, HeartPulse, Info, Plug, ClipboardList, ShieldAlert, Receipt, Activity, Layers, Bug } from 'lucide-react';
 import StageBadge from '../components/StageBadge';
 import { Panel } from '../components/ui';
 import { useTokens } from '../themeContext';
@@ -16,6 +16,7 @@ import PassaporteModal from './PassaporteModal';
 import AuditoriaDrawer from '../components/AuditoriaDrawer';
 import GraduacaoChecklist from '../components/GraduacaoChecklist';
 import CustosTab from '../components/CustosTab';
+import DividaTecnicaPanel from '../components/DividaTecnicaPanel';
 import callServer from '../gas-client';
 import type { Sistema, ServerResponse, ServerResult, SaudeBreakdown } from '../types';
 
@@ -53,6 +54,8 @@ export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDeta
   // Contagem do backlog deste sistema (aFazer + fazendo + alta) — alimenta o
   // badge no tab "Backlog" pra você saber se tem trabalho pendente sem clicar.
   const [backlogCount, setBacklogCount] = useState<{ aFazer: number; fazendo: number; alta: number; total: number } | null>(null);
+  // v1.147.0 — resumo da dívida técnica (alimenta badge da aba + widget compacto).
+  const [dividaResumo, setDividaResumo] = useState<{ total: number; debts: number; todos: number; fixmes: number; hacks: number; alta: number } | null>(null);
   // Drawer full-screen do Kanban — espaço apertado dentro da tab não dá conta
   const [backlogDrawerOpen, setBacklogDrawerOpen] = useState(false);
   // Aba ativa controlada — permite que clicar num fator da Saúde leve direto
@@ -89,10 +92,21 @@ export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDeta
       .catch(() => { /* preview */ });
   };
 
+  // Resumo cheap pro badge da aba Dívida. Lê só os ATIVOS — não chama GitHub
+  // (o scan real só roda quando o user abre a aba).
+  const carregarDividaResumo = () => {
+    callServer<ServerResult>('getDebitosResumo', sistemaId)
+      .then((r) => {
+        if (r.ok && r.data) setDividaResumo(r.data as { total: number; debts: number; todos: number; fixmes: number; hacks: number; alta: number });
+      })
+      .catch(() => { /* preview */ });
+  };
+
   useEffect(() => {
     if (sistemaId) {
       carregarUltimaAuditoria();
       carregarBacklogCount();
+      carregarDividaResumo();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sistemaId]);
@@ -196,6 +210,27 @@ export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDeta
             sistemaNome={sistema.nome}
             backlogCount={backlogCount}
             onAbrirKanban={() => setBacklogDrawerOpen(true)}
+          />
+        </TabBody>
+      ),
+    },
+    {
+      key: 'divida',
+      label: (
+        <TabLabel
+          emoji={<Bug size={14} strokeWidth={1.7} />}
+          label="Dívida"
+          badge={dividaResumo && dividaResumo.total > 0
+            ? { numero: dividaResumo.total, urgente: dividaResumo.alta > 0 }
+            : undefined}
+        />
+      ),
+      children: (
+        <TabBody titulo="Dívida técnica" hint="TODO, FIXME, HACK e DEBT(area,sev) detectados no código do repositório. Sincroniza automaticamente quando o repo muda; itens que somem do código fecham sozinhos. Promova pro Backlog quando for hora de pagar.">
+          <DividaTecnicaPanel
+            sistemaId={sistemaId}
+            repoUrl={sistema.repoUrl}
+            onPromovido={() => { carregarBacklogCount(); carregarDividaResumo(); }}
           />
         </TabBody>
       ),
@@ -328,6 +363,15 @@ export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDeta
           onIrPara={irParaAba}
         />
       </Panel>
+
+      {/* v1.147.0 — widget compacto de dívida técnica.
+          Só aparece quando há débitos detectados (zero ruído quando código tá limpo). */}
+      {dividaResumo && dividaResumo.total > 0 && (
+        <DividaWidgetCompacto
+          resumo={dividaResumo}
+          onAbrir={() => irParaAba('divida')}
+        />
+      )}
 
       {sistema.estagio === 'forja' && (
         <GraduacaoChecklist
@@ -708,6 +752,66 @@ function TabBody({ titulo, hint, children }: { titulo: string; hint: string; chi
         </Tooltip>
       </div>
       {children}
+    </div>
+  );
+}
+
+// Widget compacto de dívida técnica — aparece no resumo do Sistema só quando
+// há débitos detectados. Clique abre a aba "Dívida" com escopo já filtrado.
+function DividaWidgetCompacto({ resumo, onAbrir }: {
+  resumo: { total: number; debts: number; todos: number; fixmes: number; hacks: number; alta: number };
+  onAbrir: () => void;
+}): React.ReactElement {
+  const t = useTokens();
+  return (
+    <div
+      onClick={onAbrir}
+      role="button"
+      style={{
+        marginBottom: 24,
+        background: t.surface,
+        border: `1px solid ${resumo.alta > 0 ? `${t.accents.rose}55` : t.border}`,
+        borderRadius: 14,
+        padding: '14px 18px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 14,
+        cursor: 'pointer',
+        transition: 'all 0.15s',
+        boxShadow: t.shadowSoft,
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.boxShadow = '0 6px 22px rgba(0,0,0,0.05)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.boxShadow = t.shadowSoft; e.currentTarget.style.transform = 'translateY(0)'; }}
+    >
+      <div style={{
+        width: 36, height: 36, borderRadius: 10,
+        background: resumo.alta > 0 ? `${t.accents.rose}1f` : `${t.accents.peach}1f`,
+        color: resumo.alta > 0 ? t.accents.rose : t.accents.peach,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+      }}>
+        <Bug size={18} strokeWidth={1.8} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: FONTS.display, fontSize: 18, fontWeight: 600, color: t.text, fontVariantNumeric: 'tabular-nums' }}>{resumo.total}</span>
+          <span style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary }}>
+            {resumo.total === 1 ? 'débito técnico ativo' : 'débitos técnicos ativos'}
+          </span>
+          {resumo.alta > 0 && (
+            <span style={{ fontFamily: FONTS.ui, fontSize: 11, fontWeight: 700, color: t.accents.rose, padding: '2px 8px', background: `${t.accents.rose}1a`, borderRadius: 999 }}>
+              {resumo.alta} alta
+            </span>
+          )}
+        </div>
+        <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, marginTop: 2, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {resumo.debts > 0 && <span>{resumo.debts} estruturado{resumo.debts > 1 ? 's' : ''} (DEBT)</span>}
+          {resumo.todos > 0 && <span>{resumo.todos} TODO</span>}
+          {resumo.fixmes > 0 && <span>{resumo.fixmes} FIXME</span>}
+          {resumo.hacks > 0 && <span>{resumo.hacks} HACK</span>}
+        </div>
+      </div>
+      <Bug size={14} color={t.textTertiary} style={{ flexShrink: 0 }} />
+      <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, flexShrink: 0 }}>Abrir aba</span>
     </div>
   );
 }
