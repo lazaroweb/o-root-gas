@@ -132,7 +132,12 @@ const SCHEMA: SheetSchema[] = [
   // (Design, Frontend, Backend...), usado pra agrupar quando não há categoria.
   // `adaptacoes`: cache JSON { [ambiente]: {conteudo, em} } das adaptações por IA
   // pra export parametrizado — evita re-gastar tokens no mesmo ambiente.
-  { name: 'Skills', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes', 'favorita', 'favoritadaEm'] },
+  { name: 'Skills', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes', 'favorita', 'favoritadaEm', 'slug', 'idExterno', 'usos', 'relacionadas', 'quandoUsar', 'identidadePapel', 'secoesJson'] },
+  // v1.149.0 — Agents: irmã de Skills (estrutura paralela). Recebe os 422 agents
+  // do pack que o user vai trazer. Campos genéricos por hora; `metaJson` guarda
+  // o que for específico (modelo, ferramentas, system_prompt, etc) até a
+  // estrutura definitiva chegar via prompt do user.
+  { name: 'Agents', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes', 'favorita', 'favoritadaEm', 'slug', 'idExterno', 'usos', 'relacionadas', 'quandoUsar', 'identidadePapel', 'secoesJson', 'modelo', 'ferramentas', 'metaJson'] },
   // SkillFontes: metadados das "pastas" de skills. `chave` é o prefixo usado em
   // Skills.fonte ("<chave>/<skill>"); `nome`/`descricao`/`cor` são editáveis.
   { name: 'SkillFontes', columns: ['id', 'chave', 'nome', 'descricao', 'cor', 'criadoEm', 'atualizadoEm'] },
@@ -344,7 +349,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.72-skill-favorita';
+const SCHEMA_VERSION = 'v1.73-skills-rich-agents';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -16888,25 +16893,130 @@ function driveListarRemoto(connectorId: string, folderId?: string, busca?: strin
 // LLMs (formato SKILL.md / agent-skill). Guardamos como linhas na sheet "Skills"
 // pra evitar escopos extras de Drive. O conteúdo é texto Markdown completo.
 
+// Bloco estruturado: cada seção H2 do conteúdo vira um par título → texto.
+// Preservamos ordem e o título exato pra exibir bonito no Drawer.
+interface SecaoEstruturada {
+  titulo: string;
+  // chave canônica pra reconhecer seções "famosas" (quando_usar, identidade,
+  // pre_execucao, principios, regras, boas_praticas, framework, checklist,
+  // metadados). 'outra' quando não reconhece.
+  chave: string;
+  conteudo: string;
+}
+
 interface SkillParsed {
   nome: string;
   descricao: string;
   categoria: string;
   tags: string[];
-  // Seções extraídas (headings de nível 2) — só metadado pra preview
+  // Headings de nível 2 (compat — só os títulos pra preview).
   secoes: string[];
+  // v1.149.0 — novos campos extraídos do formato "Pack PT-BR".
+  slug: string;            // do frontmatter ou do bloco METADADOS
+  idExterno: string;       // ex.: "#0237"
+  ultimaAtualizacao: string; // YYYY-MM-DD
+  usos: number;            // valor inicial declarado (raramente vem)
+  relacionadas: string[];  // lista de slugs/ids relacionados
+  // Texto curto da seção "QUANDO USAR" pra preview no card.
+  quandoUsar: string;
+  // Texto curto da seção "IDENTIDADE E PAPEL" pra preview.
+  identidadePapel: string;
+  // Todas as seções extraídas com seu conteúdo (renderizadas no Drawer).
+  blocos: SecaoEstruturada[];
 }
 
-// Parse frontmatter YAML simples (name, description, category, tags) + headings.
-// Suporta formato Anthropic/Cursor skills (--- bloco YAML no topo) e também
-// .md "comum" (extrai do primeiro heading H1 + primeira linha).
+// v1.149.0 — Normaliza um título H2 pra chave canônica.
+// Reconhece tanto o formato PT-BR do novo pack quanto variações em inglês.
+function _chaveSecao(tituloRaw: string): string {
+  const t = tituloRaw
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // tira acentos
+    .trim();
+  if (/^metadados|^metadata$/.test(t)) return 'metadados';
+  if (/quando\s+usar|when\s+to\s+use/.test(t)) return 'quando_usar';
+  if (/identidade|identity|persona|papel|role/.test(t)) return 'identidade';
+  if (/pre.?execucao|context|coleta\s+de\s+contexto|prerequisit/.test(t)) return 'pre_execucao';
+  if (/principios|principles/.test(t)) return 'principios';
+  if (/regras|rules|estilo|style|execucao|execution/.test(t)) return 'regras';
+  if (/boas\s+praticas|best\s+practices|good\s+practices/.test(t)) return 'boas_praticas';
+  if (/framework\s+de\s+entrega|delivery\s+framework|output\s+format|entrega|formato\s+da\s+resposta/.test(t)) return 'framework';
+  if (/checklist|qualidade|quality\s+check/.test(t)) return 'checklist';
+  if (/exemplos?|examples?/.test(t)) return 'exemplos';
+  if (/anti.?padr|antipattern|nao\s+faca|do\s+not/.test(t)) return 'antipadroes';
+  return 'outra';
+}
+
+// v1.149.0 — Parse o sub-bloco "## METADADOS" do formato PT-BR.
+// Captura linhas tipo "- id: #0237", "- slug: nome", "- usos: 12",
+// "- ultima_atualizacao: 2025-11-30", "- skills_relacionadas: [a, b, c]".
+function _parseMetadadosBloco(texto: string): {
+  idExterno?: string;
+  slug?: string;
+  categoria?: string;
+  usos?: number;
+  ultimaAtualizacao?: string;
+  relacionadas?: string[];
+} {
+  const out: ReturnType<typeof _parseMetadadosBloco> = {};
+  if (!texto) return out;
+  const linhas = texto.split('\n');
+  for (const lnRaw of linhas) {
+    // Aceita "- chave: valor", "* chave: valor" ou "chave: valor".
+    const ln = lnRaw.replace(/^[\s\-\*]+/, '');
+    const kv = ln.match(/^([\w\-]+)\s*:\s*(.+)$/);
+    if (!kv) continue;
+    const k = kv[1].toLowerCase().trim();
+    let v = kv[2].trim().replace(/^['"]|['"]$/g, '');
+    // remove "[" e "]" se vier array inline
+    const arrInline = v.match(/^\[(.*)\]$/);
+    if (k === 'id' || k === 'id_externo' || k === 'codigo') {
+      out.idExterno = v;
+    } else if (k === 'slug') {
+      out.slug = v.replace(/^#/, '').trim();
+    } else if (k === 'categoria' || k === 'category') {
+      out.categoria = v;
+    } else if (k === 'usos' || k === 'uses' || k === 'uso') {
+      const n = Number(v.replace(/\D+/g, ''));
+      if (!isNaN(n)) out.usos = n;
+    } else if (k === 'ultima_atualizacao' || k === 'updated' || k === 'updated_at' || k === 'data') {
+      out.ultimaAtualizacao = v;
+    } else if (k === 'skills_relacionadas' || k === 'relacionadas' || k === 'related' || k === 'see_also') {
+      if (arrInline) v = arrInline[1];
+      out.relacionadas = v.split(/[,;]/).map((x) => x.trim().replace(/^[\-\*]\s*/, '')).filter(Boolean);
+    }
+  }
+  return out;
+}
+
+// v1.149.0 — Slugify simples (acento, espaço, símbolos → kebab-case).
+function _slugify(s: string): string {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s\-_]/g, '')
+    .trim()
+    .replace(/[\s_]+/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 64);
+}
+
+// Parse frontmatter YAML simples + extração de blocos estruturados.
+// Suporta TRÊS formatos:
+// 1) Claude/Cursor SKILL.md (frontmatter YAML + headings em inglês)
+// 2) "Pack PT-BR" (sem frontmatter, com ## METADADOS, ## QUANDO USAR ESTA SKILL,
+//    ## IDENTIDADE E PAPEL, etc.)
+// 3) .md "comum" (extrai H1 + primeiro parágrafo)
 function _parseSkillMd(conteudo: string): SkillParsed {
-  const out: SkillParsed = { nome: '', descricao: '', categoria: '', tags: [], secoes: [] };
+  const out: SkillParsed = {
+    nome: '', descricao: '', categoria: '', tags: [], secoes: [],
+    slug: '', idExterno: '', ultimaAtualizacao: '', usos: 0,
+    relacionadas: [], quandoUsar: '', identidadePapel: '', blocos: [],
+  };
   if (!conteudo) return out;
 
   const texto = conteudo.replace(/\r\n/g, '\n');
 
-  // 1) Frontmatter YAML (--- ... ---)
+  // 1) Frontmatter YAML (--- ... ---) — se existir.
   const m = texto.match(/^---\n([\s\S]*?)\n---\n?/);
   let corpo = texto;
   if (m) {
@@ -16918,34 +17028,77 @@ function _parseSkillMd(conteudo: string): SkillParsed {
       if (!kv) continue;
       const k = kv[1].toLowerCase().trim();
       let v = kv[2].trim();
-      // remove aspas simples/duplas
       v = v.replace(/^['"]|['"]$/g, '');
       if (k === 'name' || k === 'nome' || k === 'title' || k === 'titulo') out.nome = v;
       else if (k === 'description' || k === 'descricao' || k === 'desc') out.descricao = v;
       else if (k === 'category' || k === 'categoria') out.categoria = v;
+      else if (k === 'slug') out.slug = v;
+      else if (k === 'id' || k === 'id_externo') out.idExterno = v;
       else if (k === 'tags') {
-        // suporta "[a, b, c]" ou "a, b, c"
         v = v.replace(/^\[|\]$/g, '');
         out.tags = v.split(',').map((x) => x.trim()).filter(Boolean);
       }
     }
   }
 
-  // 2) Fallback: extrair de H1 + primeiro parágrafo
+  // 2) Fallback: H1 + primeiro parágrafo (pro `nome` e `descricao` quando o
+  // frontmatter não tiver).
   if (!out.nome) {
     const h1 = corpo.match(/^#\s+(.+)$/m);
     if (h1) out.nome = h1[1].trim();
   }
   if (!out.descricao) {
-    // primeiro parágrafo após o H1 (ou após frontmatter)
     const aposH1 = corpo.replace(/^#\s+.+$/m, '').trim();
     const par = aposH1.match(/^([^\n#][^\n]+(?:\n[^\n#][^\n]+)*)/);
     if (par) out.descricao = par[1].trim().slice(0, 240);
   }
 
-  // 3) Extrair headings H2 como "seções"
-  const h2 = corpo.match(/^##\s+(.+)$/gm) || [];
-  out.secoes = h2.slice(0, 12).map((h) => h.replace(/^##\s+/, '').trim());
+  // 3) Extrai TODAS as seções H2 com conteúdo. Vai do "## X" até o próximo "## Y"
+  // ou EOF. Preserva ordem e título original.
+  const blocos: SecaoEstruturada[] = [];
+  const regexH2 = /^##\s+(.+)$/gm;
+  let mh: RegExpExecArray | null;
+  const matches: Array<{ titulo: string; inicio: number; fimHeader: number }> = [];
+  while ((mh = regexH2.exec(corpo)) !== null) {
+    matches.push({ titulo: mh[1].trim(), inicio: mh.index, fimHeader: mh.index + mh[0].length });
+  }
+  for (let i = 0; i < matches.length; i++) {
+    const cur = matches[i];
+    const prox = matches[i + 1];
+    const corpoSecao = corpo.slice(cur.fimHeader, prox ? prox.inicio : undefined).trim();
+    blocos.push({ titulo: cur.titulo, chave: _chaveSecao(cur.titulo), conteudo: corpoSecao });
+  }
+  out.blocos = blocos;
+  out.secoes = blocos.map((b) => b.titulo).slice(0, 24);
+
+  // 4) Bloco METADADOS (formato Pack PT-BR) — pode complementar/sobrescrever o
+  // frontmatter se houver.
+  const blocoMeta = blocos.find((b) => b.chave === 'metadados');
+  if (blocoMeta) {
+    const meta = _parseMetadadosBloco(blocoMeta.conteudo);
+    if (meta.idExterno && !out.idExterno) out.idExterno = meta.idExterno;
+    if (meta.slug && !out.slug) out.slug = meta.slug;
+    if (meta.categoria && !out.categoria) out.categoria = meta.categoria;
+    if (meta.usos !== undefined) out.usos = meta.usos;
+    if (meta.ultimaAtualizacao) out.ultimaAtualizacao = meta.ultimaAtualizacao;
+    if (meta.relacionadas) out.relacionadas = meta.relacionadas;
+  }
+
+  // 5) Preview de "QUANDO USAR" e "IDENTIDADE" (campos rápidos pra card).
+  const blocoQuando = blocos.find((b) => b.chave === 'quando_usar');
+  if (blocoQuando) out.quandoUsar = blocoQuando.conteudo.slice(0, 400);
+  const blocoIden = blocos.find((b) => b.chave === 'identidade');
+  if (blocoIden) out.identidadePapel = blocoIden.conteudo.slice(0, 400);
+
+  // 6) Se ainda não tem descricao, deriva de QUANDO USAR (1ª frase) — útil pro
+  // pack PT-BR que não tem frontmatter nem H1.
+  if (!out.descricao && out.quandoUsar) {
+    const primeiraFrase = out.quandoUsar.split(/[.!?\n]/).map((x) => x.trim()).filter(Boolean)[0];
+    if (primeiraFrase) out.descricao = primeiraFrase.slice(0, 240);
+  }
+
+  // 7) Slug: se não vier explícito, deriva do nome.
+  if (!out.slug && out.nome) out.slug = _slugify(out.nome);
 
   return out;
 }
@@ -16973,6 +17126,17 @@ function skillsSave(payload: {
     const agora = new Date().toISOString();
     const tamanho = payload.conteudo.length;
 
+    // v1.149.0 — extra: persiste campos ricos extraídos do parser (formato Pack PT-BR).
+    const extra = {
+      slug: parsed.slug || _slugify(nome),
+      idExterno: parsed.idExterno || '',
+      relacionadas: (parsed.relacionadas || []).join(','),
+      quandoUsar: parsed.quandoUsar || '',
+      identidadePapel: parsed.identidadePapel || '',
+      // Armazena a lista de blocos como JSON (até 6KB cabe tranquilo na célula).
+      secoesJson: JSON.stringify(parsed.blocos || []),
+    };
+
     if (payload.id) {
       const linhas = dbGetAll('Skills') as Array<Record<string, unknown>>;
       const existe = linhas.find((l) => String(l.id || '') === payload.id);
@@ -16985,9 +17149,10 @@ function skillsSave(payload: {
         fonte: payload.fonte || String(existe.fonte || ''),
         tamanhoBytes: tamanho,
         atualizadoEm: agora,
+        ...extra,
         ...(conteudoMudou ? { traducaoPt: '', descricaoPt: '', tipoIA: '', adaptacoes: '' } : {}),
       });
-      return { ok: true, data: { id: payload.id, nome, descricao, categoria, tags } };
+      return { ok: true, data: { id: payload.id, nome, descricao, categoria, tags, ...extra } };
     }
 
     const novo = dbCreate('Skills', {
@@ -17000,10 +17165,30 @@ function skillsSave(payload: {
       tamanhoBytes: tamanho,
       criadoEm: agora,
       atualizadoEm: agora,
+      ...extra,
+      // Usos arranca do que vier no parser (0 na maioria dos casos).
+      usos: parsed.usos || 0,
     });
-    return { ok: true, data: { id: String(novo.id || ''), nome, descricao, categoria, tags } };
+    return { ok: true, data: { id: String(novo.id || ''), nome, descricao, categoria, tags, ...extra } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar skill' };
+  }
+}
+
+// v1.149.0 — Incrementa contador de "usos" da skill. Chamado pelo front quando
+// o user copia, baixa ou exporta a skill (sinal forte de uso). Idempotente
+// no sentido de que não falha se a skill sumir.
+function skillsRegistrarUso(id: string): ServerResult {
+  try {
+    const linhas = dbGetAll('Skills') as Array<Record<string, unknown>>;
+    const s = linhas.find((l) => String(l.id || '') === id);
+    if (!s) return { ok: true, data: { usos: 0 } }; // silencioso
+    const atual = Number(s.usos || 0);
+    const novo = atual + 1;
+    dbUpdate('Skills', id, { usos: novo, atualizadoEm: new Date().toISOString() });
+    return { ok: true, data: { usos: novo } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
   }
 }
 
@@ -17205,6 +17390,12 @@ function skillsList(): ServerResult {
         // v1.148.13 — favorita (boolean) + favoritadaEm (timestamp pra ordenação estável).
         favorita: String(s.favorita || '') === 'true' || s.favorita === true,
         favoritadaEm: String(s.favoritadaEm || ''),
+        // v1.149.0 — campos ricos (Pack PT-BR).
+        slug: String(s.slug || ''),
+        idExterno: String(s.idExterno || ''),
+        usos: Number(s.usos || 0),
+        relacionadas: String(s.relacionadas || '').split(',').map((x) => x.trim()).filter(Boolean),
+        quandoUsar: String(s.quandoUsar || ''),
       }))
       // Ordena favoritas primeiro (mais recente favoritada no topo), depois resto por atualizadoEm.
       .sort((a, b) => {
@@ -17262,6 +17453,19 @@ function skillsGetContent(id: string): ServerResult {
         traducao: _parseTraducaoPt(s.traducaoPt),
         favorita: String(s.favorita || '') === 'true' || s.favorita === true,
         favoritadaEm: String(s.favoritadaEm || ''),
+        // v1.149.0 — campos ricos.
+        slug: String(s.slug || ''),
+        idExterno: String(s.idExterno || ''),
+        usos: Number(s.usos || 0),
+        relacionadas: String(s.relacionadas || '').split(',').map((x) => x.trim()).filter(Boolean),
+        quandoUsar: String(s.quandoUsar || ''),
+        identidadePapel: String(s.identidadePapel || ''),
+        // Tenta primeiro o JSON persistido (rápido); cai pro parser ao vivo se vier vazio.
+        blocos: (() => {
+          const raw = String(s.secoesJson || '');
+          if (raw) { try { return JSON.parse(raw); } catch { /* ignore */ } }
+          return _parseSkillMd(String(s.conteudo || '')).blocos;
+        })(),
       },
     };
   } catch (e: unknown) {
@@ -17273,6 +17477,206 @@ function skillsDelete(id: string): ServerResult {
   try {
     dbDelete('Skills', id);
     return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ─── Agents (v1.149.0) ─────────────────────────────────────────────────────
+// Estrutura irmã de Skills, dedicada aos 422 agents do pack que o user vai
+// trazer. CRUDs paralelos pra que skills e agents compartilhem a mesma UX
+// (favoritar, traduzir, classificar, exportar, usos) sem misturar contagens.
+// Quando o user mandar o prompt com a ESTRUTURA específica dos agents, vamos
+// estender essas funções com campos detalhados (modelo, ferramentas, etc).
+
+function agentsList(): ServerResult {
+  try {
+    const todos = (dbGetAll('Agents') as Array<Record<string, unknown>>)
+      .map((a) => ({
+        id: String(a.id || ''),
+        nome: String(a.nome || ''),
+        descricao: String(a.descricao || ''),
+        descricaoPt: String(a.descricaoPt || ''),
+        tipoIA: String(a.tipoIA || ''),
+        categoria: String(a.categoria || ''),
+        tags: String(a.tags || '').split(',').map((x) => x.trim()).filter(Boolean),
+        fonte: String(a.fonte || ''),
+        tamanhoBytes: Number(a.tamanhoBytes || 0),
+        criadoEm: String(a.criadoEm || ''),
+        atualizadoEm: String(a.atualizadoEm || ''),
+        favorita: String(a.favorita || '') === 'true' || a.favorita === true,
+        favoritadaEm: String(a.favoritadaEm || ''),
+        slug: String(a.slug || ''),
+        idExterno: String(a.idExterno || ''),
+        usos: Number(a.usos || 0),
+        relacionadas: String(a.relacionadas || '').split(',').map((x) => x.trim()).filter(Boolean),
+        quandoUsar: String(a.quandoUsar || ''),
+        modelo: String(a.modelo || ''),
+        ferramentas: String(a.ferramentas || '').split(',').map((x) => x.trim()).filter(Boolean),
+      }))
+      .sort((x, y) => {
+        if (x.favorita !== y.favorita) return x.favorita ? -1 : 1;
+        if (x.favorita) return y.favoritadaEm.localeCompare(x.favoritadaEm);
+        return y.atualizadoEm.localeCompare(x.atualizadoEm);
+      });
+    return { ok: true, data: todos };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function agentsGetContent(id: string): ServerResult {
+  try {
+    const linhas = dbGetAll('Agents') as Array<Record<string, unknown>>;
+    const a = linhas.find((l) => String(l.id || '') === id);
+    if (!a) throw new Error('Agent não encontrado.');
+    return {
+      ok: true,
+      data: {
+        id: String(a.id || ''),
+        nome: String(a.nome || ''),
+        descricao: String(a.descricao || ''),
+        categoria: String(a.categoria || ''),
+        tags: String(a.tags || '').split(',').map((x) => x.trim()).filter(Boolean),
+        conteudo: String(a.conteudo || ''),
+        fonte: String(a.fonte || ''),
+        tamanhoBytes: Number(a.tamanhoBytes || 0),
+        criadoEm: String(a.criadoEm || ''),
+        atualizadoEm: String(a.atualizadoEm || ''),
+        parsed: _parseSkillMd(String(a.conteudo || '')),
+        traducao: _parseTraducaoPt(a.traducaoPt),
+        favorita: String(a.favorita || '') === 'true' || a.favorita === true,
+        favoritadaEm: String(a.favoritadaEm || ''),
+        slug: String(a.slug || ''),
+        idExterno: String(a.idExterno || ''),
+        usos: Number(a.usos || 0),
+        relacionadas: String(a.relacionadas || '').split(',').map((x) => x.trim()).filter(Boolean),
+        quandoUsar: String(a.quandoUsar || ''),
+        identidadePapel: String(a.identidadePapel || ''),
+        modelo: String(a.modelo || ''),
+        ferramentas: String(a.ferramentas || '').split(',').map((x) => x.trim()).filter(Boolean),
+        meta: (() => {
+          const raw = String(a.metaJson || '');
+          if (!raw) return null;
+          try { return JSON.parse(raw); } catch { return null; }
+        })(),
+        blocos: (() => {
+          const raw = String(a.secoesJson || '');
+          if (raw) { try { return JSON.parse(raw); } catch { /* ignore */ } }
+          return _parseSkillMd(String(a.conteudo || '')).blocos;
+        })(),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function agentsSave(payload: {
+  id?: string;
+  conteudo: string;
+  fonte?: string;
+  nomeOverride?: string;
+  descricaoOverride?: string;
+  categoriaOverride?: string;
+  tagsOverride?: string;
+  modelo?: string;
+  ferramentas?: string;
+  metaJson?: string;
+}): ServerResult {
+  try {
+    if (!payload.conteudo || !payload.conteudo.trim()) {
+      throw new Error('Conteúdo vazio — cole o markdown do agent ou faça upload de um arquivo.');
+    }
+    const parsed = _parseSkillMd(payload.conteudo);
+    const nome = (payload.nomeOverride || parsed.nome || payload.fonte?.replace(/\.md$/i, '') || 'Agent sem nome').trim();
+    const descricao = (payload.descricaoOverride || parsed.descricao || '').trim();
+    const categoria = (payload.categoriaOverride || parsed.categoria || '').trim();
+    const tags = (payload.tagsOverride !== undefined ? payload.tagsOverride : parsed.tags.join(', ')).trim();
+    const agora = new Date().toISOString();
+    const tamanho = payload.conteudo.length;
+
+    const extra = {
+      slug: parsed.slug || _slugify(nome),
+      idExterno: parsed.idExterno || '',
+      relacionadas: (parsed.relacionadas || []).join(','),
+      quandoUsar: parsed.quandoUsar || '',
+      identidadePapel: parsed.identidadePapel || '',
+      secoesJson: JSON.stringify(parsed.blocos || []),
+      modelo: payload.modelo || '',
+      ferramentas: payload.ferramentas || '',
+      metaJson: payload.metaJson || '',
+    };
+
+    if (payload.id) {
+      const linhas = dbGetAll('Agents') as Array<Record<string, unknown>>;
+      const existe = linhas.find((l) => String(l.id || '') === payload.id);
+      if (!existe) throw new Error('Agent não encontrado pra atualizar.');
+      const conteudoMudou = String(existe.conteudo || '') !== payload.conteudo;
+      dbUpdate('Agents', payload.id, {
+        nome, descricao, categoria, tags,
+        conteudo: payload.conteudo,
+        fonte: payload.fonte || String(existe.fonte || ''),
+        tamanhoBytes: tamanho,
+        atualizadoEm: agora,
+        ...extra,
+        ...(conteudoMudou ? { traducaoPt: '', descricaoPt: '', tipoIA: '', adaptacoes: '' } : {}),
+      });
+      return { ok: true, data: { id: payload.id, nome, descricao, categoria, tags, ...extra } };
+    }
+
+    const novo = dbCreate('Agents', {
+      nome, descricao, categoria, tags,
+      conteudo: payload.conteudo,
+      fonte: payload.fonte || '',
+      tamanhoBytes: tamanho,
+      criadoEm: agora,
+      atualizadoEm: agora,
+      ...extra,
+      usos: parsed.usos || 0,
+    });
+    return { ok: true, data: { id: String(novo.id || ''), nome, descricao, categoria, tags, ...extra } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar agent' };
+  }
+}
+
+function agentsDelete(id: string): ServerResult {
+  try {
+    dbDelete('Agents', id);
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function agentsToggleFavorita(id: string): ServerResult {
+  try {
+    const linhas = dbGetAll('Agents') as Array<Record<string, unknown>>;
+    const a = linhas.find((l) => String(l.id || '') === id);
+    if (!a) return { ok: false, error: 'Agent não encontrado.' };
+    const era = String(a.favorita || '') === 'true' || a.favorita === true;
+    const agora = new Date().toISOString();
+    dbUpdate('Agents', id, {
+      favorita: era ? '' : 'true',
+      favoritadaEm: era ? '' : agora,
+      atualizadoEm: agora,
+    });
+    return { ok: true, data: { favorita: !era, favoritadaEm: era ? '' : agora } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function agentsRegistrarUso(id: string): ServerResult {
+  try {
+    const linhas = dbGetAll('Agents') as Array<Record<string, unknown>>;
+    const a = linhas.find((l) => String(l.id || '') === id);
+    if (!a) return { ok: true, data: { usos: 0 } };
+    const atual = Number(a.usos || 0);
+    const novo = atual + 1;
+    dbUpdate('Agents', id, { usos: novo, atualizadoEm: new Date().toISOString() });
+    return { ok: true, data: { usos: novo } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
   }

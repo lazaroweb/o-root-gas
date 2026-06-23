@@ -32,6 +32,12 @@ interface SkillSummary {
   atualizadoEm: string;
   favorita?: boolean;
   favoritadaEm?: string;
+  // v1.149.0 — campos ricos vindos do parser (Pack PT-BR ou Claude SKILL.md).
+  slug?: string;
+  idExterno?: string;   // "#0237"
+  usos?: number;
+  relacionadas?: string[];
+  quandoUsar?: string;
 }
 
 // ─── Fontes (pastas) ──────────────────────────────────────────────────────────
@@ -62,10 +68,19 @@ interface SkillFonte {
 
 interface Traducao { conteudo: string; descricao: string; idioma?: string; em?: string }
 
+// v1.149.0 — Bloco estruturado extraído do markdown (uma seção H2 do conteúdo).
+// `chave` é canonical (quando_usar, identidade, pre_execucao, principios, regras,
+// boas_praticas, framework, checklist, metadados, exemplos, antipadroes, outra).
+// `titulo` preserva o texto original do heading pra renderizar fiel.
+export interface SkillBloco { titulo: string; chave: string; conteudo: string }
+
 interface SkillFull extends SkillSummary {
   conteudo: string;
   parsed: { nome: string; descricao: string; categoria: string; tags: string[]; secoes: string[] };
   traducao?: Traducao | null;
+  // v1.149.0 — campos ricos.
+  identidadePapel?: string;
+  blocos?: SkillBloco[];
 }
 
 interface Props {
@@ -637,6 +652,14 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
     a.href = url; a.download = `${slug}.md`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  // v1.149.0 — registra +1 uso no backend e atualiza a UI localmente (optimistic).
+  // Best-effort: erro de rede não trava a ação principal (copy/baixar).
+  const registrarUso = (id: string) => {
+    setSkills((prev) => prev.map((s) => s.id === id ? { ...s, usos: (s.usos || 0) + 1 } : s));
+    setAberta((prev) => prev && prev.id === id ? { ...prev, usos: (prev.usos || 0) + 1 } : prev);
+    void callServer<ServerResult>('skillsRegistrarUso', id).catch(() => { /* silent */ });
   };
 
   // v1.148.13 — filtro "só favoritas" (☆).
@@ -1287,10 +1310,10 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                 />
               </Tooltip>
               <Tooltip title="Copiar conteúdo">
-                <Button icon={<Copy size={14} />} onClick={() => copiarConteudo(aberta.conteudo)} />
+                <Button icon={<Copy size={14} />} onClick={() => { copiarConteudo(aberta.conteudo); registrarUso(aberta.id); }} />
               </Tooltip>
               <Tooltip title="Baixar como .md">
-                <Button icon={<Download size={14} />} onClick={() => baixarMd(aberta)} />
+                <Button icon={<Download size={14} />} onClick={() => { baixarMd(aberta); registrarUso(aberta.id); }} />
               </Tooltip>
               {traduzido ? (
                 <Segmented
@@ -1373,65 +1396,98 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
               </p>
             )}
 
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14, alignItems: 'center' }}>
+              {/* v1.149.0 — id externo (#0237 do pack) com destaque */}
+              {aberta.idExterno && (
+                <span style={{
+                  background: `${t.accents.lavender}1a`, color: t.accents.lavender,
+                  border: `1px solid ${t.accents.lavender}40`,
+                  fontFamily: FONTS.mono, fontSize: 11, fontWeight: 600,
+                  padding: '2px 8px', borderRadius: 6,
+                }}>
+                  {aberta.idExterno}
+                </span>
+              )}
               {aberta.categoria && <Tag color="purple">{aberta.categoria}</Tag>}
               {aberta.tags.map((tag) => <Tag key={tag} icon={<TagIcon size={10} style={{ marginRight: 4 }} />}>{tag}</Tag>)}
               {aberta.fonte && <Tag color="default" style={{ fontFamily: FONTS.mono, fontSize: 11 }}>{aberta.fonte}</Tag>}
+              {typeof aberta.usos === 'number' && aberta.usos > 0 && (
+                <Tooltip title="Quantas vezes essa skill já foi copiada ou baixada">
+                  <span style={{
+                    background: `${t.accents.peach}1a`, color: t.accents.peach,
+                    border: `1px solid ${t.accents.peach}40`,
+                    fontFamily: FONTS.ui, fontSize: 11, fontWeight: 600,
+                    padding: '2px 8px', borderRadius: 6,
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                  }}>
+                    <Sparkles size={10} />{aberta.usos} {aberta.usos === 1 ? 'uso' : 'usos'}
+                  </span>
+                </Tooltip>
+              )}
               <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginLeft: 'auto' }}>
                 {bytesHumano(aberta.tamanhoBytes)} · {relTempo(aberta.atualizadoEm)}
               </span>
             </div>
 
-            {/* Seções (índice gerado do README) */}
-            {aberta.parsed.secoes.length > 0 && (
-              <div style={{ background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 10, padding: 12, marginBottom: 16 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                  <Eye size={13} color={t.accents.lavender} />
-                  <span style={{ fontFamily: FONTS.ui, fontSize: 12, fontWeight: 600, color: t.text }}>O que essa skill cobre</span>
+            {/* v1.149.0 — Renderização rica das seções estruturadas (Pack PT-BR ou Claude SKILL.md).
+                Se temos blocos parseados, mostra cada um como card. Senão cai pro fallback do
+                "índice + markdown bruto" tradicional. Toggle "Markdown raw" pra ver a fonte. */}
+            {(aberta.blocos && aberta.blocos.length > 0) ? (
+              <SkillBlocosRender
+                blocos={aberta.blocos}
+                conteudoBruto={traduzido && !verOriginal ? traduzido.conteudo : aberta.conteudo}
+                aberta={aberta}
+                comoUsar={
+                  <ComoUsarSkill
+                    skillNome={aberta.nome}
+                    skillFonte={aberta.fonte}
+                    conteudoMd={traduzido && !verOriginal ? traduzido.conteudo : aberta.conteudo}
+                  />
+                }
+              />
+            ) : (
+              <>
+                {/* Fallback: estrutura antiga (índice + ComoUsar + raw) */}
+                {aberta.parsed.secoes.length > 0 && (
+                  <div style={{ background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 10, padding: 12, marginBottom: 16 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                      <Eye size={13} color={t.accents.lavender} />
+                      <span style={{ fontFamily: FONTS.ui, fontSize: 12, fontWeight: 600, color: t.text }}>O que essa skill cobre</span>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {aberta.parsed.secoes.map((sc) => (
+                        <span key={sc} style={{
+                          background: t.surface, color: t.textSecondary,
+                          border: `1px solid ${t.border}`, borderRadius: 999,
+                          padding: '3px 10px', fontFamily: FONTS.ui, fontSize: 11,
+                          display: 'inline-flex', alignItems: 'center', gap: 5,
+                        }}>
+                          <CheckCircle2 size={10} color={t.accents.sage} />
+                          {sc}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <ComoUsarSkill
+                  skillNome={aberta.nome}
+                  skillFonte={aberta.fonte}
+                  conteudoMd={traduzido && !verOriginal ? traduzido.conteudo : aberta.conteudo}
+                />
+                <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, marginBottom: 6, marginTop: 12 }}>
+                  {traduzido && !verOriginal ? 'Conteúdo Markdown (traduzido)' : 'Conteúdo Markdown'}
                 </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {aberta.parsed.secoes.map((sc) => (
-                    <span
-                      key={sc}
-                      style={{
-                        background: t.surface, color: t.textSecondary,
-                        border: `1px solid ${t.border}`, borderRadius: 999,
-                        padding: '3px 10px', fontFamily: FONTS.ui, fontSize: 11,
-                        display: 'inline-flex', alignItems: 'center', gap: 5,
-                      }}
-                    >
-                      <CheckCircle2 size={10} color={t.accents.sage} />
-                      {sc}
-                    </span>
-                  ))}
-                </div>
-              </div>
+                <pre style={{
+                  background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
+                  borderRadius: 10, padding: 14, fontFamily: FONTS.mono,
+                  fontSize: 12, color: t.text, lineHeight: 1.55,
+                  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  maxHeight: 'calc(100vh - 360px)', overflow: 'auto',
+                }}>
+                  {traduzido && !verOriginal ? traduzido.conteudo : aberta.conteudo}
+                </pre>
+              </>
             )}
-
-            {/* v1.148.3 — instruções de como instalar essa skill em cada IDE.
-                Sempre mostra (toda skill é instalável em qualquer agente).
-                Usa o conteúdo TRADUZIDO se disponível pra os comandos saírem em pt. */}
-            <ComoUsarSkill
-              skillNome={aberta.nome}
-              skillFonte={aberta.fonte}
-              conteudoMd={traduzido && !verOriginal ? traduzido.conteudo : aberta.conteudo}
-            />
-
-            {/* Conteúdo bruto */}
-            <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, marginBottom: 6 }}>
-              {traduzido && !verOriginal ? 'Conteúdo Markdown (traduzido)' : 'Conteúdo Markdown'}
-            </div>
-            <pre
-              style={{
-                background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
-                borderRadius: 10, padding: 14, fontFamily: FONTS.mono,
-                fontSize: 12, color: t.text, lineHeight: 1.55,
-                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                maxHeight: 'calc(100vh - 360px)', overflow: 'auto',
-              }}
-            >
-              {traduzido && !verOriginal ? traduzido.conteudo : aberta.conteudo}
-            </pre>
           </>
         )}
       </Drawer>
@@ -1838,13 +1894,15 @@ function SkillCard({ skill, onOpen, selMode = false, selecionado = false, onTogg
         </div>
       </div>
 
-      {(skill.descricaoPt || skill.descricao) && (
+      {/* v1.149.0 — Preview "QUANDO USAR" (clamped 2 linhas) tem prioridade
+          sobre a descrição. Cai pra descricaoPt → descricao se não houver. */}
+      {(skill.quandoUsar || skill.descricaoPt || skill.descricao) && (
         <p style={{
           margin: 0, fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary,
           lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box',
           WebkitLineClamp: 3, WebkitBoxOrient: 'vertical' as const,
         }}>
-          {skill.descricaoPt || skill.descricao}
+          {skill.quandoUsar || skill.descricaoPt || skill.descricao}
         </p>
       )}
 
@@ -1866,10 +1924,168 @@ function SkillCard({ skill, onOpen, selMode = false, selecionado = false, onTogg
         </div>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto', fontFamily: FONTS.ui, fontSize: 10, color: t.textTertiary }}>
-        <span>{bytesHumano(skill.tamanhoBytes)}</span>
-        <span>{relTempo(skill.atualizadoEm)}</span>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto', fontFamily: FONTS.ui, fontSize: 10, color: t.textTertiary, gap: 6 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {/* v1.149.0 — id externo (#0237 do pack) sempre exibido se houver */}
+          {skill.idExterno && (
+            <span style={{ fontFamily: FONTS.mono, color: t.accents.lavender, fontWeight: 600 }}>
+              {skill.idExterno}
+            </span>
+          )}
+          <span>{bytesHumano(skill.tamanhoBytes)}</span>
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {/* v1.149.0 — contador de usos quando > 0 */}
+          {typeof skill.usos === 'number' && skill.usos > 0 && (
+            <span style={{
+              fontFamily: FONTS.ui, fontWeight: 600, color: t.accents.peach,
+              display: 'inline-flex', alignItems: 'center', gap: 3,
+            }}>
+              <Sparkles size={9} />{skill.usos}
+            </span>
+          )}
+          <span>{relTempo(skill.atualizadoEm)}</span>
+        </span>
       </div>
+    </div>
+  );
+}
+
+// ─── v1.149.0 — Renderização rica dos blocos estruturados ─────────────────
+// Substitui o "dump de markdown bruto" por um layout visual baseado nas seções
+// que o parser detectou. Cada bloco vira um card; reconhece os blocos famosos
+// do "Pack PT-BR" (QUANDO USAR, IDENTIDADE E PAPEL, PRINCÍPIOS, etc.) e pinta
+// com ícone + cor de destaque coerente. Permite alternar pra Markdown raw.
+function SkillBlocosRender({ blocos, conteudoBruto, aberta, comoUsar }: {
+  blocos: SkillBloco[];
+  conteudoBruto: string;
+  aberta: SkillFull;
+  comoUsar: React.ReactNode;
+}): React.ReactElement {
+  const t = useTokens();
+  const [view, setView] = useState<'estruturado' | 'markdown'>('estruturado');
+
+  // Metadado visual de cada chave canônica (cor + ícone + descrição).
+  const META_BLOCO: Record<string, { cor: keyof typeof t.accents; icon: React.ReactNode; sub?: string }> = {
+    metadados: { cor: 'lavender', icon: <Info size={13} />, sub: 'Identificação' },
+    quando_usar: { cor: 'peach', icon: <Sparkles size={13} />, sub: 'Gatilho de ativação' },
+    identidade: { cor: 'blue', icon: <BookMarked size={13} />, sub: 'Persona da skill' },
+    pre_execucao: { cor: 'sage', icon: <ListChecks size={13} />, sub: 'Coleta de contexto' },
+    principios: { cor: 'lavender', icon: <CheckCircle2 size={13} />, sub: 'Princípios operacionais' },
+    regras: { cor: 'peach', icon: <FileText size={13} />, sub: 'Regras de execução' },
+    boas_praticas: { cor: 'sage', icon: <Sparkles size={13} />, sub: 'Padrões de excelência' },
+    framework: { cor: 'blue', icon: <Package size={13} />, sub: 'Formato de entrega' },
+    checklist: { cor: 'sage', icon: <CheckCircle2 size={13} />, sub: 'Verificação final' },
+    exemplos: { cor: 'lavender', icon: <Eye size={13} />, sub: 'Casos de uso' },
+    antipadroes: { cor: 'peach', icon: <X size={13} />, sub: 'O que NÃO fazer' },
+    outra: { cor: 'lavender', icon: <FileText size={13} /> },
+  };
+
+  const filtraBlocos = blocos.filter((b) => b.conteudo.trim().length > 0);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <Segmented
+        size="small"
+        value={view}
+        onChange={(v) => setView(v as 'estruturado' | 'markdown')}
+        options={[
+          { label: 'Estruturado', value: 'estruturado' },
+          { label: 'Markdown raw', value: 'markdown' },
+        ]}
+      />
+
+      {view === 'estruturado' ? (
+        <>
+          {filtraBlocos.map((bloco, idx) => {
+            const meta = META_BLOCO[bloco.chave] || META_BLOCO.outra;
+            const cor = t.accents[meta.cor];
+            return (
+              <div
+                key={`${bloco.chave}-${idx}`}
+                style={{
+                  background: t.surface, border: `1px solid ${t.border}`,
+                  borderLeft: `3px solid ${cor}`,
+                  borderRadius: 10, padding: 14,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <div style={{
+                    width: 26, height: 26, borderRadius: 7,
+                    background: `${cor}1a`, color: cor,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                  }}>
+                    {meta.icon}
+                  </div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{
+                      fontFamily: FONTS.display, fontSize: 13, fontWeight: 600, color: t.text,
+                      lineHeight: 1.3,
+                    }}>
+                      {bloco.titulo}
+                    </div>
+                    {meta.sub && (
+                      <div style={{ fontFamily: FONTS.ui, fontSize: 10, color: t.textTertiary, marginTop: 1 }}>
+                        {meta.sub}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div style={{
+                  fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary, lineHeight: 1.65,
+                  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                }}>
+                  {bloco.conteudo}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* v1.149.0 — Relacionadas: chips com slugs/ids vindos do bloco METADADOS */}
+          {aberta.relacionadas && aberta.relacionadas.length > 0 && (
+            <div style={{
+              background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
+              borderRadius: 10, padding: 12,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                <FolderInput size={13} color={t.accents.lavender} />
+                <span style={{ fontFamily: FONTS.ui, fontSize: 12, fontWeight: 600, color: t.text }}>
+                  Skills relacionadas
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {aberta.relacionadas.map((rel) => (
+                  <span
+                    key={rel}
+                    title="Cole o slug na busca pra abrir essa skill"
+                    style={{
+                      background: t.surface, color: t.accents.lavender,
+                      border: `1px solid ${t.accents.lavender}40`,
+                      fontFamily: FONTS.mono, fontSize: 11,
+                      padding: '3px 10px', borderRadius: 999,
+                    }}
+                  >
+                    {rel}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* "Como usar em cada IDE" — sempre embaixo. */}
+          {comoUsar}
+        </>
+      ) : (
+        <pre style={{
+          background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
+          borderRadius: 10, padding: 14, fontFamily: FONTS.mono,
+          fontSize: 12, color: t.text, lineHeight: 1.55,
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          maxHeight: 'calc(100vh - 360px)', overflow: 'auto', margin: 0,
+        }}>
+          {conteudoBruto}
+        </pre>
+      )}
     </div>
   );
 }

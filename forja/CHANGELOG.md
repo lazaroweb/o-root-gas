@@ -36,6 +36,83 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.149.0] — 2026-06-23
+
+### Adicionado — Skills/Agents estruturados (parser PT-BR + Atelier ganha estação Agents)
+
+**Contexto:** O user comprou um pack gigante com **1036 skills + 422 agents**
+no formato "Pack PT-BR" (sem frontmatter YAML, mas com seções rígidas:
+`## METADADOS`, `## QUANDO USAR ESTA SKILL`, `## IDENTIDADE E PAPEL`, etc.).
+Precisamos receber tudo sem perder a riqueza do formato.
+
+**Schema (`v1.73-skills-rich-agents`):**
+
+- Tabela `Skills` ganha **7 colunas** novas:
+  `slug`, `idExterno` (#0237), `usos` (contador), `relacionadas` (CSV de slugs),
+  `quandoUsar`, `identidadePapel`, `secoesJson` (todos os blocos parseados).
+- **Nova tabela `Agents`** (irmã de Skills) com os mesmos campos ricos + 3
+  específicos: `modelo`, `ferramentas`, `metaJson` (campo livre pra estrutura
+  que vai vir no próximo prompt do user).
+
+**Parser estendido (`_parseSkillMd`):**
+
+Detecta **3 formatos** automaticamente:
+
+1. Claude/Cursor SKILL.md (frontmatter YAML + headings em inglês).
+2. Pack PT-BR (sem frontmatter, com `## METADADOS`, etc.).
+3. `.md` comum (H1 + 1º parágrafo).
+
+Extrai todas as seções H2 como `blocos` estruturados (com `titulo`, `chave`
+canônica e `conteudo`), e mapeia os títulos famosos (`QUANDO USAR`, `IDENTIDADE`,
+`PRÉ-EXECUÇÃO`, `PRINCÍPIOS`, `REGRAS`, `BOAS PRÁTICAS`, `FRAMEWORK`, `CHECKLIST`,
+`EXEMPLOS`, `ANTIPADRÕES`) pra chaves canônicas — habilita ícone + cor coerente
+no render. Bloco `## METADADOS` é parseado linha a linha (`- id:`, `- slug:`,
+`- usos:`, `- ultima_atualizacao:`, `- skills_relacionadas: [a, b, c]`).
+
+**UI Skills — Drawer rico:**
+
+- Cada bloco estruturado vira um **card visual** com ícone + cor de destaque
+  (lavender pra princípios, peach pra QUANDO USAR, sage pra checklist, etc.).
+- Header do drawer ganha badge **`#0237`** (id externo do pack) e contador de
+  **usos** com sparkles.
+- Seção "Skills relacionadas" com chips dos slugs.
+- Toggle **"Estruturado / Markdown raw"** pra ver a fonte se precisar.
+- Fallback automático pro layout antigo quando não há blocos detectados.
+
+**UI Skills — Card:**
+
+- Preview agora prioriza **QUANDO USAR** (mais informativo que descrição
+  genérica).
+- Mostra **`#0237`** + **contador de usos** (com Sparkles) no rodapé.
+
+**Contador de usos:**
+
+- Nova RPC `skillsRegistrarUso(id)` incrementa o contador no backend.
+- Disparado automaticamente quando o user **copia** ou **baixa** a skill no
+  drawer — sinal forte de "essa skill é útil de verdade".
+- Backend retorna `usos` em `skillsList` e `skillsGetContent`.
+
+**Atelier ganha estação "Agents" (esqueleto):**
+
+- Nova entrada **"Agents"** no menu lateral (entre Skills e Snippets), com
+  badge `novo`, ícone `Bot`, cor azul.
+- `AgentsHubModal`: componente paralelo ao SkillsHubModal, com mesmas
+  capacidades (listar, buscar, favoritar, importar, drawer com blocos).
+- Banner "ESPERANDO ESTRUTURA" explicando que o user pode mandar o prompt
+  com a estrutura específica dos agents pra detalharmos campos como `modelo`,
+  `ferramentas`, system prompt, etc.
+- RPCs: `agentsList`, `agentsGetContent`, `agentsSave`, `agentsDelete`,
+  `agentsToggleFavorita`, `agentsRegistrarUso`.
+
+**Compatibilidade:**
+
+- Skills antigas (sem o formato Pack PT-BR) continuam funcionando — o drawer
+  cai no fallback "índice + ComoUsar + markdown raw" quando não há blocos.
+- A próxima vez que uma skill antiga for **salva**, o parser repopula os
+  campos ricos automaticamente (re-parse no `skillsSave`).
+
+---
+
 ## [1.148.13] — 2026-06-23
 
 ### Adicionado — ⭐ Favoritar skills (botão estrela no Hub)
