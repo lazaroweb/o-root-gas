@@ -614,7 +614,8 @@ export default function FinPessoal(): React.ReactElement {
       {/* Sub-views */}
       {view === 'visao' && (
         <VisaoMensal resumo={resumo} loading={loading} orcamentos={orcamentosProgresso}
-          lancamentos={lancamentos} cartoes={cartoes} mes={mes} onRecarregar={recarregar} onEditar={abrirEditarLancamento} />
+          lancamentos={lancamentos} cartoes={cartoes} mes={mes} onRecarregar={recarregar} onEditar={abrirEditarLancamento}
+          onIrParaOrcamentos={() => setView('orcamentos')} />
       )}
       {view === 'painel' && (
         <PainelAnual mes={mes} onLancarReceita={() => abrirNovaReceita('salario')} />
@@ -1258,9 +1259,11 @@ function DonutGastos({ segmentos, total, label }: {
   );
 }
 
-function VisaoMensal({ resumo, loading, orcamentos, lancamentos, cartoes, mes, onRecarregar, onEditar }: {
+function VisaoMensal({ resumo, loading, orcamentos, lancamentos, cartoes, mes, onRecarregar, onEditar, onIrParaOrcamentos }: {
   resumo: ResumoFinPessoal | null; loading: boolean; orcamentos: ProgressoOrcamentos | null;
   lancamentos: LancamentoPessoal[]; cartoes: CartaoPessoal[]; mes: string; onRecarregar: () => void; onEditar: (l: LancamentoPessoal) => void;
+  // v1.147 — Alerta de orçamento estourado precisa levar pra aba "Orçamentos" (tratativa).
+  onIrParaOrcamentos?: () => void;
 }): React.ReactElement {
   const t = useTokens();
   const { message, modal } = AntApp.useApp();
@@ -1367,7 +1370,7 @@ function VisaoMensal({ resumo, loading, orcamentos, lancamentos, cartoes, mes, o
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Alerta de orçamentos críticos */}
+      {/* Alerta de orçamentos críticos — agora com tratativa (action button) */}
       {orcamentosCriticos.length > 0 && (
         <Alert
           type={orcamentosCriticos.some((o) => o.status === 'estouro') ? 'error' : 'warning'}
@@ -1380,6 +1383,11 @@ function VisaoMensal({ resumo, loading, orcamentos, lancamentos, cartoes, mes, o
               {orcamentosCriticos.length > 3 && ` e mais ${orcamentosCriticos.length - 3}`}
             </div>
           }
+          action={onIrParaOrcamentos ? (
+            <Button size="small" type="primary" onClick={onIrParaOrcamentos}>
+              Ver orçamentos
+            </Button>
+          ) : undefined}
         />
       )}
 
@@ -2707,11 +2715,13 @@ function ContasAPagar({ pendentes, cartoes, membros, membrosDe, onEditar, onReca
             return (
               <div
                 key={l.id}
+                data-lanc-id={l.id}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 12,
                   padding: '12px 18px',
                   borderBottom: idx < items.length - 1 ? `1px solid ${t.borderSoft}` : 'none',
                   background: orfao ? `${t.accents.rose}0d` : undefined,
+                  transition: 'outline 0.2s ease',
                 }}
               >
                 <Calendar size={16} color={cor} style={{ flexShrink: 0 }} />
@@ -2786,6 +2796,18 @@ function ContasAPagar({ pendentes, cartoes, membros, membrosDe, onEditar, onReca
   }
 
   const totalOrfaos = orfaos.reduce((s, l) => s + l.valor, 0);
+  // v1.147 — rola até o primeiro órfão quando user clica "Ver órfãos" no alerta.
+  const primeiroOrfaoId = orfaos[0]?.id;
+  const irParaPrimeiroOrfao = () => {
+    if (!primeiroOrfaoId) return;
+    const el = document.querySelector(`[data-lanc-id="${primeiroOrfaoId}"]`) as HTMLElement | null;
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const original = el.style.outline;
+      el.style.outline = `2px solid ${t.accents.rose}`;
+      setTimeout(() => { el.style.outline = original; }, 1800);
+    }
+  };
 
   return (
     <div>
@@ -2801,6 +2823,11 @@ function ContasAPagar({ pendentes, cartoes, membros, membrosDe, onEditar, onReca
               Por isso somem das telas de Cartões e Lançamentos do mês. Use <b>Editar</b> em cada um pra vincular ao cartão certo,
               ou <b>Excluir</b> pra removê-los se foram um engano.
             </div>
+          }
+          action={
+            <Button size="small" onClick={irParaPrimeiroOrfao}>
+              Ver órfãos
+            </Button>
           }
         />
       )}

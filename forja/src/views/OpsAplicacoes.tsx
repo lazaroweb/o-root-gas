@@ -1,13 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { Button, Empty, Spin, Tag, App as AntApp } from 'antd';
-import { RefreshCw, ExternalLink, Server } from 'lucide-react';
+import { Button, Empty, Spin, Tag, App as AntApp, Tooltip } from 'antd';
+import { RefreshCw, ExternalLink, Server, Wrench } from 'lucide-react';
 import { Panel, StatusDot } from '../components/ui';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import type { AppStatusItem, ServerResponse } from '../types';
 
-export default function OpsAplicacoes(): React.ReactElement {
+interface OpsAplicacoesProps {
+  // Permite abrir o sistema na lista de Sistemas — necessário pra
+  // "Fora do ar" / "Sem URL" terem caminho de resolução (cadastrar/editar URL).
+  onAbrirSistema?: (id: string) => void;
+}
+
+export default function OpsAplicacoes({ onAbrirSistema }: OpsAplicacoesProps = {}): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [apps, setApps] = useState<AppStatusItem[] | null>(null);
@@ -62,7 +68,17 @@ export default function OpsAplicacoes(): React.ReactElement {
                   {tag(a.conectado, a.temUrl)}
                   {a.temUrl && <span style={{ color: t.textTertiary, fontSize: 11, fontFamily: FONTS.mono }}>{a.status ? `HTTP ${a.status}` : 'sem resposta'}{a.latenciaMs ? ` · ${a.latenciaMs}ms` : ''}</span>}
                 </div>
-                {a.urlProd && <Button type="text" size="small" icon={<ExternalLink size={15} />} href={a.urlProd} target="_blank" />}
+                {/* Tratativa: app sem URL ou fora do ar → botão "Abrir sistema" pra editar a ficha.
+                    Mantém o ExternalLink quando há URL e está OK (uso clássico de abrir). */}
+                {(!a.temUrl || !a.conectado) && onAbrirSistema ? (
+                  <Tooltip title={a.temUrl ? 'Abre a ficha do sistema pra você revisar a URL de produção, repoUrl e ambiente.' : 'Abre a ficha pra você cadastrar a URL de produção.'}>
+                    <Button size="small" type="text" icon={<Wrench size={14} />} onClick={() => onAbrirSistema(a.id)}>
+                      {a.temUrl ? 'Resolver' : 'Cadastrar URL'}
+                    </Button>
+                  </Tooltip>
+                ) : a.urlProd && (
+                  <Button type="text" size="small" icon={<ExternalLink size={15} />} href={a.urlProd} target="_blank" />
+                )}
               </div>
               {a.endpoints.length > 0 && (
                 <div style={{ padding: '0 14px 12px 36px' }}>

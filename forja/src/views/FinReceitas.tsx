@@ -61,6 +61,14 @@ export default function FinReceitas({ sistemas }: { sistemas: Sistema[] }): Reac
   // FASE 4 — cross-link Cliente ↔ Financeiro: filtro por cliente e snapshot inline
   const [clienteFiltro, setClienteFiltro] = useState<string>('todos');
   const [snapshotPessoa, setSnapshotPessoa] = useState<{ id: string; nome: string } | null>(null);
+  // v1.147 — tile "Em atraso" passa a aplicar filtro nas Próximas cobranças
+  // (princípio "alerta sem ação proibido": tile vermelho precisa levar a algum lugar).
+  const [filtroAtrasadas, setFiltroAtrasadas] = useState(false);
+  const proximasRef = React.useRef<HTMLDivElement | null>(null);
+  const focarAtrasadas = () => {
+    setFiltroAtrasadas(true);
+    setTimeout(() => proximasRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  };
 
   const nomeApp = (id?: string) => sistemas.find((s) => s.id === id)?.nome || '—';
   // Prefere "empresa" (ficha rica) sobre "nome" pra dar contexto comercial
@@ -155,7 +163,16 @@ export default function FinReceitas({ sistemas }: { sistemas: Sistema[] }): Reac
       {/* Faixa de variação do mês */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
         <MetricCard icon={<CircleDollarSign size={18} />} label="Recebido no mês" valor={formatBRL(resumo?.recebidoMes || 0)} cor={t.accents.sage} sub={resumo ? `${resumo.recebimentosMesQtd} recebimento(s)` : ''} />
-        <MetricCard icon={<AlertCircle size={18} />} label="Em atraso" valor={formatBRL(resumo?.inadimplenciaValor || 0)} cor={t.accents.rose} sub={resumo ? `${resumo.inadimplenciaQtd} cobrança(s) vencida(s)` : ''} highlight={!!resumo && resumo.inadimplenciaValor > 0} />
+        <MetricCard
+          icon={<AlertCircle size={18} />}
+          label="Em atraso"
+          valor={formatBRL(resumo?.inadimplenciaValor || 0)}
+          cor={t.accents.rose}
+          sub={resumo ? `${resumo.inadimplenciaQtd} cobrança(s) vencida(s)` : ''}
+          highlight={!!resumo && resumo.inadimplenciaValor > 0}
+          onClick={(resumo?.inadimplenciaQtd || 0) > 0 ? focarAtrasadas : undefined}
+          hint="Filtra Próximas cobranças mostrando só as vencidas e rola até o painel pra você registrar recebimento."
+        />
         <MetricCard icon={<TrendingUp size={18} />} label="Novo MRR no mês" valor={formatBRL(resumo?.novoMrrMes || 0)} cor={t.accents.blue} sub={resumo ? `${resumo.novasAssinaturasMes} nova(s) assinatura(s)` : ''} />
         <MetricCard icon={<Repeat size={18} />} label="Churn do mês" valor={formatBRL(resumo?.churnMrr || 0)} cor={t.accents.clay} sub={resumo ? `${resumo.churnQtd} cancelada(s)` : ''} sinal={resumo && resumo.churnMrr > 0 ? '-' : ''} />
         <MetricCard icon={<DollarSign size={18} />} label="Avulsas no mês" valor={formatBRL(resumo?.avulsasMesValor || 0)} cor={t.accents.lavender} sub={resumo ? `${resumo.avulsasMesQtd} venda(s) única(s)` : ''} />
@@ -188,12 +205,22 @@ export default function FinReceitas({ sistemas }: { sistemas: Sistema[] }): Reac
         </Panel>
 
         {/* Próximas cobranças */}
-        <Panel title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CalendarClock size={16} /> Próximas cobranças (45 dias)</span>}>
-          {(resumo?.proximas || []).length === 0 ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Nenhuma cobrança próxima" style={{ padding: 16 }} />
-          ) : (
+        <div ref={proximasRef}>
+        <Panel
+          title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CalendarClock size={16} /> Próximas cobranças (45 dias){filtroAtrasadas ? ' · só atrasadas' : ''}</span>}
+          extra={filtroAtrasadas ? (
+            <Button size="small" type="text" onClick={() => setFiltroAtrasadas(false)}>Limpar filtro</Button>
+          ) : undefined}
+        >
+          {(() => {
+            const listaTodas = resumo?.proximas || [];
+            const lista = filtroAtrasadas ? listaTodas.filter((p) => p.dias < 0) : listaTodas;
+            if (lista.length === 0) {
+              return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={filtroAtrasadas ? 'Nenhuma atrasada agora' : 'Nenhuma cobrança próxima'} style={{ padding: 16 }} />;
+            }
+            return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 320, overflowY: 'auto' }}>
-              {(resumo?.proximas || []).map((p) => {
+              {lista.map((p) => {
                 const atrasada = p.dias < 0;
                 const corDia = atrasada ? t.accents.rose : p.dias <= 7 ? t.accents.peach : t.textTertiary;
                 return (
@@ -221,8 +248,10 @@ export default function FinReceitas({ sistemas }: { sistemas: Sistema[] }): Reac
                 );
               })}
             </div>
-          )}
+            );
+          })()}
         </Panel>
+        </div>
       </div>
 
       {/* Tabela de assinaturas */}
@@ -509,21 +538,43 @@ function DivV({ t }: { t: ReturnType<typeof useTokens> }): React.ReactElement {
   return <div style={{ width: 1, alignSelf: 'stretch', background: t.borderSoft }} />;
 }
 
-function MetricCard({ icon, label, valor, cor, sub, sinal, highlight }: {
+function MetricCard({ icon, label, valor, cor, sub, sinal, highlight, onClick, hint }: {
   icon: React.ReactNode; label: string; valor: string; cor: string; sub?: string; sinal?: string; highlight?: boolean;
+  // Tratativa: tile vira clicável quando tem CTA contextual (ex.: "Em atraso" → filtra atrasadas).
+  onClick?: () => void;
+  hint?: string;
 }): React.ReactElement {
   const t = useTokens();
   return (
-    <div style={{ background: t.surface, border: `1px solid ${highlight ? `${cor}66` : t.border}`, borderRadius: 14, padding: '14px 16px', boxShadow: t.shadowSoft, display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ color: cor, display: 'inline-flex' }}>{icon}</span>
-        <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</span>
+    <Tooltip title={onClick ? hint : undefined}>
+      <div
+        onClick={onClick}
+        role={onClick ? 'button' : undefined}
+        tabIndex={onClick ? 0 : undefined}
+        onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
+        style={{
+          background: t.surface,
+          border: `1px solid ${highlight ? `${cor}66` : t.border}`,
+          borderRadius: 14, padding: '14px 16px', boxShadow: t.shadowSoft,
+          display: 'flex', flexDirection: 'column', gap: 6,
+          cursor: onClick ? 'pointer' : 'default',
+          transition: 'transform 0.15s, box-shadow 0.15s',
+        }}
+        onMouseEnter={onClick ? (e) => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = t.shadow; } : undefined}
+        onMouseLeave={onClick ? (e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = t.shadowSoft; } : undefined}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ color: cor, display: 'inline-flex' }}>{icon}</span>
+          <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</span>
+        </div>
+        <div style={{ fontFamily: FONTS.display, fontSize: 22, fontWeight: 600, color: t.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.1 }}>
+          {sinal}{valor}
+        </div>
+        {sub && <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: onClick ? cor : t.textTertiary, fontWeight: onClick ? 600 : 400 }}>
+          {sub}{onClick ? ' →' : ''}
+        </div>}
       </div>
-      <div style={{ fontFamily: FONTS.display, fontSize: 22, fontWeight: 600, color: t.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.1 }}>
-        {sinal}{valor}
-      </div>
-      {sub && <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary }}>{sub}</div>}
-    </div>
+    </Tooltip>
   );
 }
 

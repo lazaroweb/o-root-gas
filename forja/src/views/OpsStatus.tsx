@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Button, Modal, Form, Input, Select, Tag, Empty, Spin, Popconfirm, App as AntApp } from 'antd';
-import { Plus, Activity, Trash2, Pencil, Zap, ExternalLink, Sparkles, GitBranch, RefreshCw, Server } from 'lucide-react';
+import { Button, Modal, Form, Input, Select, Tag, Empty, Spin, Popconfirm, App as AntApp, Tooltip } from 'antd';
+import { Plus, Activity, Trash2, Pencil, Zap, ExternalLink, Sparkles, GitBranch, RefreshCw, Server, Settings as SettingsIcon } from 'lucide-react';
 import { Panel, StatusDot } from '../components/ui';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -27,7 +27,14 @@ const PROVIDER_OPTIONS = [
 
 const SEM_APP = '__sem_app__';
 
-export default function OpsStatus({ sistemas }: { sistemas: Sistema[] }): React.ReactElement {
+interface OpsStatusProps {
+  sistemas: Sistema[];
+  // Callback pra levar o user direto em Configurações quando IA ou GitHub
+  // estão desconectados (princípio: alerta sem ação proibido).
+  onIrParaConfig?: () => void;
+}
+
+export default function OpsStatus({ sistemas, onIrParaConfig }: OpsStatusProps): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [apis, setApis] = useState<ApiEndpoint[]>([]);
@@ -107,17 +114,28 @@ export default function OpsStatus({ sistemas }: { sistemas: Sistema[] }): React.
     );
   };
 
-  const statusRow = (icon: React.ReactNode, nome: string, detalhe: string, conectado: boolean, configurado: boolean, latencia?: number) => (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderBottom: `1px solid ${t.borderSoft}` }}>
-      <StatusDot color={!configurado ? t.textTertiary : conectado ? t.accents.sage : t.accents.rose} />
-      <span style={{ width: 30, height: 30, borderRadius: 8, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: t.surfaceMuted, color: t.textSecondary }}>{icon}</span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ color: t.text, fontWeight: 600, fontSize: 14 }}>{nome}</div>
-        <div style={{ color: t.textTertiary, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{detalhe}{latencia ? ` · ${latencia}ms` : ''}</div>
+  const statusRow = (icon: React.ReactNode, nome: string, detalhe: string, conectado: boolean, configurado: boolean, latencia?: number) => {
+    // Tratativa: linha vai pra Configurações quando há problema (sem config ou desconectada).
+    const precisaAjuste = !configurado || !conectado;
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderBottom: `1px solid ${t.borderSoft}` }}>
+        <StatusDot color={!configurado ? t.textTertiary : conectado ? t.accents.sage : t.accents.rose} />
+        <span style={{ width: 30, height: 30, borderRadius: 8, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: t.surfaceMuted, color: t.textSecondary }}>{icon}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ color: t.text, fontWeight: 600, fontSize: 14 }}>{nome}</div>
+          <div style={{ color: t.textTertiary, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{detalhe}{latencia ? ` · ${latencia}ms` : ''}</div>
+        </div>
+        {conexaoTag(conectado, configurado)}
+        {precisaAjuste && onIrParaConfig && (
+          <Tooltip title={!configurado ? 'Cadastre a chave/token em Configurações.' : 'Verifique a chave/token em Configurações — pode ter expirado ou mudado de endpoint.'}>
+            <Button size="small" type="text" icon={<SettingsIcon size={13} />} onClick={onIrParaConfig}>
+              {!configurado ? 'Configurar' : 'Revisar'}
+            </Button>
+          </Tooltip>
+        )}
       </div>
-      {conexaoTag(conectado, configurado)}
-    </div>
-  );
+    );
+  };
 
   const statusInfo = (api: ApiEndpoint) => {
     const live = apiStatusOf(api.id);

@@ -13218,6 +13218,11 @@ interface AuditFontes {
   // Auditoria incremental (Fase 2.5): rodou só sobre o diff desde a última auditoria.
   incremental?: boolean;
   baseCommit?: string;
+  // Chunking de diff (v1.147): batches usados, arquivos ignorados pelo cap global,
+  // arquivos que foram splitted em janelas. Espelho de AuditFontes em types.ts.
+  batchesUsados?: number;
+  arquivosIgnorados?: string[];
+  arquivosSplitted?: string[];
   // Auditoria de onboarding: sistema sem dados — devolvemos checklist (sem IA).
   onboarding?: boolean;
 }
@@ -13505,49 +13510,254 @@ interface DiffContexto {
   erro?: string;
 }
 
-// Lê o DIFF (patches) entre o commit `baseSha` (já auditado) e o HEAD atual via
-// a compare API do GitHub. Diferente de _lerCodigoGitHub (que lê o repo inteiro),
-// aqui só entram os arquivos de código que mudaram — base da auditoria incremental.
-// O `patch` já vem inline na resposta do compare, então não há download de blobs.
-function _lerDiffGitHub(repoUrl: string, baseSha: string): DiffContexto {
+// ─── Chunking de diff (v1.147 — resolve DIFF TRUNCADO) ────────────────────────
+//
+// Antes: 1 chamada LLM com diff inteiro → estoura limites → trunca silenciosamente.
+// Agora: diff fatiado em batches que cabem na janela do modelo, LLM por batch,
+// achados fundidos com dedup, narrativa final consolidada em chamada extra.
+//
+// Princípios:
+// - Arquivo é a unidade primária. Arquivos individualmente > BATCH_MAX_BYTES
+//   viram múltiplas janelas (com 5 linhas de overlap pra preservar contexto de
+//   função/bloco — sem isso, a AI vê só metade de um diff e tira conclusão errada).
+// - Cap global (BATCH_MAX_TOTAL): controla custo. Arquivos que sobrarem ficam
+//   listados em `arquivosIgnorados` — com nome — pro user saber EXATAMENTE o
+//   que não foi auditado (acaba a "traição silenciosa" do truncamento mudo).
+// - Arquivos de prioridade alta entram primeiro (já existia em `_codePrioridade`).
+
+const _BATCH_MAX_BYTES = 75_000;       // Capacidade efetiva por chamada LLM (folga pro prompt fixo + achados anteriores)
+const _BATCH_MAX_TOTAL = 5;            // Máx de batches (cap global = ~375KB de diff por auditoria)
+const _BATCH_OVERLAP_LINHAS = 5;       // Sobreposição entre janelas do mesmo arquivo
+
+interface DiffArquivoBruto {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  patch: string;
+  bytes: number;
+}
+
+interface DiffArquivoBlocado {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  patch: string;          // patch já formatado (já com header, ja com janela#X se splitted)
+  bytes: number;
+  janela?: { ix: number; total: number }; // presente se arquivo foi splitted
+}
+
+interface DiffBatch {
+  arquivos: DiffArquivoBlocado[];
+  contexto: string;       // texto completo do batch, pronto pra colar no prompt LLM
+  bytes: number;
+}
+
+interface DiffPaginado {
+  arquivos: DiffArquivoBruto[];   // todos os arquivos do compare (filtrados, sem truncar nada)
+  batches: DiffBatch[];           // até _BATCH_MAX_TOTAL batches
+  arquivosIgnorados: string[];    // nomes dos que ficaram fora pelo cap global
+  arquivosSplitted: string[];     // nomes dos que foram divididos em múltiplas janelas
+  baseCommit: string;
+  headCommit: string;
+  bytes: number;
+  erro?: string;
+}
+
+// Busca o compare GitHub e retorna a lista CRUA de arquivos (sem caps), pronta
+// pra ser fatiada em batches. Separar essa etapa permite que tanto o caminho
+// "1 batch único" (diff pequeno) quanto o "N batches" (diff grande) compartilhem
+// a mesma origem dos dados.
+function _ghLerCompareBruto(repoUrl: string, baseSha: string): { arquivos: DiffArquivoBruto[]; baseCommit: string; headCommit: string; erro?: string } {
   const base7 = String(baseSha || '').slice(0, 7);
-  const vazio: DiffContexto = { contexto: '', arquivos: 0, bytes: 0, baseCommit: base7, headCommit: '', truncado: false, lista: [] };
   const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
-  if (!token) return { ...vazio, erro: 'GitHub não conectado (sem token).' };
+  if (!token) return { arquivos: [], baseCommit: base7, headCommit: '', erro: 'GitHub não conectado (sem token).' };
   const full = _ghFullName(repoUrl);
-  if (!/^[^/]+\/[^/]+$/.test(full)) return { ...vazio, erro: 'repoUrl inválida.' };
+  if (!/^[^/]+\/[^/]+$/.test(full)) return { arquivos: [], baseCommit: base7, headCommit: '', erro: 'repoUrl inválida.' };
   const headers = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'User-Agent': 'FORJA' };
   try {
     const head = _ghHeadCommitCurto(full, headers);
-    if (!head) return { ...vazio, erro: 'Não consegui ler o HEAD do repositório.' };
-    if (head === base7) return { ...vazio, headCommit: head };
+    if (!head) return { arquivos: [], baseCommit: base7, headCommit: '', erro: 'Não consegui ler o HEAD do repositório.' };
+    if (head === base7) return { arquivos: [], baseCommit: base7, headCommit: head };
 
     const cmp = UrlFetchApp.fetch(`https://api.github.com/repos/${full}/compare/${base7}...${head}`, { headers, muteHttpExceptions: true });
-    if (cmp.getResponseCode() !== 200) return { ...vazio, headCommit: head, erro: `Não consegui comparar os commits (${cmp.getResponseCode()}).` };
+    if (cmp.getResponseCode() !== 200) return { arquivos: [], baseCommit: base7, headCommit: head, erro: `Não consegui comparar os commits (${cmp.getResponseCode()}).` };
     const j = JSON.parse(cmp.getContentText()) as { files?: Array<{ filename: string; status: string; additions?: number; deletions?: number; patch?: string }> };
 
     const arquivos = (j.files || [])
       .filter((f) => _codeArquivoRelevante(f.filename, 0))
-      .sort((a, b) => _codePrioridade(b.filename) - _codePrioridade(a.filename));
+      .sort((a, b) => _codePrioridade(b.filename) - _codePrioridade(a.filename))
+      .map((f): DiffArquivoBruto => {
+        let patch = String(f.patch || '');
+        if (!patch) patch = f.status === 'removed' ? '(arquivo removido)' : '(sem patch textual — binário, renomeação ou diff muito grande)';
+        return {
+          filename: f.filename,
+          status: f.status,
+          additions: f.additions || 0,
+          deletions: f.deletions || 0,
+          patch,
+          bytes: patch.length,
+        };
+      });
 
-    const partes: string[] = [];
-    let bytes = 0; let truncado = false; let incluidos = 0; const lista: string[] = [];
-    for (const f of arquivos) {
-      if (incluidos >= _CODE_MAX_ARQUIVOS) { truncado = true; break; }
-      if (bytes >= _CODE_MAX_BYTES_TOTAL) { truncado = true; break; }
-      let patch = String(f.patch || '');
-      if (!patch) patch = f.status === 'removed' ? '(arquivo removido)' : '(sem patch textual — binário, renomeação ou diff muito grande)';
-      if (patch.length > _CODE_MAX_BYTES_ARQUIVO) { patch = patch.slice(0, _CODE_MAX_BYTES_ARQUIVO) + '\n… [diff truncado para a auditoria]'; truncado = true; }
-      partes.push(`\n### ${f.filename} (${f.status}, +${f.additions || 0} −${f.deletions || 0})\n\`\`\`diff\n${patch}\n\`\`\`\n`);
-      bytes += patch.length; incluidos++; lista.push(f.filename);
-    }
-    if (incluidos === 0) return { ...vazio, headCommit: head, arquivos: 0 };
-
-    const cabecalho = `Diff do repositório ${full}: ${base7} → ${head}\nArquivos de código alterados: ${incluidos}${truncado ? ' · diff truncado pelo orçamento' : ''}\n`;
-    return { contexto: cabecalho + partes.join(''), arquivos: incluidos, bytes, baseCommit: base7, headCommit: head, truncado, lista };
+    return { arquivos, baseCommit: base7, headCommit: head };
   } catch (e: unknown) {
-    return { ...vazio, erro: e instanceof Error ? e.message : 'Erro ao ler o diff' };
+    return { arquivos: [], baseCommit: base7, headCommit: '', erro: e instanceof Error ? e.message : 'Erro ao ler o diff' };
   }
+}
+
+// Splita um patch grande em janelas linha-a-linha com `overlap` linhas de
+// sobreposição entre janelas adjacentes. Preserva o cabeçalho `@@` mínimo pra
+// que cada janela ainda faça sentido como diff isolado pra AI.
+function _splitarPatchEmJanelas(patch: string, capBytes: number, overlap: number): string[] {
+  if (patch.length <= capBytes) return [patch];
+  const linhas = patch.split('\n');
+  const janelas: string[] = [];
+  let i = 0;
+  while (i < linhas.length) {
+    let acumulado = '';
+    let j = i;
+    while (j < linhas.length) {
+      const next = linhas[j] + '\n';
+      if (acumulado.length + next.length > capBytes && acumulado.length > 0) break;
+      acumulado += next;
+      j++;
+    }
+    janelas.push(acumulado.trimEnd());
+    if (j >= linhas.length) break;
+    // Próxima janela começa `overlap` linhas atrás pra manter contexto.
+    i = Math.max(j - overlap, i + 1);
+  }
+  return janelas;
+}
+
+// Monta os batches a partir dos arquivos brutos. Aplica:
+// 1. Split de arquivo grande em janelas
+// 2. Empilhamento em batches até _BATCH_MAX_BYTES
+// 3. Cap global _BATCH_MAX_TOTAL — sobras vão pra `arquivosIgnorados`
+function _montarBatchesDoDiff(
+  arquivos: DiffArquivoBruto[],
+  repoFull: string,
+  baseCommit: string,
+  headCommit: string,
+): { batches: DiffBatch[]; arquivosIgnorados: string[]; arquivosSplitted: string[]; bytesTotal: number } {
+  // Expande arquivos grandes em janelas, mantendo ordem de prioridade.
+  const unidades: DiffArquivoBlocado[] = [];
+  const splittedNomes: string[] = [];
+  for (const a of arquivos) {
+    if (a.bytes <= _BATCH_MAX_BYTES) {
+      unidades.push({ filename: a.filename, status: a.status, additions: a.additions, deletions: a.deletions, patch: a.patch, bytes: a.bytes });
+    } else {
+      const janelas = _splitarPatchEmJanelas(a.patch, _BATCH_MAX_BYTES, _BATCH_OVERLAP_LINHAS);
+      splittedNomes.push(a.filename);
+      janelas.forEach((p, ix) => {
+        unidades.push({ filename: a.filename, status: a.status, additions: a.additions, deletions: a.deletions, patch: p, bytes: p.length, janela: { ix: ix + 1, total: janelas.length } });
+      });
+    }
+  }
+
+  // Empilha em batches respeitando o cap de bytes.
+  const batches: DiffBatch[] = [];
+  let atual: DiffArquivoBlocado[] = [];
+  let atualBytes = 0;
+  const ignorados: string[] = [];
+
+  for (const u of unidades) {
+    // Se já bateu o cap global, marca como ignorado.
+    if (batches.length >= _BATCH_MAX_TOTAL) {
+      // dedup: arquivo grande splitted pode aparecer várias vezes; conta uma só.
+      if (ignorados.indexOf(u.filename) < 0) ignorados.push(u.filename);
+      continue;
+    }
+    // Estouraria o cap por batch? Fecha o batch atual e abre outro.
+    if (atualBytes + u.bytes > _BATCH_MAX_BYTES && atual.length > 0) {
+      batches.push(_finalizarBatch(atual, repoFull, baseCommit, headCommit, batches.length + 1));
+      atual = [];
+      atualBytes = 0;
+      // Verifica cap global de novo antes de iniciar nova unidade no novo batch.
+      if (batches.length >= _BATCH_MAX_TOTAL) {
+        if (ignorados.indexOf(u.filename) < 0) ignorados.push(u.filename);
+        continue;
+      }
+    }
+    atual.push(u);
+    atualBytes += u.bytes;
+  }
+  if (atual.length > 0 && batches.length < _BATCH_MAX_TOTAL) {
+    batches.push(_finalizarBatch(atual, repoFull, baseCommit, headCommit, batches.length + 1));
+  }
+
+  let bytesTotal = 0;
+  batches.forEach((b) => { bytesTotal += b.bytes; });
+
+  return { batches, arquivosIgnorados: ignorados, arquivosSplitted: splittedNomes, bytesTotal };
+}
+
+function _finalizarBatch(
+  unidades: DiffArquivoBlocado[],
+  repoFull: string,
+  baseCommit: string,
+  headCommit: string,
+  numBatch: number,
+): DiffBatch {
+  const partes: string[] = [];
+  for (const u of unidades) {
+    const janelaTxt = u.janela ? ` · janela ${u.janela.ix}/${u.janela.total}` : '';
+    partes.push(`\n### ${u.filename} (${u.status}, +${u.additions} −${u.deletions}${janelaTxt})\n\`\`\`diff\n${u.patch}\n\`\`\`\n`);
+  }
+  const cabecalho = `Diff do repositório ${repoFull}: ${baseCommit} → ${headCommit} · batch ${numBatch}\nArquivos neste batch: ${unidades.length}\n`;
+  return { arquivos: unidades, contexto: cabecalho + partes.join(''), bytes: unidades.reduce((s, u) => s + u.bytes, 0) };
+}
+
+// Pagina o diff completo: agrega batches + métricas. Retorna `arquivosIgnorados`
+// pra UI mostrar EXATAMENTE o que ficou de fora (sem silêncio).
+function _lerDiffGitHubPaginado(repoUrl: string, baseSha: string): DiffPaginado {
+  const bruto = _ghLerCompareBruto(repoUrl, baseSha);
+  const full = _ghFullName(repoUrl);
+  if (bruto.erro) {
+    return { arquivos: [], batches: [], arquivosIgnorados: [], arquivosSplitted: [], baseCommit: bruto.baseCommit, headCommit: bruto.headCommit, bytes: 0, erro: bruto.erro };
+  }
+  if (bruto.arquivos.length === 0) {
+    return { arquivos: [], batches: [], arquivosIgnorados: [], arquivosSplitted: [], baseCommit: bruto.baseCommit, headCommit: bruto.headCommit, bytes: 0 };
+  }
+  const { batches, arquivosIgnorados, arquivosSplitted, bytesTotal } = _montarBatchesDoDiff(bruto.arquivos, full, bruto.baseCommit, bruto.headCommit);
+  return {
+    arquivos: bruto.arquivos,
+    batches,
+    arquivosIgnorados,
+    arquivosSplitted,
+    baseCommit: bruto.baseCommit,
+    headCommit: bruto.headCommit,
+    bytes: bytesTotal,
+  };
+}
+
+// Wrapper retro-compatível: monta UM DiffContexto único a partir do paginado
+// (usa só batch 1). Mantido pra rotas que ainda chamam o nome antigo — e como
+// caminho rápido quando o diff todo cabe em 1 batch (caso comum: 90% das vezes).
+function _lerDiffGitHub(repoUrl: string, baseSha: string): DiffContexto {
+  const pag = _lerDiffGitHubPaginado(repoUrl, baseSha);
+  const base7 = pag.baseCommit;
+  if (pag.erro) {
+    return { contexto: '', arquivos: 0, bytes: 0, baseCommit: base7, headCommit: pag.headCommit, truncado: false, lista: [], erro: pag.erro };
+  }
+  if (pag.batches.length === 0) {
+    return { contexto: '', arquivos: 0, bytes: 0, baseCommit: base7, headCommit: pag.headCommit, truncado: false, lista: [] };
+  }
+  const arquivosTotal = pag.arquivos.length;
+  const arquivosNoBatch1 = pag.batches[0].arquivos.length;
+  const truncado = pag.batches.length > 1 || pag.arquivosIgnorados.length > 0;
+  const lista = pag.batches[0].arquivos.map((u) => u.filename);
+  return {
+    contexto: pag.batches[0].contexto,
+    arquivos: arquivosNoBatch1,
+    bytes: pag.batches[0].bytes,
+    baseCommit: base7,
+    headCommit: pag.headCommit,
+    truncado: arquivosTotal > arquivosNoBatch1,
+    lista,
+  };
 }
 
 // Status de frescor da auditoria de código: diz se o repositório mudou desde a
@@ -14056,6 +14266,255 @@ function _reconciliarComAnterior(payload: AuditPayload, sistemaId: string): Audi
 // (1) os achados anteriores e (2) só o DIFF desde a última auditoria, pedindo pra
 // RECONCILIAR — o que o diff resolveu, o que persiste e quais problemas novos ele
 // introduziu. Sai no MESMO formato AuditPayload, então persistência/render não mudam.
+// ─── Merge de findings entre batches (v1.147) ─────────────────────────────────
+//
+// Usado quando a auditoria roda em N batches: cada batch devolve seus achados
+// e seus "resolvidos". Aqui:
+// - Findings dedupados via `_mesmoAchado` (Jaccard + área+keywords). Mantemos
+//   a primeira ocorrência (já vem do batch de maior prioridade, pois ordenamos
+//   por `_codePrioridade`).
+// - Resolvidos unidos por título (case-insensitive, espaços normalizados).
+// - "estadoGeral" / "proximosPassos" / "oQueEmpolga" ficam VAZIOS aqui — quem
+//   preenche é a síntese final em chamada LLM extra (vê narrativa coerente).
+function _mergeAuditPayloads(payloads: AuditPayload[]): AuditPayload {
+  const findings: AuditFinding[] = [];
+  const resolvidosSet = new Map<string, string>(); // chave normalizada → título original
+  for (const p of payloads) {
+    if (!p || !Array.isArray(p.findings)) continue;
+    for (const f of p.findings) {
+      const jaExiste = findings.some((e) => _mesmoAchado(e, f));
+      if (!jaExiste) findings.push(f);
+    }
+    if (Array.isArray(p.resolvidos)) {
+      for (const r of p.resolvidos) {
+        const k = String(r || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        if (k && !resolvidosSet.has(k)) resolvidosSet.set(k, String(r));
+      }
+    }
+  }
+  // Re-ID posicional pros findings (importante: registrosJson é chaveado por id).
+  const findingsId = findings.map((f, i) => Object.assign({}, f, { id: 'finding-' + (i + 1) }));
+  return {
+    estadoGeral: '',
+    oQueEmpolga: [],
+    proximosPassos: '',
+    findings: findingsId,
+    resolvidos: Array.from(resolvidosSet.values()),
+  };
+}
+
+// Síntese final: depois dos batches devolverem findings, fazemos UMA chamada
+// extra pedindo só a narrativa (Estado geral / O que mudou / Próximos passos)
+// baseada nos achados consolidados — sem mandar o diff de novo, só os títulos.
+// Custo: 1 chamada curta (~800 tokens out).
+function _sintetizarNarrativaPosBatch(
+  sistemaNome: string,
+  payload: AuditPayload,
+  numBatches: number,
+  totalArquivos: number,
+): { estadoGeral: string; oQueEmpolga: string[]; proximosPassos: string } {
+  const fallback = {
+    estadoGeral: `Auditei ${totalArquivos} arquivo(s) modificado(s) em ${numBatches} batch(es). ${payload.findings.length} achado(s) ativo(s), ${(payload.resolvidos || []).length} resolvido(s).`,
+    oQueEmpolga: [],
+    proximosPassos: payload.findings.length > 0
+      ? `Comece pelos achados de severidade ALTA (${payload.findings.filter(f => f.severidade === 'alta').length}).`
+      : 'Sem achados ativos — bom momento pra avançar com features novas.',
+  };
+  try {
+    const findingsTxt = payload.findings.slice(0, 12)
+      .map((f, i) => `#${i + 1} [${f.severidade}|${f.area}|${f.origem || '?'}] ${f.titulo}`)
+      .join('\n');
+    const resolvidosTxt = (payload.resolvidos || []).slice(0, 8).map((r, i) => `- ${r}`).join('\n');
+
+    const prompt = (
+      `Você sintetizou achados de uma auditoria incremental de "${sistemaNome}". O diff foi grande e veio em ${numBatches} batches (cobrindo ${totalArquivos} arquivos). Os achados foram consolidados:\n\n`
+      + `## Achados ativos (${payload.findings.length})\n${findingsTxt || '(nenhum)'}\n\n`
+      + `## Resolvidos pelo diff (${(payload.resolvidos || []).length})\n${resolvidosTxt || '(nenhum)'}\n\n`
+      + `Sua tarefa: gerar a NARRATIVA executiva em JSON puro (sem cercas):\n`
+      + `{\n`
+      + `  "estadoGeral": "<2-3 frases sobre o impacto do diff: o que melhorou, o que ainda falta. Cite números (X resolvidos, Y persistem).>",\n`
+      + `  "oQueEmpolga": ["bullet 1", "bullet 2"],\n`
+      + `  "proximosPassos": "<1 parágrafo. Aponte o achado #N mais importante por nome e diga POR ONDE COMEÇAR.>"\n`
+      + `}\n\n`
+      + `Seja CONCRETO. Sem genérico. JSON válido, aspas escapadas.`
+    );
+    const messages: LlmMessage[] = [
+      { role: 'system', content: 'Você é um auditor técnico sênior fazendo a síntese final de uma auditoria já reconciliada.' },
+      { role: 'user', content: prompt },
+    ];
+    const resp = forjaCallLLM(messages, 800, undefined, 'auditoria');
+    // Parse tolerante: extrai primeiro {...}
+    const m = resp.match(/\{[\s\S]*\}/);
+    if (!m) return fallback;
+    const j = JSON.parse(m[0]) as { estadoGeral?: string; oQueEmpolga?: unknown[]; proximosPassos?: string };
+    return {
+      estadoGeral: String(j.estadoGeral || fallback.estadoGeral),
+      oQueEmpolga: Array.isArray(j.oQueEmpolga) ? j.oQueEmpolga.map((x) => String(x)) : [],
+      proximosPassos: String(j.proximosPassos || fallback.proximosPassos),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+// Roda 1 chamada LLM pra UM batch do diff. Retorna o AuditPayload já parseado
+// (com findings + resolvidos do batch). Sem narrativa aqui — vai pra síntese.
+function _auditarUmBatch(
+  sistemaId: string,
+  sistema: Record<string, unknown>,
+  diffContexto: string,
+  prevPayload: AuditPayload,
+  numBatch: number,
+  totalBatches: number,
+  modeloAuditoria: string,
+): AuditPayload | null {
+  const areasPermitidas = 'governanca|arquitetura|seguranca|dependencias|testes|operacional|financeiro|produto|ux|codigo|performance';
+  const prevList = prevPayload.findings
+    .map((f, i) => `#${i + 1} [${f.severidade}|${f.area}] ${f.titulo}`)
+    .join('\n');
+
+  const promptUser = (
+    `Auditoria INCREMENTAL do sistema "${sistema.nome}" — BATCH ${numBatch}/${totalBatches}.\n\n`
+    + 'O diff é grande e está sendo auditado em pedaços. Você recebe AGORA UM PEDAÇO dos arquivos alterados. '
+    + 'Sua tarefa: analisar SÓ os arquivos deste batch, reconciliando contra os achados anteriores listados abaixo.\n\n'
+    + 'Responda APENAS com o JSON dentro de <AUDIT>...</AUDIT> (sem texto fora):\n\n'
+    + '<AUDIT>\n'
+    + '{\n'
+    + '  "resolvidos": ["<título de achado anterior que ESTE batch claramente resolve>"],\n'
+    + '  "findings": [\n'
+    + '    {\n'
+    + '      "titulo": "<curto, máx 70 chars>",\n'
+    + '      "severidade": "alta|media|baixa",\n'
+    + '      "area": "' + areasPermitidas + '",\n'
+    + '      "origem": "novo|persiste",\n'
+    + '      "problema": "<1-2 frases>",\n'
+    + '      "evidencia": "<arquivo:trecho do diff>",\n'
+    + '      "solucao": "<2-4 passos numerados>",\n'
+    + '      "prompt": "<colável no Cursor/Claude>",\n'
+    + '      "toolSugerida": "registrar_risco|registrar_decisao|registrar_oportunidade",\n'
+    + '      "toolParams": { "sistemaId": "' + sistemaId + '" }\n'
+    + '    }\n'
+    + '  ]\n'
+    + '}\n'
+    + '</AUDIT>\n\n'
+    + 'REGRAS DURAS:\n'
+    + '- SÓ analise os arquivos DESTE batch. NÃO especule sobre arquivos que não estão aqui.\n'
+    + '- "resolvidos" = títulos LITERAIS dos achados anteriores que ESTE batch resolve. Na dúvida, NÃO inclua (outro batch pode resolver).\n'
+    + '- Persistem ≠ todos os anteriores: só marque "persiste" se o batch atual mostra que o problema CONTINUA (ex.: arquivo do problema NÃO mudou ou mudou em outra dimensão).\n'
+    + '- Achados NOVOS: só os introduzidos pelo diff DESTE batch. Sem inferências sobre outros batches.\n'
+    + '- Máx 6 findings por batch. Qualidade > quantidade.\n'
+    + '- JSON VÁLIDO. Aspas escapadas. Sem comentários.\n\n'
+    + 'IDs reais: sistemaId="' + sistemaId + '"\n\n'
+    + '--- ACHADOS ANTERIORES (referência para reconciliação) ---\n' + prevList + '\n\n'
+    + '--- DIFF DESTE BATCH ---\n' + diffContexto
+  );
+
+  const messages: LlmMessage[] = [
+    { role: 'system', content: 'Você audita UM batch de um diff grande. Não generaliza pra arquivos fora do batch.' },
+    { role: 'user', content: promptUser },
+  ];
+  try {
+    const resp = forjaCallLLM(messages, 4000, modeloAuditoria, 'auditoria');
+    const parsed = _parseAuditPayload(resp);
+    return parsed.payload;
+  } catch {
+    return null;
+  }
+}
+
+// Versão CHUNKED da auditoria incremental: usada quando o diff bate em > 1 batch.
+function _executarAuditoriaIncrementalChunked(
+  sistemaId: string,
+  sistema: Record<string, unknown>,
+  modo: 'codigo' | 'completa',
+  paginado: DiffPaginado,
+  prevPayload: AuditPayload,
+  prevRegistros: Record<string, RegistroFinding>,
+): ServerResult {
+  const fontes = _coletarFontesAuditoria(sistemaId);
+  fontes.modo = modo;
+  fontes.fonteCodigo = 'github';
+  fontes.incremental = true;
+  fontes.arquivosLidos = paginado.arquivos.length - paginado.arquivosIgnorados.length;
+  fontes.bytesCodigo = paginado.bytes;
+  fontes.commitSha = paginado.headCommit;
+  fontes.baseCommit = paginado.baseCommit;
+  // Em chunked, "truncado" só é verdade se o cap GLOBAL bateu (não pela
+  // existência de múltiplos batches em si — múltiplos batches = sucesso!).
+  fontes.codigoTruncado = paginado.arquivosIgnorados.length > 0;
+  fontes.batchesUsados = paginado.batches.length;
+  fontes.arquivosIgnorados = paginado.arquivosIgnorados;
+  fontes.arquivosSplitted = paginado.arquivosSplitted;
+
+  const props = PropertiesService.getScriptProperties();
+  const modeloAuditoria = props.getProperty('LLM_MODEL_AUDITORIA') || '';
+  const modeloEfetivo = modeloAuditoria || props.getProperty('LLM_MODEL') || 'desconhecido';
+
+  const inicio = Date.now();
+
+  // Roda os batches sequencialmente. Falhas em 1 batch não derrubam os outros.
+  const payloadsParciais: AuditPayload[] = [];
+  for (let i = 0; i < paginado.batches.length; i++) {
+    const b = paginado.batches[i];
+    const p = _auditarUmBatch(sistemaId, sistema, b.contexto, prevPayload, i + 1, paginado.batches.length, modeloAuditoria);
+    if (p) payloadsParciais.push(p);
+  }
+
+  if (payloadsParciais.length === 0) {
+    return { ok: false, error: 'Todos os batches da auditoria falharam. Tente de novo em 1 min ou troque o modelo em Configurações.' };
+  }
+
+  // Merge: dedup findings + união de resolvidos.
+  const merged = _mergeAuditPayloads(payloadsParciais);
+
+  // Síntese final: 1 chamada extra pra narrativa.
+  const narrativa = _sintetizarNarrativaPosBatch(String(sistema.nome || 'sistema'), merged, paginado.batches.length, paginado.arquivos.length);
+  merged.estadoGeral = narrativa.estadoGeral;
+  merged.oQueEmpolga = narrativa.oQueEmpolga;
+  merged.proximosPassos = narrativa.proximosPassos;
+
+  const duracaoMs = Date.now() - inicio;
+
+  // Auto-fecha backlog dos resolvidos antes de calcular saúde.
+  let fechadosAuto: BacklogFechadoAuto[] = [];
+  if (merged.resolvidos && merged.resolvidos.length > 0) {
+    fechadosAuto = _fecharBacklogResolvidos(prevPayload, prevRegistros, merged.resolvidos);
+  }
+
+  const saudeAtual = calcularSaudeReal(sistemaId, merged);
+  const saudeScore = (saudeAtual.ok && saudeAtual.data) ? Number((saudeAtual.data as { score: number }).score) : 0;
+
+  const resultadoFinal: AuditResultPayloadServer = {
+    id: '',
+    texto: `## Estado geral\n${merged.estadoGeral}\n\n## Próximos passos estratégicos\n${merged.proximosPassos}`,
+    payload: merged,
+    fontes,
+    saudeAtual: saudeAtual.ok ? saudeAtual.data : null,
+    modeloUsado: modeloEfetivo,
+    duracaoMs,
+    criadoEm: new Date().toISOString(),
+    registros: {},
+    fechadosAuto,
+  };
+
+  try {
+    const novaLinha = dbCreate('Auditorias', {
+      sistemaId,
+      criadoEm: resultadoFinal.criadoEm,
+      modeloUsado: modeloEfetivo,
+      duracaoMs,
+      scoreNoMomento: saudeScore,
+      numFindings: merged.findings.length,
+      payloadJson: JSON.stringify(merged),
+      fontesJson: JSON.stringify(fontes),
+      registrosJson: '{}',
+    }) as Record<string, unknown>;
+    resultadoFinal.id = String(novaLinha.id || '');
+  } catch { /* persistência é best-effort */ }
+
+  return { ok: true, data: resultadoFinal };
+}
+
 function _executarAuditoriaIncremental(
   sistemaId: string,
   sistema: Record<string, unknown>,
@@ -14073,6 +14532,7 @@ function _executarAuditoriaIncremental(
   fontes.commitSha = diff.headCommit;
   fontes.baseCommit = diff.baseCommit;
   fontes.codigoTruncado = diff.truncado;
+  fontes.batchesUsados = 1;
 
   const areasPermitidas = 'governanca|arquitetura|seguranca|dependencias|testes|operacional|financeiro|produto|ux|codigo|performance';
 
@@ -14222,9 +14682,26 @@ function acaoIAAuditarSistema(sistemaId: string, modo?: string, forcar?: boolean
             let prevRegistros: Record<string, RegistroFinding> = {};
             try { prevRegistros = JSON.parse(String(ultAud.registrosJson || '{}')) || {}; } catch { prevRegistros = {}; }
             if (prevPayload && Array.isArray(prevPayload.findings) && prevPayload.findings.length > 0) {
-              const diff = _lerDiffGitHub(repoUrlSist, lastCommit);
-              if (!diff.erro && diff.arquivos > 0) {
-                return _executarAuditoriaIncremental(sistemaId, sistema, modoSolicitado, diff, prevPayload, prevRegistros);
+              // Lê o diff PAGINADO. Se cabe em 1 batch (caso comum) → caminho rápido (1 chamada).
+              // Se precisa de N batches → caminho chunked (N chamadas + 1 síntese), resolve o
+              // DIFF TRUNCADO histórico que silenciava arquivos sem o user saber.
+              const pag = _lerDiffGitHubPaginado(repoUrlSist, lastCommit);
+              if (!pag.erro && pag.batches.length > 0) {
+                if (pag.batches.length === 1 && pag.arquivosIgnorados.length === 0) {
+                  // Cabe em 1 batch → fluxo single (mais rápido, 1 chamada).
+                  const diffSingle: DiffContexto = {
+                    contexto: pag.batches[0].contexto,
+                    arquivos: pag.batches[0].arquivos.length,
+                    bytes: pag.batches[0].bytes,
+                    baseCommit: pag.baseCommit,
+                    headCommit: pag.headCommit,
+                    truncado: false,
+                    lista: pag.batches[0].arquivos.map((u) => u.filename),
+                  };
+                  return _executarAuditoriaIncremental(sistemaId, sistema, modoSolicitado, diffSingle, prevPayload, prevRegistros);
+                }
+                // Múltiplos batches → caminho chunked.
+                return _executarAuditoriaIncrementalChunked(sistemaId, sistema, modoSolicitado, pag, prevPayload, prevRegistros);
               }
               // Sem diff utilizável (erro/0 arquivos relevantes) → cai pra completa.
             }

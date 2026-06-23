@@ -36,6 +36,52 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.147.0] — 2026-06-23
+
+### Resolvido — DIFF TRUNCADO (auditoria com IA agora cobre repos grandes)
+
+- **Backend (`server.ts`)** — chunking automático do diff GitHub:
+  - Substituído o pipeline single-shot (1 chamada LLM com diff inteiro → truncava em silêncio quando passava de 110KB / 28 arquivos / 15KB por arquivo).
+  - Novo `_lerDiffGitHubPaginado` retorna a lista bruta de arquivos do compare + N batches já empacotados pra caber na janela do modelo (75KB por batch).
+  - Arquivos individualmente grandes são divididos em **janelas com overlap de 5 linhas** (`_splitarPatchEmJanelas`) — preserva contexto de bloco/função entre fatias.
+  - `_executarAuditoriaIncrementalChunked` roda N chamadas LLM (uma por batch), faz **merge dedupado** dos findings via `_mergeAuditPayloads` (reusa `_mesmoAchado` com Jaccard + área+keywords), e **sintetiza a narrativa final** em chamada extra leve (`_sintetizarNarrativaPosBatch`).
+  - Cap global de **5 batches** por auditoria controla custo. Arquivos que ficam de fora vão pra `fontes.arquivosIgnorados` (lista explícita por nome) — acaba o silêncio do truncamento mudo.
+  - Caminho rápido preservado: diff que cabe em 1 batch sem ignorados continua chamando o fluxo single (1 chamada LLM, sem overhead).
+- **UI (`AuditoriaDrawer.tsx`)** — sinais novos no cabeçalho da auditoria:
+  - Tag verde **`N batches · coberto`** quando o diff foi fatiado mas TUDO foi auditado.
+  - Tag lavanda **`N splitted`** com lista no tooltip dos arquivos que foram divididos em janelas.
+  - Tag peach **`N arquivo(s) fora desta auditoria`** com lista no tooltip dos ignorados pelo cap global + orientação de tratativa ("rode Nova auditoria depois").
+  - O `.md` baixado também reflete os números: `auditado em N batches`, `N divididos em janelas`, `N ignorados pelo cap global` com nomes.
+  - Auditorias antigas (pré-chunking) ainda mostram o aviso clássico "diff truncado" como fallback.
+
+### Resolvido — Alerta sem tratativa (princípio "alerta sem ação proibido")
+
+Varredura completa do app identificou **20 ofensores reais** que mostravam alerta/contagem sem caminho de resolução. Todos os 7 de severidade ALTA + 10 MÉDIA + 3 BAIXA implementados:
+
+**Severidade ALTA (7)**:
+- **Dashboard hero** — contadores "X decisões em aberto" e "X findings pra resolver" agora são clicáveis, navegando pra Bancada/Sistemas.
+- **OpsMonitor** — linhas FALHA ganham botão "Resolver" que abre a sub-aba certa (Aplicações pra `app`, Status pros demais).
+- **OpsAplicacoes** — apps "Fora do ar" ou "Sem URL" ganham botão "Resolver" / "Cadastrar URL" que abre a ficha do sistema.
+- **OpsStatus** — linhas IA / GitHub desconectadas ganham botão "Configurar" / "Revisar" que abre Configurações.
+- **Dashboard widget Conexões** — IA/GitHub ficam clicáveis: leva pra Configurações quando há problema, pra Operações quando ok.
+- **FinReceitas** — tile "Em atraso" clicável aplica filtro "só atrasadas" nas Próximas cobranças e rola até o painel.
+- **FinPessoal** — Alert de orçamento estourado ganha botão "Ver orçamentos" que troca pra aba certa.
+
+**Severidade MÉDIA (10)**:
+- ClienteSnapshotDrawer (alertas + KPI Pendências), PessoasView SaudeBadge, FinPessoal órfãos (rola até + highlight), FinInteligencia (InsightsPanel + PlanoCard com próximo passo contextual), ServidoresPanel tiles (filtro automático), Dashboard "Atenção" mini-stat, SystemCard (pill de auditoria muda cor + mostra findings em destaque), AuditoriaDrawer Alert "Formato não estruturado" (botão Rodar de novo).
+
+**Severidade BAIXA (3)**:
+- ConectarReposModal Alert sem GITHUB_TOKEN (caminho explícito Configurações → Integrações → GitHub), ModelosDisponiveis Alert de erro (botão "Tentar de novo"), Sidebar item Ideias (badge com inbox count global).
+
+### Técnica
+
+- `AuditFontes` ganhou `batchesUsados`, `arquivosIgnorados[]`, `arquivosSplitted[]` (espelhado em `types.ts` e `server.ts`).
+- `AppSidebar.tsx` ganhou prop `ideiasInbox` + badge peach no item Ideias.
+- `App.tsx` busca `getIdeiasInboxCount` em cada navegação (cheap call, sem polling).
+- Decisão de simplificação documentada: batches sequenciais (não paralelos via `fetchAll`) — refator de `forjaCallLLM` pra paralelizar não compensa o ganho de latência (5 batches sequenciais ≈ 100s, dentro do limite GAS de 6min). Paralelização fica como evolução futura caso vire gargalo.
+
+---
+
 ## [1.146.1] — 2026-06-22
 
 ### Adicionado — monitoramento ao vivo dos Servidores

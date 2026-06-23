@@ -41,6 +41,9 @@ interface AppSidebarProps {
   // No mobile (sidebar dentro do drawer), eles continuam aqui.
   footerMenu?: boolean;
   naoLidos?: number;
+  // v1.147 — badge na Ideias mostra inbox count (princípio "alerta sem ação proibido":
+  // contagem visível convida a triar; sem ela, inbox acumula esquecido).
+  ideiasInbox?: number;
 }
 
 const ITEMS: Array<{ key: ViewName; icon: React.ReactNode; label: string }> = [
@@ -60,7 +63,7 @@ const ITEMS: Array<{ key: ViewName; icon: React.ReactNode; label: string }> = [
 
 export const SIDEBAR_WIDTH = 232;
 
-export default function AppSidebar({ currentView, saudeMedia, papel, onNavigate, onLogoClick, onSearchOpen, onGuideOpen, onShortcutsOpen, onAlertsOpen, footerMenu = true, naoLidos = 0 }: AppSidebarProps): React.ReactElement {
+export default function AppSidebar({ currentView, saudeMedia, papel, onNavigate, onLogoClick, onSearchOpen, onGuideOpen, onShortcutsOpen, onAlertsOpen, footerMenu = true, naoLidos = 0, ideiasInbox = 0 }: AppSidebarProps): React.ReactElement {
   const { mode, toggle, tokens: t } = useForja();
   // Enquanto o papel não chegou (null), assume admin (o owner é sempre admin).
   const isAdmin = papel ? papel === 'admin' : true;
@@ -95,7 +98,21 @@ export default function AppSidebar({ currentView, saudeMedia, papel, onNavigate,
         onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}
       >
         <span style={{ display: 'inline-flex', color: active ? t.accents.peach : t.textTertiary }}>{item.icon}</span>
-        {item.label}
+        <span style={{ flex: 1 }}>{item.label}</span>
+        {item.key === 'ideias' && ideiasInbox > 0 && (
+          <span
+            title={`${ideiasInbox} ideia(s) no inbox aguardando triagem`}
+            style={{
+              minWidth: 18, height: 18, paddingInline: 6, borderRadius: 9,
+              background: t.accents.peach, color: '#FFFFFF',
+              fontFamily: FONTS.ui, fontSize: 10.5, fontWeight: 700,
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {ideiasInbox > 99 ? '99+' : ideiasInbox}
+          </span>
+        )}
       </button>
     );
   };

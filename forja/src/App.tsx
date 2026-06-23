@@ -102,6 +102,19 @@ export default function App(): React.ReactElement {
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const [alertsDrawerOpen, setAlertsDrawerOpen] = useState(false);
   const [naoLidos, setNaoLidos] = useState(0);
+  // v1.147 — contagem global de ideias no inbox pra badge no item Ideias da sidebar.
+  // Atualizada a cada navegação (cheap call) pra refletir capturas recentes.
+  const [ideiasInbox, setIdeiasInbox] = useState(0);
+  useEffect(() => {
+    let cancelado = false;
+    const buscar = () => {
+      callServer<ServerResponse<{ pendentes: number }>>('getIdeiasInboxCount')
+        .then((r) => { if (!cancelado && r && r.ok && r.data) setIdeiasInbox(Number(r.data.pendentes || 0)); })
+        .catch(() => { /* sem ruído */ });
+    };
+    buscar();
+    return () => { cancelado = true; };
+  }, [currentView]);
   const [acesso, setAcesso] = useState<MeuAcesso | null>(null);
   const isMobile = useIsMobile();
   // Enquanto carrega, assume admin (o owner é sempre admin) pra não esconder
@@ -258,7 +271,7 @@ export default function App(): React.ReactElement {
       case 'sistemas':
         return <Bancada onSelectSistema={handleSelectSistema} onNewSistema={() => setCurrentView('sistema-form')} onImportGAS={() => setImportGASOpen(true)} refreshKey={sistemasRefresh} />;
       case 'operacoes':
-        return <Operacoes />;
+        return <Operacoes onAbrirSistema={handleSelectSistema} onIrPara={handleNavigate} />;
       case 'financeiro':
         return isAdmin ? <Financeiro /> : <AcessoNegado area="Financeiro" onVoltar={() => handleNavigate('dashboard')} />;
       case 'forja-ia':
@@ -296,6 +309,7 @@ export default function App(): React.ReactElement {
       usuario={acesso}
       footerMenu={isMobile}
       naoLidos={naoLidos}
+      ideiasInbox={ideiasInbox}
       onNavigate={handleNavigate}
       onLogoClick={handleShowLanding}
       onSearchOpen={() => { setSearchOpen(true); setNavDrawerOpen(false); }}

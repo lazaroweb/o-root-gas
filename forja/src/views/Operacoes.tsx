@@ -7,9 +7,16 @@ import OpsAplicacoes from './OpsAplicacoes';
 import OpsGitHub from './OpsGitHub';
 import OpsMonitor from './OpsMonitor';
 import callServer from '../gas-client';
-import type { Sistema, ServerResponse } from '../types';
+import type { Sistema, ServerResponse, ViewName } from '../types';
 
 type OpsTab = 'status' | 'apps' | 'github' | 'monitor';
+
+interface OperacoesProps {
+  // Caminhos de tratativa: linhas FALHA/Fora do ar precisam abrir o lugar certo
+  // (sistema, configurações). Princípio "alerta sem ação proibido".
+  onAbrirSistema?: (id: string) => void;
+  onIrPara?: (view: ViewName) => void;
+}
 
 // Mesmo padrão de seções do Atelier/Configurações: trilho lateral (sticky) com
 // ícone + descrição por área, no lugar das tabs horizontais que ficavam secas.
@@ -20,7 +27,7 @@ const SECOES: SubNavItem<OpsTab>[] = [
   { key: 'monitor', icon: Radar, label: 'Monitoramento', accent: 'peach', desc: 'Verificações automáticas e alertas de disponibilidade.' },
 ];
 
-export default function Operacoes(): React.ReactElement {
+export default function Operacoes({ onAbrirSistema, onIrPara }: OperacoesProps = {}): React.ReactElement {
   const [sistemas, setSistemas] = useState<Sistema[]>([]);
   const [tab, setTab] = useState<OpsTab>('status');
 
@@ -33,10 +40,10 @@ export default function Operacoes(): React.ReactElement {
   // Só a seção ativa é montada — equivale ao destroyInactiveTabPane das tabs.
   const renderConteudo = (): React.ReactNode => {
     switch (tab) {
-      case 'status': return <OpsStatus sistemas={sistemas} />;
-      case 'apps': return <OpsAplicacoes />;
+      case 'status': return <OpsStatus sistemas={sistemas} onIrParaConfig={() => onIrPara && onIrPara('configuracoes')} />;
+      case 'apps': return <OpsAplicacoes onAbrirSistema={onAbrirSistema} />;
       case 'github': return <OpsGitHub />;
-      case 'monitor': return <OpsMonitor />;
+      case 'monitor': return <OpsMonitor onIrParaStatus={() => setTab('status')} onIrParaApps={() => setTab('apps')} />;
       default: return null;
     }
   };

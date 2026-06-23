@@ -432,7 +432,18 @@ export default function AuditoriaDrawer({ sistemaId, sistemaNome, repoUrl, scrip
     if (repo) L.push(`- **Repositório:** ${repo}`);
     if (commitBase && commit) L.push(`- **Range auditado:** \`${commitBase}\` → \`${commit}\``);
     else if (commit) L.push(`- **Commit auditado:** \`${commit}\``);
-    if (arquivos > 0) L.push(`- **Volume lido pela IA:** ${arquivos} arquivo(s)${bytes ? ` · ~${Math.round(bytes / 1024)}KB` : ''}${truncado ? ' · **diff truncado (IA não viu tudo — considere isso ao reconciliar)**' : ''}`);
+    {
+      const batches = dadosExibidos.fontes?.batchesUsados || 1;
+      const ignorados = dadosExibidos.fontes?.arquivosIgnorados || [];
+      const splitted = dadosExibidos.fontes?.arquivosSplitted || [];
+      const partes: string[] = [];
+      if (arquivos > 0) partes.push(`${arquivos} arquivo(s)${bytes ? ` · ~${Math.round(bytes / 1024)}KB` : ''}`);
+      if (batches > 1) partes.push(`auditado em ${batches} batches`);
+      if (splitted.length > 0) partes.push(`${splitted.length} arquivo(s) divididos em janelas`);
+      if (ignorados.length > 0) partes.push(`**${ignorados.length} arquivo(s) ignorados pelo cap global** (${ignorados.slice(0, 3).join(', ')}${ignorados.length > 3 ? `, +${ignorados.length - 3}` : ''})`);
+      else if (truncado && batches === 1) partes.push('diff truncado (auditoria antiga — re-audite p/ chunking automático)');
+      if (partes.length > 0) L.push(`- **Volume lido pela IA:** ${partes.join(' · ')}`);
+    }
     L.push(`- **Score de saúde:** ${score === 0 ? 'não avaliado' : score + '/100'}${anterior ? ` (${setaDelta} ${sinalDelta}${scoreDelta} pts vs. anterior de ${anterior.scoreNoMomento})` : ''}`);
     L.push('');
 
@@ -451,7 +462,7 @@ export default function AuditoriaDrawer({ sistemaId, sistemaNome, repoUrl, scrip
       L.push('2. **Mantenha em aberto** no SEU planning os itens em "Persistem em aberto" — o esforço atual não fechou.');
       L.push('3. **Adicione ao SEU planning** os itens em "Novos detectados" — problemas que surgiram nesta rodada (regressões ou descobertas).');
       L.push('4. **Não invente itens fora desta lista.** Se um item do seu backlog interno não aparece aqui, mantenha como estava.');
-      L.push('5. Se um item esperado **não foi marcado como resolvido** mesmo após o seu fix, é provável que: (a) o diff estivesse truncado, (b) o fix foi parcial, ou (c) a IA Forja foi conservadora demais. Verifique manualmente antes de fechar.');
+      L.push('5. Se um item esperado **não foi marcado como resolvido** mesmo após o seu fix, é provável que: (a) o fix foi parcial, (b) a IA Forja foi conservadora demais, ou (c) o arquivo ficou na lista de "arquivos ignorados pelo cap global" (releia o cabeçalho desta auditoria). Verifique manualmente antes de fechar.');
       L.push('6. **Se você concluir o trabalho com base SÓ neste arquivo (criando `.md`, escrevendo análise, fazendo commits `docs:`) → você fez ERRADO.** Este arquivo é só relatório — não disparou trabalho novo.');
       L.push('');
     }
@@ -995,8 +1006,13 @@ export default function AuditoriaDrawer({ sistemaId, sistemaNome, repoUrl, scrip
             type="warning"
             showIcon
             message="Formato não estruturado"
-            description="A IA não retornou os achados no formato esperado. Mostrando texto bruto abaixo. Clique em 'Rodar de novo' pra tentar mais uma vez."
+            description="A IA não retornou os achados no formato esperado. Mostrando texto bruto abaixo."
             style={{ marginBottom: 16 }}
+            action={
+              <Button size="small" type="primary" loading={loading} onClick={() => { reset(); void auditar(true); }}>
+                Rodar de novo
+              </Button>
+            }
           />
           <div style={{ fontFamily: FONTS.ui, fontSize: 13.5, lineHeight: 1.7, color: t.textSecondary, whiteSpace: 'pre-wrap', background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 10, padding: 14 }}>
             {resultado.texto}
@@ -1960,8 +1976,83 @@ function FontesBlock({ fontes, modelo, onReauditarCodigo, reauditando }: { fonte
                 <strong>{fontes.arquivosLidos}</strong> arquivo(s){fontes.bytesCodigo ? ` · ~${Math.round((fontes.bytesCodigo || 0) / 1024)}KB` : ''}
               </span>
               {fontes.commitSha ? <span style={{ fontFamily: FONTS.mono, fontSize: 10.5, color: t.textTertiary }}>commit {fontes.commitSha}</span> : null}
-              {fontes.codigoTruncado ? (
-                <Tooltip title="O conteúdo enviado à IA passou do limite de contexto e foi cortado. Isso pode fazer com que correções no trecho cortado NÃO sejam reconhecidas como 'resolvidas'. Considere rodar uma auditoria completa (não incremental) ou quebrar o diff em pedaços menores.">
+              {/* v1.147: novos sinais do chunking — substituem o aviso silencioso "DIFF TRUNCADO".
+                  Agora o user sabe EXATAMENTE quantos batches rodaram e o que (se algo) ficou de fora. */}
+              {(fontes.batchesUsados || 0) > 1 && (
+                <Tooltip title={`O diff foi grande — foi dividido em ${fontes.batchesUsados} pedaços auditados separadamente e os achados foram consolidados. Cobertura completa, sem truncamento.`}>
+                  <Tag
+                    style={{
+                      background: `${t.accents.sage}14`,
+                      color: t.accents.sage,
+                      border: `1px solid ${t.accents.sage}55`,
+                      fontFamily: FONTS.ui,
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      letterSpacing: 0.4,
+                      marginInlineEnd: 0,
+                      paddingInline: 7,
+                    }}
+                  >
+                    {fontes.batchesUsados} batches · coberto
+                  </Tag>
+                </Tooltip>
+              )}
+              {(fontes.arquivosSplitted || []).length > 0 && (
+                <Tooltip title={`Arquivos individualmente grandes foram divididos em janelas com overlap pra não perder contexto: ${(fontes.arquivosSplitted || []).join(', ')}`}>
+                  <Tag
+                    style={{
+                      background: `${t.accents.lavender}14`,
+                      color: t.accents.lavender,
+                      border: `1px solid ${t.accents.lavender}55`,
+                      fontFamily: FONTS.ui,
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      letterSpacing: 0.4,
+                      marginInlineEnd: 0,
+                      paddingInline: 7,
+                    }}
+                  >
+                    {(fontes.arquivosSplitted || []).length} splitted
+                  </Tag>
+                </Tooltip>
+              )}
+              {(fontes.arquivosIgnorados || []).length > 0 ? (
+                <Tooltip
+                  title={
+                    <div>
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{(fontes.arquivosIgnorados || []).length} arquivo(s) NÃO foram auditados (cap global de 5 batches):</div>
+                      <ul style={{ margin: 0, paddingLeft: 16 }}>
+                        {(fontes.arquivosIgnorados || []).slice(0, 8).map((f) => <li key={f} style={{ fontFamily: 'ui-monospace, monospace', fontSize: 10.5 }}>{f}</li>)}
+                        {(fontes.arquivosIgnorados || []).length > 8 && <li>+ {(fontes.arquivosIgnorados || []).length - 8} outros…</li>}
+                      </ul>
+                      <div style={{ marginTop: 6, fontSize: 11, opacity: 0.85 }}>Rode "Nova auditoria" depois de tratar os achados desta rodada — os arquivos não auditados podem virar achados novos.</div>
+                    </div>
+                  }
+                >
+                  <Tag
+                    icon={<AlertCircle size={11} style={{ verticalAlign: 'text-top' }} />}
+                    style={{
+                      background: `${t.accents.peach}1a`,
+                      color: t.accents.peach,
+                      border: `1px solid ${t.accents.peach}66`,
+                      fontFamily: FONTS.ui,
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      letterSpacing: 0.4,
+                      marginInlineEnd: 0,
+                      paddingInline: 7,
+                      cursor: 'help',
+                    }}
+                  >
+                    {(fontes.arquivosIgnorados || []).length} arquivo(s) fora desta auditoria
+                  </Tag>
+                </Tooltip>
+              ) : (fontes.codigoTruncado && !(fontes.batchesUsados && fontes.batchesUsados > 0)) ? (
+                /* Fallback: auditoria antiga (pré-chunking) que tem só o flag binário. */
+                <Tooltip title="O conteúdo enviado à IA passou do limite de contexto. Re-audite — a v1.147 fatia o diff automaticamente.">
                   <Tag
                     icon={<AlertCircle size={11} style={{ verticalAlign: 'text-top' }} />}
                     style={{
@@ -1977,7 +2068,7 @@ function FontesBlock({ fontes, modelo, onReauditarCodigo, reauditando }: { fonte
                       paddingInline: 7,
                     }}
                   >
-                    diff truncado — IA não viu tudo
+                    diff truncado (auditoria antiga)
                   </Tag>
                 </Tooltip>
               ) : null}

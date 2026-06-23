@@ -15,7 +15,7 @@ import type { AtelierTab } from './Atelier';
 
 interface DashboardProps {
   onSelectSistema: (id: string) => void;
-  onNavigate: (view: 'financeiro' | 'sistemas' | 'operacoes' | 'relatorios' | 'ideias') => void;
+  onNavigate: (view: 'financeiro' | 'sistemas' | 'operacoes' | 'relatorios' | 'ideias' | 'configuracoes') => void;
   onImportGAS?: () => void;
   // v1.4.4: abre o drawer de alertas (controlado em App.tsx). Quando ausente
   // (preview local), o link de "ver alertas" não aparece.
@@ -285,8 +285,9 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
                   hint="Pedindo ação"
                   destaque={bk.atencao > 0}
                   dica={bk.atencao > 0
-                    ? 'Apps com alerta crítico ou risco alto. Ação: abra cada um e trate o que está vermelho na Saúde — isso tira do status atenção.'
+                    ? 'Apps com alerta crítico ou risco alto. Clique pra abrir a Bancada — você vai cair direto nos apps em atenção.'
                     : 'Nenhum app pedindo ação agora. Mantenha resolvendo alertas e findings assim que aparecem.'}
+                  onClick={bk.atencao > 0 ? () => onNavigate('sistemas') : undefined}
                 />
               </Col>
             </Row>
@@ -311,16 +312,22 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
                   </Tooltip>
                 )}
                 {ops && ops.decisoesAbertas > 0 && (
-                  <Tooltip title={<TipBox titulo="Decisões em aberto" dica="Itens no backlog ainda não concluídos. Ação: abra o sistema → aba Backlog e mova pra 'Feito' o que já resolveu." />}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'help' }}>
+                  <Tooltip title={<TipBox titulo="Decisões em aberto" dica="Itens no backlog ainda não concluídos. Clique pra ver a Bancada — entre nos sistemas com mais pendência e mova pra 'Feito' o que já resolveu." />}>
+                    <span
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}
+                      onClick={() => onNavigate('sistemas')}
+                    >
                       <ListChecks size={13} color={t.accents.lavender} />
                       <strong style={{ color: t.text, fontVariantNumeric: 'tabular-nums' }}>{ops.decisoesAbertas}</strong> decisões em aberto
                     </span>
                   </Tooltip>
                 )}
                 {ops && ops.findingsAbertos > 0 && (
-                  <Tooltip title={<TipBox titulo="Findings de auditoria" dica="Achados da Forja IA ainda não tratados. Ação: abra o sistema, resolva (ou registre como risco/decisão) — um por dia já mantém a casa em ordem." />}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'help' }}>
+                  <Tooltip title={<TipBox titulo="Findings de auditoria" dica="Achados da Forja IA ainda não tratados. Clique pra abrir a Bancada — entre nos sistemas com mais findings e resolva (ou registre como risco/decisão)." />}>
+                    <span
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}
+                      onClick={() => onNavigate('sistemas')}
+                    >
                       <AlertTriangle size={13} color={t.accents.peach} />
                       <strong style={{ color: t.text, fontVariantNumeric: 'tabular-nums' }}>{ops.findingsAbertos}</strong> findings pra resolver
                     </span>
@@ -354,13 +361,20 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
             </Tooltip>
             <div style={{ borderTop: `1px solid ${t.borderSoft}`, paddingTop: 8 }}>
               {(status ? [
-                { icon: <Sparkles size={14} strokeWidth={1.8} />, nome: 'IA — Proxy', live: status.llm, tip: status.llm.detalhe || 'Conexão com o proxy de LLM (Configurações).' },
-                { icon: <GitBranch size={14} strokeWidth={1.8} />, nome: 'GitHub', live: status.github, tip: status.github.detalhe || 'Validação do token do GitHub.' },
+                { icon: <Sparkles size={14} strokeWidth={1.8} />, nome: 'IA — Proxy', live: status.llm, tip: status.llm.detalhe || 'Conexão com o proxy de LLM.', destino: 'configuracoes' as const },
+                { icon: <GitBranch size={14} strokeWidth={1.8} />, nome: 'GitHub', live: status.github, tip: status.github.detalhe || 'Validação do token do GitHub.', destino: 'configuracoes' as const },
               ] : []).map((r, i) => {
                 const cor = !r.live.configurado ? t.textTertiary : r.live.conectado ? t.accents.sage : t.accents.rose;
+                // Tratativa: se está com problema (sem config ou desconectada),
+                // clicar leva direto pra Configurações. Senão, leva pra Operações.
+                const precisaAjuste = !r.live.configurado || !r.live.conectado;
+                const tipFinal = precisaAjuste
+                  ? `${r.tip}\n\nClique pra abrir Configurações e corrigir.`
+                  : `${r.tip}\n\nClique pra ver detalhes em Operações.`;
+                const onClick = () => onNavigate(precisaAjuste ? 'configuracoes' : 'operacoes');
                 return (
-                  <Tooltip key={i} title={r.tip} placement="left">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 4px', cursor: 'help' }}>
+                  <Tooltip key={i} title={tipFinal} placement="left">
+                    <div onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 4px', cursor: 'pointer' }}>
                       <LiveDot color={cor} live={r.live.conectado === true} />
                       <span style={{ color: t.textSecondary, display: 'inline-flex' }}>{r.icon}</span>
                       <span style={{ flex: 1, color: t.text, fontSize: 13, fontWeight: 500 }}>{r.nome}</span>
@@ -520,12 +534,19 @@ function TipBox({ titulo, dica }: { titulo: string; dica: string }): React.React
   );
 }
 
-function TechMiniStat({ titulo, valor, cor, hint, destaque, dica }: {
+function TechMiniStat({ titulo, valor, cor, hint, destaque, dica, onClick }: {
   titulo: string; valor: number; cor: string; hint?: string; destaque?: boolean; dica?: string;
+  // v1.147 — stat fica clicável quando tem ação (princípio "alerta sem ação proibido").
+  onClick?: () => void;
 }): React.ReactElement {
   const t = useTokens();
   const conteudo = (
-    <div style={{ cursor: dica ? 'help' : 'default' }}>
+    <div
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      style={{ cursor: onClick ? 'pointer' : dica ? 'help' : 'default' }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ width: 7, height: 7, borderRadius: '50%', background: cor }} />
         <span style={{ fontSize: 12, fontWeight: 600, color: t.textSecondary, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{titulo}</span>
@@ -537,7 +558,9 @@ function TechMiniStat({ titulo, valor, cor, hint, destaque, dica }: {
       }}>
         {valor}
       </div>
-      {hint && <div style={{ fontSize: 11.5, color: t.textTertiary, marginTop: 2 }}>{hint}</div>}
+      {hint && <div style={{ fontSize: 11.5, color: onClick ? cor : t.textTertiary, marginTop: 2, fontWeight: onClick ? 600 : 400 }}>
+        {hint}{onClick ? ' →' : ''}
+      </div>}
     </div>
   );
   return dica

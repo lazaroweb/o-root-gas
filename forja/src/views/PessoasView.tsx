@@ -445,13 +445,13 @@ function SaudeBadge({ pessoa }: { pessoa: Pessoa }): React.ReactElement {
       cor: t.accents.peach, bg: `${t.accents.peach}1f`,
       label: `Atenção${pessoa.pendenciasQtd ? ` (${pessoa.pendenciasQtd})` : ''}`,
       icon: <Clock size={11} />,
-      tooltip: `${pessoa.pendenciasQtd || 0} cobrança(s) atrasada(s), no máximo 15 dias.`,
+      tooltip: `${pessoa.pendenciasQtd || 0} cobrança(s) atrasada(s), no máximo 15 dias. Clique na linha pra abrir o cliente — depois aba Cobranças, KPI "Pendências" filtra só as atrasadas.`,
     },
     inadimplente: {
       cor: t.accents.rose, bg: `${t.accents.rose}1f`,
       label: `Inadimplente${pessoa.pendenciasQtd ? ` (${pessoa.pendenciasQtd})` : ''}`,
       icon: <AlertTriangle size={11} />,
-      tooltip: `${pessoa.pendenciasQtd || 0} cobrança(s) atrasada(s); pelo menos uma com mais de 15 dias.`,
+      tooltip: `${pessoa.pendenciasQtd || 0} cobrança(s) atrasada(s); pelo menos uma com mais de 15 dias. Clique na linha pra abrir o cliente e tratar as pendências.`,
     },
     sem_historico: {
       cor: t.textTertiary, bg: t.surfaceMuted,

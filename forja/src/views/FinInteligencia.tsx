@@ -505,6 +505,12 @@ function PlanoCard({ item }: { item: PlanoReducaoItem }): React.ReactElement {
   const t = useTokens();
   const cor = corSeveridade(item.severidade, t);
   const Icon = item.tipo === 'alerta' ? AlertTriangle : item.tipo === 'habito' ? Lightbulb : Scissors;
+  // v1.147 — orientação contextual de tratativa baseada no tipo do item (princípio #6).
+  const proximoPasso = item.tipo === 'cortar'
+    ? 'Vá em Assinaturas pra cancelar a recorrência ou em Lançamentos pra remover.'
+    : item.tipo === 'alerta'
+    ? 'Revise em Cartões / Orçamentos ou recategorize Lançamentos relevantes.'
+    : '';
   return (
     <div style={{
       display: 'flex', gap: 12, padding: 14, borderRadius: 12,
@@ -526,6 +532,11 @@ function PlanoCard({ item }: { item: PlanoReducaoItem }): React.ReactElement {
           )}
         </div>
         <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, marginTop: 3, lineHeight: 1.5 }}>{item.descricao}</div>
+        {proximoPasso && (
+          <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: cor, marginTop: 6, fontStyle: 'italic' }}>
+            → {proximoPasso}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -657,14 +668,21 @@ function InsightsPanel({ insights }: { insights: InsightFinanceiro[] }): React.R
       {insights.length === 0 ? (
         <div style={{ color: t.textTertiary, fontFamily: FONTS.ui, fontSize: 13 }}>Cadastre mais dados pra gerar insights.</div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {insights.map((ins, i) => (
-            <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-              <span style={{ color: cor(ins.tipo), display: 'inline-flex', marginTop: 1, flexShrink: 0 }}>{ico(ins.tipo)}</span>
-              <span style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary, lineHeight: 1.5 }}>{ins.texto}</span>
+        <>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {insights.map((ins, i) => (
+              <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                <span style={{ color: cor(ins.tipo), display: 'inline-flex', marginTop: 1, flexShrink: 0 }}>{ico(ins.tipo)}</span>
+                <span style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary, lineHeight: 1.5 }}>{ins.texto}</span>
+              </div>
+            ))}
+          </div>
+          {insights.some((i) => i.tipo === 'alerta') && (
+            <div style={{ marginTop: 14, paddingTop: 10, borderTop: `1px dashed ${t.borderSoft}`, fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, fontStyle: 'italic' }}>
+              Pra agir em cima dos alertas acima: vá em <strong>Assinaturas</strong> (cancelar recorrências), <strong>Cartões</strong> (revisar limites) ou <strong>Orçamentos</strong> (ajustar tetos).
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
     </Panel>
   );

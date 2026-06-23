@@ -474,8 +474,18 @@ export default function ServidoresPanel({ onAbrirCofre }: { onAbrirCofre?: (labe
           sub={resumo.monitoraveis === 0 ? 'cadastre uma URL pra pingar' : resumo.online === resumo.monitoraveis ? 'tudo no ar agora' : `${resumo.offline} sem resposta`}
           icon={resumo.online === resumo.monitoraveis && resumo.monitoraveis > 0 ? <Wifi size={16} /> : <WifiOff size={16} />}
           cor={resumo.monitoraveis === 0 ? t.textTertiary : resumo.online === resumo.monitoraveis ? t.accents.sage : t.accents.rose}
+          onClick={resumo.offline > 0 ? () => setFiltroStatus('parado') : undefined}
+          hint="Filtra a lista mostrando só os servidores marcados como parados (sem resposta no último ping)."
         />
-        <StatTile titulo="Com erro" valor={String(resumo.erro)} sub={resumo.erro === 0 ? 'tudo tranquilo' : 'precisa olhar'} icon={<AlertTriangle size={16} />} cor={resumo.erro > 0 ? t.accents.rose : t.accents.sage} />
+        <StatTile
+          titulo="Com erro"
+          valor={String(resumo.erro)}
+          sub={resumo.erro === 0 ? 'tudo tranquilo' : 'precisa olhar'}
+          icon={<AlertTriangle size={16} />}
+          cor={resumo.erro > 0 ? t.accents.rose : t.accents.sage}
+          onClick={resumo.erro > 0 ? () => setFiltroStatus('erro') : undefined}
+          hint="Filtra a lista mostrando só os servidores com status 'erro' (algo precisa ser olhado)."
+        />
         <StatTile titulo="Custo mensal" valor={custoTxt} sub="instâncias pagas (recorrentes)" icon={<Cpu size={16} />} cor={t.accents.peach} />
       </div>
 
@@ -1180,18 +1190,27 @@ function Campo({ label, valor, mono, icon }: { label: string; valor: string; mon
 }
 
 // ─── Sub: stat tile (igual ao do ContasPanel pra coerência visual) ────────────
-function StatTile({ titulo, valor, sub, icon, cor }: {
+function StatTile({ titulo, valor, sub, icon, cor, onClick, hint }: {
   titulo: string; valor: string; sub: string; icon: React.ReactNode; cor: string;
+  // v1.147 — tile clicável (princípio "alerta sem ação proibido"):
+  // tiles "Online ao vivo" / "Com erro" passam a aplicar filtro na lista.
+  onClick?: () => void;
+  hint?: string;
 }): React.ReactElement {
   const t = useTokens();
-  return (
+  const tile = (
     <div
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
       className="forja-lift"
       style={{
         position: 'relative', overflow: 'hidden',
         border: `1px solid ${t.border}`, borderRadius: 14, padding: '14px 16px',
         background: t.surface, boxShadow: t.shadowSoft,
         display: 'flex', flexDirection: 'column', gap: 11,
+        cursor: onClick ? 'pointer' : 'default',
       }}
     >
       <span aria-hidden style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: `linear-gradient(90deg, ${cor}00, ${cor}cc, ${cor}00)`, opacity: 0.7 }} />
@@ -1201,8 +1220,11 @@ function StatTile({ titulo, valor, sub, icon, cor }: {
       </div>
       <div>
         <div style={{ fontFamily: FONTS.display, fontSize: 23, fontWeight: 600, color: t.text, lineHeight: 1.1, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{valor}</div>
-        <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, marginTop: 4 }}>{sub}</div>
+        <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: onClick ? cor : t.textTertiary, marginTop: 4, fontWeight: onClick ? 600 : 400 }}>
+          {sub}{onClick ? ' →' : ''}
+        </div>
       </div>
     </div>
   );
+  return onClick && hint ? <Tooltip title={hint}>{tile}</Tooltip> : tile;
 }

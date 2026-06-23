@@ -142,6 +142,11 @@ export default function ConectarReposModal({ open, onClose, onDone }: Props): Re
           showIcon
           style={{ marginBottom: 12 }}
           message={<span style={{ fontFamily: FONTS.ui, fontSize: 12.5 }}>Sem GITHUB_TOKEN — não dá pra verificar se os repos existem. Confira as URLs antes de conectar.</span>}
+          description={
+            <span style={{ fontFamily: FONTS.ui, fontSize: 11.5 }}>
+              Pra ativar a validação automática (e habilitar auditoria de código), cadastre o token em <strong>Configurações → Integrações → GitHub</strong>.
+            </span>
+          }
         />
       )}
 

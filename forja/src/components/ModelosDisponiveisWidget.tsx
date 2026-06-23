@@ -190,6 +190,11 @@ export default function ModelosDisponiveisWidget({ valorAtual, onSelect }: Props
                 </div>
               </div>
             }
+            action={
+              <Button size="small" onClick={() => carregar(true)}>
+                Tentar de novo
+              </Button>
+            }
           />
         </div>
       )}

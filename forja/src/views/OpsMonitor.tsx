@@ -1,11 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Button, Spin, Tag, Select, Switch, App as AntApp, Empty } from 'antd';
-import { Radar, PlayCircle, Clock, Mail } from 'lucide-react';
+import { Button, Spin, Tag, Select, Switch, App as AntApp, Empty, Tooltip } from 'antd';
+import { Radar, PlayCircle, Clock, Mail, Wrench } from 'lucide-react';
 import { Panel, StatusDot } from '../components/ui';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import type { MonitorStatus, ServerResponse } from '../types';
+
+interface OpsMonitorProps {
+  // Callbacks pra outras sub-abas de Operações — habilitam tratativa direta
+  // de cada linha FALHA (princípio "alerta sem ação proibido").
+  onIrParaStatus?: () => void;
+  onIrParaApps?: () => void;
+}
 
 const INTERVALOS = [
   { value: 5, label: 'A cada 5 min' },
@@ -15,7 +22,7 @@ const INTERVALOS = [
   { value: 60, label: 'A cada 1 hora' },
 ];
 
-export default function OpsMonitor(): React.ReactElement {
+export default function OpsMonitor({ onIrParaStatus, onIrParaApps }: OpsMonitorProps = {}): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [status, setStatus] = useState<MonitorStatus | null>(null);
@@ -99,14 +106,29 @@ export default function OpsMonitor(): React.ReactElement {
           {snapshot.length === 0 ? (
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Ainda sem leituras. Clique em “Rodar agora”." style={{ padding: 28 }} />
           ) : (
-            snapshot.map((s, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderBottom: `1px solid ${t.borderSoft}` }}>
-                <StatusDot color={s.conectado ? t.accents.sage : t.accents.rose} />
-                <Tag bordered={false} style={{ background: `${t.accents.blue}1a`, color: t.accents.blue, fontSize: 11, textTransform: 'uppercase' }}>{s.tipo}</Tag>
-                <span style={{ flex: 1, color: t.text, fontSize: 14 }}>{s.nome}</span>
-                <span style={{ fontFamily: FONTS.mono, fontSize: 12, color: s.conectado ? t.accents.sage : t.accents.rose }}>{s.conectado ? 'OK' : 'FALHA'} {s.status ? `· ${s.status}` : ''}</span>
-              </div>
-            ))
+            snapshot.map((s, i) => {
+              // Tratativa: linhas FALHA viram acionáveis (princípio #6).
+              // Tipo 'app' → vai pra Aplicações (editar URL/repaginar); demais (api/proxy/github) → vai pra Status.
+              const callback = !s.conectado
+                ? (s.tipo === 'app' ? onIrParaApps : onIrParaStatus)
+                : undefined;
+              const tipDestino = s.tipo === 'app' ? 'Aplicações' : 'Status & APIs';
+              return (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderBottom: `1px solid ${t.borderSoft}` }}>
+                  <StatusDot color={s.conectado ? t.accents.sage : t.accents.rose} />
+                  <Tag bordered={false} style={{ background: `${t.accents.blue}1a`, color: t.accents.blue, fontSize: 11, textTransform: 'uppercase' }}>{s.tipo}</Tag>
+                  <span style={{ flex: 1, color: t.text, fontSize: 14 }}>{s.nome}</span>
+                  <span style={{ fontFamily: FONTS.mono, fontSize: 12, color: s.conectado ? t.accents.sage : t.accents.rose }}>{s.conectado ? 'OK' : 'FALHA'} {s.status ? `· ${s.status}` : ''}</span>
+                  {!s.conectado && callback && (
+                    <Tooltip title={`Abre ${tipDestino} pra você ajustar URL, credencial ou ambiente desta integração.`}>
+                      <Button size="small" type="text" icon={<Wrench size={13} />} onClick={callback}>
+                        Resolver
+                      </Button>
+                    </Tooltip>
+                  )}
+                </div>
+              );
+            })
           )}
         </Panel>
       </div>

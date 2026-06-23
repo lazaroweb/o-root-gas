@@ -116,6 +116,14 @@ export interface AuditFontes {
   // Auditoria incremental (Fase 2.5): rodou só sobre o diff desde a última auditoria.
   incremental?: boolean;
   baseCommit?: string;
+  // Chunking de diff (v1.147 — resolve DIFF TRUNCADO):
+  // - batchesUsados: quantas chamadas LLM rodaram pra cobrir o diff (1 = caminho rápido)
+  // - arquivosIgnorados: arquivos do diff que ficaram FORA do cap global (ex.: > 5 batches)
+  //   Lista os nomes pro user saber EXATAMENTE o que não foi auditado (acaba o silêncio).
+  // - arquivosSplitted: arquivos individualmente grandes que foram divididos em janelas.
+  batchesUsados?: number;
+  arquivosIgnorados?: string[];
+  arquivosSplitted?: string[];
   // Auditoria de onboarding: sistema sem dados — devolvemos um checklist (sem IA).
   onboarding?: boolean;
 }

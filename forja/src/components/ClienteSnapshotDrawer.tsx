@@ -293,6 +293,10 @@ export default function ClienteSnapshotDrawer({ pessoaId, pessoaNome, onClose, i
                   );
                 })}
               </div>
+              {/* Tratativa: orienta o user pro caminho real (sino de alertas no topo do app). */}
+              <div style={{ marginTop: 8, fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, fontStyle: 'italic' }}>
+                Pra gerenciar (marcar lido, dispensar): clique no <strong>sino de alertas</strong> no canto superior direito do app.
+              </div>
             </Section>
           )}
 
@@ -332,18 +336,32 @@ function InfoRow({ icon, label, valor }: { icon: React.ReactNode; label: string;
   );
 }
 
-function KpiCard({ cor, icon, label, valor, subtitulo }: { cor: string; icon: React.ReactNode; label: string; valor: string; subtitulo?: string }): React.ReactElement {
+function KpiCard({ cor, icon, label, valor, subtitulo, onClick, hint }: { cor: string; icon: React.ReactNode; label: string; valor: string; subtitulo?: string; onClick?: () => void; hint?: string }): React.ReactElement {
   const t = useTokens();
-  return (
-    <div style={{ padding: 12, background: t.surface, border: `1px solid ${t.border}`, borderRadius: 10 }}>
+  const card = (
+    <div
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      style={{
+        padding: 12, background: t.surface, border: `1px solid ${t.border}`, borderRadius: 10,
+        cursor: onClick ? 'pointer' : 'default',
+        transition: 'transform 0.15s, box-shadow 0.15s',
+      }}
+      onMouseEnter={onClick ? (e) => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = t.shadowSoft; } : undefined}
+      onMouseLeave={onClick ? (e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; } : undefined}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, color: cor }}>
         {icon}
         <span style={{ fontFamily: FONTS.ui, fontSize: 10.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</span>
       </div>
       <div style={{ fontFamily: FONTS.display, fontSize: 18, fontWeight: 600, color: t.text, fontVariantNumeric: 'tabular-nums' }}>{valor}</div>
-      {subtitulo && <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginTop: 2 }}>{subtitulo}</div>}
+      {subtitulo && <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: onClick ? cor : t.textTertiary, marginTop: 2, fontWeight: onClick ? 600 : 400 }}>
+        {subtitulo}{onClick ? ' →' : ''}
+      </div>}
     </div>
   );
+  return onClick && hint ? <Tooltip title={hint}>{card}</Tooltip> : card;
 }
 
 // Badge compacto de saúde financeira pra header do drawer. Tem a mesma cor
@@ -478,6 +496,8 @@ function HistoricoFinanceiroSection({ data }: { data: ClienteSnapshotPayload }):
           label="Pendências"
           valor={data.kpis.pendenciasQtd > 0 ? brl(data.kpis.pendenciasValor) : 'Em dia'}
           subtitulo={data.kpis.pendenciasQtd > 0 ? `${data.kpis.pendenciasQtd} ${data.kpis.pendenciasQtd === 1 ? 'cobrança' : 'cobranças'} atrasada${data.kpis.pendenciasQtd === 1 ? '' : 's'}` : 'sem atrasos'}
+          onClick={data.kpis.pendenciasQtd > 0 ? () => setFiltroStatus('atrasada') : undefined}
+          hint="Filtra a lista de cobranças mostrando só as atrasadas."
         />
       </div>
 

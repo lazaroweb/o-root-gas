@@ -113,21 +113,32 @@ export default function SystemCard({ sistema, onClick, auditoria, backlog }: Sys
               </span>
             </Tooltip>
           )}
-          {auditoria && (
-            <Tooltip title={`Auditada há ${relTempoCurto(auditoria.criadoEm)} · ${auditoria.numFindings} achado(s)`}>
-              <span
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  background: `${t.accents.sage}1a`, color: t.accents.sage,
-                  border: `1px solid ${t.accents.sage}55`, borderRadius: 999,
-                  padding: '1px 7px', fontSize: 10, fontFamily: FONTS.ui, fontWeight: 600,
-                }}
-              >
-                <Wand2 size={9} strokeWidth={2} />
-                {relTempoCurto(auditoria.criadoEm)}
-              </span>
-            </Tooltip>
-          )}
+          {auditoria && (() => {
+            // v1.147 — pill de auditoria deixa de mascarar findings em aberto.
+            // Quando há findings, a cor vira peach/rose e mostra a contagem
+            // explicitamente (princípio "alerta sem ação proibido").
+            const findings = auditoria.numFindings || 0;
+            const corPill = findings === 0 ? t.accents.sage : findings >= 5 ? t.accents.rose : t.accents.peach;
+            return (
+              <Tooltip title={
+                findings === 0
+                  ? `Auditada há ${relTempoCurto(auditoria.criadoEm)} · sem findings em aberto`
+                  : `Auditada há ${relTempoCurto(auditoria.criadoEm)} · ${findings} achado(s) em aberto. Abra o sistema → aba Auditorias.`
+              }>
+                <span
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                    background: `${corPill}1a`, color: corPill,
+                    border: `1px solid ${corPill}55`, borderRadius: 999,
+                    padding: '1px 7px', fontSize: 10, fontFamily: FONTS.ui, fontWeight: 600,
+                  }}
+                >
+                  <Wand2 size={9} strokeWidth={2} />
+                  {findings > 0 ? `${findings} achado${findings > 1 ? 's' : ''}` : relTempoCurto(auditoria.criadoEm)}
+                </span>
+              </Tooltip>
+            );
+          })()}
           <StageBadge estagio={sistema.estagio} />
         </div>
       </div>
