@@ -1,6 +1,8 @@
 ---
 name: forja-debt-tracking
 description: Mark technical debt and TODOs in source code so they appear in Forja's "Dívida técnica" tab of the matching System. Use whenever you spot a shortcut, missing test, deprecated dependency, hard-coded value, security concern, or any deliberate "we'll fix this later" while implementing or reviewing code.
+category: code-quality
+tags: [debt, todo, fixme, hack, code-review, ai-instructions, forja, governance]
 ---
 
 # Forja — Débito Técnico & TODOs

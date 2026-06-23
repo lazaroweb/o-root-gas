@@ -36,6 +36,44 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.148.5] — 2026-06-23
+
+### Corrigido — Skill `forja-debt-tracking` sem categoria + banner contextual no Hub
+
+**O bug que o usuário pegou**
+
+Criei a skill `forja-debt-tracking` na v1.148.0 só com `name` + `description` no frontmatter (padrão Anthropic, minimalista). A Forja tem campos de `categoria` + `tags` que viraram vazios no banco depois do "Importar GAS App Kit", deixando a skill solta sem classificação. O usuário pegou na visualização da lista e perguntou "porque não classificou?"
+
+**Fix imediato**: frontmatter completo na skill
+
+```yaml
+---
+name: forja-debt-tracking
+description: ...
+category: code-quality
+tags: [debt, todo, fixme, hack, code-review, ai-instructions, forja, governance]
+---
+```
+
+Próximo "Importar GAS App Kit" atualiza a skill no banco in-place (a importação é idempotente por `fonte`).
+
+**Fix sistêmico**: banner contextual no Skills Hub
+
+`SkillsHubModal.tsx` agora detecta skills sem categoria e mostra um banner laranja-brasa contextual entre o header e a lista:
+
+> ⚡ **N skill(s) sem categoria** — A IA lê nome + descrição de cada uma e agrupa em temas (Design, Frontend, Code Quality…). Roda só nas faltantes, em ~10 segundos.
+> [Classificar agora]
+
+Antes, o usuário precisava descobrir o botão "Classificar por tema" sozinho no header (escondido entre 6 outras ações). Agora, quando há trabalho a fazer, a ação chega até ele. Princípio Forja #6 (alerta sempre com tratativa) aplicado.
+
+Banner some quando: 0 skills sem categoria · classificação em andamento · modo "Montar kit" ativo (não polui contexto de seleção).
+
+**Documentação**
+
+`forja/docs/AGENTS-debt-tracking-template.md` ganhou nota pro autor de novas skills: SEMPRE preencher `category:` + `tags:` no frontmatter pra evitar exatamente esse buraco. Exemplo de frontmatter completo no topo do arquivo.
+
+---
+
 ## [1.148.4] — 2026-06-23
 
 ### Adicionado — `<ProcessoCarregando>`: padrão Forja pra feedback de operações longas

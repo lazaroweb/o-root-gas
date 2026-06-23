@@ -1,5 +1,17 @@
 # AGENTS.md template — Protocolo Forja de dívida técnica
 
+> **Nota pra quem cria skills do Atelier**: toda nova skill deve incluir `category:` e `tags: [...]` no frontmatter YAML. Sem isso, ela cai sem classificação no Skills Hub da Forja e o usuário precisa rodar "Classificar por tema" manualmente. Exemplo de frontmatter completo:
+>
+> ```yaml
+> ---
+> name: minha-skill
+> description: O que a skill faz e quando usar.
+> category: code-quality
+> tags: [debt, review, ai-instructions]
+> ---
+> ```
+
+
 > **Cole isso na raiz de qualquer repositório** que você queira que a Forja escaneie. Se já existe um `AGENTS.md` no repo, cola a seção dentro dele. Se não, renomeia este arquivo pra `AGENTS.md` (e remove esse aviso do topo).
 >
 > Por que `AGENTS.md` e não `.cursor/rules/`? Convenção universal: **Cursor, Claude Code, Codex, e Continue** todos respeitam `AGENTS.md` na raiz. `.cursor/rules/*.mdc` só funciona no Cursor.

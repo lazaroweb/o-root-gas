@@ -772,6 +772,35 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                     </Button>
                   </div>
 
+                  {/* v1.148.5 — banner contextual: skills sem categoria detectadas.
+                      O usuário viu o problema na prática (importou skill, ficou sem
+                      categoria, ficou perdido). Em vez de obrigar ele a descobrir o
+                      botão "Classificar por tema" sozinho, sugerimos aqui mesmo. */}
+                  {(() => {
+                    const semCategoria = skills.filter((s) => !s.categoria || s.categoria.trim() === '').length;
+                    if (semCategoria === 0 || classificando || selMode) return null;
+                    return (
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14,
+                        padding: '10px 14px', borderRadius: 12,
+                        background: `${t.accents.peach}12`, border: `1px solid ${t.accents.peach}3a`,
+                      }}>
+                        <Sparkles size={15} color={t.accents.peach} />
+                        <div style={{ flex: 1 }}>
+                          <span style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.text }}>
+                            <strong>{semCategoria}</strong> skill(s) sem categoria
+                          </span>
+                          <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, display: 'block', marginTop: 1 }}>
+                            A IA lê nome + descrição de cada uma e agrupa em temas (Design, Frontend, Code Quality…). Roda só nas faltantes, em ~10 segundos.
+                          </span>
+                        </div>
+                        <Button size="small" type="primary" icon={<Sparkles size={13} />} loading={classificando} onClick={classificarSkills}>
+                          Classificar agora
+                        </Button>
+                      </div>
+                    );
+                  })()}
+
                   {selMode && (
                     <div style={{
                       display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14,
