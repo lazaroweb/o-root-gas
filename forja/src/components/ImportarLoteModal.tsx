@@ -109,6 +109,9 @@ interface Props {
 
 export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, onConcluido }: Props): React.ReactElement {
   const t = useTokens();
+  // v1.151.2 — ref no <input file>. AntD <Button> é um <button> real e, dentro
+  // de <label>, ele captura o clique e NÃO dispara o input. Disparamos via ref.
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const [lotes, setLotes] = useState<Lote[]>([]);
   const [categoriaDefault, setCategoriaDefault] = useState('');
   const [fonteDefault, setFonteDefault] = useState('');
@@ -122,11 +125,6 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
   const isSkills = tipo === 'skills';
   const corDestaque = isSkills ? t.accents.lavender : t.accents.blue;
   const label = isSkills ? 'skills' : 'agents';
-
-  // v1.151.2 — Bug: o Button do AntD interceptava o click e o <input hidden>
-  // dentro dele nunca era acionado. Agora usamos um ref e disparamos
-  // .click() programaticamente via onClick do botão.
-  const inputRef = useRef<HTMLInputElement | null>(null);
 
   const totalItens = useMemo(() => lotes.reduce((acc, l) => acc + l.itens.length, 0), [lotes]);
   const totalArquivosValidos = useMemo(() => lotes.filter((l) => !l.erroParse).length, [lotes]);
@@ -306,6 +304,17 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
           </div>
 
           <div style={{ marginBottom: 16 }}>
+            <input
+              ref={inputRef}
+              type="file"
+              accept=".json,.md,.txt"
+              multiple
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) aoSelecionarArquivos(e.target.files);
+                e.target.value = '';
+              }}
+            />
             <Button
               icon={<UploadIcon size={14} />}
               block
@@ -318,17 +327,6 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
                 : `+ Adicionar mais arquivos (${lotes.length} selecionado${lotes.length === 1 ? '' : 's'})`
               }
             </Button>
-            <input
-              ref={inputRef}
-              type="file"
-              accept=".json,.md,.txt"
-              multiple
-              style={{ display: 'none' }}
-              onChange={(e) => {
-                if (e.target.files && e.target.files.length > 0) aoSelecionarArquivos(e.target.files);
-                e.target.value = '';
-              }}
-            />
           </div>
 
           {/* Lista de arquivos selecionados */}

@@ -38,33 +38,27 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ## [1.151.2] — 2026-06-23
 
-### Corrigido — 2 bugs reportados na v1.151.1
+### Corrigido — Seletor de arquivos não abria + banner "sem categoria" falso
 
-**Bug 1: botão "Escolher arquivos" do modal de import não abria nada**
+Dois bugs reportados na tela de Skills:
 
-- **Causa:** o `<input type="file" hidden>` estava embutido dentro de um
-  `<Button>` do Ant Design dentro de um `<label>`. O Button captura o
-  evento de click pra si mesmo, então o input nunca era acionado, e o
-  `<label htmlFor>` também não funcionava porque o input estava dentro
-  do conteúdo do botão (não do label).
-- **Fix (`ImportarLoteModal.tsx`):** usa `useRef` no input, dispara
-  `inputRef.current?.click()` no `onClick` do Button. Input fica fora do
-  Button como sibling. Funciona em Chrome/Safari/Firefox.
+**1. Botão "Escolher arquivos" não abria o seletor (`ImportarLoteModal.tsx`):**
 
-**Bug 2: banner "11 skill(s) sem categoria" aparecia indevidamente**
+- Causa: o `<Button>` do Ant Design renderiza um `<button>` real e estava
+  dentro de um `<label>` com `<input type="file" hidden>`. Um `<button>`
+  dentro de `<label>` **captura o clique pra si** e não propaga pro input —
+  então nada abria.
+- Fix: input agora fica fora, com `ref`, e o botão chama
+  `inputRef.current?.click()` no `onClick`. Funciona dentro do iframe do GAS.
 
-- **Causa:** a agrupação visual do hub usa `tipoIA || categoria` (linha
-  709 do hub) — se a skill tem `tipoIA` preenchido (Cursor, Claude Code,
-  etc.), ela já aparece classificada visualmente. Mas o banner de
-  "Classificar agora" contava só `categoria`, então skills com `tipoIA`
-  mas sem `categoria` (caso comum no import GAS App Kit, que veio só
-  com `tipoIA`) caíam no alarme falso.
-- **Fix (`SkillsHubModal.tsx`):** banner agora usa o MESMO critério da
-  agrupação. Só é "sem classificação" quem não tem nem `tipoIA` nem
-  `categoria`. Alinhamento consistente entre o que o usuário VÊ
-  (agrupado) e o que o sistema chama de "sem categoria".
+**2. Banner "11 skill(s) sem categoria" aparecia mesmo com tudo classificado (`SkillsHubModal.tsx`):**
 
-**Deploy:** `@339`.
+- Causa: o banner só checava o campo `categoria` (frontmatter). Mas o backend
+  (`skillsClassificar`) considera classificada toda skill com `tipoIA` (o tema
+  inferido pela IA). As skills do GAS App Kit têm `tipoIA` preenchido mas não
+  têm `categoria` no frontmatter → eram contadas falsamente como "sem categoria".
+- Fix: o banner agora só conta como "sem categoria" quem não tem **nem
+  `tipoIA` nem `categoria`** — mesmo critério do backend.
 
 ---
 
