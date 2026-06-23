@@ -17423,6 +17423,42 @@ function agentsBulkSave(payload: {
   return _bulkSaveGenerico('Agents', payload);
 }
 
+// v1.151.3 — Heurística de "completude" do conteúdo. Usada pra (a) barrar
+// itens incompletos na importação e (b) decidir qual versão manter quando há
+// duplicata. Pontua tamanho do markdown + nome + descrição + nº de seções +
+// quando_usar. Não precisa ser exata: serve só pra comparar versões e cortar lixo.
+function _scoreCompletudeParsed(parsed: {
+  nome?: string; descricao?: string; quandoUsar?: string; blocos?: unknown[];
+}, md: string): number {
+  let score = Math.min(md.length, 4000) / 100; // até 40 pts por tamanho
+  if (parsed.nome && parsed.nome.trim() && parsed.nome.toLowerCase() !== 'sem nome') score += 10;
+  if (parsed.descricao && parsed.descricao.trim().length > 20) score += 10;
+  score += Math.min((parsed.blocos || []).length, 8) * 5; // estrutura (seções)
+  if (parsed.quandoUsar && parsed.quandoUsar.trim()) score += 5;
+  return score;
+}
+
+// Score equivalente pra uma linha JÁ salva no banco (pra comparar com a importada).
+function _scoreCompletudeLinha(row: Record<string, unknown>): number {
+  const md = String(row.conteudo || '');
+  let blocos = 0;
+  try { const arr = JSON.parse(String(row.secoesJson || '[]')); if (Array.isArray(arr)) blocos = arr.length; } catch { /* ignora */ }
+  let score = Math.min(md.length, 4000) / 100;
+  if (String(row.nome || '').trim() && String(row.nome).toLowerCase() !== 'sem nome') score += 10;
+  if (String(row.descricao || '').trim().length > 20) score += 10;
+  score += Math.min(blocos, 8) * 5;
+  if (String(row.quandoUsar || '').trim()) score += 5;
+  return score;
+}
+
+// "Completinho" = tem nome de verdade, markdown com tamanho mínimo e corpo
+// (não só frontmatter). Barra entradas truncadas/redirecionadas/placeholder.
+function _pareceCompletoConteudo(parsed: { nome?: string }, md: string): boolean {
+  const corpo = md.replace(/^\s*---[\s\S]*?\n---\s*/, '').trim(); // remove frontmatter YAML
+  const temNome = !!(parsed.nome && parsed.nome.trim() && parsed.nome.toLowerCase() !== 'sem nome');
+  return md.length >= 120 && temNome && corpo.length >= 40;
+}
+
 // v1.151.0 — Implementação compartilhada do bulk save (Skills e Agents).
 // Skills = sem campos modelo/ferramentas/metaJson/tipo/diretrizFinal/dominios
 // (ficam vazios pras Skills, sem impacto). Agents = campos extra preenchidos
@@ -17470,12 +17506,28 @@ function _bulkSaveGenerico(
     const paraAtualizar: Array<{ id: string; data: Record<string, unknown> }> = [];
     let pulados = 0;
     const erros: Array<{ slug: string; msg: string }> = [];
+    // v1.151.3 — itens descartados de propósito (incompletos, duplicados no
+    // lote, ou downgrade evitado). Não são "erros" — são a trava de segurança
+    // funcionando. Reportados separadamente pra transparência.
+    const ignorados: Array<{ slug: string; msg: string }> = [];
 
+    // ── 1ª passada: parse + trava de qualidade + dedup DENTRO do lote ──────────
+    // Mantém apenas a versão MAIS COMPLETA de cada slug dentro deste lote, então
+    // se o mesmo slug vier em 2 arquivos (ex.: o quebrado + o regerado), só o
+    // melhor sobrevive — nunca os dois.
+    const candidatos = new Map<string, { row: Record<string, unknown>; md: string; score: number; slug: string; usos: number }>();
+    let semSlugSeq = 0;
     for (const item of payload.itens) {
       try {
         const md = (item.markdown || '').trim();
-        if (!md) { erros.push({ slug: item.slug || '(sem slug)', msg: 'Markdown vazio.' }); continue; }
+        if (!md) { ignorados.push({ slug: item.slug || '(sem slug)', msg: 'Markdown vazio.' }); continue; }
         const parsed = _parseSkillMd(md);
+
+        // Trava de qualidade: só passa o que estiver "completinho".
+        if (!_pareceCompletoConteudo(parsed, md)) {
+          ignorados.push({ slug: item.slug || parsed.slug || '(incompleto)', msg: 'Conteúdo incompleto — não importado.' });
+          continue;
+        }
 
         const slugFinal = (item.slug || parsed.slug || _slugify(parsed.nome) || '').trim();
         const nome = (parsed.nome || item.slug || 'Sem nome').trim();
@@ -17511,27 +17563,52 @@ function _bulkSaveGenerico(
           baseRow.dominios = (parsed.dominios || []).join(',');
         }
 
-        const existente = slugFinal ? porSlug.get(slugFinal) : undefined;
-        if (existente) {
-          if (modo === 'criar') { pulados++; continue; }
-          // upsert: invalida cache de tradução se conteúdo mudou.
-          const conteudoMudou = String(existente.conteudo || '') !== md;
-          paraAtualizar.push({
-            id: String(existente.id || ''),
-            data: {
-              ...baseRow,
-              ...(conteudoMudou ? { traducaoPt: '', descricaoPt: '', tipoIA: '', adaptacoes: '' } : {}),
-            },
-          });
+        const score = _scoreCompletudeParsed(parsed, md);
+        const usos = parsed.usos || 0;
+        // Chave de dedup: slug quando existe; senão, cada item é único.
+        const chave = slugFinal || `__noslug_${++semSlugSeq}`;
+        const anterior = candidatos.get(chave);
+        if (anterior) {
+          // Duplicado no MESMO lote → mantém o mais completo, descarta o outro.
+          if (score > anterior.score) candidatos.set(chave, { row: baseRow, md, score, slug: slugFinal, usos });
+          pulados++;
+          ignorados.push({ slug: slugFinal, msg: 'Duplicado no lote — mantida a versão mais completa.' });
         } else {
-          paraCriar.push({
-            ...baseRow,
-            criadoEm: agora,
-            usos: parsed.usos || 0,
-          });
+          candidatos.set(chave, { row: baseRow, md, score, slug: slugFinal, usos });
         }
       } catch (e: unknown) {
         erros.push({ slug: item.slug || '(parse falhou)', msg: e instanceof Error ? e.message : 'Erro' });
+      }
+    }
+
+    // ── 2ª passada: criar vs atualizar contra o que JÁ existe no banco ─────────
+    for (const cand of candidatos.values()) {
+      const { row, md, score, slug, usos } = cand;
+      const existente = slug ? porSlug.get(slug) : undefined;
+      if (existente) {
+        if (modo === 'criar') {
+          pulados++;
+          ignorados.push({ slug, msg: 'Slug já existe (modo "pular existentes").' });
+          continue;
+        }
+        // upsert com proteção anti-downgrade: não troca uma versão completa
+        // por uma claramente mais pobre (ex.: re-import de arquivo truncado).
+        const scoreExistente = _scoreCompletudeLinha(existente);
+        if (scoreExistente > 0 && score < scoreExistente * 0.6) {
+          pulados++;
+          ignorados.push({ slug, msg: 'Mantida a versão salva (mais completa que a importada).' });
+          continue;
+        }
+        const conteudoMudou = String(existente.conteudo || '') !== md;
+        paraAtualizar.push({
+          id: String(existente.id || ''),
+          data: {
+            ...row,
+            ...(conteudoMudou ? { traducaoPt: '', descricaoPt: '', tipoIA: '', adaptacoes: '' } : {}),
+          },
+        });
+      } else {
+        paraCriar.push({ ...row, criadoEm: agora, usos });
       }
     }
 
@@ -17567,6 +17644,7 @@ function _bulkSaveGenerico(
         atualizados,
         pulados,
         erros,
+        ignorados,
       },
     };
   } catch (e: unknown) {

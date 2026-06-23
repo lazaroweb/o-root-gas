@@ -26,6 +26,9 @@ interface RelatorioLote {
   atualizados: number;
   pulados: number;
   erros: Array<{ slug: string; msg: string }>;
+  // v1.151.3 — descartados pela trava de segurança (incompletos, duplicados
+  // no lote, downgrade evitado). Não são erros — é a proteção funcionando.
+  ignorados?: Array<{ slug: string; msg: string }>;
 }
 
 // v1.151.1 — Cada arquivo selecionado vira um "Lote" com estado próprio.
@@ -120,7 +123,7 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
   // Progresso global agregado (todos os lotes).
   const [progGlobal, setProgGlobal] = useState({ loteAtual: 0, totalLotes: 0, itensFeitos: 0, totalItens: 0 });
   // Quando termina tudo, mostra resumo consolidado.
-  const [resumoFinal, setResumoFinal] = useState<{ arquivos: number; total: number; criados: number; atualizados: number; pulados: number; erros: number } | null>(null);
+  const [resumoFinal, setResumoFinal] = useState<{ arquivos: number; total: number; criados: number; atualizados: number; pulados: number; ignorados: number; erros: number } | null>(null);
 
   const isSkills = tipo === 'skills';
   const corDestaque = isSkills ? t.accents.lavender : t.accents.blue;
@@ -171,7 +174,7 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
     const total = validos.reduce((acc, l) => acc + l.itens.length, 0);
     setProgGlobal({ loteAtual: 0, totalLotes: validos.length, itensFeitos: 0, totalItens: total });
 
-    const consolidado = { arquivos: 0, total: 0, criados: 0, atualizados: 0, pulados: 0, erros: 0 };
+    const consolidado = { arquivos: 0, total: 0, criados: 0, atualizados: 0, pulados: 0, ignorados: 0, erros: 0 };
     let itensFeitos = 0;
 
     for (let li = 0; li < validos.length; li++) {
@@ -180,7 +183,7 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
       setLotes((prev) => prev.map((l) => l.id === lote.id ? { ...l, status: 'processando' } : l));
       setProgGlobal((p) => ({ ...p, loteAtual: li + 1, itensFeitos }));
 
-      const relAcc: RelatorioLote = { total: 0, criados: 0, atualizados: 0, pulados: 0, erros: [] };
+      const relAcc: RelatorioLote = { total: 0, criados: 0, atualizados: 0, pulados: 0, erros: [], ignorados: [] };
       let loteErrou = false;
       try {
         for (let i = 0; i < lote.itens.length; i += CHUNK) {
@@ -204,6 +207,7 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
           relAcc.atualizados += rep.atualizados;
           relAcc.pulados += rep.pulados;
           relAcc.erros.push(...rep.erros);
+          if (rep.ignorados) relAcc.ignorados!.push(...rep.ignorados);
           itensFeitos += chunk.length;
           setProgGlobal((p) => ({ ...p, itensFeitos }));
         }
@@ -220,6 +224,7 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
       consolidado.criados += relAcc.criados;
       consolidado.atualizados += relAcc.atualizados;
       consolidado.pulados += relAcc.pulados;
+      consolidado.ignorados += (relAcc.ignorados ? relAcc.ignorados.length : 0);
       consolidado.erros += relAcc.erros.length;
     }
 
@@ -301,6 +306,24 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
             Se cada arquivo já trouxer <code style={{ fontFamily: FONTS.mono }}>category</code> nos itens (caso da AI),
             a Forja vai <strong>respeitar a categoria de cada arquivo</strong> automaticamente —
             você não precisa digitar nada.
+          </div>
+
+          {/* v1.151.3 — trava de segurança: deixa explícito pro usuário que pode
+              jogar tudo (até arquivos repetidos/regerados) sem medo de sujar. */}
+          <div style={{
+            background: `${t.accents.sage}0d`, border: `1px solid ${t.accents.sage}33`,
+            borderRadius: 10, padding: '10px 12px', marginBottom: 16,
+            fontFamily: FONTS.ui, fontSize: 11.5, color: t.textSecondary, lineHeight: 1.6,
+            display: 'flex', gap: 8, alignItems: 'flex-start',
+          }}>
+            <CheckCircle2 size={15} color={t.accents.sage} style={{ flexShrink: 0, marginTop: 1 }} />
+            <span>
+              <strong style={{ color: t.text }}>Pode jogar tudo sem medo.</strong> A importação tem
+              trava de segurança: <strong>não duplica</strong> (dedup por <code style={{ fontFamily: FONTS.mono }}>slug</code> dentro
+              do lote e contra o que já existe), <strong>ignora itens incompletos</strong> e, no modo
+              upsert, <strong>nunca troca uma versão completa por uma pior</strong>. Se a AI regerou
+              arquivos na mesma pasta, mande os dois — só o mais completo de cada um fica.
+            </span>
           </div>
 
           <div style={{ marginBottom: 16 }}>
@@ -536,9 +559,9 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
                     {resumoFinal.atualizados} atualizada{resumoFinal.atualizados === 1 ? '' : 's'}
                   </Tag>
                 )}
-                {resumoFinal.pulados > 0 && (
-                  <Tag style={{ fontFamily: FONTS.ui, fontSize: 12 }}>
-                    {resumoFinal.pulados} pulada{resumoFinal.pulados === 1 ? '' : 's'} (slug existia)
+                {resumoFinal.ignorados > 0 && (
+                  <Tag color="gold" style={{ fontFamily: FONTS.ui, fontSize: 12 }}>
+                    {resumoFinal.ignorados} barrada{resumoFinal.ignorados === 1 ? '' : 's'} pela trava (duplicada/incompleta)
                   </Tag>
                 )}
                 {resumoFinal.erros > 0 && (
@@ -581,7 +604,29 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
                   <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginTop: 4, marginLeft: 22 }}>
                     {lote.relatorio.criados} criadas
                     {lote.relatorio.atualizados > 0 && ` · ${lote.relatorio.atualizados} atualizadas`}
-                    {lote.relatorio.pulados > 0 && ` · ${lote.relatorio.pulados} puladas`}
+                    {(lote.relatorio.ignorados?.length || 0) > 0 && (
+                      <details style={{ marginTop: 4 }}>
+                        <summary style={{ color: t.accents.peach, cursor: 'pointer', fontWeight: 600 }}>
+                          {lote.relatorio.ignorados!.length} barrada{lote.relatorio.ignorados!.length === 1 ? '' : 's'} pela trava
+                        </summary>
+                        <div style={{
+                          marginTop: 6, paddingLeft: 8,
+                          borderLeft: `2px solid ${t.accents.peach}40`,
+                          maxHeight: 120, overflow: 'auto',
+                        }}>
+                          {lote.relatorio.ignorados!.slice(0, 30).map((ig, ii) => (
+                            <div key={ii} style={{ fontSize: 10.5, marginBottom: 2 }}>
+                              <strong>{ig.slug}:</strong> {ig.msg}
+                            </div>
+                          ))}
+                          {lote.relatorio.ignorados!.length > 30 && (
+                            <div style={{ fontSize: 10, color: t.textTertiary }}>
+                              … e mais {lote.relatorio.ignorados!.length - 30}
+                            </div>
+                          )}
+                        </div>
+                      </details>
+                    )}
                     {lote.relatorio.erros.length > 0 && (
                       <details style={{ marginTop: 4 }}>
                         <summary style={{ color: '#dc2626', cursor: 'pointer', fontWeight: 600 }}>

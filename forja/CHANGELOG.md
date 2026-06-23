@@ -36,6 +36,53 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.151.3] — 2026-06-23
+
+### Adicionado — Trava de segurança na importação em lote (anti-duplicata + qualidade)
+
+**Contexto:** a AU que gera os JSONs está **regerando arquivos pra corrigir
+erros, no mesmo diretório**. O user vai querer jogar a pasta inteira (incluindo
+versões repetidas/regeradas) e precisa de garantia de que **nada duplica** e que
+**só o que está completo entra**.
+
+**Antes (v1.151.1/2):** dedup só existia por `slug` contra o banco. Faltava:
+- dedup DENTRO do mesmo lote (mesmo slug em 2 arquivos selecionados juntos
+  entrava 2×);
+- trava de qualidade (subia qualquer markdown não-vazio, mesmo truncado);
+- proteção contra downgrade (re-import quebrado sobrescrevia versão boa).
+
+**Agora (`server.ts` — `_bulkSaveGenerico`):** import em 2 passadas.
+
+1. **Passada de parse + qualidade + dedup intra-lote:**
+   - `_pareceCompletoConteudo()`: barra itens incompletos (markdown < 120 chars,
+     sem nome real, ou só frontmatter sem corpo). Reportados como "barrados".
+   - `_scoreCompletudeParsed()`: pontua completude (tamanho + nome + descrição +
+     nº de seções + quando_usar).
+   - Dedup por `slug` num `Map`: se o mesmo slug aparece 2× no lote (ex.: o
+     arquivo quebrado + o regerado), **mantém só o de maior score**. Nunca os dois.
+2. **Passada de criar vs atualizar contra o banco:**
+   - modo `criar`: pula slugs existentes.
+   - modo `upsert` com **anti-downgrade**: se a versão importada tem score
+     < 60% da versão já salva (claramente mais pobre/truncada), **mantém a salva**.
+     Edições normais (score igual ou maior) atualizam sem problema.
+
+- Novo campo no relatório: `ignorados: [{slug, msg}]` — explica CADA descarte
+  ("incompleto", "duplicado no lote — mantida a mais completa", "mantida a versão
+  salva", etc.). Não são erros, é a trava funcionando.
+
+**Frontend (`ImportarLoteModal.tsx`):**
+
+- Aviso verde fixo: "Pode jogar tudo sem medo" explicando a trava.
+- Resumo final ganhou tag dourada "**N barradas pela trava (duplicada/incompleta)**".
+- Detalhe por arquivo tem `<details>` expansível listando os barrados com motivo.
+
+**Resultado:** o user pode selecionar a pasta inteira (com regerados e tudo) que
+a base fica limpa: sem duplicata, só conteúdo completo, e versão boa preservada.
+
+**Deploy:** `@341` (estável).
+
+---
+
 ## [1.151.2] — 2026-06-23
 
 ### Corrigido — Seletor de arquivos não abria + banner "sem categoria" falso
