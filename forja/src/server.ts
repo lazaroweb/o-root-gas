@@ -498,6 +498,32 @@ function dbCreate(sheetName: string, data: Record<string, unknown>): Record<stri
   return obj;
 }
 
+// v1.151.0 — Batch insert. Substitui 129 appendRow() (cada uma é uma chamada
+// do GAS e satura o quota) por 1 setValues(). Crítico pro bulk import.
+// IMPORTANTE: gera IDs em sequência pra evitar colisão dentro do mesmo batch.
+function dbBatchCreate(sheetName: string, itens: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  if (!itens || itens.length === 0) return [];
+  const schema = SCHEMA.find(s => s.name === sheetName);
+  if (!schema) throw new Error(`Sheet ${sheetName} not in schema`);
+  const sheet = getOrCreateSheet(sheetName, schema.columns);
+  const linhas: unknown[][] = [];
+  const objs: Array<Record<string, unknown>> = [];
+  for (const data of itens) {
+    const id = generateId();
+    const row = schema.columns.map(col => {
+      if (col === 'id') return id;
+      return data[col] !== undefined ? data[col] : '';
+    });
+    linhas.push(row);
+    const obj: Record<string, unknown> = {};
+    schema.columns.forEach((col, i) => { obj[col] = row[i]; });
+    objs.push(obj);
+  }
+  const startRow = sheet.getLastRow() + 1;
+  sheet.getRange(startRow, 1, linhas.length, schema.columns.length).setValues(linhas as unknown[][]);
+  return objs;
+}
+
 function dbUpdate(sheetName: string, id: string, data: Record<string, unknown>): Record<string, unknown> | null {
   const schema = SCHEMA.find(s => s.name === sheetName);
   if (!schema) throw new Error(`Sheet ${sheetName} not in schema`);
@@ -17341,6 +17367,207 @@ function skillsRegistrarUso(id: string): ServerResult {
     return { ok: true, data: { usos: novo } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// v1.151.0 — Import em lote. Aceita N skills numa só chamada e usa dbBatchCreate
+// (1 write pra todo o lote) em vez de N appendRow().
+// Payload:
+//   itens: array de { markdown, slug?, categoria?, tags?, fonte?, idExterno? }
+//   opcoes:
+//     - categoriaDefault: aplica a TODOS os itens (override). Caso típico:
+//       user baixou 129 skills duma mesma categoria.
+//     - fonteDefault: agrupa visualmente as skills (vira "fonte" da pasta).
+//     - modo: 'criar' (skip se slug existe) ou 'upsert' (atualiza se existe).
+//       Default 'upsert' — mais útil pra re-imports.
+// Resposta: { total, criados, atualizados, pulados, erros: [{slug, msg}] }.
+//
+// LIMITE: 200 itens por chamada. Pra 1036 skills, o frontend faz 6 chamadas.
+// Isso evita timeout do GAS (~6 min) e mantém a UI responsiva (mostra
+// progresso de batch em batch).
+function skillsBulkSave(payload: {
+  itens: Array<{
+    markdown: string;
+    slug?: string;
+    categoria?: string;
+    tags?: string;
+    fonte?: string;
+    idExterno?: string;
+  }>;
+  opcoes?: {
+    categoriaDefault?: string;
+    fonteDefault?: string;
+    modo?: 'criar' | 'upsert';
+  };
+}): ServerResult {
+  return _bulkSaveGenerico('Skills', payload);
+}
+
+function agentsBulkSave(payload: {
+  itens: Array<{
+    markdown: string;
+    slug?: string;
+    categoria?: string;
+    tags?: string;
+    fonte?: string;
+    idExterno?: string;
+    modelo?: string;
+    ferramentas?: string;
+  }>;
+  opcoes?: {
+    categoriaDefault?: string;
+    fonteDefault?: string;
+    modo?: 'criar' | 'upsert';
+  };
+}): ServerResult {
+  return _bulkSaveGenerico('Agents', payload);
+}
+
+// v1.151.0 — Implementação compartilhada do bulk save (Skills e Agents).
+// Skills = sem campos modelo/ferramentas/metaJson/tipo/diretrizFinal/dominios
+// (ficam vazios pras Skills, sem impacto). Agents = campos extra preenchidos
+// pelo parser quando vierem no markdown.
+function _bulkSaveGenerico(
+  tabela: 'Skills' | 'Agents',
+  payload: {
+    itens: Array<{
+      markdown: string;
+      slug?: string;
+      categoria?: string;
+      tags?: string;
+      fonte?: string;
+      idExterno?: string;
+      modelo?: string;
+      ferramentas?: string;
+    }>;
+    opcoes?: {
+      categoriaDefault?: string;
+      fonteDefault?: string;
+      modo?: 'criar' | 'upsert';
+    };
+  },
+): ServerResult {
+  try {
+    if (!payload || !Array.isArray(payload.itens) || payload.itens.length === 0) {
+      return { ok: false, error: 'Lote vazio.' };
+    }
+    if (payload.itens.length > 200) {
+      return { ok: false, error: `Lote acima de 200 itens (${payload.itens.length}). Fatiar em vários chunks.` };
+    }
+    const op = payload.opcoes || {};
+    const modo = op.modo || 'upsert';
+    const agora = new Date().toISOString();
+
+    // Pré-busca: slugs já existentes (caso modo upsert/criar precise checar).
+    const existentes = dbGetAll(tabela) as Array<Record<string, unknown>>;
+    const porSlug = new Map<string, Record<string, unknown>>();
+    for (const e of existentes) {
+      const sl = String(e.slug || '').trim();
+      if (sl) porSlug.set(sl, e);
+    }
+
+    const paraCriar: Array<Record<string, unknown>> = [];
+    const paraAtualizar: Array<{ id: string; data: Record<string, unknown> }> = [];
+    let pulados = 0;
+    const erros: Array<{ slug: string; msg: string }> = [];
+
+    for (const item of payload.itens) {
+      try {
+        const md = (item.markdown || '').trim();
+        if (!md) { erros.push({ slug: item.slug || '(sem slug)', msg: 'Markdown vazio.' }); continue; }
+        const parsed = _parseSkillMd(md);
+
+        const slugFinal = (item.slug || parsed.slug || _slugify(parsed.nome) || '').trim();
+        const nome = (parsed.nome || item.slug || 'Sem nome').trim();
+        // v1.151.0 — Override de categoria explicito > vindo no item > parsed > vazio.
+        const categoria = (op.categoriaDefault || item.categoria || parsed.categoria || '').trim();
+        const fonte = (item.fonte || op.fonteDefault || '').trim();
+        const tags = (item.tags || parsed.tags.join(', ')).trim();
+        const descricao = parsed.descricao;
+
+        const baseRow: Record<string, unknown> = {
+          nome, descricao, categoria, tags,
+          conteudo: md,
+          fonte,
+          tamanhoBytes: md.length,
+          atualizadoEm: agora,
+          slug: slugFinal,
+          idExterno: item.idExterno || parsed.idExterno || '',
+          relacionadas: (parsed.relacionadas || []).join(','),
+          quandoUsar: parsed.quandoUsar || '',
+          identidadePapel: parsed.identidadePapel || '',
+          secoesJson: JSON.stringify(parsed.blocos || []),
+        };
+
+        // Campos específicos de Agent (vazios pra Skills, sem dano).
+        if (tabela === 'Agents') {
+          baseRow.modelo = item.modelo || '';
+          baseRow.ferramentas = item.ferramentas || '';
+          baseRow.tipo = parsed.tipo || '';
+          baseRow.diretrizFinal = parsed.diretrizFinal || '';
+          baseRow.dominios = (parsed.dominios || []).join(',');
+        }
+
+        const existente = slugFinal ? porSlug.get(slugFinal) : undefined;
+        if (existente) {
+          if (modo === 'criar') { pulados++; continue; }
+          // upsert: invalida cache de tradução se conteúdo mudou.
+          const conteudoMudou = String(existente.conteudo || '') !== md;
+          paraAtualizar.push({
+            id: String(existente.id || ''),
+            data: {
+              ...baseRow,
+              ...(conteudoMudou ? { traducaoPt: '', descricaoPt: '', tipoIA: '', adaptacoes: '' } : {}),
+            },
+          });
+        } else {
+          paraCriar.push({
+            ...baseRow,
+            criadoEm: agora,
+            usos: parsed.usos || 0,
+          });
+        }
+      } catch (e: unknown) {
+        erros.push({ slug: item.slug || '(parse falhou)', msg: e instanceof Error ? e.message : 'Erro' });
+      }
+    }
+
+    // Atualizações (uma a uma — não tem batch do GAS pra setValues de linhas
+    // não-contíguas. Mas em geral upsert é minoria; o ganho real está no batch
+    // de inserção de novos).
+    let atualizados = 0;
+    for (const upd of paraAtualizar) {
+      try { dbUpdate(tabela, upd.id, upd.data); atualizados++; }
+      catch (e: unknown) { erros.push({ slug: String(upd.data.slug || ''), msg: e instanceof Error ? e.message : 'Erro update' }); }
+    }
+
+    // Criações em batch (a economia real).
+    let criados = 0;
+    if (paraCriar.length > 0) {
+      try {
+        const novos = dbBatchCreate(tabela, paraCriar);
+        criados = novos.length;
+      } catch (e: unknown) {
+        // Fallback: tenta um por um pra ao menos salvar o que der.
+        for (const c of paraCriar) {
+          try { dbCreate(tabela, c); criados++; }
+          catch (e2: unknown) { erros.push({ slug: String(c.slug || ''), msg: e2 instanceof Error ? e2.message : 'Erro create' }); }
+        }
+      }
+    }
+
+    return {
+      ok: true,
+      data: {
+        total: payload.itens.length,
+        criados,
+        atualizados,
+        pulados,
+        erros,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro no bulk save' };
   }
 }
 

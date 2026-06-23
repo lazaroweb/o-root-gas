@@ -7,7 +7,7 @@ import {
   BookMarked, Plus, Upload as UploadIcon, Copy, Trash2, Download, Search, Tag as TagIcon,
   ExternalLink, Sparkles, Eye, FileText, Save, X, FolderOpen, Folder, FolderPlus, Pencil,
   FolderInput, Palette, Check, CheckCircle2, Info, Languages, Package, Archive, ListChecks,
-  Star,
+  Star, Boxes,
 } from 'lucide-react';
 import { criarZipBlob, baixarBlob, type ZipEntry } from '../zip';
 import ModeloBadge from './ModeloBadge';
@@ -17,6 +17,7 @@ import callServer from '../gas-client';
 import type { ServerResult } from '../types';
 import { GAS_APP_KIT_SKILLS } from '../data/gasAppKitSkills';
 import ComoUsarSkill from './ComoUsarSkill';
+import ImportarLoteModal from './ImportarLoteModal';
 
 interface SkillSummary {
   id: string;
@@ -261,6 +262,8 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
   const [loading, setLoading] = useState(false);
   const [filtro, setFiltro] = useState('');
   const [soFavoritas, setSoFavoritas] = useState(false);
+  // v1.151.0 — modal de import em lote (JSON/MD com categoria-no-import).
+  const [importLoteAberto, setImportLoteAberto] = useState(false);
   const [openSources, setOpenSources] = useState<string[]>([]);
   // Categorias abertas por pasta: { [chaveDaPasta]: string[] }. Tudo recolhido
   // por padrão; o usuário expande só o tema que quer ver.
@@ -909,6 +912,13 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                         </Button>
                       </Tooltip>
                     )}
+                    {/* v1.151.0 — Importar lote: aceita .json [{slug, markdown}] ou
+                        .md concatenado. Permite atribuir categoria/fonte na hora. */}
+                    <Tooltip title="Importa um lote de skills de um .json ou .md concatenado. Atribua a categoria pra todas de uma vez.">
+                      <Button icon={<Boxes size={14} />} onClick={() => setImportLoteAberto(true)}>
+                        Importar lote
+                      </Button>
+                    </Tooltip>
                     {GAS_APP_KIT_SKILLS.length > 0 && (
                       <Tooltip title={`Adiciona as ${GAS_APP_KIT_SKILLS.length} skills do GAS App Kit à sua biblioteca. Reimportar atualiza, não duplica.`}>
                         <Button icon={<Download size={14} />} loading={importandoKit} onClick={importarKit}>
@@ -1277,6 +1287,15 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
           {tabsEl}
         </Modal>
       )}
+
+      {/* v1.151.0 — Modal de import em lote (JSON/MD + categoria-no-import) */}
+      <ImportarLoteModal
+        aberto={importLoteAberto}
+        onClose={() => setImportLoteAberto(false)}
+        tipo="skills"
+        rpcBulkSave="skillsBulkSave"
+        onConcluido={() => { void carregar(); }}
+      />
 
       {/* Drawer: detalhe de uma skill */}
       <Drawer

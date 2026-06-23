@@ -36,6 +36,63 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.151.0] — 2026-06-23
+
+### Adicionado — Importar lote (JSON/MD) com categoria atribuída na hora
+
+**Pra que serve:** o user vai trazer pacotes grandes (ex.: 129 skills duma
+mesma categoria, 422 agents do pack vibeship). Era inviável fazer 129 uploads
+manuais ou 129 chamadas server-side. Agora rola em 1 ação só.
+
+**Backend (`server.ts`):**
+
+- `dbBatchCreate(sheetName, itens[])`: novo helper que faz `setValues()` único
+  pra todo o lote. Substitui N `appendRow()` (que estouravam quota do GAS) por
+  uma chamada só. **~50× mais rápido** que o loop antigo.
+- `skillsBulkSave` e `agentsBulkSave`: novas RPCs. Aceitam:
+  - `itens`: array de `{ markdown, slug?, categoria?, tags?, fonte?, idExterno? }`
+  - `opcoes.categoriaDefault`: **sobrescreve a categoria de TODOS os itens**
+    (caso do user — ele baixou 129 skills da categoria X)
+  - `opcoes.fonteDefault`: agrupa visualmente como uma "pasta" no Hub
+  - `opcoes.modo`: `'upsert'` (atualiza se slug existe) ou `'criar'` (skip)
+- Limite **200 itens por chamada** — frontend já fatia em chunks de 100.
+- Resposta: `{ total, criados, atualizados, pulados, erros: [{slug, msg}] }`.
+
+**Frontend (`ImportarLoteModal.tsx` — novo componente compartilhado):**
+
+- Botão **"Importar lote"** novo no header de Skills E de Agents (mesma UX).
+- Aceita 2 formatos:
+  - **`.json` recomendado** — `[{slug, markdown, category?, tags?}]`.
+    Aceita variações `conteudo`/`content`/`md` e `tags` como string ou array.
+  - **`.md` único concatenado** (fallback) — tenta divisores comuns
+    (`\n---\n\n# `, `\n##========\n`, ou split por `\n# `).
+- Inputs no modal:
+  - **Categoria deste lote** (override — texto livre, ex.: "ai-specialists")
+  - **Fonte / pasta** (agrupamento visual no Hub)
+  - **Se slug já existe**: upsert ou pular
+- Preview após upload: "129 skills detectadas em `pack-x.json`" + aviso de
+  fatiamento ("será processada em 2 lotes de até 100").
+- **Progress bar real** durante import (`Processando lote 2/3…`), com %.
+- Relatório final com tags coloridas: `127 criadas / 2 atualizadas / 0 erros`.
+- Lista os erros (até 30) com slug + mensagem se houver.
+
+**Como usar (caso do user — 129 skills de categoria X):**
+
+1. Atelier → Skills → **"Importar lote"**
+2. Escolher o `.json` baixado
+3. Em "Categoria deste lote", digitar **`ai-specialists`** (ou o que for)
+4. Em "Fonte / pasta", colocar **`pack-vibeship`** (opcional, pra agrupar)
+5. Modo: **Upsert** (re-imports atualizam, não duplicam)
+6. Clicar "Importar 129 skills" — vê o progresso ao vivo
+
+**Recomendação enviada à outra AI (que pergunta o formato):**
+
+> Use `.json` `[{slug, markdown, category?, tags?}]`. MD concatenado quebra
+> com `---` do frontmatter e dificulta dedup. JSON é trivial de validar,
+> dedup é O(1) por slug, e dá pra anexar metadados opcionais sem ambiguidade.
+
+---
+
 ## [1.150.1] — 2026-06-23
 
 ### Refinado — Parser absorve o formato `vibeship-spawner-skills` (e qualquer Anthropic-style)

@@ -8,12 +8,13 @@ import { Button, Empty, Input, Spin, Tag, Tooltip, Drawer, message, Skeleton, Se
 import {
   Bot, Search, Star, Copy, Download, Trash2, Sparkles, Upload as UploadIcon,
   FileText, ListChecks, BookMarked, Package, CheckCircle2, GitBranch, Workflow,
-  Network, Quote, Zap,
+  Network, Quote, Zap, Boxes,
 } from 'lucide-react';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import type { ServerResult } from '../types';
+import ImportarLoteModal from './ImportarLoteModal';
 
 interface AgentSummary {
   id: string;
@@ -81,6 +82,8 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
   const [soFavoritas, setSoFavoritas] = useState(false);
   const [aberto, setAberto] = useState<AgentFull | null>(null);
   const [carregandoAberto, setCarregandoAberto] = useState(false);
+  // v1.151.0 — modal de import em lote.
+  const [importLoteAberto, setImportLoteAberto] = useState(false);
 
   const carregar = async () => {
     setLoading(true);
@@ -245,7 +248,21 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
             />
           </Button>
         </label>
+        {/* v1.151.0 — Importar lote (JSON/MD com categoria-no-import) */}
+        <Tooltip title="Importa um lote de agents de um .json ou .md concatenado. Atribua a categoria pra todos de uma vez.">
+          <Button icon={<Boxes size={14} />} onClick={() => setImportLoteAberto(true)}>
+            Importar lote
+          </Button>
+        </Tooltip>
       </div>
+
+      <ImportarLoteModal
+        aberto={importLoteAberto}
+        onClose={() => setImportLoteAberto(false)}
+        tipo="agents"
+        rpcBulkSave="agentsBulkSave"
+        onConcluido={() => { void carregar(); }}
+      />
 
       {/* Lista */}
       {loading && agents.length === 0 ? (
