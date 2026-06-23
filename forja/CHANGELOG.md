@@ -36,6 +36,40 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.148.4] — 2026-06-23
+
+### Adicionado — `<ProcessoCarregando>`: padrão Forja pra feedback de operações longas
+
+**Princípio**: nenhuma operação acima de ~600ms pode rodar silenciosa. Sincronização com GitHub, scan de repo, auditoria com IA, recálculo de saúde — TUDO que demora precisa indicar visualmente. Silêncio = bug presumido.
+
+Esse princípio é parente direto do "alerta sem tratativa proibido" (#6 do ROADMAP). O usuário levantou na hora certa: testando o sync de Dívida que vai pro GitHub (3-15s), o app ficava SEM feedback nenhum durante a operação — sensação real de "travou".
+
+**Componente novo: `forja/src/components/ProcessoCarregando.tsx`**
+
+Componente único com 3 variantes pra cobrir todo cenário:
+
+- **`inline`** (default) — banner laranja-brasa no topo do conteúdo, não bloqueia interação. Pra: sync em background, refresh, save em segundo plano.
+- **`overlay`** — cobre o conteúdo do painel atual com blur sutil + card central. Pra: operação que invalida tudo na view atual.
+- **`fullscreen`** — cobre o app inteiro. Pra: primeira carga, bootstrap crítico.
+
+Anatomia visual: spinner SVG nativo com gradient da brasa (não depende do Spin do antd pra controle fino) + mensagem (verbo no gerúndio + reticências) + (opcional) etapa técnica em mono lavanda + (opcional) subtexto cinza. Animação `forjaFadeIn` 0.18-0.25s. Cores via `useTokens()`.
+
+**Aplicação imediata: aba Dívida técnica**
+
+`DividaTecnicaPanel.tsx` agora mostra `<ProcessoCarregando variante="inline" />` enquanto `sincronizando=true`, com mensagem contextual baseada na fonte (`Sincronizando dívida técnica com GitHub…` ou `…Apps Script…`) + etapa técnica (`baixando árvore + arquivos + parseando`) + subtexto sobre cache.
+
+**Documentação no design system**
+
+`.cursor/rules/forja-design-system.mdc` ganhou nova **seção 10** (foi a antiga seção 10 "checklist final" pra 11) detalhando:
+- Quando usar cada variante (com exemplos `tsx`)
+- Regras de uso (mensagem ativa, etapa, subtexto)
+- Quando NÃO usar (< 600ms basta loading antd)
+- Item novo no checklist final: *"Operações > 600ms usam `<ProcessoCarregando>` (não silenciosas)?"*
+
+Próximo agente IA pegando o repo já vai saber que precisa usar — e vai ser pego pelo bugbot se esquecer.
+
+---
+
 ## [1.148.3] — 2026-06-23
 
 ### Adicionado — Self-bootstrap do FORJA + seção "Como usar essa skill em cada IDE"

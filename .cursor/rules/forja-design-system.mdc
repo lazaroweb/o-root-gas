@@ -234,7 +234,63 @@ import { Plus, Trash2, Edit3, ... } from 'lucide-react';
 
 ---
 
-## 10. Antes de finalizar QUALQUER view nova ou modificada
+## 10. Operações longas: **OBRIGATÓRIO** mostrar progresso (v1.148.4)
+
+> **Princípio**: nenhuma operação acima de ~600ms pode rodar silenciosa. O usuário precisa SABER que está acontecendo coisa — não que o app travou.
+
+Este princípio é parente direto do "alerta sem tratativa proibido" (princípio #6 do ROADMAP): **silêncio = bug presumido**. Sincronização com GitHub, auditoria com IA, recálculo de saúde, scan de repo — TUDO que demora precisa indicar visualmente.
+
+### Componente padrão: `<ProcessoCarregando>`
+
+Use **sempre** o componente `forja/src/components/ProcessoCarregando.tsx` em vez de inventar spinner próprio. Ele tem 3 variantes:
+
+```tsx
+import ProcessoCarregando from '../components/ProcessoCarregando';
+
+// VARIANTE 'inline' (default) — banner no topo, não bloqueia interação.
+// Use pra: sincronização em background, refresh, save em segundo plano.
+<ProcessoCarregando
+  mostrar={sincronizando}
+  mensagem="Sincronizando com GitHub…"
+  etapa="baixando 47 arquivos"
+  subtexto="pode levar alguns segundos · cache será reutilizado nas próximas"
+/>
+
+// VARIANTE 'overlay' — cobre o conteúdo do painel atual com blur sutil.
+// Use pra: operação que invalida tudo na view atual (recálculo de algo
+// crítico, importação que muda tudo).
+<ProcessoCarregando
+  mostrar={importando}
+  mensagem="Importando GAS App Kit…"
+  etapa="11 skills · cadastrando no banco"
+  variante="overlay"
+/>
+
+// VARIANTE 'fullscreen' — cobre app inteiro. SÓ pra primeira carga ou
+// operação crítica que invalida absolutamente tudo.
+<ProcessoCarregando
+  mostrar={bootstrapping}
+  mensagem="Preparando a Forja pela primeira vez…"
+  variante="fullscreen"
+/>
+```
+
+### Regras de uso
+
+- **Mensagem ativa**: "Sincronizando…", "Auditando…", "Recalculando…". Verbo no gerúndio + reticências.
+- **`etapa` quando der**: mostra o que está rolando AGORA tecnicamente (ex.: "baixando blobs", "rodando batch 3 de 5"). Reforça que o sistema está vivo.
+- **`subtexto` quando demora**: gerencia expectativa do usuário ("pode levar alguns segundos", "cache será reutilizado nas próximas").
+- **Não substitua `loading` de botões**: use AMBOS — o botão fica em `loading={true}` (impede duplo-clique) e o `ProcessoCarregando` aparece no conteúdo (mostra que tá rolando).
+
+### Quando NÃO usar
+
+- Operação < 600ms (basta `loading` do botão antd).
+- Carregamento de lista trivial (`Spin` do antd resolve).
+- Auto-save silencioso (mostra só toast no fim).
+
+---
+
+## 11. Antes de finalizar QUALQUER view nova ou modificada
 
 Checklist mental obrigatório:
 
@@ -242,6 +298,8 @@ Checklist mental obrigatório:
 - [ ] Usa `<PageHeader>` no topo?
 - [ ] Cores via `useTokens()`, sem hex hardcoded?
 - [ ] Espaçamento na escala (4/8/12/16/20/24/28/32)?
+- [ ] **Operações > 600ms usam `<ProcessoCarregando>` (não silenciosas)?**
+- [ ] **Alertas têm CTA/saiba mais/descarte (não "alerta sem tratativa")?**
 - [ ] Tipografia: display em headings, ui em texto, mono em códigos?
 - [ ] Empty states com instrução do que fazer?
 - [ ] Edição rica usa Drawer (não Modal pesado)?

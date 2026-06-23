@@ -9,6 +9,7 @@ import {
   CheckCircle2, ArrowUpRight, Search, ShieldAlert,
 } from 'lucide-react';
 import { Panel } from './ui';
+import ProcessoCarregando from './ProcessoCarregando';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
@@ -181,8 +182,23 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, scriptId, onPro
     );
   }
 
+  // Mensagem de etapa baseada na fonte — informa o usuário o que está rolando.
+  const etapaSincronia = temRepo
+    ? 'GitHub · baixando árvore + arquivos + parseando'
+    : 'Apps Script · baixando projeto e parseando comentários';
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* v1.148.4 — feedback visual obrigatório pra operação que demora.
+          Sincronizar com GitHub pode levar 2-15s; o user precisa SABER que
+          não travou. Aparece como banner inline acima do conteúdo. */}
+      <ProcessoCarregando
+        mostrar={sincronizando}
+        mensagem={`Sincronizando dívida técnica com ${fonteLabel}…`}
+        etapa={etapaSincronia}
+        subtexto="pode levar alguns segundos na primeira vez · cache será reutilizado nas próximas"
+      />
+
       {/* Header: contadores + ações */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
