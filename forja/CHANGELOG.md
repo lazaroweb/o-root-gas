@@ -36,6 +36,39 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.148.1] — 2026-06-23
+
+### Corrigido — Dívida técnica também escaneia projetos Apps Script (sem repoUrl)
+
+Quando o sistema é Google Apps Script puro (tem `scriptId` mas não tem
+`repoUrl`), a aba **Dívida** dizia "sem repositório GitHub" mesmo o usuário
+tendo conexão GitHub ativa. A auditoria já sabia lidar com isso há tempos
+(via `_lerCodigoSistema` que escolhe GitHub > GAS); a Dívida ficou pra trás.
+
+**Backend (`forja/src/server.ts`)**
+
+- Nova `_scanGASTodos(scriptId)`: lê arquivos do projeto via `script.googleapis.com/v1/projects/.../content`, parseia cada `source` linha-a-linha procurando os 4 padrões. Devolve no mesmo formato de `_scanRepoTodos` (sha + matches + erro) pra tratamento uniforme.
+- Nova `_scanCodigoSistemaParaDebitos(sistema)`: orquestrador — escolhe GitHub se tem `repoUrl`, GAS se tem só `scriptId`. Mesma prioridade da auditoria.
+- Nova `_mudouDesdeUltimoScan(sistema, ultimoScanSha)`: abstrai o HEAD check. Pra GitHub, faz a chamada barata de commit SHA; pra GAS sempre devolve "mudou" (Apps Script API já é rápida e não tem HEAD equivalente).
+- `_hashConteudoGAS`: gera SHA-like determinístico (`gas-XXXXXX`) baseado em nomes+tamanhos dos arquivos, usado como identificador de "scan" no lugar do commit.
+- `sincronizarDebitos` refatorado pra usar essas abstrações — código consistente, GitHub e GAS tratados igual.
+
+**Frontend (`DividaTecnicaPanel.tsx`)**
+
+- Nova prop `scriptId` (paralela a `repoUrl`). Validação trocada de `temRepo` pra `temCodigo = temRepo || temScript`.
+- Mensagem de erro "sem repositório GitHub" → "sem código auditável" (com instrução pra cadastrar `repoUrl` OU `scriptId`).
+- Label da fonte (header + tooltip): mostra "github" ou "apps script" conforme o caso.
+- Ação "Abrir no GitHub" do card: vira "Abrir no editor do Apps Script" (sem âncora de linha — GAS não suporta deep-link) quando a fonte é GAS.
+
+**Por quê**
+
+O sistema "Forja - CRM Gestão 360" (o próprio QG do user) é GAS — não tem
+`repoUrl`. A auditoria com IA funcionava nele, mas a Dívida estava bloqueada,
+o que quebrava a promessa de "qualquer sistema com código vira target". Agora
+qualquer Sistema com **GitHub OU Apps Script** vê dívida automaticamente.
+
+---
+
 ## [1.148.0] — 2026-06-23
 
 ### Adicionado — Dívida técnica + TODO list lidos do código

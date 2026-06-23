@@ -20,6 +20,7 @@ import type {
 interface Props {
   sistemaId: string;
   repoUrl?: string;
+  scriptId?: string; // v1.149.0 — fallback pra GAS sem repoUrl (mesma lógica da auditoria)
   onPromovido?: () => void; // pra dar refresh no badge do Backlog
 }
 
@@ -37,7 +38,7 @@ const SEV_META: Record<string, { label: string; corKey: 'rose' | 'peach' | 'sage
   baixa: { label: 'baixa', corKey: 'sage' },
 };
 
-export default function DividaTecnicaPanel({ sistemaId, repoUrl, onPromovido }: Props): React.ReactElement {
+export default function DividaTecnicaPanel({ sistemaId, repoUrl, scriptId, onPromovido }: Props): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
 
@@ -48,7 +49,12 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, onPromovido }: 
   const [filtroTipo, setFiltroTipo] = useState<'todos' | 'debt' | 'todo_fixme_hack' | 'promovidos' | 'pagos'>('todos');
   const [busca, setBusca] = useState('');
 
+  // Aceita qualquer fonte de código que a auditoria também aceita:
+  // GitHub (repoUrl) ou Google Apps Script (scriptId).
   const temRepo = !!(repoUrl && repoUrl.trim());
+  const temScript = !!(scriptId && scriptId.trim());
+  const temCodigo = temRepo || temScript;
+  const fonteLabel = temRepo ? 'GitHub' : temScript ? 'Apps Script' : '';
 
   const carregarLista = () => {
     setLoading(true);
@@ -64,7 +70,7 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, onPromovido }: 
   // Auto-sync ao abrir: faz a sincronia em background depois do carregamento inicial.
   // Backend faz HEAD check barato e devolve `semMudanca` se nada mudou.
   const sincronizar = (forcar = false) => {
-    if (!temRepo) return;
+    if (!temCodigo) return;
     setSincronizando(true);
     callServer<ServerResult>('sincronizarDebitos', sistemaId, forcar)
       .then((r) => {
@@ -92,13 +98,13 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, onPromovido }: 
     carregarLista();
     // Auto-sync com pequeno delay pra UI montar primeiro (sensação de fresco
     // sem bloquear o render). Se HEAD não mudou, backend devolve cache instant.
-    if (temRepo) {
+    if (temCodigo) {
       const tid = setTimeout(() => sincronizar(false), 250);
       return () => clearTimeout(tid);
     }
     return undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sistemaId, temRepo]);
+  }, [sistemaId, temCodigo]);
 
   // Filtro + busca aplicados.
   const filtrados = useMemo(() => {
@@ -159,15 +165,15 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, onPromovido }: 
     }
   };
 
-  if (!temRepo) {
+  if (!temCodigo) {
     return (
       <Panel padding={28}>
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
           description={
             <div style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary }}>
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>Sistema sem repositório GitHub</div>
-              <div>Cadastre o <code>repoUrl</code> na ficha do sistema pra a Forja escanear TODO/FIXME/HACK/DEBT do código.</div>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>Sistema sem código auditável</div>
+              <div>Cadastre o <code>repoUrl</code> (GitHub) ou <code>scriptId</code> (Google Apps Script) na ficha do sistema pra a Forja escanear TODO/FIXME/HACK/DEBT.</div>
             </div>
           }
         />
@@ -220,10 +226,10 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, onPromovido }: 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {ultimoSync && !sincronizando && (
             <Tooltip title={ultimoSync.semMudanca
-              ? `HEAD continua em ${ultimoSync.scanSha} — não precisou re-escanear.`
+              ? `${temRepo ? 'HEAD' : 'Snapshot'} continua em ${ultimoSync.scanSha} — não precisou re-escanear.`
               : `${ultimoSync.novos} novo(s) · ${ultimoSync.pagosAuto} pago(s) auto · ${ultimoSync.inalterados} mantido(s)`}>
               <span style={{ fontFamily: FONTS.mono, fontSize: 11, color: t.textTertiary }}>
-                commit {ultimoSync.scanSha}{ultimoSync.semMudanca ? ' · em dia' : ''}
+                {fonteLabel.toLowerCase()} {ultimoSync.scanSha}{ultimoSync.semMudanca ? ' · em dia' : ''}
               </span>
             </Tooltip>
           )}
@@ -288,6 +294,7 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, onPromovido }: 
               key={d.id}
               d={d}
               repoUrl={repoUrl || ''}
+              scriptId={scriptId || ''}
               onPromover={() => promover(d)}
               onPago={() => marcarPago(d)}
             />
@@ -298,20 +305,28 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, onPromovido }: 
   );
 }
 
-function DebitoCard({ d, repoUrl, onPromover, onPago }: {
-  d: DebitoTecnico; repoUrl: string; onPromover: () => void; onPago: () => void;
+function DebitoCard({ d, repoUrl, scriptId, onPromover, onPago }: {
+  d: DebitoTecnico; repoUrl: string; scriptId: string; onPromover: () => void; onPago: () => void;
 }): React.ReactElement {
   const t = useTokens();
   const meta = TIPO_META[d.tipo] || TIPO_META.todo;
   const corTipo = t.accents[meta.corKey];
   const Icon = meta.Icon;
 
-  // Monta link permanente do GitHub pro arquivo:linha (branch default).
-  const ghLink = useMemo(() => {
-    if (!repoUrl) return null;
-    const cleaned = repoUrl.replace(/\.git$/, '').replace(/\/+$/, '');
-    return `${cleaned}/blob/HEAD/${d.arquivo}#L${d.linha}`;
-  }, [repoUrl, d.arquivo, d.linha]);
+  // Monta link adequado pra fonte: GitHub permalink (arquivo:linha) quando tem
+  // repo; editor do Apps Script (sem âncora de linha — GAS não suporta) quando
+  // é só scriptId. Ordem espelha a prioridade do scan (GitHub > GAS).
+  const linkExterno = useMemo(() => {
+    if (repoUrl) {
+      const cleaned = repoUrl.replace(/\.git$/, '').replace(/\/+$/, '');
+      return { url: `${cleaned}/blob/HEAD/${d.arquivo}#L${d.linha}`, tooltip: 'Abrir no GitHub (arquivo:linha)' };
+    }
+    if (scriptId) {
+      // GAS não tem deep-link pra linha específica; abre o editor no projeto.
+      return { url: `https://script.google.com/d/${scriptId}/edit`, tooltip: 'Abrir no editor do Apps Script' };
+    }
+    return null;
+  }, [repoUrl, scriptId, d.arquivo, d.linha]);
 
   const sev = d.severidade ? SEV_META[d.severidade] : null;
   const corSev = sev ? t.accents[sev.corKey] : t.textTertiary;
@@ -386,9 +401,9 @@ function DebitoCard({ d, repoUrl, onPromover, onPago }: {
 
       {/* Ações */}
       <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-        {ghLink && (
-          <Tooltip title="Abrir no GitHub (arquivo:linha)">
-            <Button size="small" type="text" icon={<ExternalLink size={13} />} href={ghLink} target="_blank" />
+        {linkExterno && (
+          <Tooltip title={linkExterno.tooltip}>
+            <Button size="small" type="text" icon={<ExternalLink size={13} />} href={linkExterno.url} target="_blank" />
           </Tooltip>
         )}
         {ehAtivo && (

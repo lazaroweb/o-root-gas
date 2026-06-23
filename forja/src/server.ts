@@ -15685,6 +15685,16 @@ function _ghHeadShaSeguro(repoUrl: string): string {
   return _ghHeadCommitCurto(full, headers);
 }
 
+// Hash leve do conteúdo concatenado de um projeto GAS (substitui o commit SHA
+// no fluxo de cache). Se nada mudou no projeto, hash igual → sem re-scan.
+// Usa só nomes + tamanhos (não o source todo) pra ser barato.
+function _hashConteudoGAS(arquivos: Array<{ name: string; source?: string }>): string {
+  const raw = arquivos.map((f) => `${f.name}:${(f.source || '').length}`).join('|');
+  let h = 0;
+  for (let i = 0; i < raw.length; i++) { h = ((h << 5) - h) + raw.charCodeAt(i); h |= 0; }
+  return 'gas-' + Math.abs(h).toString(36).slice(0, 7);
+}
+
 // Scan completo: lê tree do repo, baixa blobs (cache por SHA), parseia.
 // Retorna lista de matches com SHA do HEAD scaneado.
 function _scanRepoTodos(repoUrl: string): { sha: string; matches: DebitoMatchRaw[]; erro?: string } {
@@ -15769,31 +15779,106 @@ function _scanRepoTodos(repoUrl: string): { sha: string; matches: DebitoMatchRaw
   }
 }
 
-// Sincroniza dívidas do sistema com o estado atual do repo.
+// Scan de projeto Google Apps Script via Apps Script API.
+// Mesmo formato de retorno de `_scanRepoTodos` (sha + matches + erro) — assim
+// o `sincronizarDebitos` consegue tratar GitHub e GAS uniformemente.
+// `sha` aqui é um hash determinístico do conteúdo (não tem commit no GAS).
+function _scanGASTodos(scriptId: string): { sha: string; matches: DebitoMatchRaw[]; erro?: string } {
+  const sid = String(scriptId || '').trim();
+  if (!sid) return { sha: '', matches: [], erro: 'Sistema sem scriptId.' };
+  try {
+    const token = ScriptApp.getOAuthToken();
+    const res = UrlFetchApp.fetch(`https://script.googleapis.com/v1/projects/${encodeURIComponent(sid)}/content`, {
+      headers: { Authorization: 'Bearer ' + token },
+      muteHttpExceptions: true,
+    });
+    const code = res.getResponseCode();
+    if (code === 403) return { sha: '', matches: [], erro: 'Apps Script API desativada. Ative em script.google.com/home/usersettings.' };
+    if (code !== 200) return { sha: '', matches: [], erro: `Apps Script API respondeu ${code}.` };
+    const json = JSON.parse(res.getContentText()) as { files?: Array<{ name: string; type: string; source?: string }> };
+    const arquivos = json.files || [];
+    if (arquivos.length === 0) return { sha: '', matches: [], erro: 'Projeto GAS sem arquivos legíveis.' };
+
+    const sha = _hashConteudoGAS(arquivos);
+    const matches: DebitoMatchRaw[] = [];
+    for (const f of arquivos) {
+      const source = String(f.source || '');
+      if (!source) continue;
+      // Reusa convenção de path com extensão (igual auditoria).
+      const ext = f.type === 'HTML' ? 'html' : f.type === 'JSON' ? 'json' : 'gs';
+      const path = `${f.name}.${ext}`;
+      const linhas = source.split('\n');
+      for (let i = 0; i < linhas.length; i++) {
+        const m = _parseLinhaDebito(linhas[i], path, i + 1);
+        if (m) matches.push(m);
+      }
+    }
+    return { sha, matches };
+  } catch (e: unknown) {
+    return { sha: '', matches: [], erro: e instanceof Error ? e.message : 'Erro ao ler projeto GAS' };
+  }
+}
+
+// Escolhe a melhor fonte pra escanear: GitHub (se repoUrl) > GAS (se scriptId).
+// Mesma lógica que `_lerCodigoSistema` usa pra auditoria — garante consistência.
+function _scanCodigoSistemaParaDebitos(sistema: Record<string, unknown>): { sha: string; matches: DebitoMatchRaw[]; fonte: 'github' | 'gas'; erro?: string } {
+  const repoUrl = String(sistema.repoUrl || '').trim();
+  if (repoUrl) {
+    const r = _scanRepoTodos(repoUrl);
+    return { ...r, fonte: 'github' };
+  }
+  const scriptId = String(sistema.scriptId || '').trim();
+  if (scriptId) {
+    const r = _scanGASTodos(scriptId);
+    return { ...r, fonte: 'gas' };
+  }
+  return { sha: '', matches: [], fonte: 'github', erro: 'Sistema sem repoUrl nem scriptId — sem código pra escanear.' };
+}
+
+// Checagem barata "mudou desde último scan?" — só faz sentido pra GitHub (HEAD
+// SHA cheap). Pra GAS não tem equivalente sem baixar o content completo, então
+// sempre devolve falso (vai re-escanear sempre, mas Apps Script API é rápida).
+function _mudouDesdeUltimoScan(sistema: Record<string, unknown>, ultimoScanSha: string): { mudou: boolean; novaShaSePararAqui: string } {
+  if (!ultimoScanSha) return { mudou: true, novaShaSePararAqui: '' };
+  const repoUrl = String(sistema.repoUrl || '').trim();
+  if (repoUrl) {
+    const head = _ghHeadShaSeguro(repoUrl);
+    if (head && head.slice(0, 7) === ultimoScanSha) return { mudou: false, novaShaSePararAqui: ultimoScanSha };
+    return { mudou: true, novaShaSePararAqui: '' };
+  }
+  // GAS: sem HEAD barato — sempre re-escaneia (Apps Script API é rápida).
+  return { mudou: true, novaShaSePararAqui: '' };
+}
+
+// Sincroniza dívidas do sistema com o estado atual do código.
 // 1. Checa se HEAD mudou desde último scan — se igual, retorna cache (semMudanca).
-// 2. Roda _scanRepoTodos.
+// 2. Roda scan da fonte certa (GitHub OU GAS).
 // 3. Diff: novos vs existentes (hash); marca como pago os ativos que sumiram.
 // 4. Preserva status='promovido' (não desfaz ligação com backlog).
 function sincronizarDebitos(sistemaId: string, forcar?: boolean): ServerResult {
   try {
     const sistema = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => s.id === sistemaId);
     if (!sistema) return { ok: false, error: 'Sistema não encontrado' };
-    const repoUrl = String(sistema.repoUrl || '').trim();
-    if (!repoUrl) return { ok: false, error: 'Sistema sem repoUrl — sem como escanear.' };
+    const temRepo = !!String(sistema.repoUrl || '').trim();
+    const temScript = !!String(sistema.scriptId || '').trim();
+    if (!temRepo && !temScript) {
+      return { ok: false, error: 'Sistema sem repoUrl nem scriptId — sem código pra escanear.' };
+    }
 
     const debitosAtuais = (dbGetAll('DebitoTecnico') as Array<Record<string, unknown>>).filter((d) => String(d.sistemaId || '') === sistemaId);
     const ultimoScanSha = debitosAtuais.length > 0
       ? String(debitosAtuais[0].ultimoScanSha || '').slice(0, 7)
       : '';
 
-    // Otimização: HEAD check barato antes do scan pesado.
-    if (!forcar && ultimoScanSha) {
-      const headAtual = _ghHeadShaSeguro(repoUrl);
-      if (headAtual && headAtual.slice(0, 7) === ultimoScanSha) {
+    // Otimização: HEAD check barato antes do scan pesado (só faz efeito no GitHub;
+    // GAS sempre re-escaneia porque API já é rápida e não tem HEAD equivalente).
+    if (!forcar) {
+      const check = _mudouDesdeUltimoScan(sistema, ultimoScanSha);
+      if (!check.mudou) {
         return {
           ok: true,
           data: {
-            scanSha: ultimoScanSha,
+            scanSha: check.novaShaSePararAqui,
             itensAtuais: debitosAtuais.map(_debitoToView),
             novos: 0,
             pagosAuto: 0,
@@ -15804,7 +15889,7 @@ function sincronizarDebitos(sistemaId: string, forcar?: boolean): ServerResult {
       }
     }
 
-    const scan = _scanRepoTodos(repoUrl);
+    const scan = _scanCodigoSistemaParaDebitos(sistema);
     if (scan.erro) return { ok: false, error: scan.erro };
     const novoSha = scan.sha.slice(0, 7);
 

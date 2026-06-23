@@ -230,6 +230,7 @@ export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDeta
           <DividaTecnicaPanel
             sistemaId={sistemaId}
             repoUrl={sistema.repoUrl}
+            scriptId={sistema.scriptId}
             onPromovido={() => { carregarBacklogCount(); carregarDividaResumo(); }}
           />
         </TabBody>
