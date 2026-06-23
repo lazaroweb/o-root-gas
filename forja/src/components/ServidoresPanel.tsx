@@ -10,7 +10,7 @@
 //   Operação → Manutenção → Notas), sem deixar a tela pesada.
 // - Presets de tipos famosos pra preencher rápido (LiteLLM, Ollama, n8n…).
 // - cofreLabel referencia item no Cofre (nunca guarda senha aqui).
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   App as AntApp, Button, Input, Select, Empty, Skeleton, Tooltip, Modal, Form,
   Popconfirm, InputNumber, Segmented,
@@ -19,12 +19,14 @@ import {
   Plus, Search, Trash2, Pencil, ExternalLink, Cpu, Terminal, ShieldCheck,
   Server as ServerIcon, Database, Box, Activity, Code2, Brain,
   Copy, Hammer, Sparkles, ChevronRight, Cloud, Home, AlertTriangle,
-  BookOpen, Tag as TagIcon, Globe, Workflow, Container, Power,
+  BookOpen, Tag as TagIcon, Globe, Workflow, Container, Power, Wifi, WifiOff,
+  RefreshCcw, HelpCircle,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
+import { pingMuitos, pingServidor, urlPingavel, type PingResult } from '../utils/pingServidor';
 import type { Servidor, ServidorPath, ServerResult, Sistema, ServerResponse } from '../types';
 
 // ─── Catálogos ────────────────────────────────────────────────────────────────
@@ -126,6 +128,66 @@ function localTxt(s: Servidor, ambienteLabel: string, tecLabel: string): string 
   return parts.filter(Boolean).join(' · ');
 }
 
+// ─── Display helpers do monitoramento ─────────────────────────────────────────
+
+interface PingDisplay {
+  cor: string;
+  rotulo: string;
+  tooltip: React.ReactNode;
+}
+
+function tempoRelativo(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 5_000) return 'agora';
+  if (diff < 60_000) return `há ${Math.round(diff / 1000)}s`;
+  if (diff < 3_600_000) return `há ${Math.round(diff / 60_000)}min`;
+  return `há ${Math.round(diff / 3_600_000)}h`;
+}
+
+// Converte um PingResult numa representação visual coerente com o tema.
+// Centralizado pra usar igual no card, no detalhe e — quando der — no widget.
+function pingDisplay(ping: PingResult | undefined, t: ReturnType<typeof useTokens>): PingDisplay {
+  if (!ping) {
+    return { cor: t.textTertiary, rotulo: 'não verificado', tooltip: 'Clique pra pingar este servidor agora.' };
+  }
+  switch (ping.status) {
+    case 'online':
+      return {
+        cor: t.accents.sage,
+        rotulo: 'online',
+        tooltip: (
+          <div>
+            <strong>Online</strong> · respondeu em {ping.latenciaMs}ms<br />
+            Verificado {tempoRelativo(ping.verificadoEm)}
+          </div>
+        ),
+      };
+    case 'offline':
+      return {
+        cor: t.accents.rose,
+        rotulo: 'offline',
+        tooltip: (
+          <div>
+            <strong>Sem resposta</strong><br />
+            {ping.erro || 'O endpoint não respondeu.'}<br />
+            <span style={{ opacity: 0.7 }}>Verificado {tempoRelativo(ping.verificadoEm)}</span>
+          </div>
+        ),
+      };
+    case 'bloqueado_mixed':
+      return {
+        cor: t.accents.clay,
+        rotulo: 'bloqueado',
+        tooltip: ping.erro || 'Mixed content: o Forja em HTTPS não consegue pingar HTTP. Abra o servidor manualmente.',
+      };
+    case 'sem_url':
+      return { cor: t.textTertiary, rotulo: 'sem URL', tooltip: 'Sem URL ou host:porta cadastrado — não é possível monitorar.' };
+    case 'verificando':
+    default:
+      return { cor: t.accents.lavender, rotulo: 'verificando…', tooltip: 'Pingando o endpoint…' };
+  }
+}
+
 // ─── Componente principal ────────────────────────────────────────────────────
 
 export default function ServidoresPanel({ onAbrirCofre }: { onAbrirCofre?: (label?: string) => void } = {}): React.ReactElement {
@@ -145,6 +207,11 @@ export default function ServidoresPanel({ onAbrirCofre }: { onAbrirCofre?: (labe
   const [salvando, setSalvando] = useState(false);
   const [form] = Form.useForm();
 
+  // Monitoramento — estado volátil (não persiste), atualizado a cada ping.
+  // id → resultado do ping. Servidores ausentes do mapa = nunca pingados.
+  const [pings, setPings] = useState<Record<string, PingResult>>({});
+  const [verificandoTodos, setVerificandoTodos] = useState(false);
+
   const carregar = () => {
     setLoading(true);
     callServer<ServerResult>('servidoresList')
@@ -153,12 +220,48 @@ export default function ServidoresPanel({ onAbrirCofre }: { onAbrirCofre?: (labe
       .finally(() => setLoading(false));
   };
 
+  // Pinga todos os servidores em paralelo (helper com cap de concorrência).
+  // Marca como 'verificando' antes pra UI dar feedback visual instantâneo.
+  const verificarTodos = useCallback(async (lista: Servidor[]) => {
+    if (lista.length === 0) return;
+    setVerificandoTodos(true);
+    setPings((prev) => {
+      const next = { ...prev };
+      for (const s of lista) {
+        next[s.id] = { status: 'verificando', verificadoEm: Date.now() };
+      }
+      return next;
+    });
+    const mapa = await pingMuitos(lista, 5000, 6);
+    setPings((prev) => {
+      const next = { ...prev };
+      mapa.forEach((r, id) => { next[id] = r; });
+      return next;
+    });
+    setVerificandoTodos(false);
+  }, []);
+
+  const verificarUm = useCallback(async (s: Servidor) => {
+    setPings((prev) => ({ ...prev, [s.id]: { status: 'verificando', verificadoEm: Date.now() } }));
+    const r = await pingServidor(s, 5000);
+    setPings((prev) => ({ ...prev, [s.id]: r }));
+  }, []);
+
   useEffect(() => {
     carregar();
     callServer<ServerResponse<Sistema[]>>('getSistemas')
       .then((r) => { if (r.ok && r.data) setSistemas(r.data); })
       .catch(() => { /* preview */ });
   }, []);
+
+  // Auto-ping ao carregar a lista pela primeira vez (UX: já mostra status sem
+  // o user precisar clicar). Só roda quando a lista REALMENTE chega.
+  useEffect(() => {
+    if (!loading && servidores.length > 0 && Object.keys(pings).length === 0) {
+      verificarTodos(servidores);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, servidores.length]);
 
   const copiarTexto = (txt: string) => {
     if (!txt) return;
@@ -290,13 +393,25 @@ export default function ServidoresPanel({ onAbrirCofre }: { onAbrirCofre?: (labe
     const total = servidores.length;
     const rodando = servidores.filter((s) => s.status === 'rodando').length;
     const erro = servidores.filter((s) => s.status === 'erro').length;
+    // Contagens do monitoramento ao vivo (ping). Servidores sem URL não entram
+    // no denominador "monitoráveis" — não dá pra pingar sem alvo.
+    let online = 0;
+    let offline = 0;
+    let monitoraveis = 0;
+    for (const s of servidores) {
+      if (!urlPingavel(s)) continue;
+      monitoraveis++;
+      const p = pings[s.id];
+      if (p?.status === 'online') online++;
+      else if (p?.status === 'offline' || p?.status === 'bloqueado_mixed') offline++;
+    }
     const porMoeda: Record<string, number> = {};
     for (const s of servidores) {
       const v = s.custoMensal || 0;
       if (v > 0) porMoeda[s.moeda || 'BRL'] = (porMoeda[s.moeda || 'BRL'] || 0) + v;
     }
-    return { total, rodando, erro, porMoeda };
-  }, [servidores]);
+    return { total, rodando, erro, porMoeda, online, offline, monitoraveis };
+  }, [servidores, pings]);
 
   const custoTxt = Object.keys(resumo.porMoeda).length
     ? Object.entries(resumo.porMoeda).map(([m, v]) => fmtMoeda(v, m)).join(' + ')
@@ -330,14 +445,36 @@ export default function ServidoresPanel({ onAbrirCofre }: { onAbrirCofre?: (labe
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
         <div style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.textTertiary }}>
           {resumo.total} {resumo.total === 1 ? 'servidor cadastrado' : 'servidores cadastrados'}
+          {resumo.monitoraveis > 0 && (
+            <span> · {resumo.online}/{resumo.monitoraveis} online ao vivo</span>
+          )}
         </div>
-        <Button type="primary" icon={<Plus size={14} />} onClick={abrirNova}>Adicionar servidor</Button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {resumo.monitoraveis > 0 && (
+            <Tooltip title="Re-pinga todos os servidores com URL ou host:porta no browser. Localhost só funciona se você abrir o app na mesma máquina onde rodam.">
+              <Button
+                icon={<RefreshCcw size={14} className={verificandoTodos ? 'forja-spin' : ''} />}
+                loading={verificandoTodos}
+                onClick={() => verificarTodos(servidores)}
+              >
+                Verificar todos
+              </Button>
+            </Tooltip>
+          )}
+          <Button type="primary" icon={<Plus size={14} />} onClick={abrirNova}>Adicionar servidor</Button>
+        </div>
       </div>
 
       {/* Stat tiles */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10, marginBottom: 16 }}>
-        <StatTile titulo="Total" valor={String(resumo.total)} sub={`${resumo.rodando} rodando agora`} icon={<ServerIcon size={16} />} cor={t.accents.lavender} />
-        <StatTile titulo="Rodando" valor={String(resumo.rodando)} sub={resumo.rodando === resumo.total ? 'tudo no ar' : `${resumo.total - resumo.rodando} fora do ar`} icon={<Activity size={16} />} cor={t.accents.sage} />
+        <StatTile titulo="Total" valor={String(resumo.total)} sub={`${resumo.rodando} marcados como rodando`} icon={<ServerIcon size={16} />} cor={t.accents.lavender} />
+        <StatTile
+          titulo="Online ao vivo"
+          valor={resumo.monitoraveis > 0 ? `${resumo.online}/${resumo.monitoraveis}` : '—'}
+          sub={resumo.monitoraveis === 0 ? 'cadastre uma URL pra pingar' : resumo.online === resumo.monitoraveis ? 'tudo no ar agora' : `${resumo.offline} sem resposta`}
+          icon={resumo.online === resumo.monitoraveis && resumo.monitoraveis > 0 ? <Wifi size={16} /> : <WifiOff size={16} />}
+          cor={resumo.monitoraveis === 0 ? t.textTertiary : resumo.online === resumo.monitoraveis ? t.accents.sage : t.accents.rose}
+        />
         <StatTile titulo="Com erro" valor={String(resumo.erro)} sub={resumo.erro === 0 ? 'tudo tranquilo' : 'precisa olhar'} icon={<AlertTriangle size={16} />} cor={resumo.erro > 0 ? t.accents.rose : t.accents.sage} />
         <StatTile titulo="Custo mensal" valor={custoTxt} sub="instâncias pagas (recorrentes)" icon={<Cpu size={16} />} cor={t.accents.peach} />
       </div>
@@ -397,7 +534,9 @@ export default function ServidoresPanel({ onAbrirCofre }: { onAbrirCofre?: (labe
               key={s.id}
               servidor={s}
               sistemaNome={nomeSistema(s.sistemaId)}
+              ping={pings[s.id]}
               onAbrir={() => setDetalhe(s)}
+              onPingar={() => verificarUm(s)}
             />
           ))}
         </div>
@@ -437,6 +576,8 @@ export default function ServidoresPanel({ onAbrirCofre }: { onAbrirCofre?: (labe
           <ServidorDetalhe
             servidor={detalhe}
             sistemaNome={nomeSistema(detalhe.sistemaId)}
+            ping={pings[detalhe.id]}
+            onPingar={() => verificarUm(detalhe)}
             onCopiar={copiarTexto}
             onEditar={() => { setDetalhe(null); abrirEditar(detalhe); }}
             onRemover={() => { remover(detalhe.id); setDetalhe(null); }}
@@ -609,10 +750,12 @@ export default function ServidoresPanel({ onAbrirCofre }: { onAbrirCofre?: (labe
 }
 
 // ─── Sub: card de servidor ────────────────────────────────────────────────────
-function ServidorCard({ servidor, sistemaNome, onAbrir }: {
+function ServidorCard({ servidor, sistemaNome, ping, onAbrir, onPingar }: {
   servidor: Servidor;
   sistemaNome: string;
+  ping?: PingResult;
   onAbrir: () => void;
+  onPingar: () => void;
 }): React.ReactElement {
   const t = useTokens();
   const [hover, setHover] = useState(false);
@@ -621,6 +764,8 @@ function ServidorCard({ servidor, sistemaNome, onAbrir }: {
   const tecLabel = TECNOLOGIAS.find((x) => x.value === servidor.tecnologia)?.label || '';
   const IconeTipo = iconePorTipo(servidor.tipo);
   const url = urlExibivel(servidor);
+  const monitoravel = !!urlPingavel(servidor);
+  const pingInfo = pingDisplay(ping, t);
 
   return (
     <div
@@ -695,18 +840,48 @@ function ServidorCard({ servidor, sistemaNome, onAbrir }: {
         </div>
       )}
 
-      {/* URL (se houver) — destacado em mono */}
+      {/* URL (se houver) — destacado em mono, com bolinha ao vivo se monitorável */}
       {url && (
-        <div style={{
-          fontFamily: FONTS.mono, fontSize: 11.5, color: t.textSecondary,
-          background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
-          borderRadius: 7, padding: '4px 9px',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          display: 'flex', alignItems: 'center', gap: 6,
-        }}>
-          <Globe size={11} color={t.textTertiary} style={{ flexShrink: 0 }} />
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{url}</span>
-        </div>
+        <Tooltip
+          title={
+            monitoravel
+              ? pingInfo.tooltip
+              : 'Sem URL ou host:porta — adicione pra monitorar online/offline.'
+          }
+          placement="top"
+        >
+          <div style={{
+            fontFamily: FONTS.mono, fontSize: 11.5, color: t.textSecondary,
+            background: t.surfaceMuted, border: `1px solid ${monitoravel ? `${pingInfo.cor}33` : t.borderSoft}`,
+            borderRadius: 7, padding: '4px 9px',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            display: 'flex', alignItems: 'center', gap: 6,
+          }}>
+            {monitoravel ? (
+              <span
+                aria-hidden
+                style={{
+                  width: 8, height: 8, borderRadius: '50%',
+                  background: pingInfo.cor, flexShrink: 0,
+                  boxShadow: ping?.status === 'online' ? `0 0 0 3px ${pingInfo.cor}22` : 'none',
+                  animation: ping?.status === 'verificando' ? 'forjaPulse 1.2s ease-in-out infinite' : 'none',
+                }}
+              />
+            ) : (
+              <Globe size={11} color={t.textTertiary} style={{ flexShrink: 0 }} />
+            )}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{url}</span>
+            {monitoravel && (
+              <Button
+                type="text"
+                size="small"
+                icon={<RefreshCcw size={10} className={ping?.status === 'verificando' ? 'forja-spin' : ''} />}
+                onClick={(e) => { e.stopPropagation(); onPingar(); }}
+                style={{ width: 18, height: 18, padding: 0, color: t.textTertiary }}
+              />
+            )}
+          </div>
+        </Tooltip>
       )}
 
       {/* rodapé: ambiente + tecnologia + custo, ou sistema vinculado */}
@@ -740,9 +915,11 @@ function ServidorCard({ servidor, sistemaNome, onAbrir }: {
 }
 
 // ─── Sub: detalhe (modal aberto) ──────────────────────────────────────────────
-function ServidorDetalhe({ servidor, sistemaNome, onCopiar, onEditar, onRemover, onAbrirCofre }: {
+function ServidorDetalhe({ servidor, sistemaNome, ping, onPingar, onCopiar, onEditar, onRemover, onAbrirCofre }: {
   servidor: Servidor;
   sistemaNome: string;
+  ping?: PingResult;
+  onPingar: () => void;
   onCopiar: (s: string) => void;
   onEditar: () => void;
   onRemover: () => void;
@@ -753,9 +930,67 @@ function ServidorDetalhe({ servidor, sistemaNome, onCopiar, onEditar, onRemover,
   const tecLabel = TECNOLOGIAS.find((x) => x.value === servidor.tecnologia)?.label || '';
   const url = urlExibivel(servidor);
   const fullUrl = servidor.url || (url ? (url.startsWith('http') ? url : `http://${url}`) : '');
+  const monitoravel = !!urlPingavel(servidor);
+  const pingInfo = pingDisplay(ping, t);
+  const verificando = ping?.status === 'verificando';
 
   return (
     <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Banner do status ao vivo — primeira coisa que o user vê */}
+      {monitoravel && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 12,
+          background: `${pingInfo.cor}10`, border: `1px solid ${pingInfo.cor}44`,
+          borderRadius: 11, padding: '10px 14px',
+        }}>
+          <span
+            aria-hidden
+            style={{
+              width: 10, height: 10, borderRadius: '50%', background: pingInfo.cor,
+              flexShrink: 0,
+              boxShadow: ping?.status === 'online' ? `0 0 0 4px ${pingInfo.cor}22` : 'none',
+              animation: verificando ? 'forjaPulse 1.2s ease-in-out infinite' : 'none',
+            }}
+          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: FONTS.ui, fontSize: 13, fontWeight: 600, color: pingInfo.cor, textTransform: 'capitalize' }}>
+              {pingInfo.rotulo}
+              {ping?.status === 'online' && ping.latenciaMs !== undefined && (
+                <span style={{ marginLeft: 8, color: t.textTertiary, fontWeight: 400 }}>
+                  · {ping.latenciaMs}ms
+                </span>
+              )}
+            </div>
+            <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary }}>
+              {ping ? `Verificado ${tempoRelativo(ping.verificadoEm)}` : 'Ainda não verificado'}
+              {ping?.erro && ping.status !== 'online' && (
+                <span style={{ marginLeft: 6 }}>· {ping.erro}</span>
+              )}
+            </div>
+          </div>
+          <Button
+            size="small"
+            icon={<RefreshCcw size={12} className={verificando ? 'forja-spin' : ''} />}
+            onClick={onPingar}
+            loading={verificando}
+          >
+            Pingar agora
+          </Button>
+        </div>
+      )}
+
+      {!monitoravel && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          background: t.surfaceMuted, border: `1px dashed ${t.border}`,
+          borderRadius: 11, padding: '10px 14px',
+          fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary,
+        }}>
+          <HelpCircle size={14} color={t.textTertiary} />
+          Cadastre uma URL ou host + porta pra monitorar online/offline.
+        </div>
+      )}
+
       {/* descrição */}
       {servidor.descricao && (
         <div style={{

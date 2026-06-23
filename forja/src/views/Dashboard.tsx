@@ -3,12 +3,15 @@ import { Row, Col, Alert, Tag, Tooltip, Button } from 'antd';
 import {
   HeartPulse, Sparkles, GitBranch, Server, Plus, AppWindow, Flame, FileCode, FileText,
   AlertTriangle, AlertCircle, Info, ListChecks, GitCommit, ChevronRight, CloudOff, Inbox,
+  Cpu,
 } from 'lucide-react';
 import { Panel, Skeleton, RingProgress, LiveDot, EmptyArt, useCountUp } from '../components/ui';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
-import type { DashboardData, StatusGeral, DashboardOperacional, ServerResponse } from '../types';
+import { pingMuitos, urlPingavel, type PingResult } from '../utils/pingServidor';
+import type { DashboardData, StatusGeral, DashboardOperacional, ServerResponse, Servidor, ServerResult } from '../types';
+import type { AtelierTab } from './Atelier';
 
 interface DashboardProps {
   onSelectSistema: (id: string) => void;
@@ -17,6 +20,8 @@ interface DashboardProps {
   // v1.4.4: abre o drawer de alertas (controlado em App.tsx). Quando ausente
   // (preview local), o link de "ver alertas" não aparece.
   onOpenAlertas?: () => void;
+  // v1.146.1: navega direto pra uma estação específica do Atelier (ex.: Servidores).
+  onOpenAtelierTab?: (tab: AtelierTab) => void;
 }
 
 function saudacao(): string {
@@ -58,7 +63,7 @@ const MOCK: DashboardData = {
   totais: { sistemas: 3, ativos: 2, assinaturas: 0 },
 };
 
-export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, onOpenAlertas }: DashboardProps): React.ReactElement {
+export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, onOpenAlertas, onOpenAtelierTab }: DashboardProps): React.ReactElement {
   const t = useTokens();
   const [data, setData] = useState<DashboardData | null>(null);
   const [status, setStatus] = useState<StatusGeral | null>(null);
@@ -68,6 +73,10 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
   // v1.143.0 (fusão Centelha): substituído por contagem do inbox de Ideias —
   // mesma semântica (captura bruta esperando triagem), feature unificada.
   const [ideiasInbox, setIdeiasInbox] = useState<number>(0);
+  // Monitoramento ao vivo dos servidores cadastrados (v1.146.1).
+  // Pingados no browser do user — único caminho pra alcançar localhost.
+  const [servidores, setServidores] = useState<Servidor[]>([]);
+  const [servidoresPings, setServidoresPings] = useState<Map<string, PingResult>>(new Map());
 
   useEffect(() => {
     callServer<ServerResponse<DashboardData>>('getDashboardData')
@@ -86,6 +95,22 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
     // Ideias no inbox (princípio #6: alerta sem tratativa proibido — o badge tem clique).
     callServer<ServerResponse<{ pendentes: number }>>('getIdeiasInboxCount')
       .then((res) => { if (res.ok && res.data) setIdeiasInbox(res.data.pendentes || 0); })
+      .catch(() => { /* preview */ });
+    // Servidores cadastrados + ping ao vivo no browser do user.
+    // Falha silenciosa em preview local. Ping com timeout curto (3s) pra não
+    // travar o Dashboard se algum endpoint estiver pendurado.
+    callServer<ServerResult>('servidoresList')
+      .then(async (res) => {
+        if (res.ok && res.data) {
+          const lista = res.data as Servidor[];
+          setServidores(lista);
+          const pingaveis = lista.filter((s) => !!urlPingavel(s));
+          if (pingaveis.length > 0) {
+            const mapa = await pingMuitos(pingaveis, 3000, 4);
+            setServidoresPings(mapa);
+          }
+        }
+      })
       .catch(() => { /* preview */ });
     // Sync silencioso com o GAS: se algo mudou (novo/removido), recarrega o painel.
     callServer<ServerResponse<{ novos: number; removidos: unknown[]; renomeados: unknown[]; restaurados: number; selfVinculado?: boolean }>>('sincronizarGAS')
@@ -357,6 +382,40 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
                     <span style={{ flex: 1, color: t.text, fontSize: 13, fontWeight: 500 }}>Endpoints de APIs</span>
                     <span style={{ fontSize: 12, fontWeight: 600, color: t.textSecondary }}>{total ? `${apisOnline}/${total}` : '—'}</span>
                   </div>
+                );
+              })()}
+              {/* Servidores locais/cloud — pingados no browser do user. */}
+              {(() => {
+                const pingaveis = servidores.filter((s) => !!urlPingavel(s));
+                if (servidores.length === 0) return null;
+                const monit = pingaveis.length;
+                let online = 0;
+                let verificando = 0;
+                pingaveis.forEach((s) => {
+                  const p = servidoresPings.get(s.id);
+                  if (p?.status === 'online') online++;
+                  else if (p?.status === 'verificando' || !p) verificando++;
+                });
+                const cor = monit === 0
+                  ? t.textTertiary
+                  : online === monit ? t.accents.sage
+                  : online === 0 ? t.accents.rose
+                  : t.accents.peach;
+                const tipText = monit === 0
+                  ? `${servidores.length} servidores cadastrados sem URL pra pingar.`
+                  : `${online}/${monit} servidores respondendo ao ping. Clica pra abrir a estação Servidores no Atelier.`;
+                const onClick = onOpenAtelierTab ? () => onOpenAtelierTab('servidores') : undefined;
+                return (
+                  <Tooltip title={tipText} placement="left">
+                    <div onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 4px', cursor: onClick ? 'pointer' : 'default' }}>
+                      <LiveDot color={cor} live={online > 0} />
+                      <span style={{ color: t.textSecondary, display: 'inline-flex' }}><Cpu size={14} strokeWidth={1.8} /></span>
+                      <span style={{ flex: 1, color: t.text, fontSize: 13, fontWeight: 500 }}>Servidores</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: cor }}>
+                        {monit === 0 ? '—' : verificando === monit ? '...' : `${online}/${monit}`}
+                      </span>
+                    </div>
+                  </Tooltip>
                 );
               })()}
             </div>

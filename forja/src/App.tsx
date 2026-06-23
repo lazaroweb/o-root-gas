@@ -95,6 +95,9 @@ export default function App(): React.ReactElement {
   // (substitui a view antiga Centelha — agora fundida em Ideias).
   const [capturaQuickOpen, setCapturaQuickOpen] = useState(false);
   const [sistemasRefresh, setSistemasRefresh] = useState(0);
+  // Tab inicial do Atelier — Dashboard pode pular direto pra estação Servidores
+  // ao clicar na linha de monitoramento no widget Conexões.
+  const [atelierInitialTab, setAtelierInitialTab] = useState<import('./views/Atelier').AtelierTab>('guia');
   const [saudeMedia, setSaudeMedia] = useState(0);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const [alertsDrawerOpen, setAlertsDrawerOpen] = useState(false);
@@ -241,7 +244,13 @@ export default function App(): React.ReactElement {
   const renderView = () => {
     switch (currentView) {
       case 'dashboard':
-        return <Dashboard onSelectSistema={handleSelectSistema} onNavigate={handleNavigate} onImportGAS={() => setImportGASOpen(true)} onOpenAlertas={() => setAlertsDrawerOpen(true)} />;
+        return <Dashboard
+          onSelectSistema={handleSelectSistema}
+          onNavigate={handleNavigate}
+          onImportGAS={() => setImportGASOpen(true)}
+          onOpenAlertas={() => setAlertsDrawerOpen(true)}
+          onOpenAtelierTab={(t) => { setAtelierInitialTab(t); setCurrentView('atelier'); }}
+        />;
       case 'clientes':
         return <Clientes />;
       case 'ideias':
@@ -257,7 +266,7 @@ export default function App(): React.ReactElement {
       case 'relatorios':
         return <Relatorios />;
       case 'atelier':
-        return <Atelier />;
+        return <Atelier initialTab={atelierInitialTab} />;
       case 'estudos':
         return <Estudos />;
       case 'configuracoes':

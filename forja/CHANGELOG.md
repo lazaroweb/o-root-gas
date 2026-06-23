@@ -36,6 +36,49 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.146.1] — 2026-06-22
+
+### Adicionado — monitoramento ao vivo dos Servidores
+
+Logo após a estação Servidores, a pergunta natural: "como sei se eles estão no ar?".
+Resposta: ping leve no browser do user (não dá pra ser no GAS — a nuvem do Google
+não enxerga seu `localhost`).
+
+**Como funciona**:
+- Cada servidor com `url` ou `host:porta` ganha uma bolinha colorida ao lado do
+  endereço no card: verde = online, vermelho = offline, lavanda = verificando,
+  cinza = sem URL pra pingar.
+- Auto-ping ao abrir a estação Servidores; botão **"Verificar todos"** no header
+  pra re-checar; botão de refresh no próprio card pra checar 1 só.
+- No modal de detalhe, banner generoso com latência (ms), tempo desde o último
+  check e botão "Pingar agora".
+- Tile **"Online ao vivo"** no painel substitui o antigo "Com erro" estático.
+- Detecção de mixed content: avisa quando Forja-em-HTTPS tenta bater em HTTP
+  local (o navegador bloqueia silenciosamente — agora você sabe disso).
+
+### Adicionado — widget Conexões do Dashboard
+
+O widget "Conexões" no Dashboard agora mostra **uma linha extra** para os
+servidores cadastrados: `Servidores 3/5`, bolinha viva, tooltip explicativa.
+Clique abre direto a estação Servidores no Atelier — sem precisar navegar manualmente.
+
+### Notas técnicas
+
+- Novo helper `src/utils/pingServidor.ts` — usa `fetch(url, { mode: 'no-cors' })`
+  com `AbortSignal.timeout`. Funciona pra qualquer URL alcançável pelo browser
+  do user (localhost, LAN, internet). Não diferencia 200 de 500 (limitação do
+  no-cors), mas detecta "respondeu vs não respondeu" — o que importa pra
+  saúde de processo.
+- Helper `pingMuitos` faz pings em paralelo com cap de concorrência (default 6).
+- Estado de ping é **volátil** (não persiste no Sheet) — status real-time não
+  faz sentido guardar; o que vale é o agora.
+- Animação `forjaPulse` adicionada ao `esbuild.mjs` (bolinha pulsando durante
+  verificação).
+- `App.tsx`: novo `atelierInitialTab` permite o Dashboard pular direto pra
+  estação Servidores via `onOpenAtelierTab('servidores')`.
+
+---
+
 ## [1.146.0] — 2026-06-22
 
 ### Adicionado — Atelier > Servidores

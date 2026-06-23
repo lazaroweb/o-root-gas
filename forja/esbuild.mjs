@@ -216,6 +216,11 @@ const html = `<!DOCTYPE html>
         50%      { box-shadow: 0 0 0 6px rgba(217, 155, 115, 0.30); }
       }
       .forja-pulse-audit { animation: forjaPulseAuditar 1.6s ease-in-out infinite; }
+      /* Pulso neutro pra bolinha de status "verificando" do monitoramento */
+      @keyframes forjaPulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50%      { opacity: 0.45; transform: scale(0.85); }
+      }
       /* ─── Premium ambient (Dashboard) ──────────────────────────────────────
          Aurora: manchas de cor da paleta, muito borradas, derivando devagar —
          dá profundidade e "vida" sem poluir. Lift: cards sobem de leve no hover. */
