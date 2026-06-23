@@ -36,6 +36,112 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.148.11] — 2026-06-23
+
+### Adicionado — Débito vira PROMPT pronto pra agente de IA (Cursor, Claude Code, Codex, Windsurf)
+
+**Pergunta do usuário**
+> "O que ele leva pro backlog, qual minha ação lá dentro, eu copio é um prompt?
+> Eu levo isso pra AI que está desenvolvendo o app?"
+
+**Resposta: SIM — e agora vem formatado.**
+
+Antes o corpo do card no backlog era apenas "Origem: dívida técnica detectada
+no código. Arquivo: X. Descrição: Y." — informativo, mas não acionável.
+
+Agora é um **prompt markdown completo** pronto pra colar em qualquer agente
+de IA que esteja trabalhando neste projeto.
+
+### Estrutura do prompt gerado
+
+```markdown
+# Resolva este [tipo]
+
+**Projeto:** Forja - CRM Gestão 360
+**Arquivo:** `forja/src/components/X.tsx:361`
+**Área:** governanca · **Severidade:** media
+**Permalink:** https://github.com/.../blob/HEAD/...#L361
+
+## O que está marcado no código
+\`\`\`
+// TODO: descrição completa do débito
+\`\`\`
+
+## Tarefas
+1. Abra o arquivo e leia o contexto ao redor da linha
+2. Entenda o que esse TODO está pedindo
+3. Implemente a solução adequada
+4. **Apague o comentário marcador** da linha
+5. Commit + push no branch default
+
+## Critério de aceite
+- ✅ O comentário marcador foi removido do código
+- ✅ A implementação cobre o que a descrição pede
+- ✅ Não introduziu regressão
+
+## Como o débito fecha sozinho
+A Forja escaneia o repositório. Quando este comentário sumir do código E o
+commit estiver no branch default, o débito vira `pago` automaticamente.
+Você não precisa fazer nada extra na Forja.
+```
+
+### 3 caminhos de uso (todos suportados)
+
+| Cenário | Caminho | Resultado |
+|---------|---------|-----------|
+| **"Quero resolver agora"** | Drawer → "Copiar prompt" → cola no Cursor | IA resolve, faz commit, sync detecta, débito fecha sozinho |
+| **"Vou rastrear pra depois"** | Drawer → "Promover pra Backlog" | Card vai pro kanban com o prompt no corpo |
+| **"Quero o snippet junto"** | Drawer → "Copiar com código" | Prompt + trecho de código no entorno (pra chat direto sem filesystem) |
+
+### Nova seção no Drawer
+
+**"Prompt pra agente de IA"** aparece quando o débito é `ativo`:
+
+- Banner explicando que é prompt acionável + lista de agentes compatíveis
+- **Preview do prompt** com clamp de 180px e botão "ver completo" (`N linhas`)
+- **2 botões de cópia**:
+  - **"Copiar prompt"** (cinza) — versão limpa, pra agentes com filesystem (Cursor, Claude Code, Windsurf)
+  - **"Copiar com código"** (primary) — inclui o snippet de 13 linhas no prompt, pra agentes sem filesystem (chat direto)
+- **Rodapé didático** com os 3 caminhos de uso
+
+### Backend
+
+**Nova função utilitária**: `_gerarPromptIA(d, sistema)` no `server.ts`.
+Centraliza a geração do prompt. Usado por:
+1. `promoverDebitoParaBacklog` → corpo do card no kanban
+2. Nova RPC `getPromptIADebito(debitoId)` → pro Drawer mostrar/copiar
+   antes de promover
+
+O prompt sempre referencia:
+- **Nome do projeto** (vem da tabela Sistemas)
+- **Permalink real** (`{repoUrl}/blob/HEAD/{arquivo}#L{linha}`)
+- **Marcador exato** (`DEBT(area,sev)` pra estruturados, ou `TODO`/`FIXME`/`HACK`)
+- **Hash do débito** (rastreabilidade)
+
+### Por que isso muda o jogo
+
+A Forja deixa de ser um "tracker de TODO" e vira um **dispatcher de tarefas
+pra agentes de IA**. O ciclo completo agora é:
+
+```
+1. Dev marca // TODO: no código
+2. Forja detecta no scan
+3. Dev abre o débito na Forja → vê preview do prompt
+4. Dev copia → cola no Cursor/Claude Code
+5. IA resolve + commit + push
+6. Forja detecta remoção → fecha o débito sozinho
+```
+
+Zero contexto perdido entre o "isso precisa ser feito" e o "isso foi feito".
+
+### Impacto
+Fecha o loop conceitual da Forja como **QG pra desenvolvimento com IA**.
+O débito não é mais um item passivo numa lista — é uma tarefa empacotada
+pronta pra ser delegada pra IA, com critério de aceite e ciclo de fechamento
+automático.
+
+---
+
 ## [1.148.10] — 2026-06-23
 
 ### Adicionado — "Promover pra Backlog" agora explica o que vai acontecer

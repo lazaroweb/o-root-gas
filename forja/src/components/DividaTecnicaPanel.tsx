@@ -93,6 +93,9 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, scriptId, onPro
   const [contexto, setContexto] = useState<DebitoContexto | null>(null);
   const [carregandoCtx, setCarregandoCtx] = useState(false);
   const [erroCtx, setErroCtx] = useState<string>('');
+  // v1.148.11 — prompt pronto pra IA (usado tanto pelo Drawer quanto pelo card).
+  const [prompt, setPrompt] = useState<string>('');
+  const [carregandoPrompt, setCarregandoPrompt] = useState(false);
 
   // Aceita qualquer fonte de código que a auditoria também aceita:
   // GitHub (repoUrl) ou Google Apps Script (scriptId).
@@ -259,17 +262,23 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, scriptId, onPro
     setAberto(d);
     setContexto(null);
     setErroCtx('');
+    setPrompt('');
     setCarregandoCtx(true);
+    setCarregandoPrompt(true);
+    // Busca contexto do código + prompt pra IA em paralelo (2 RPCs independentes).
     callServer<ServerResult>('getDebitoContexto', d.id)
       .then((r) => {
-        if (r && r.ok && r.data) {
-          setContexto(r.data as DebitoContexto);
-        } else {
-          setErroCtx((r && r.error) || 'Não foi possível buscar o contexto.');
-        }
+        if (r && r.ok && r.data) setContexto(r.data as DebitoContexto);
+        else setErroCtx((r && r.error) || 'Não foi possível buscar o contexto.');
       })
       .catch((e) => setErroCtx(e instanceof Error ? e.message : 'Erro de rede'))
       .finally(() => setCarregandoCtx(false));
+    callServer<ServerResult>('getPromptIADebito', d.id)
+      .then((r) => {
+        if (r && r.ok && r.data) setPrompt(String((r.data as { prompt?: string }).prompt || ''));
+      })
+      .catch(() => { /* drawer não bloqueia se prompt falhar */ })
+      .finally(() => setCarregandoPrompt(false));
   }, []);
 
   if (!temCodigo) {
@@ -474,6 +483,8 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, scriptId, onPro
           contexto={contexto}
           carregando={carregandoCtx}
           erro={erroCtx}
+          prompt={prompt}
+          carregandoPrompt={carregandoPrompt}
           temRepo={temRepo}
           temScript={temScript}
           onClose={() => setAberto(null)}
@@ -652,11 +663,13 @@ function DebitoCard({ d, repoUrl, scriptId, onPromover, onPago, onApagar, onAbri
 // e botões de ação (Promover, Abrir no editor, Marcar pago, Copiar linha).
 // Solução pro feedback do user (v1.148.8): "não vejo detalhes dos débitos
 // técnicos, só mostra essa descrição".
-function DebitoDrawer({ d, contexto, carregando, erro, temRepo, temScript, onClose, onPromover, onPago, onApagar }: {
+function DebitoDrawer({ d, contexto, carregando, erro, prompt, carregandoPrompt, temRepo, temScript, onClose, onPromover, onPago, onApagar }: {
   d: DebitoTecnico;
   contexto: DebitoContexto | null;
   carregando: boolean;
   erro: string;
+  prompt: string;
+  carregandoPrompt: boolean;
   temRepo: boolean;
   temScript: boolean;
   onClose: () => void;
@@ -781,6 +794,14 @@ function DebitoDrawer({ d, contexto, carregando, erro, temRepo, temScript, onClo
             )}
           </div>
         </section>
+
+        {/* v1.148.11 — Prompt pronto pra colar em agente de IA.
+            Resposta ao user: "ele leva o que pro backlog, qual minha ação lá
+            dentro, eu copio é um prompt, eu levo isso pra AI que está
+            desenvolvendo o app?". RESPOSTA: SIM. E agora vem formatado. */}
+        {ehAtivo && (
+          <PromptIASection prompt={prompt} carregando={carregandoPrompt} d={d} contexto={contexto} />
+        )}
 
         {/* v1.148.10 — Seção explicativa "O que acontece" antes das ações.
             Resposta ao feedback do user: "eu promovo para backlog ele leva o que
@@ -913,6 +934,117 @@ function Meta({ icon, label, valor, hint, mono, t }: {
         <div style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary, marginTop: 1 }}>{hint}</div>
       )}
     </div>
+  );
+}
+
+// v1.148.11 — Seção dedicada ao prompt pra agente de IA.
+// Resposta direta ao user: "ele leva o que pro backlog, qual minha ação lá
+// dentro, eu copio é um prompt, eu levo isso pra AI que está desenvolvendo
+// o app?". RESPOSTA: SIM — e agora o prompt vem pronto, com link permalink,
+// instruções pra IA, critério de aceite e promessa do ciclo (commit fecha
+// automaticamente). Cole no Cursor / Claude Code / Codex / Windsurf.
+function PromptIASection({ prompt, carregando, d, contexto }: {
+  prompt: string;
+  carregando: boolean;
+  d: DebitoTecnico;
+  contexto: DebitoContexto | null;
+}): React.ReactElement {
+  const t = useTokens();
+  const { message } = AntApp.useApp();
+  const cor = t.accents.peach;
+  const [expandido, setExpandido] = useState(false);
+
+  // Versão "enriquecida": prompt + trecho de código quando contexto carregou.
+  // Pra IAs que NÃO têm acesso ao filesystem (ex: chat direto), o snippet
+  // economiza um "abra o arquivo X" inicial.
+  const promptComCodigo = useMemo(() => {
+    if (!contexto || !prompt) return prompt;
+    const lang = d.arquivo.match(/\.(\w+)$/)?.[1] || '';
+    const snippet = contexto.contextoLinhas
+      .map((l, i) => `${String(contexto.contextoInicio + i).padStart(4, ' ')} | ${l}`)
+      .join('\n');
+    return prompt.replace(
+      '## Tarefas',
+      `## Código no entorno (linhas ${contexto.contextoInicio}-${contexto.contextoInicio + contexto.contextoLinhas.length - 1})\n\n\`\`\`${lang}\n${snippet}\n\`\`\`\n\n## Tarefas`,
+    );
+  }, [prompt, contexto, d.arquivo]);
+
+  const copiar = (texto: string, label: string) => {
+    if (!texto) { message.warning('Prompt ainda não está pronto.'); return; }
+    try {
+      navigator.clipboard.writeText(texto);
+      message.success(`${label} copiado — cole no seu agente de IA`);
+    } catch { message.error('Não foi possível copiar'); }
+  };
+
+  return (
+    <section>
+      <SectionLabel>Prompt pra agente de IA</SectionLabel>
+      <div style={{
+        background: `${cor}08`,
+        border: `1px solid ${cor}33`,
+        borderRadius: 10, padding: 14,
+        display: 'flex', flexDirection: 'column', gap: 12,
+      }}>
+        <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, lineHeight: 1.55 }}>
+          <strong style={{ color: t.text }}>Sim — é um prompt acionável.</strong> Cole direto no <strong>Cursor</strong>, <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Windsurf</strong> ou qualquer agente de IA que esteja trabalhando neste projeto.
+          O prompt traz <em>permalink, arquivo:linha, marcador do código, critério de aceite</em> e explica o ciclo de fechamento automático.
+        </div>
+
+        {/* Preview do prompt (clamped + expandível) */}
+        {carregando ? (
+          <div style={{ padding: 14, textAlign: 'center', fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary }}>
+            <Spin size="small" /> <span style={{ marginLeft: 8 }}>gerando prompt…</span>
+          </div>
+        ) : prompt ? (
+          <div style={{
+            background: t.surface, border: `1px solid ${t.border}`, borderRadius: 8,
+            padding: 0, overflow: 'hidden',
+          }}>
+            <pre style={{
+              fontFamily: FONTS.mono, fontSize: 11, color: t.textSecondary,
+              padding: '10px 12px', margin: 0,
+              maxHeight: expandido ? 'none' : 180,
+              overflow: 'auto', whiteSpace: 'pre-wrap',
+              borderBottom: `1px solid ${t.borderSoft}`,
+              background: t.surface,
+            }}>
+              {expandido ? promptComCodigo : prompt}
+            </pre>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', background: t.surfaceMuted }}>
+              <Button size="small" type="text" onClick={() => setExpandido((v) => !v)} style={{ fontSize: 11, color: t.textTertiary }}>
+                {expandido ? 'recolher' : `ver completo (${prompt.split('\n').length} linhas)`}
+              </Button>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <Tooltip title="Copia só o prompt (sem incluir o trecho de código). Use quando a IA tem acesso ao filesystem (Cursor, Claude Code, Windsurf etc).">
+                  <Button size="small" icon={<Copy size={12} />} onClick={() => copiar(prompt, 'Prompt')}>
+                    Copiar prompt
+                  </Button>
+                </Tooltip>
+                {contexto && (
+                  <Tooltip title="Copia o prompt incluindo o trecho de código no entorno (6 linhas antes + linha do débito + 6 depois). Use quando a IA NÃO tem acesso ao filesystem (chat direto)." >
+                    <Button size="small" type="primary" icon={<Sparkles size={12} />} onClick={() => copiar(promptComCodigo, 'Prompt + código')}>
+                      Copiar com código
+                    </Button>
+                  </Tooltip>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div style={{ padding: 10, fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary }}>
+            Prompt indisponível.
+          </div>
+        )}
+
+        <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, lineHeight: 1.5 }}>
+          💡 <strong style={{ color: t.textSecondary }}>Mesmo prompt vai pro card</strong> quando você clicar "Promover pra Backlog" abaixo. Você pode trabalhar de 3 jeitos:
+          <br /><span style={{ marginLeft: 18 }}>① <strong>Copiar e ir direto</strong> pra IA sem criar card (resolve agora)</span>
+          <br /><span style={{ marginLeft: 18 }}>② <strong>Promover</strong> pra rastrear depois (vira card no kanban)</span>
+          <br /><span style={{ marginLeft: 18 }}>③ <strong>Os dois</strong> — promove agora, copia o prompt do card depois quando for atacar</span>
+        </div>
+      </div>
+    </section>
   );
 }
 

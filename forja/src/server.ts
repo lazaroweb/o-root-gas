@@ -16060,6 +16060,63 @@ function getDebitosTecnicos(sistemaId: string): ServerResult {
   }
 }
 
+// v1.148.11 — Gera prompt formatado em markdown pronto pra colar em agente de IA
+// (Cursor, Claude Code, Codex, Continue, GitHub Copilot, Windsurf etc).
+// Inclui: contexto do sistema, ancoragem arquivo:linha, descrição, tarefas
+// numeradas, critério de aceite e promessa do ciclo ("commit fecha sozinho").
+// Reusado pelo corpo do card no backlog E pelo botão "Copiar prompt" do drawer.
+function _gerarPromptIA(d: Record<string, unknown>, sistema: Record<string, unknown>): string {
+  const tipoLabel: Record<string, string> = { debt: 'Dívida técnica', todo: 'TODO', fixme: 'FIXME', hack: 'HACK' };
+  const tipo = String(d.tipo || 'todo');
+  const tipoStr = tipoLabel[tipo] || 'Dívida técnica';
+  const marcadorComentario = tipo === 'debt'
+    ? `DEBT(${d.area || 'codigo'},${d.severidade || 'media'})`
+    : tipoStr.toUpperCase();
+  const arquivo = String(d.arquivo || '');
+  const linha = Number(d.linha || 0);
+  const desc = String(d.descricao || '(sem descrição)');
+  const nomeSist = String(sistema.nome || sistema.codinome || 'projeto');
+  const repoUrl = String(sistema.repoUrl || '').replace(/\.git$/, '').replace(/\/+$/, '');
+  const permalink = repoUrl ? `${repoUrl}/blob/HEAD/${arquivo}#L${linha}` : '';
+  const hash = String(d.hash || '');
+  const meta = [
+    d.area ? `**Área:** ${d.area}` : '',
+    d.severidade ? `**Severidade:** ${d.severidade}` : '',
+  ].filter(Boolean).join(' · ');
+
+  return `# Resolva este ${tipoStr.toLowerCase()}
+
+**Projeto:** ${nomeSist}
+**Arquivo:** \`${arquivo}:${linha}\`
+${meta ? meta + '\n' : ''}${permalink ? `**Permalink:** ${permalink}\n` : ''}
+## O que está marcado no código
+
+\`\`\`
+// ${marcadorComentario}: ${desc}
+\`\`\`
+
+## Tarefas
+
+1. Abra o arquivo \`${arquivo}\` e leia o contexto ao redor da linha ${linha}.
+2. Entenda o que esse ${tipoStr.toLowerCase()} está pedindo — analise a função/componente em que está inserido.
+3. Implemente a solução adequada (refator, fix, completar a feature etc).
+4. **Apague o comentário marcador** (\`// ${marcadorComentario}:\`) da linha ${linha} — ele é o sinalizador do débito.
+5. Commit + push no branch default.
+
+## Critério de aceite
+
+- ✅ O comentário marcador foi removido do código.
+- ✅ A implementação cobre o que a descrição pede.
+- ✅ Não introduziu regressão (rode os testes se houver).
+
+## Como o débito fecha sozinho
+
+A **Forja** (sistema de gestão deste projeto) escaneia o repositório periodicamente. Quando este comentário sumir do código E o commit estiver no branch default, o débito de hash \`${hash}\` vai automaticamente pra status \`pago\`. **Você não precisa fazer nada extra na Forja.**
+
+---
+_Gerado automaticamente pela Forja a partir do scan de dívida técnica._`;
+}
+
 // Promove débito para o Backlog (cria card e linka). Mantém débito como
 // 'promovido' pra não recriar no próximo sync. Quando o user concluir o card
 // no backlog, débito não volta pra 'ativo' automaticamente — ele tem que apagar
@@ -16072,22 +16129,23 @@ function promoverDebitoParaBacklog(debitoId: string): ServerResult {
     if (d.status === 'promovido' && d.backlogId) return { ok: false, error: 'Já promovido pra backlog.' };
 
     const sistemaId = String(d.sistemaId || '');
+    const sistemas = dbGetAll('Sistemas') as Array<Record<string, unknown>>;
+    const sist = sistemas.find((s) => String(s.id) === sistemaId) || { nome: 'projeto' };
     const tipoLabel: Record<string, string> = { debt: 'Dívida', todo: 'TODO', fixme: 'FIXME', hack: 'HACK' };
     const titulo = `[${tipoLabel[String(d.tipo)] || 'Dívida'}] ${String(d.descricao).slice(0, 80)}`;
-    const corpo = (
-      `Origem: dívida técnica detectada no código.\n`
-      + `Arquivo: \`${d.arquivo}:${d.linha}\`\n`
-      + (d.area ? `Área: ${d.area} · Severidade: ${d.severidade}\n` : '')
-      + `\n${d.descricao}\n\n`
-      + `Pra fechar este card: apague o comentário do código E faça commit. A Forja vai detectar a remoção na próxima sincronização e o débito vai pra "pago" automaticamente.`
-    );
+    // v1.148.11 — corpo agora é um PROMPT pronto pra colar em agente de IA.
+    // Antes era só descrição. Agora é acionável: cola no Cursor/Claude e a IA
+    // já tem tudo que precisa (arquivo, linha, marcador, critério de aceite,
+    // promessa do ciclo "commit fecha sozinho").
+    const corpo = _gerarPromptIA(d, sist);
 
-    // Cria decisão no backlog (Decisoes é a tabela do kanban — coluna `status` controla a coluna).
+    // Cria card no backlog (Decisoes é a tabela do kanban — coluna `status`
+    // controla a coluna no board: aFazer | fazendo | feito).
     const novoCard = dbCreate('Decisoes', {
       sistemaId,
       titulo,
       decisao: corpo,
-      justificativa: `Promovido do scan de dívida técnica (hash ${d.hash}).`,
+      justificativa: `Promovido do scan de dívida técnica (hash ${d.hash}). Corpo é um prompt pronto pra IA — cole no Cursor/Claude Code/etc.`,
       status: 'aFazer',
       gravidade: d.severidade || 'media',
       area: d.area || 'codigo',
@@ -16105,6 +16163,22 @@ function promoverDebitoParaBacklog(debitoId: string): ServerResult {
     return { ok: true, data: { backlogId: String(novoCard.id || '') } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao promover dívida' };
+  }
+}
+
+// v1.148.11 — Retorna o prompt formatado pra IA SEM promover (útil pro botão
+// "Copiar prompt pra IA" do drawer, que permite trabalhar o débito sem precisar
+// criar card no backlog).
+function getPromptIADebito(debitoId: string): ServerResult {
+  try {
+    const todos = dbGetAll('DebitoTecnico') as Array<Record<string, unknown>>;
+    const d = todos.find((x) => String(x.id) === debitoId);
+    if (!d) return { ok: false, error: 'Débito não encontrado' };
+    const sistemas = dbGetAll('Sistemas') as Array<Record<string, unknown>>;
+    const sist = sistemas.find((s) => String(s.id) === String(d.sistemaId || '')) || { nome: 'projeto' };
+    return { ok: true, data: { prompt: _gerarPromptIA(d, sist) } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
   }
 }
 
