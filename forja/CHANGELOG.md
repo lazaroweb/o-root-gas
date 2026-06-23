@@ -36,6 +36,78 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.150.0] — 2026-06-23
+
+### Adicionado — Parser do "Pack PT-BR" para Agents (8 blocos específicos)
+
+**Contexto:** O user mandou a **estrutura padrão de Agent** do pack. É mais rica
+que a Skill — tem 8 blocos exclusivos:
+
+| Bloco | O que captura |
+|---|---|
+| `## METADADOS` | `slug`, `categoria`, **`tipo: agente-autonomo`** (NOVO) |
+| `## QUANDO USAR ESTE AGENTE` | Gatilho + exemplo `<example>` |
+| `## IDENTIDADE E EXPERTISE` | Persona + foco + ênfase |
+| `## PROTOCOLO DE INICIALIZAÇÃO` | Passos numerados quando invocado |
+| `## DOMÍNIOS DE CONHECIMENTO` | Áreas (### Área) com sub-skills |
+| `## CHECKLIST DE QUALIDADE` | Métricas com threshold |
+| `## WORKFLOW DE EXECUÇÃO` | Fases (### Fase N — Nome) |
+| `## PROTOCOLO DE COMUNICAÇÃO` | JSON entre agentes |
+| `## INTEGRAÇÃO COM OUTROS AGENTES` | Grafo de colaboração |
+| `## DIRETRIZ FINAL` | 1 frase resumo (a "alma" do agent) |
+
+**Schema (`v1.74-agents-rich`):**
+
+- Tabela `Agents` ganha **3 colunas first-class**:
+  - `tipo` — pra filtros rápidos (autônomo, orquestrador, etc.)
+  - `diretrizFinal` — vira preview do card automaticamente
+  - `dominios` — CSV das áreas (pra busca/agrupamento futuro)
+- Reaproveita `relacionadas` pra grafo de "Integra com" (dedup com METADADOS).
+
+**Parser estendido:**
+
+- `_chaveSecao` agora reconhece 6 chaves novas:
+  `protocolo_inicializacao`, `dominios`, `workflow`, `protocolo_comunicacao`,
+  `integracoes`, `diretriz_final`. Compatível com inglês também.
+- `_parseMetadadosBloco` captura `- tipo: agente-autonomo` (e variantes
+  `type`, `agent_type`, `kind`).
+- 3 helpers novos:
+  - `_extrairDominios` → pega títulos `### Área X` de DOMÍNIOS.
+  - `_extrairIntegracoes` → captura slugs em `[colchetes]` e \`backticks\` do
+    bloco INTEGRAÇÕES. Faz dedup, limite 16.
+  - `_extrairDiretrizFinal` → tira aspas/markdown e pega a 1ª frase (máx 280
+    chars). Fallback pra 1ª linha.
+
+**UI Agents — Drawer rico:**
+
+- Banner "ESPERANDO ESTRUTURA" removido. Só mostra dica quando a base está
+  vazia (e diz exatamente quais 8 blocos o parser reconhece).
+- **Diretriz Final em epígrafe** no topo (border-left peach, itálico) — destaca
+  a missão central do agent.
+- Header ganha badge **`tipo`** (peach + Bot icon) destacando o `agente-autonomo`.
+- Chips de **Domínios** no header (lavender).
+- Cada bloco vira um card com ícone + cor coerente:
+  - WORKFLOW → renderiza fases como **stepper visual numerado** (círculos com
+    o número da fase, igual o Linear faz com checkboxes).
+  - PROTOCOLO_COMUNICAÇÃO → extrai bloco \`\`\`json\`\`\` e mostra com
+    `JSON.stringify(parse, null, 2)` indentado (formatação consistente).
+  - DOMÍNIOS → grid de cards aninhados (1 por área, com sub-skills).
+  - INTEGRAÇÕES → chips com os slugs extraídos + texto original abaixo.
+- Toggle "Estruturado / Markdown raw" preservado.
+
+**UI Agents — Card:**
+
+- Preview prioriza **Diretriz Final** (em itálico pra sinalizar) → fallback pra
+  QUANDO USAR → descrição.
+- Mostra **`tipo`** como badge sutil abaixo da descrição.
+- Mantém badges de #idExterno + usos + modelo no rodapé.
+
+**Próximo passo:** o user vai trazer os 422 agents do pack (provavelmente
+como zip/pasta). Vou desenhar o fluxo de **bulk import** otimizado pra essa
+escala — paralelizar uploads em batch, dedup por slug, mostrar progresso.
+
+---
+
 ## [1.149.0] — 2026-06-23
 
 ### Adicionado — Skills/Agents estruturados (parser PT-BR + Atelier ganha estação Agents)

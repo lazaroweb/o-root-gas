@@ -4,10 +4,11 @@
 // pack pra detalharmos os campos (modelo, ferramentas, system_prompt, etc.).
 // Por hora, oferece: listagem, busca, favoritar, importar avulso e drawer.
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Empty, Input, Spin, Tag, Tooltip, Drawer, message, Skeleton } from 'antd';
+import { Button, Empty, Input, Spin, Tag, Tooltip, Drawer, message, Skeleton, Segmented } from 'antd';
 import {
-  Bot, Plus, Search, Star, Copy, Download, Trash2, Sparkles, Upload as UploadIcon,
-  FileText, Hourglass,
+  Bot, Search, Star, Copy, Download, Trash2, Sparkles, Upload as UploadIcon,
+  FileText, ListChecks, BookMarked, Package, CheckCircle2, GitBranch, Workflow,
+  Network, Quote, Zap,
 } from 'lucide-react';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -34,6 +35,10 @@ interface AgentSummary {
   quandoUsar?: string;
   modelo?: string;
   ferramentas?: string[];
+  // v1.150.0 — campos específicos do formato Agent.
+  tipo?: string;            // "agente-autonomo" / "orquestrador" / etc.
+  diretrizFinal?: string;   // 1 frase resumo (vira preview do card)
+  dominios?: string[];      // áreas de expertise (### dentro de DOMÍNIOS)
 }
 
 interface AgentFull extends AgentSummary {
@@ -170,50 +175,39 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
 
   return (
     <div style={{ padding: 24 }}>
-      {/* Banner "esperando estrutura" — sinaliza ao user que essa área tá pronta
-          pra receber os 422 agents, e que campos específicos vão ser detalhados
-          quando ele mandar o prompt com a estrutura. */}
-      <div style={{
-        background: `${corDestaque}0d`, border: `1px solid ${corDestaque}40`,
-        borderRadius: 12, padding: 16, marginBottom: 20,
-        display: 'flex', gap: 14, alignItems: 'flex-start',
-      }}>
+      {/* v1.150.0 — Banner "estrutura completa": o parser entende o formato
+          Pack PT-BR de Agent (PROTOCOLO DE INICIALIZAÇÃO, DOMÍNIOS, WORKFLOW
+          em fases, PROTOCOLO DE COMUNICAÇÃO JSON, INTEGRAÇÕES, DIRETRIZ FINAL).
+          Só aparece quando a base está vazia — guia o user. */}
+      {agents.length === 0 && (
         <div style={{
-          width: 36, height: 36, borderRadius: 10,
-          background: `${corDestaque}1a`, color: corDestaque,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          background: `${corDestaque}0d`, border: `1px solid ${corDestaque}40`,
+          borderRadius: 12, padding: 16, marginBottom: 20,
+          display: 'flex', gap: 14, alignItems: 'flex-start',
         }}>
-          <Bot size={18} />
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
-            fontFamily: FONTS.display, fontSize: 14, fontWeight: 600, color: t.text,
-            display: 'flex', alignItems: 'center', gap: 8,
+            width: 36, height: 36, borderRadius: 10,
+            background: `${corDestaque}1a`, color: corDestaque,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
           }}>
-            Estação Agents — pronta pra receber seus 422 agents
-            <span style={{
-              background: `${corDestaque}1a`, color: corDestaque,
-              fontFamily: FONTS.ui, fontSize: 10, fontWeight: 700,
-              padding: '2px 7px', borderRadius: 999,
-              display: 'inline-flex', alignItems: 'center', gap: 3,
-            }}>
-              <Hourglass size={9} />ESPERANDO ESTRUTURA
-            </span>
+            <Bot size={18} />
           </div>
-          <div style={{
-            fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, marginTop: 6, lineHeight: 1.55,
-          }}>
-            A tabela de Agents tá criada no banco com os mesmos campos ricos das Skills
-            (slug, id externo, usos, favoritar, blocos estruturados) + 3 campos extras
-            específicos de agent (<code style={{ fontFamily: FONTS.mono }}>modelo</code>,{' '}
-            <code style={{ fontFamily: FONTS.mono }}>ferramentas</code>,{' '}
-            <code style={{ fontFamily: FONTS.mono }}>metaJson</code>).
-            Quando você mandar o prompt com a <strong>estrutura padrão de agent</strong>,
-            eu adapto o parser e os campos extras pra capturar tudo sem perder informação.
-            Por hora, dá pra importar arquivos avulsos pra testar o fluxo.
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: FONTS.display, fontSize: 14, fontWeight: 600, color: t.text }}>
+              Estação Agents — parser pronto pro formato Pack PT-BR
+            </div>
+            <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, marginTop: 6, lineHeight: 1.55 }}>
+              O parser reconhece <strong>todos os 8 blocos</strong> do padrão Agent:
+              QUANDO USAR, IDENTIDADE E EXPERTISE, PROTOCOLO DE INICIALIZAÇÃO,
+              DOMÍNIOS DE CONHECIMENTO, CHECKLIST DE QUALIDADE, WORKFLOW DE
+              EXECUÇÃO (com fases), PROTOCOLO DE COMUNICAÇÃO (JSON entre agentes)
+              e INTEGRAÇÃO COM OUTROS AGENTES. O METADADOS captura também
+              {' '}<code style={{ fontFamily: FONTS.mono }}>tipo: agente-autonomo</code>.
+              Importe um <code style={{ fontFamily: FONTS.mono }}>.md</code> pra ver o render.
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Barra de ações */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -322,68 +316,15 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
       >
         {carregandoAberto && <Skeleton active paragraph={{ rows: 6 }} />}
         {aberto && (
-          <>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
-              {aberto.idExterno && (
-                <span style={{
-                  background: `${corDestaque}1a`, color: corDestaque,
-                  border: `1px solid ${corDestaque}40`,
-                  fontFamily: FONTS.mono, fontSize: 11, fontWeight: 600,
-                  padding: '2px 8px', borderRadius: 6,
-                }}>
-                  {aberto.idExterno}
-                </span>
-              )}
-              {aberto.categoria && <Tag color="blue">{aberto.categoria}</Tag>}
-              {aberto.tags.map((tag) => <Tag key={tag}>{tag}</Tag>)}
-              {aberto.modelo && <Tag color="purple" style={{ fontFamily: FONTS.mono, fontSize: 11 }}>{aberto.modelo}</Tag>}
-              <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginLeft: 'auto' }}>
-                {bytesHumano(aberto.tamanhoBytes)} · {relTempo(aberto.atualizadoEm)}
-              </span>
-            </div>
-
-            {aberto.descricao && (
-              <p style={{ fontFamily: FONTS.ui, fontSize: 14, color: t.textSecondary, lineHeight: 1.65, marginTop: 0 }}>
-                {aberto.descricao}
-              </p>
-            )}
-
-            {/* Blocos estruturados (reusa visual do SkillBlocosRender — mas inline aqui pra não acoplar) */}
-            {aberto.blocos && aberto.blocos.length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
-                {aberto.blocos.filter((b) => b.conteudo.trim()).map((bloco, idx) => (
-                  <div key={`${bloco.chave}-${idx}`} style={{
-                    background: t.surface, border: `1px solid ${t.border}`,
-                    borderLeft: `3px solid ${corDestaque}`,
-                    borderRadius: 10, padding: 14,
-                  }}>
-                    <div style={{
-                      fontFamily: FONTS.display, fontSize: 13, fontWeight: 600, color: t.text,
-                      marginBottom: 8,
-                    }}>
-                      {bloco.titulo}
-                    </div>
-                    <div style={{
-                      fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary, lineHeight: 1.65,
-                      whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                    }}>
-                      {bloco.conteudo}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <pre style={{
-                background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
-                borderRadius: 10, padding: 14, fontFamily: FONTS.mono,
-                fontSize: 12, color: t.text, lineHeight: 1.55,
-                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                maxHeight: 'calc(100vh - 360px)', overflow: 'auto',
-              }}>
-                {aberto.conteudo}
-              </pre>
-            )}
-          </>
+          <AgentDrawerConteudo
+            agent={aberto}
+            onApagar={() => apagar(aberto.id)}
+            onToggleFavorita={() => {
+              const id = aberto.id; const era = !!aberto.favorita;
+              setAberto((prev) => prev ? { ...prev, favorita: !era } : prev);
+              void toggleFavorita(id);
+            }}
+          />
         )}
       </Drawer>
     </div>
@@ -453,15 +394,32 @@ function AgentCard({ agent, onOpen, onToggleFavorita }: {
           </div>
         </div>
       </div>
-      {(agent.quandoUsar || agent.descricaoPt || agent.descricao) && (
+      {/* v1.150.0 — Preview prioriza DIRETRIZ FINAL (1 frase resumo do agent),
+          cai pra QUANDO USAR, depois descrição. Render em itálico quando é a
+          diretriz pra sinalizar visualmente que é a "alma" do agent. */}
+      {(agent.diretrizFinal || agent.quandoUsar || agent.descricaoPt || agent.descricao) && (
         <p style={{
           margin: 0, fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary,
           lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box',
           WebkitLineClamp: 3, WebkitBoxOrient: 'vertical' as const,
+          fontStyle: agent.diretrizFinal ? 'italic' : 'normal',
         }}>
-          {agent.quandoUsar || agent.descricaoPt || agent.descricao}
+          {agent.diretrizFinal || agent.quandoUsar || agent.descricaoPt || agent.descricao}
         </p>
       )}
+
+      {/* v1.150.0 — Tipo do agent (agente-autonomo, etc) — badge sutil */}
+      {agent.tipo && (
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4,
+          background: `${corFav}0a`, color: corFav,
+          fontFamily: FONTS.ui, fontSize: 10, fontWeight: 600,
+          padding: '2px 7px', borderRadius: 999, width: 'fit-content',
+        }}>
+          <Bot size={9} />{agent.tipo}
+        </div>
+      )}
+
       {agent.tags.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 'auto' }}>
           {agent.tags.slice(0, 4).map((tag) => (
@@ -494,6 +452,394 @@ function AgentCard({ agent, onOpen, onToggleFavorita }: {
           <span>{relTempo(agent.atualizadoEm)}</span>
         </span>
       </div>
+    </div>
+  );
+}
+
+// ─── v1.150.0 — Conteúdo do Drawer do Agent ───────────────────────────────
+// Renderização rica dos 8 blocos do padrão Pack PT-BR para Agents:
+// 1. QUANDO USAR    → peach + sparkles (preview prioritário)
+// 2. IDENTIDADE     → blue + bookmark
+// 3. PROTOCOLO_INIT → sage + zap (passos numerados)
+// 4. DOMÍNIOS       → lavender + network (cards com sub-skills)
+// 5. CHECKLIST      → sage + check
+// 6. WORKFLOW       → blue + workflow (FASES como stepper visual)
+// 7. PROTOCOLO_COM  → peach + quote (JSON em pre com mono)
+// 8. INTEGRAÇÕES    → lavender + git-branch (chips de slugs)
+// 9. DIRETRIZ_FINAL → peach + quote (epígrafe grande)
+function AgentDrawerConteudo({ agent, onApagar: _onApagar, onToggleFavorita: _onToggleFavorita }: {
+  agent: AgentFull;
+  onApagar: () => void;
+  onToggleFavorita: () => void;
+}): React.ReactElement {
+  const t = useTokens();
+  const [view, setView] = useState<'estruturado' | 'markdown'>('estruturado');
+  const corDestaque = t.accents.blue;
+
+  const blocos = (agent.blocos || []).filter((b) => b.conteudo.trim().length > 0);
+  const blocoDiretriz = blocos.find((b) => b.chave === 'diretriz_final');
+  const blocosRender = blocos.filter((b) => b.chave !== 'diretriz_final' && b.chave !== 'metadados');
+
+  // META por chave (cor + icone + descrição auxiliar).
+  const META: Record<string, { cor: keyof typeof t.accents; icon: React.ReactNode; sub?: string }> = {
+    quando_usar: { cor: 'peach', icon: <Sparkles size={13} />, sub: 'Gatilho de ativação' },
+    identidade: { cor: 'blue', icon: <BookMarked size={13} />, sub: 'Persona e expertise' },
+    protocolo_inicializacao: { cor: 'sage', icon: <Zap size={13} />, sub: 'Sequência ao ser invocado' },
+    dominios: { cor: 'lavender', icon: <Network size={13} />, sub: 'Áreas de conhecimento' },
+    checklist: { cor: 'sage', icon: <CheckCircle2 size={13} />, sub: 'Critérios mensuráveis' },
+    workflow: { cor: 'blue', icon: <Workflow size={13} />, sub: 'Fluxo em fases' },
+    protocolo_comunicacao: { cor: 'peach', icon: <Quote size={13} />, sub: 'Formato entre agentes' },
+    integracoes: { cor: 'lavender', icon: <GitBranch size={13} />, sub: 'Colabora com' },
+    principios: { cor: 'lavender', icon: <CheckCircle2 size={13} />, sub: 'Princípios operacionais' },
+    regras: { cor: 'peach', icon: <FileText size={13} />, sub: 'Regras de execução' },
+    boas_praticas: { cor: 'sage', icon: <Sparkles size={13} />, sub: 'Padrões de excelência' },
+    framework: { cor: 'blue', icon: <Package size={13} />, sub: 'Formato de entrega' },
+    exemplos: { cor: 'lavender', icon: <FileText size={13} />, sub: 'Casos de uso' },
+    pre_execucao: { cor: 'sage', icon: <ListChecks size={13} />, sub: 'Coleta de contexto' },
+    outra: { cor: 'lavender', icon: <FileText size={13} /> },
+  };
+
+  return (
+    <>
+      {/* Header: badges + meta linha */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14, alignItems: 'center' }}>
+        {agent.idExterno && (
+          <span style={{
+            background: `${corDestaque}1a`, color: corDestaque,
+            border: `1px solid ${corDestaque}40`,
+            fontFamily: FONTS.mono, fontSize: 11, fontWeight: 600,
+            padding: '2px 8px', borderRadius: 6,
+          }}>
+            {agent.idExterno}
+          </span>
+        )}
+        {/* v1.150.0 — tipo (agente-autonomo) com destaque */}
+        {agent.tipo && (
+          <span style={{
+            background: `${t.accents.peach}1a`, color: t.accents.peach,
+            border: `1px solid ${t.accents.peach}40`,
+            fontFamily: FONTS.ui, fontSize: 11, fontWeight: 600,
+            padding: '2px 8px', borderRadius: 999,
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+          }}>
+            <Bot size={10} />{agent.tipo}
+          </span>
+        )}
+        {agent.categoria && <Tag color="blue">{agent.categoria}</Tag>}
+        {agent.tags.map((tag) => <Tag key={tag}>{tag}</Tag>)}
+        {agent.modelo && <Tag color="purple" style={{ fontFamily: FONTS.mono, fontSize: 11 }}>{agent.modelo}</Tag>}
+        {typeof agent.usos === 'number' && agent.usos > 0 && (
+          <span style={{
+            background: `${t.accents.peach}1a`, color: t.accents.peach,
+            border: `1px solid ${t.accents.peach}40`,
+            fontFamily: FONTS.ui, fontSize: 11, fontWeight: 600,
+            padding: '2px 8px', borderRadius: 6,
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+          }}>
+            <Sparkles size={10} />{agent.usos} {agent.usos === 1 ? 'uso' : 'usos'}
+          </span>
+        )}
+        <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginLeft: 'auto' }}>
+          {bytesHumano(agent.tamanhoBytes)} · {relTempo(agent.atualizadoEm)}
+        </span>
+      </div>
+
+      {/* v1.150.0 — Diretriz Final: epígrafe grande, posicionada no topo
+          como assinatura/missão do agent. Quando existe, é a "alma" dele. */}
+      {(blocoDiretriz || agent.diretrizFinal) && (
+        <div style={{
+          background: `${t.accents.peach}0d`,
+          borderLeft: `4px solid ${t.accents.peach}`,
+          borderRadius: 10, padding: 16, marginBottom: 16,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+            <Quote size={12} color={t.accents.peach} />
+            <span style={{
+              fontFamily: FONTS.ui, fontSize: 10, fontWeight: 700, color: t.accents.peach,
+              letterSpacing: '0.08em', textTransform: 'uppercase',
+            }}>
+              Diretriz final
+            </span>
+          </div>
+          <div style={{
+            fontFamily: FONTS.display, fontSize: 15, color: t.text, lineHeight: 1.5,
+            fontStyle: 'italic',
+          }}>
+            {agent.diretrizFinal || (blocoDiretriz?.conteudo || '').slice(0, 360)}
+          </div>
+        </div>
+      )}
+
+      {/* v1.150.0 — Domínios de conhecimento como chips (preview rápido) */}
+      {agent.dominios && agent.dominios.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14, alignItems: 'center' }}>
+          <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary }}>Domínios:</span>
+          {agent.dominios.map((d) => (
+            <span key={d} style={{
+              background: `${t.accents.lavender}1a`, color: t.accents.lavender,
+              border: `1px solid ${t.accents.lavender}40`,
+              fontFamily: FONTS.ui, fontSize: 11,
+              padding: '2px 8px', borderRadius: 999,
+            }}>
+              {d}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <Segmented
+        size="small"
+        value={view}
+        onChange={(v) => setView(v as 'estruturado' | 'markdown')}
+        options={[
+          { label: 'Estruturado', value: 'estruturado' },
+          { label: 'Markdown raw', value: 'markdown' },
+        ]}
+        style={{ marginBottom: 12 }}
+      />
+
+      {view === 'markdown' ? (
+        <pre style={{
+          background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
+          borderRadius: 10, padding: 14, fontFamily: FONTS.mono,
+          fontSize: 12, color: t.text, lineHeight: 1.55,
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          maxHeight: 'calc(100vh - 460px)', overflow: 'auto', margin: 0,
+        }}>
+          {agent.conteudo}
+        </pre>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {blocosRender.map((bloco, idx) => {
+            const meta = META[bloco.chave] || META.outra;
+            const cor = t.accents[meta.cor];
+            return (
+              <BlocoAgentCard
+                key={`${bloco.chave}-${idx}`}
+                bloco={bloco}
+                cor={cor}
+                icon={meta.icon}
+                sub={meta.sub}
+                relacionadas={bloco.chave === 'integracoes' ? agent.relacionadas : undefined}
+              />
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─── v1.150.0 — Card de um bloco do Agent ────────────────────────────────
+// Renderização especial dependendo da chave do bloco:
+// - `workflow`: detecta sub-headings "### Fase N" e mostra como stepper visual
+// - `protocolo_comunicacao`: se tem ```json``` ou {} grande, syntax highlight
+// - `dominios`: lista os ### como cards aninhados (cada área + bullets)
+// - `integracoes`: chips com os slugs extraídos automaticamente
+// - Outros: texto puro com formatação preservada
+function BlocoAgentCard({ bloco, cor, icon, sub, relacionadas }: {
+  bloco: { titulo: string; chave: string; conteudo: string };
+  cor: string;
+  icon: React.ReactNode;
+  sub?: string;
+  relacionadas?: string[];
+}): React.ReactElement {
+  const t = useTokens();
+
+  const renderConteudo = () => {
+    // 1) WORKFLOW: detecta "### Fase N — Nome" e renderiza como stepper.
+    if (bloco.chave === 'workflow') {
+      const matches = bloco.conteudo.match(/^###\s+(.+)$/gm) || [];
+      if (matches.length >= 2) {
+        const partes: Array<{ titulo: string; corpo: string }> = [];
+        const regex = /^###\s+(.+)$/gm;
+        let mm: RegExpExecArray | null;
+        const positions: Array<{ titulo: string; inicio: number; fimH: number }> = [];
+        while ((mm = regex.exec(bloco.conteudo)) !== null) {
+          positions.push({ titulo: mm[1].trim(), inicio: mm.index, fimH: mm.index + mm[0].length });
+        }
+        for (let i = 0; i < positions.length; i++) {
+          const cur = positions[i];
+          const prox = positions[i + 1];
+          partes.push({
+            titulo: cur.titulo,
+            corpo: bloco.conteudo.slice(cur.fimH, prox ? prox.inicio : undefined).trim(),
+          });
+        }
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {partes.map((p, i) => (
+              <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                <div style={{
+                  width: 26, height: 26, borderRadius: 999,
+                  background: cor, color: '#fff',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontFamily: FONTS.display, fontSize: 11, fontWeight: 700,
+                  flexShrink: 0, marginTop: 1,
+                }}>
+                  {i + 1}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontFamily: FONTS.display, fontSize: 12, fontWeight: 600,
+                    color: t.text, marginBottom: 4,
+                  }}>
+                    {p.titulo}
+                  </div>
+                  <div style={{
+                    fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary,
+                    lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  }}>
+                    {p.corpo}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        );
+      }
+    }
+
+    // 2) PROTOCOLO_COMUNICACAO: highlight de JSON
+    if (bloco.chave === 'protocolo_comunicacao') {
+      // Procura bloco ```json``` ou JSON solto.
+      const jsonMatch = bloco.conteudo.match(/```(?:json)?\s*([\s\S]*?)```/);
+      const jsonInline = bloco.conteudo.match(/\{[\s\S]*\}/);
+      const json = jsonMatch ? jsonMatch[1] : (jsonInline ? jsonInline[0] : '');
+      const antes = json ? bloco.conteudo.split(json)[0].replace(/```(?:json)?/g, '').trim() : bloco.conteudo;
+      return (
+        <>
+          {antes && (
+            <div style={{
+              fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary,
+              lineHeight: 1.6, marginBottom: 8, whiteSpace: 'pre-wrap',
+            }}>
+              {antes}
+            </div>
+          )}
+          {json && (
+            <pre style={{
+              background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
+              borderRadius: 8, padding: 12, fontFamily: FONTS.mono,
+              fontSize: 11.5, color: t.text, lineHeight: 1.55,
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0,
+              overflowX: 'auto',
+            }}>
+              {(() => {
+                try { return JSON.stringify(JSON.parse(json), null, 2); }
+                catch { return json.trim(); }
+              })()}
+            </pre>
+          )}
+        </>
+      );
+    }
+
+    // 3) DOMÍNIOS: lista os ### como cards aninhados com bullets
+    if (bloco.chave === 'dominios') {
+      const matches = bloco.conteudo.match(/^###\s+(.+)$/gm) || [];
+      if (matches.length >= 1) {
+        const regex = /^###\s+(.+)$/gm;
+        let mm: RegExpExecArray | null;
+        const positions: Array<{ titulo: string; inicio: number; fimH: number }> = [];
+        while ((mm = regex.exec(bloco.conteudo)) !== null) {
+          positions.push({ titulo: mm[1].trim(), inicio: mm.index, fimH: mm.index + mm[0].length });
+        }
+        const areas = positions.map((p, i) => {
+          const prox = positions[i + 1];
+          return { titulo: p.titulo, corpo: bloco.conteudo.slice(p.fimH, prox ? prox.inicio : undefined).trim() };
+        });
+        return (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
+            {areas.map((a, i) => (
+              <div key={i} style={{
+                background: t.surface, border: `1px solid ${t.borderSoft}`,
+                borderRadius: 8, padding: 12,
+              }}>
+                <div style={{
+                  fontFamily: FONTS.display, fontSize: 12, fontWeight: 600,
+                  color: t.text, marginBottom: 6,
+                }}>
+                  {a.titulo}
+                </div>
+                <div style={{
+                  fontFamily: FONTS.ui, fontSize: 11.5, color: t.textSecondary,
+                  lineHeight: 1.55, whiteSpace: 'pre-wrap',
+                }}>
+                  {a.corpo}
+                </div>
+              </div>
+            ))}
+          </div>
+        );
+      }
+    }
+
+    // 4) INTEGRAÇÕES: mostra chips de slugs (se houver) + texto original
+    if (bloco.chave === 'integracoes') {
+      return (
+        <>
+          {relacionadas && relacionadas.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+              {relacionadas.map((rel) => (
+                <span key={rel} style={{
+                  background: `${cor}1a`, color: cor,
+                  border: `1px solid ${cor}40`,
+                  fontFamily: FONTS.mono, fontSize: 11,
+                  padding: '3px 10px', borderRadius: 999,
+                }}>
+                  {rel}
+                </span>
+              ))}
+            </div>
+          )}
+          <div style={{
+            fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary,
+            lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          }}>
+            {bloco.conteudo}
+          </div>
+        </>
+      );
+    }
+
+    // 5) Default: texto preservando formatação
+    return (
+      <div style={{
+        fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary,
+        lineHeight: 1.65, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+      }}>
+        {bloco.conteudo}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{
+      background: t.surface, border: `1px solid ${t.border}`,
+      borderLeft: `3px solid ${cor}`,
+      borderRadius: 10, padding: 14,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <div style={{
+          width: 26, height: 26, borderRadius: 7,
+          background: `${cor}1a`, color: cor,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        }}>
+          {icon}
+        </div>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontFamily: FONTS.display, fontSize: 13, fontWeight: 600, color: t.text, lineHeight: 1.3 }}>
+            {bloco.titulo}
+          </div>
+          {sub && (
+            <div style={{ fontFamily: FONTS.ui, fontSize: 10, color: t.textTertiary, marginTop: 1 }}>
+              {sub}
+            </div>
+          )}
+        </div>
+      </div>
+      {renderConteudo()}
     </div>
   );
 }

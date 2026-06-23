@@ -133,11 +133,14 @@ const SCHEMA: SheetSchema[] = [
   // `adaptacoes`: cache JSON { [ambiente]: {conteudo, em} } das adaptações por IA
   // pra export parametrizado — evita re-gastar tokens no mesmo ambiente.
   { name: 'Skills', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes', 'favorita', 'favoritadaEm', 'slug', 'idExterno', 'usos', 'relacionadas', 'quandoUsar', 'identidadePapel', 'secoesJson'] },
-  // v1.149.0 — Agents: irmã de Skills (estrutura paralela). Recebe os 422 agents
-  // do pack que o user vai trazer. Campos genéricos por hora; `metaJson` guarda
-  // o que for específico (modelo, ferramentas, system_prompt, etc) até a
-  // estrutura definitiva chegar via prompt do user.
-  { name: 'Agents', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes', 'favorita', 'favoritadaEm', 'slug', 'idExterno', 'usos', 'relacionadas', 'quandoUsar', 'identidadePapel', 'secoesJson', 'modelo', 'ferramentas', 'metaJson'] },
+  // v1.150.0 — Agents: a estrutura específica do pack do user chegou.
+  // Campos novos first-class (filtros/buscas rápidas):
+  // - `tipo`: agente-autonomo, orquestrador, etc.
+  // - `diretrizFinal`: 1 frase que resume o agent (vira preview do card).
+  // - `dominios`: CSV das áreas de expertise (extraídas dos ### dentro de
+  //   ## DOMÍNIOS DE CONHECIMENTO). Permite agrupar agents por domínio.
+  // `relacionadas` reaproveita a coluna pra "integrações com outros agents".
+  { name: 'Agents', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes', 'favorita', 'favoritadaEm', 'slug', 'idExterno', 'usos', 'relacionadas', 'quandoUsar', 'identidadePapel', 'secoesJson', 'modelo', 'ferramentas', 'metaJson', 'tipo', 'diretrizFinal', 'dominios'] },
   // SkillFontes: metadados das "pastas" de skills. `chave` é o prefixo usado em
   // Skills.fonte ("<chave>/<skill>"); `nome`/`descricao`/`cor` são editáveis.
   { name: 'SkillFontes', columns: ['id', 'chave', 'nome', 'descricao', 'cor', 'criadoEm', 'atualizadoEm'] },
@@ -349,7 +352,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.73-skills-rich-agents';
+const SCHEMA_VERSION = 'v1.74-agents-rich';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -16923,10 +16926,16 @@ interface SkillParsed {
   identidadePapel: string;
   // Todas as seções extraídas com seu conteúdo (renderizadas no Drawer).
   blocos: SecaoEstruturada[];
+  // v1.150.0 — campos específicos do formato AGENT.
+  tipo: string;             // ex.: "agente-autonomo"
+  diretrizFinal: string;    // 1 frase resumo (vira preview do card)
+  dominios: string[];       // áreas de conhecimento (### dentro do bloco DOMÍNIOS)
 }
 
 // v1.149.0 — Normaliza um título H2 pra chave canônica.
 // Reconhece tanto o formato PT-BR do novo pack quanto variações em inglês.
+// v1.150.0 — Adicionadas chaves específicas de Agent: protocolo_inicializacao,
+// dominios, workflow, protocolo_comunicacao, integracoes, diretriz_final.
 function _chaveSecao(tituloRaw: string): string {
   const t = tituloRaw
     .toLowerCase()
@@ -16934,13 +16943,27 @@ function _chaveSecao(tituloRaw: string): string {
     .trim();
   if (/^metadados|^metadata$/.test(t)) return 'metadados';
   if (/quando\s+usar|when\s+to\s+use/.test(t)) return 'quando_usar';
-  if (/identidade|identity|persona|papel|role/.test(t)) return 'identidade';
+  // "IDENTIDADE E EXPERTISE" (agent) e "IDENTIDADE E PAPEL" (skill) caem aqui.
+  if (/identidade|identity|persona|papel|role|expertise/.test(t)) return 'identidade';
+  // v1.150.0 — Protocolo de inicialização (passo-a-passo de quando o agent é invocado).
+  if (/protocolo\s+de\s+inicializ|protocol(?:o)?\s+de\s+ativacao|inicializacao|initialization|invoked|startup/.test(t)) return 'protocolo_inicializacao';
+  // v1.150.0 — Domínios de conhecimento (áreas + sub-skills do agent).
+  if (/dominios?\s+de\s+conhec|knowledge\s+domains?|areas\s+de\s+expertise|expertise\s+areas/.test(t)) return 'dominios';
   if (/pre.?execucao|context|coleta\s+de\s+contexto|prerequisit/.test(t)) return 'pre_execucao';
   if (/principios|principles/.test(t)) return 'principios';
-  if (/regras|rules|estilo|style|execucao|execution/.test(t)) return 'regras';
+  if (/regras|rules|estilo|style/.test(t)) return 'regras';
   if (/boas\s+praticas|best\s+practices|good\s+practices/.test(t)) return 'boas_praticas';
   if (/framework\s+de\s+entrega|delivery\s+framework|output\s+format|entrega|formato\s+da\s+resposta/.test(t)) return 'framework';
+  // v1.150.0 — Workflow de execução (fases) — agent específico.
+  if (/workflow\s+de\s+execucao|execution\s+workflow|fluxo\s+de\s+execucao|workflow|execution\s+flow/.test(t)) return 'workflow';
+  // Checklist genérico. Vem DEPOIS de workflow pra não pegar "workflow de qualidade".
   if (/checklist|qualidade|quality\s+check/.test(t)) return 'checklist';
+  // v1.150.0 — Protocolo de comunicação (JSON entre agents).
+  if (/protocolo\s+de\s+comunicacao|communication\s+protocol|agent\s+protocol/.test(t)) return 'protocolo_comunicacao';
+  // v1.150.0 — Integrações com outros agents.
+  if (/integracao\s+com\s+outros\s+agen|colabora|colaboracao|integration|interacts?\s+with/.test(t)) return 'integracoes';
+  // v1.150.0 — Diretriz final (1 frase resumo, vira preview do card).
+  if (/diretriz\s+final|princip(?:io|al)\s+(?:de\s+ouro|guideline)|final\s+directive|golden\s+rule/.test(t)) return 'diretriz_final';
   if (/exemplos?|examples?/.test(t)) return 'exemplos';
   if (/anti.?padr|antipattern|nao\s+faca|do\s+not/.test(t)) return 'antipadroes';
   return 'outra';
@@ -16949,6 +16972,7 @@ function _chaveSecao(tituloRaw: string): string {
 // v1.149.0 — Parse o sub-bloco "## METADADOS" do formato PT-BR.
 // Captura linhas tipo "- id: #0237", "- slug: nome", "- usos: 12",
 // "- ultima_atualizacao: 2025-11-30", "- skills_relacionadas: [a, b, c]".
+// v1.150.0 — Captura também "- tipo: agente-autonomo" (específico de Agent).
 function _parseMetadadosBloco(texto: string): {
   idExterno?: string;
   slug?: string;
@@ -16956,6 +16980,7 @@ function _parseMetadadosBloco(texto: string): {
   usos?: number;
   ultimaAtualizacao?: string;
   relacionadas?: string[];
+  tipo?: string;
 } {
   const out: ReturnType<typeof _parseMetadadosBloco> = {};
   if (!texto) return out;
@@ -16975,17 +17000,71 @@ function _parseMetadadosBloco(texto: string): {
       out.slug = v.replace(/^#/, '').trim();
     } else if (k === 'categoria' || k === 'category') {
       out.categoria = v;
+    } else if (k === 'tipo' || k === 'type' || k === 'agent_type' || k === 'kind') {
+      out.tipo = v;
     } else if (k === 'usos' || k === 'uses' || k === 'uso') {
       const n = Number(v.replace(/\D+/g, ''));
       if (!isNaN(n)) out.usos = n;
     } else if (k === 'ultima_atualizacao' || k === 'updated' || k === 'updated_at' || k === 'data') {
       out.ultimaAtualizacao = v;
-    } else if (k === 'skills_relacionadas' || k === 'relacionadas' || k === 'related' || k === 'see_also') {
+    } else if (
+      k === 'skills_relacionadas' || k === 'relacionadas' || k === 'related' || k === 'see_also'
+      || k === 'integracoes' || k === 'integrations' || k === 'colabora_com' || k === 'collaborates_with'
+    ) {
       if (arrInline) v = arrInline[1];
       out.relacionadas = v.split(/[,;]/).map((x) => x.trim().replace(/^[\-\*]\s*/, '')).filter(Boolean);
     }
   }
   return out;
+}
+
+// v1.150.0 — Extrai as ÁREAS de expertise do bloco "## DOMÍNIOS DE CONHECIMENTO".
+// Cada área aparece como sub-heading `### Nome`. Retorna lista de nomes pra
+// usar como tags/dominios estruturados (busca, agrupamento).
+function _extrairDominios(texto: string): string[] {
+  if (!texto) return [];
+  const matches = texto.match(/^###\s+(.+)$/gm) || [];
+  return matches
+    .map((h) => h.replace(/^###\s+/, '').trim())
+    .filter(Boolean)
+    .slice(0, 24);
+}
+
+// v1.150.0 — Extrai os slugs/nomes do bloco "## INTEGRAÇÃO COM OUTROS AGENTES".
+// Cada linha vem como: "- Colabora com [agente-x] em [tarefa]".
+// Captura o que estiver dentro de [colchetes] OU `backticks` OU palavra
+// kebab-case isolada (fallback). Limita a 16 pra não estourar a célula.
+function _extrairIntegracoes(texto: string): string[] {
+  if (!texto) return [];
+  const out: string[] = [];
+  // 1) Match em [colchetes]
+  const matchesBracket = texto.match(/\[([a-z0-9\-_]+)\]/g) || [];
+  for (const m of matchesBracket) out.push(m.slice(1, -1));
+  // 2) Match em `backticks`
+  const matchesBack = texto.match(/`([a-z0-9\-_]+)`/g) || [];
+  for (const m of matchesBack) out.push(m.slice(1, -1));
+  // Dedup, mantém ordem de aparição.
+  const seen = new Set<string>();
+  const dedup: string[] = [];
+  for (const x of out) { if (!seen.has(x)) { seen.add(x); dedup.push(x); } }
+  return dedup.slice(0, 16);
+}
+
+// v1.150.0 — Extrai a DIRETRIZ FINAL — vira o preview principal do card do agent.
+// Tira aspas, markdown e mantém só a primeira "frase" (até o primeiro ponto-final
+// + espaço/EOL). Se vazio, retorna a 1ª linha não-vazia do bloco.
+function _extrairDiretrizFinal(texto: string): string {
+  if (!texto) return '';
+  const limpo = texto
+    .replace(/^[#>\s]+/gm, '') // remove marcadores de markdown no início de linha
+    .replace(/\*\*?/g, '')      // remove ** e *
+    .trim();
+  if (!limpo) return '';
+  // Pega a 1ª frase completa, máximo 280 chars.
+  const matchFrase = limpo.match(/^[^\n]+?[.!?](?:\s|$)/);
+  if (matchFrase) return matchFrase[0].trim().slice(0, 280);
+  // Fallback: 1ª linha.
+  return limpo.split('\n')[0].trim().slice(0, 280);
 }
 
 // v1.149.0 — Slugify simples (acento, espaço, símbolos → kebab-case).
@@ -17011,6 +17090,7 @@ function _parseSkillMd(conteudo: string): SkillParsed {
     nome: '', descricao: '', categoria: '', tags: [], secoes: [],
     slug: '', idExterno: '', ultimaAtualizacao: '', usos: 0,
     relacionadas: [], quandoUsar: '', identidadePapel: '', blocos: [],
+    tipo: '', diretrizFinal: '', dominios: [],
   };
   if (!conteudo) return out;
 
@@ -17079,6 +17159,7 @@ function _parseSkillMd(conteudo: string): SkillParsed {
     if (meta.idExterno && !out.idExterno) out.idExterno = meta.idExterno;
     if (meta.slug && !out.slug) out.slug = meta.slug;
     if (meta.categoria && !out.categoria) out.categoria = meta.categoria;
+    if (meta.tipo) out.tipo = meta.tipo;
     if (meta.usos !== undefined) out.usos = meta.usos;
     if (meta.ultimaAtualizacao) out.ultimaAtualizacao = meta.ultimaAtualizacao;
     if (meta.relacionadas) out.relacionadas = meta.relacionadas;
@@ -17090,11 +17171,32 @@ function _parseSkillMd(conteudo: string): SkillParsed {
   const blocoIden = blocos.find((b) => b.chave === 'identidade');
   if (blocoIden) out.identidadePapel = blocoIden.conteudo.slice(0, 400);
 
-  // 6) Se ainda não tem descricao, deriva de QUANDO USAR (1ª frase) — útil pro
-  // pack PT-BR que não tem frontmatter nem H1.
-  if (!out.descricao && out.quandoUsar) {
-    const primeiraFrase = out.quandoUsar.split(/[.!?\n]/).map((x) => x.trim()).filter(Boolean)[0];
-    if (primeiraFrase) out.descricao = primeiraFrase.slice(0, 240);
+  // v1.150.0 — Campos específicos de Agent.
+  // 5.1) Diretriz final → preview do card (mais resumido que QUANDO USAR).
+  const blocoDiretriz = blocos.find((b) => b.chave === 'diretriz_final');
+  if (blocoDiretriz) out.diretrizFinal = _extrairDiretrizFinal(blocoDiretriz.conteudo);
+  // 5.2) Domínios de conhecimento → tags estruturadas (áreas dos ###).
+  const blocoDominios = blocos.find((b) => b.chave === 'dominios');
+  if (blocoDominios) out.dominios = _extrairDominios(blocoDominios.conteudo);
+  // 5.3) Integrações com outros agents → reusa `relacionadas` se ainda vazio,
+  // ou complementa se o METADADOS não trouxe a lista. Dedup.
+  const blocoIntegracoes = blocos.find((b) => b.chave === 'integracoes');
+  if (blocoIntegracoes) {
+    const integracoes = _extrairIntegracoes(blocoIntegracoes.conteudo);
+    if (integracoes.length > 0) {
+      const set = new Set([...out.relacionadas, ...integracoes]);
+      out.relacionadas = Array.from(set);
+    }
+  }
+
+  // 6) Se ainda não tem descricao, deriva de DIRETRIZ FINAL → QUANDO USAR (1ª frase)
+  // — útil pro pack PT-BR que não tem frontmatter nem H1.
+  if (!out.descricao) {
+    if (out.diretrizFinal) out.descricao = out.diretrizFinal.slice(0, 240);
+    else if (out.quandoUsar) {
+      const primeiraFrase = out.quandoUsar.split(/[.!?\n]/).map((x) => x.trim()).filter(Boolean)[0];
+      if (primeiraFrase) out.descricao = primeiraFrase.slice(0, 240);
+    }
   }
 
   // 7) Slug: se não vier explícito, deriva do nome.
@@ -17513,6 +17615,10 @@ function agentsList(): ServerResult {
         quandoUsar: String(a.quandoUsar || ''),
         modelo: String(a.modelo || ''),
         ferramentas: String(a.ferramentas || '').split(',').map((x) => x.trim()).filter(Boolean),
+        // v1.150.0 — campos específicos de Agent.
+        tipo: String(a.tipo || ''),
+        diretrizFinal: String(a.diretrizFinal || ''),
+        dominios: String(a.dominios || '').split(',').map((x) => x.trim()).filter(Boolean),
       }))
       .sort((x, y) => {
         if (x.favorita !== y.favorita) return x.favorita ? -1 : 1;
@@ -17555,6 +17661,10 @@ function agentsGetContent(id: string): ServerResult {
         identidadePapel: String(a.identidadePapel || ''),
         modelo: String(a.modelo || ''),
         ferramentas: String(a.ferramentas || '').split(',').map((x) => x.trim()).filter(Boolean),
+        // v1.150.0 — campos específicos de Agent.
+        tipo: String(a.tipo || ''),
+        diretrizFinal: String(a.diretrizFinal || ''),
+        dominios: String(a.dominios || '').split(',').map((x) => x.trim()).filter(Boolean),
         meta: (() => {
           const raw = String(a.metaJson || '');
           if (!raw) return null;
@@ -17606,6 +17716,10 @@ function agentsSave(payload: {
       modelo: payload.modelo || '',
       ferramentas: payload.ferramentas || '',
       metaJson: payload.metaJson || '',
+      // v1.150.0 — campos específicos de Agent extraídos pelo parser.
+      tipo: parsed.tipo || '',
+      diretrizFinal: parsed.diretrizFinal || '',
+      dominios: (parsed.dominios || []).join(','),
     };
 
     if (payload.id) {
