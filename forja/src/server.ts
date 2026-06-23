@@ -132,7 +132,9 @@ const SCHEMA: SheetSchema[] = [
   // (Design, Frontend, Backend...), usado pra agrupar quando não há categoria.
   // `adaptacoes`: cache JSON { [ambiente]: {conteudo, em} } das adaptações por IA
   // pra export parametrizado — evita re-gastar tokens no mesmo ambiente.
-  { name: 'Skills', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes', 'favorita', 'favoritadaEm', 'slug', 'idExterno', 'usos', 'relacionadas', 'quandoUsar', 'identidadePapel', 'secoesJson'] },
+  // v1.152.0 — `estrelas` (0-5): nota global de qualidade dada pela Lume (ou
+  // manual). `estrelasMotivo`: justificativa curta da Lume. `avaliadaEm`: ISO.
+  { name: 'Skills', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes', 'favorita', 'favoritadaEm', 'slug', 'idExterno', 'usos', 'relacionadas', 'quandoUsar', 'identidadePapel', 'secoesJson', 'estrelas', 'estrelasMotivo', 'avaliadaEm'] },
   // v1.150.0 — Agents: a estrutura específica do pack do user chegou.
   // Campos novos first-class (filtros/buscas rápidas):
   // - `tipo`: agente-autonomo, orquestrador, etc.
@@ -140,10 +142,14 @@ const SCHEMA: SheetSchema[] = [
   // - `dominios`: CSV das áreas de expertise (extraídas dos ### dentro de
   //   ## DOMÍNIOS DE CONHECIMENTO). Permite agrupar agents por domínio.
   // `relacionadas` reaproveita a coluna pra "integrações com outros agents".
-  { name: 'Agents', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes', 'favorita', 'favoritadaEm', 'slug', 'idExterno', 'usos', 'relacionadas', 'quandoUsar', 'identidadePapel', 'secoesJson', 'modelo', 'ferramentas', 'metaJson', 'tipo', 'diretrizFinal', 'dominios'] },
+  { name: 'Agents', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes', 'favorita', 'favoritadaEm', 'slug', 'idExterno', 'usos', 'relacionadas', 'quandoUsar', 'identidadePapel', 'secoesJson', 'modelo', 'ferramentas', 'metaJson', 'tipo', 'diretrizFinal', 'dominios', 'estrelas', 'estrelasMotivo', 'avaliadaEm'] },
   // SkillFontes: metadados das "pastas" de skills. `chave` é o prefixo usado em
   // Skills.fonte ("<chave>/<skill>"); `nome`/`descricao`/`cor` são editáveis.
   { name: 'SkillFontes', columns: ['id', 'chave', 'nome', 'descricao', 'cor', 'criadoEm', 'atualizadoEm'] },
+  // v1.152.0 — Kits: "kits dos sonhos" curados. `templateId` aponta pro
+  // KIT_TEMPLATES fixo. `skillIds`/`agentIds` são CSV. `justificativa`: texto da
+  // Lume explicando a curadoria. `montadoPorLume`: 'true' quando veio da IA.
+  { name: 'Kits', columns: ['id', 'templateId', 'nome', 'descricao', 'skillIds', 'agentIds', 'justificativa', 'montadoPorLume', 'criadoEm', 'atualizadoEm'] },
   { name: 'Provedores', columns: ['id', 'nome', 'categoria', 'urlSite', 'freeTier', 'precoBase', 'beneficios', 'limitacoes', 'idealPara', 'notas', 'status', 'tags', 'criadoEm', 'atualizadoEm'] },
   { name: 'Cofre', columns: ['id', 'label', 'categoria', 'urlRef', 'usuario', 'iv', 'cipher', 'notas', 'criadoEm', 'atualizadoEm'] },
   { name: 'Snippets', columns: ['id', 'titulo', 'descricao', 'linguagem', 'codigo', 'tags', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm'] },
@@ -352,7 +358,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.74-agents-rich';
+const SCHEMA_VERSION = 'v1.75-estrelas-kits';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -8858,6 +8864,8 @@ const SERVICOS_IA: ServicoIA[] = [
   { id: 'conselho',  label: 'Conselho de especialistas', descricao: 'Pareceres multi-persona de produto.',               stack: 'proxy',  complexidade: 'media',   propKey: 'LLM_MODEL_CONSELHO',  roteavel: true },
   { id: 'entrevista', label: 'Entrevistas & discovery', descricao: 'Análise de entrevista + roteiro de discovery.',       stack: 'proxy',  complexidade: 'media',   propKey: 'LLM_MODEL_ENTREVISTA', roteavel: true },
   { id: 'acoes',     label: 'Ações rápidas da IA', descricao: 'Resumo executivo, preço, release notes, ideias, risco, refinar prompt.', stack: 'proxy', complexidade: 'media', propKey: 'LLM_MODEL_ACOES', roteavel: true },
+  { id: 'avaliacao', label: 'Avaliação de skills/agents (Lume)', descricao: 'Dá nota 0-5 de qualidade pra skills e agents em lote.', stack: 'proxy', complexidade: 'media', propKey: 'LLM_MODEL_AVALIACAO', roteavel: true },
+  { id: 'kit',       label: 'Montagem de kits (Lume)', descricao: 'Seleciona as melhores skills+agents pra um objetivo de kit.', stack: 'proxy', complexidade: 'pesada', propKey: 'LLM_MODEL_KIT', roteavel: true },
   { id: 'financasPlano', label: 'Finanças — planos (IA)', descricao: 'Plano de redução, mapa ideal e plano por fases.',  stack: 'proxy',  complexidade: 'pesada',  propKey: 'LLM_MODEL_FIN_PLANO', roteavel: true },
   { id: 'financasLeitura', label: 'Finanças — leitura de fatura', descricao: 'Interpreta texto de fatura de cartão.',     stack: 'proxy',  complexidade: 'media',   propKey: 'LLM_MODEL_FIN_FATURA', roteavel: true },
   { id: 'financasCategorias', label: 'Finanças — reclassificar', descricao: 'Classifica gastos "outros" (fallback sem Gemini).', stack: 'proxy', complexidade: 'simples', propKey: 'LLM_MODEL_FIN_CAT', roteavel: true },
@@ -17831,6 +17839,446 @@ function _parseClassificacao(resp: string): Record<number, string> {
   return out;
 }
 
+// ─── Avaliação de qualidade (estrelas 0-5) pela Lume (v1.152.0) ─────────────
+// Nota GLOBAL de qualidade, gravada na skill/agent. Processa UM chunk por
+// chamada (pra não estourar timeout do GAS) e devolve `restantes` pro frontend
+// repetir até zerar, com barra de progresso. Escopo: ids | fonte | categoria,
+// e por padrão só "pendentes" (sem estrelas) — re-rodar não re-gasta tokens.
+const CHUNK_AVALIACAO = 40;
+
+interface OpcoesAvaliar {
+  ids?: string[];
+  fonte?: string;       // chave da pasta (prefixo de `fonte`)
+  categoria?: string;   // casa contra tipoIA || categoria
+  escopo?: 'pendentes' | 'todas';
+  forcar?: boolean;     // re-avalia mesmo quem já tem estrelas
+}
+
+function _selecionarParaAvaliar(
+  linhas: Array<Record<string, unknown>>,
+  op: OpcoesAvaliar,
+): Array<Record<string, unknown>> {
+  let alvo = linhas;
+  if (op.ids && op.ids.length > 0) {
+    const set = new Set(op.ids.map((x) => String(x)));
+    return linhas.filter((l) => set.has(String(l.id || '')));
+  }
+  if (op.fonte) {
+    alvo = alvo.filter((l) => _chaveDaFonte(String(l.fonte || '')) === op.fonte);
+  }
+  if (op.categoria) {
+    const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+    const alvoCat = norm(op.categoria);
+    alvo = alvo.filter((l) => norm(String(l.tipoIA || l.categoria || '')) === alvoCat);
+  }
+  const querTodas = op.escopo === 'todas' || op.forcar;
+  if (!querTodas) alvo = alvo.filter((l) => !(Number(l.estrelas || 0) > 0));
+  // Só itens com texto avaliável.
+  alvo = alvo.filter((l) => String(l.nome || '').trim() || String(l.descricao || '').trim());
+  return alvo;
+}
+
+// Parse defensivo da resposta de avaliação → { [i]: {estrelas, motivo} }.
+function _parseAvaliacao(resp: string): Record<number, { estrelas: number; motivo: string }> {
+  const out: Record<number, { estrelas: number; motivo: string }> = {};
+  let txt = String(resp || '').trim();
+  const ini = txt.indexOf('[');
+  const fim = txt.lastIndexOf(']');
+  if (ini >= 0 && fim > ini) txt = txt.slice(ini, fim + 1);
+  try {
+    const arr = JSON.parse(txt) as Array<Record<string, unknown>>;
+    if (Array.isArray(arr)) {
+      for (const o of arr) {
+        const i = Number(o.i);
+        if (Number.isNaN(i)) continue;
+        let n = Math.round(Number(o.estrelas ?? o.nota ?? o.stars ?? 0));
+        if (Number.isNaN(n)) n = 0;
+        n = Math.max(0, Math.min(5, n));
+        out[i] = { estrelas: n, motivo: String(o.motivo || o.razao || o.reason || '').slice(0, 160) };
+      }
+    }
+  } catch { /* sem avaliação utilizável */ }
+  return out;
+}
+
+function _avaliarGenerico(tabela: 'Skills' | 'Agents', op: OpcoesAvaliar): ServerResult {
+  try {
+    const linhas = dbGetAll(tabela) as Array<Record<string, unknown>>;
+    const candidatos = _selecionarParaAvaliar(linhas, op || {});
+    const total = candidatos.length;
+    if (total === 0) return { ok: true, data: { avaliadas: 0, restantes: 0, total: 0 } };
+
+    const chunk = candidatos.slice(0, CHUNK_AVALIACAO);
+    const itens = chunk.map((s, i) => ({
+      i,
+      id: String(s.id || ''),
+      nome: String(s.nome || ''),
+      desc: String(s.descricaoPt || s.descricao || s.diretrizFinal || '').slice(0, 320),
+      tipo: String(s.tipoIA || s.categoria || ''),
+    }));
+    const oque = tabela === 'Agents' ? 'agents de IA' : 'skills de desenvolvimento';
+    const sys = `Você avalia a QUALIDADE de ${oque}. Para cada item dê uma nota inteira de 0 a 5 `
+      + 'considerando: clareza, completude, utilidade prática e maturidade. '
+      + '5 = excelente/pronto pra produção; 3 = ok mas genérico; 0-1 = vago/incompleto. '
+      + 'Responda SOMENTE com um array JSON, sem texto extra, no formato '
+      + '[{"i":0,"estrelas":4,"motivo":"frase curta"}] cobrindo TODOS os itens. '
+      + 'O motivo deve ter no máximo 12 palavras, em português.';
+    const userMsg = JSON.stringify(itens.map((x) => ({ i: x.i, nome: x.nome, tipo: x.tipo, descricao: x.desc })));
+    const resp = forjaCallLLM(
+      [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
+      1800, undefined, 'avaliacao',
+    );
+    const mapa = _parseAvaliacao(resp);
+    const agora = new Date().toISOString();
+    let n = 0;
+    for (const it of itens) {
+      const aval = mapa[it.i];
+      if (!aval) continue;
+      try {
+        dbUpdate(tabela, it.id, { estrelas: aval.estrelas, estrelasMotivo: aval.motivo, avaliadaEm: agora });
+        n++;
+      } catch { /* segue */ }
+    }
+    return { ok: true, data: { avaliadas: n, restantes: Math.max(0, total - chunk.length), total } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao avaliar' };
+  }
+}
+
+function skillsAvaliar(opcoes?: OpcoesAvaliar): ServerResult {
+  return _avaliarGenerico('Skills', opcoes || {});
+}
+
+function agentsAvaliar(opcoes?: OpcoesAvaliar): ServerResult {
+  return _avaliarGenerico('Agents', opcoes || {});
+}
+
+// Override manual da nota (0-5). Marca motivo como ajuste manual.
+function _definirEstrelasGenerico(tabela: 'Skills' | 'Agents', id: string, estrelas: number): ServerResult {
+  try {
+    let n = Math.round(Number(estrelas || 0));
+    if (Number.isNaN(n)) n = 0;
+    n = Math.max(0, Math.min(5, n));
+    const agora = new Date().toISOString();
+    dbUpdate(tabela, id, { estrelas: n, estrelasMotivo: 'Ajuste manual', avaliadaEm: agora });
+    return { ok: true, data: { id, estrelas: n } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao definir estrelas' };
+  }
+}
+
+function skillsDefinirEstrelas(id: string, estrelas: number): ServerResult {
+  return _definirEstrelasGenerico('Skills', id, estrelas);
+}
+
+function agentsDefinirEstrelas(id: string, estrelas: number): ServerResult {
+  return _definirEstrelasGenerico('Agents', id, estrelas);
+}
+
+// ─── Kits dos sonhos (v1.152.0) ─────────────────────────────────────────────
+// Objetivos fixos (definidos por nós); a Lume escolhe as melhores skills+agents
+// da base pra preencher cada um. Híbrido: o template dá o "norte", a IA cura.
+interface KitTemplate {
+  id: string;
+  nome: string;
+  descricao: string;
+  objetivo: string;       // contexto que vai pro prompt da Lume
+  accent: string;         // chave de t.accents no front
+  alvoSkills: number;     // qtd-alvo de skills
+  alvoAgents: number;     // qtd-alvo de agents
+}
+
+const KIT_TEMPLATES: KitTemplate[] = [
+  {
+    id: 'fundacao', nome: 'Fundação Essencial', accent: 'lavender', alvoSkills: 12, alvoAgents: 5,
+    descricao: 'A base mínima e perfeita pra iniciar QUALQUER desenvolvimento.',
+    objetivo: 'Montar a base fundacional pra iniciar qualquer projeto de software do zero, '
+      + 'independente da stack: planejamento, arquitetura, versionamento (git), qualidade de código, '
+      + 'testes, revisão de código, documentação e boas práticas. Priorize skills e agents genéricos, '
+      + 'de altíssimo impacto e reuso, que todo dev deveria ter desde o primeiro dia.',
+  },
+  {
+    id: 'fullstack-web', nome: 'Full-stack Web', accent: 'blue', alvoSkills: 14, alvoAgents: 6,
+    descricao: 'Front + back + banco + deploy de aplicações web modernas.',
+    objetivo: 'Desenvolvimento full-stack web moderno: frontend (UI, componentes, React/JS), '
+      + 'backend e APIs, banco de dados, autenticação/autorização, performance e deploy.',
+  },
+  {
+    id: 'ai-dev', nome: 'AI Dev / Agentes', accent: 'peach', alvoSkills: 14, alvoAgents: 8,
+    descricao: 'Construir produtos com LLMs, RAG e agentes que colaboram.',
+    objetivo: 'Construção de produtos com IA: engenharia de prompt, RAG, orquestração de múltiplos '
+      + 'agentes, ferramentas/function-calling, avaliação de qualidade e LLMOps. Combine skills de '
+      + 'prompt com agents orquestradores e especialistas que trabalham juntos.',
+  },
+  {
+    id: 'dados', nome: 'Dados & Analytics', accent: 'sage', alvoSkills: 12, alvoAgents: 5,
+    descricao: 'Pipelines, modelagem, análise e visualização de dados.',
+    objetivo: 'Engenharia e análise de dados: ETL/pipelines, SQL, modelagem dimensional, '
+      + 'qualidade de dados, analytics e visualização/dashboards.',
+  },
+  {
+    id: 'devops', nome: 'Infra & DevOps', accent: 'blue', alvoSkills: 12, alvoAgents: 5,
+    descricao: 'CI/CD, containers, IaC, observabilidade e cloud.',
+    objetivo: 'Infraestrutura e operações: CI/CD, containers/Kubernetes, infraestrutura como código, '
+      + 'observabilidade/monitoramento, cloud e confiabilidade (SRE).',
+  },
+  {
+    id: 'seguranca', nome: 'Segurança', accent: 'peach', alvoSkills: 10, alvoAgents: 5,
+    descricao: 'AppSec, revisão segura, hardening e compliance.',
+    objetivo: 'Segurança de aplicações: revisão de código segura, AppSec, gestão de segredos, '
+      + 'threat modeling, testes de segurança e compliance.',
+  },
+  {
+    id: 'produtividade', nome: 'Produtividade', accent: 'lavender', alvoSkills: 10, alvoAgents: 4,
+    descricao: 'Acelerar o dia a dia de quem desenvolve.',
+    objetivo: 'Produtividade do desenvolvedor: automações, documentação, escrita técnica, '
+      + 'gestão de tarefas, refatoração e fluxos de trabalho que economizam tempo.',
+  },
+];
+
+function kitTemplatesList(): ServerResult {
+  return { ok: true, data: KIT_TEMPLATES };
+}
+
+// Monta um pool compacto de candidatos (top por estrelas → usos) pra caber no
+// contexto do LLM sem mandar a base inteira.
+function _poolCandidatos(tabela: 'Skills' | 'Agents', teto: number): Array<Record<string, unknown>> {
+  const linhas = dbGetAll(tabela) as Array<Record<string, unknown>>;
+  const comTexto = linhas.filter((l) => String(l.nome || '').trim());
+  // Preferimos avaliados (estrelas>=3); se houver poucos, completa com o resto
+  // ordenado por estrelas/usos pra nunca devolver vazio.
+  const ordenado = [...comTexto].sort((a, b) => {
+    const ea = Number(a.estrelas || 0); const eb = Number(b.estrelas || 0);
+    if (eb !== ea) return eb - ea;
+    return Number(b.usos || 0) - Number(a.usos || 0);
+  });
+  return ordenado.slice(0, teto);
+}
+
+function _parseKitSelecao(resp: string): { skills: number[]; agents: number[]; justificativa: string } {
+  let txt = String(resp || '').trim();
+  const ini = txt.indexOf('{');
+  const fim = txt.lastIndexOf('}');
+  if (ini >= 0 && fim > ini) txt = txt.slice(ini, fim + 1);
+  try {
+    const o = JSON.parse(txt) as Record<string, unknown>;
+    const toNums = (v: unknown): number[] => Array.isArray(v)
+      ? v.map((x) => Number(x)).filter((n) => !Number.isNaN(n)) : [];
+    return {
+      skills: toNums(o.skills),
+      agents: toNums(o.agents),
+      justificativa: String(o.justificativa || o.motivo || '').slice(0, 1200),
+    };
+  } catch { return { skills: [], agents: [], justificativa: '' }; }
+}
+
+function kitMontarComLume(templateId: string): ServerResult {
+  try {
+    const tpl = KIT_TEMPLATES.find((k) => k.id === templateId);
+    if (!tpl) throw new Error('Template de kit desconhecido.');
+
+    const poolSkills = _poolCandidatos('Skills', 120);
+    const poolAgents = _poolCandidatos('Agents', 60);
+    if (poolSkills.length === 0 && poolAgents.length === 0) {
+      throw new Error('Sua base de skills/agents está vazia — importe antes de montar kits.');
+    }
+
+    const compacto = (l: Record<string, unknown>, i: number) => ({
+      i,
+      nome: String(l.nome || ''),
+      tema: String(l.tipoIA || l.categoria || ''),
+      estrelas: Number(l.estrelas || 0),
+      desc: String(l.descricaoPt || l.descricao || l.diretrizFinal || '').slice(0, 140),
+    });
+    const catSkills = poolSkills.map(compacto);
+    const catAgents = poolAgents.map(compacto);
+
+    const sys = 'Você é a Lume, curadora de kits de desenvolvimento. A partir de um OBJETIVO e de '
+      + 'catálogos de skills e agents (cada um com índice `i`, nome, tema, estrelas 0-5 e descrição), '
+      + `selecione os MELHORES pra esse objetivo. Alvo: ~${tpl.alvoSkills} skills e ~${tpl.alvoAgents} agents `
+      + '(pode variar um pouco). Priorize itens com mais estrelas e alta aderência ao objetivo; evite '
+      + 'redundância. Responda SOMENTE com um objeto JSON, sem texto extra, no formato '
+      + '{"skills":[indices],"agents":[indices],"justificativa":"2-3 frases explicando a curadoria"}.';
+    const userMsg = JSON.stringify({
+      objetivo: `${tpl.nome} — ${tpl.objetivo}`,
+      skills: catSkills,
+      agents: catAgents,
+    });
+    const resp = forjaCallLLM(
+      [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
+      1500, undefined, 'kit',
+    );
+    const sel = _parseKitSelecao(resp);
+
+    const skillIds = sel.skills.map((i) => String(poolSkills[i]?.id || '')).filter(Boolean);
+    const agentIds = sel.agents.map((i) => String(poolAgents[i]?.id || '')).filter(Boolean);
+    if (skillIds.length === 0 && agentIds.length === 0) {
+      throw new Error('A Lume não retornou uma seleção válida. Tente novamente.');
+    }
+
+    const agora = new Date().toISOString();
+    const kits = dbGetAll('Kits') as Array<Record<string, unknown>>;
+    const existente = kits.find((k) => String(k.templateId || '') === templateId);
+    const dados = {
+      templateId,
+      nome: tpl.nome,
+      descricao: tpl.descricao,
+      skillIds: skillIds.join(','),
+      agentIds: agentIds.join(','),
+      justificativa: sel.justificativa,
+      montadoPorLume: 'true',
+      atualizadoEm: agora,
+    };
+    let kitId: string;
+    if (existente) {
+      kitId = String(existente.id || '');
+      dbUpdate('Kits', kitId, dados);
+    } else {
+      const novo = dbCreate('Kits', { ...dados, criadoEm: agora });
+      kitId = String(novo.id || '');
+    }
+    return { ok: true, data: { id: kitId, templateId, skills: skillIds.length, agents: agentIds.length, justificativa: sel.justificativa } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao montar kit' };
+  }
+}
+
+function kitsList(): ServerResult {
+  try {
+    const kits = (dbGetAll('Kits') as Array<Record<string, unknown>>).map((k) => {
+      const skillIds = String(k.skillIds || '').split(',').map((x) => x.trim()).filter(Boolean);
+      const agentIds = String(k.agentIds || '').split(',').map((x) => x.trim()).filter(Boolean);
+      return {
+        id: String(k.id || ''),
+        templateId: String(k.templateId || ''),
+        nome: String(k.nome || ''),
+        descricao: String(k.descricao || ''),
+        skills: skillIds.length,
+        agents: agentIds.length,
+        justificativa: String(k.justificativa || ''),
+        montadoPorLume: String(k.montadoPorLume || '') === 'true',
+        criadoEm: String(k.criadoEm || ''),
+        atualizadoEm: String(k.atualizadoEm || ''),
+      };
+    });
+    return { ok: true, data: kits };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar kits' };
+  }
+}
+
+function kitsGetContent(id: string): ServerResult {
+  try {
+    const kits = dbGetAll('Kits') as Array<Record<string, unknown>>;
+    const k = kits.find((x) => String(x.id || '') === id);
+    if (!k) throw new Error('Kit não encontrado.');
+    const skillIds = String(k.skillIds || '').split(',').map((x) => x.trim()).filter(Boolean);
+    const agentIds = String(k.agentIds || '').split(',').map((x) => x.trim()).filter(Boolean);
+
+    const skillsTodas = dbGetAll('Skills') as Array<Record<string, unknown>>;
+    const agentsTodos = dbGetAll('Agents') as Array<Record<string, unknown>>;
+    const porIdSkill = new Map(skillsTodas.map((s) => [String(s.id || ''), s]));
+    const porIdAgent = new Map(agentsTodos.map((a) => [String(a.id || ''), a]));
+
+    const resumo = (l: Record<string, unknown> | undefined, id2: string) => l ? {
+      id: String(l.id || ''),
+      nome: String(l.nome || ''),
+      descricao: String(l.descricaoPt || l.descricao || l.diretrizFinal || ''),
+      tema: String(l.tipoIA || l.categoria || ''),
+      estrelas: Number(l.estrelas || 0),
+      fonte: String(l.fonte || ''),
+    } : { id: id2, nome: '(removido)', descricao: '', tema: '', estrelas: 0, fonte: '' };
+
+    return {
+      ok: true,
+      data: {
+        id: String(k.id || ''),
+        templateId: String(k.templateId || ''),
+        nome: String(k.nome || ''),
+        descricao: String(k.descricao || ''),
+        justificativa: String(k.justificativa || ''),
+        montadoPorLume: String(k.montadoPorLume || '') === 'true',
+        atualizadoEm: String(k.atualizadoEm || ''),
+        skills: skillIds.map((sid) => resumo(porIdSkill.get(sid), sid)),
+        agents: agentIds.map((aid) => resumo(porIdAgent.get(aid), aid)),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao abrir kit' };
+  }
+}
+
+function kitSalvar(payload: {
+  id?: string; templateId?: string; nome: string; descricao?: string;
+  skillIds?: string[]; agentIds?: string[];
+}): ServerResult {
+  try {
+    const nome = String(payload.nome || '').trim();
+    if (!nome) throw new Error('Dê um nome pro kit.');
+    const agora = new Date().toISOString();
+    const dados = {
+      templateId: String(payload.templateId || ''),
+      nome,
+      descricao: String(payload.descricao || ''),
+      skillIds: (payload.skillIds || []).join(','),
+      agentIds: (payload.agentIds || []).join(','),
+      montadoPorLume: 'false',
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('Kits', payload.id, dados);
+      return { ok: true, data: { id: payload.id } };
+    }
+    const novo = dbCreate('Kits', { ...dados, justificativa: '', criadoEm: agora });
+    return { ok: true, data: { id: String(novo.id || '') } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar kit' };
+  }
+}
+
+function kitRemover(id: string): ServerResult {
+  try {
+    dbDelete('Kits', id);
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover kit' };
+  }
+}
+
+// Devolve nome+conteúdo das skills E agents de um kit, pra montar o .zip misto.
+function kitExportar(id: string): ServerResult {
+  try {
+    const kits = dbGetAll('Kits') as Array<Record<string, unknown>>;
+    const k = kits.find((x) => String(x.id || '') === id);
+    if (!k) throw new Error('Kit não encontrado.');
+    const skillIds = String(k.skillIds || '').split(',').map((x) => x.trim()).filter(Boolean);
+    const agentIds = String(k.agentIds || '').split(',').map((x) => x.trim()).filter(Boolean);
+
+    const mapear = (tabela: 'Skills' | 'Agents', ids: string[]) => {
+      const linhas = dbGetAll(tabela) as Array<Record<string, unknown>>;
+      const porId = new Map(linhas.map((l) => [String(l.id || ''), l]));
+      return ids.map((x) => porId.get(x)).filter((l): l is Record<string, unknown> => !!l).map((l) => ({
+        id: String(l.id || ''),
+        nome: String(l.nome || ''),
+        descricao: String(l.descricaoPt || l.descricao || ''),
+        conteudo: String(l.conteudo || ''),
+        fonte: String(l.fonte || ''),
+      }));
+    };
+
+    return {
+      ok: true,
+      data: {
+        nome: String(k.nome || 'Kit'),
+        skills: mapear('Skills', skillIds),
+        agents: mapear('Agents', agentIds),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao exportar kit' };
+  }
+}
+
 // Lista todas as skills com metadados (sem o conteúdo completo, pra ser leve).
 function skillsList(): ServerResult {
   try {
@@ -17856,6 +18304,10 @@ function skillsList(): ServerResult {
         usos: Number(s.usos || 0),
         relacionadas: String(s.relacionadas || '').split(',').map((x) => x.trim()).filter(Boolean),
         quandoUsar: String(s.quandoUsar || ''),
+        // v1.152.0 — nota global de qualidade (0-5) dada pela Lume (ou manual).
+        estrelas: Number(s.estrelas || 0),
+        estrelasMotivo: String(s.estrelasMotivo || ''),
+        avaliadaEm: String(s.avaliadaEm || ''),
       }))
       // Ordena favoritas primeiro (mais recente favoritada no topo), depois resto por atualizadoEm.
       .sort((a, b) => {
@@ -17920,6 +18372,9 @@ function skillsGetContent(id: string): ServerResult {
         relacionadas: String(s.relacionadas || '').split(',').map((x) => x.trim()).filter(Boolean),
         quandoUsar: String(s.quandoUsar || ''),
         identidadePapel: String(s.identidadePapel || ''),
+        estrelas: Number(s.estrelas || 0),
+        estrelasMotivo: String(s.estrelasMotivo || ''),
+        avaliadaEm: String(s.avaliadaEm || ''),
         // Tenta primeiro o JSON persistido (rápido); cai pro parser ao vivo se vier vazio.
         blocos: (() => {
           const raw = String(s.secoesJson || '');
@@ -17977,6 +18432,10 @@ function agentsList(): ServerResult {
         tipo: String(a.tipo || ''),
         diretrizFinal: String(a.diretrizFinal || ''),
         dominios: String(a.dominios || '').split(',').map((x) => x.trim()).filter(Boolean),
+        // v1.152.0 — nota global de qualidade (0-5).
+        estrelas: Number(a.estrelas || 0),
+        estrelasMotivo: String(a.estrelasMotivo || ''),
+        avaliadaEm: String(a.avaliadaEm || ''),
       }))
       .sort((x, y) => {
         if (x.favorita !== y.favorita) return x.favorita ? -1 : 1;
@@ -18023,6 +18482,9 @@ function agentsGetContent(id: string): ServerResult {
         tipo: String(a.tipo || ''),
         diretrizFinal: String(a.diretrizFinal || ''),
         dominios: String(a.dominios || '').split(',').map((x) => x.trim()).filter(Boolean),
+        estrelas: Number(a.estrelas || 0),
+        estrelasMotivo: String(a.estrelasMotivo || ''),
+        avaliadaEm: String(a.avaliadaEm || ''),
         meta: (() => {
           const raw = String(a.metaJson || '');
           if (!raw) return null;
@@ -18246,6 +18708,26 @@ function skillFonteSalvar(payload: {
       return { ok: true, data: { id: payload.id, chave: String(existe.chave || ''), nome, descricao, cor } };
     }
 
+    // v1.152.0 — Upsert por chave: quando vem uma `chave` explícita que já existe
+    // (caso do "avulsas" e de re-saves de pasta sintética), atualiza em vez de
+    // criar duplicata. Isso permite renomear o bucket "Avulsas / Importadas":
+    // o frontend manda chave='avulsas' sem id; aqui criamos/atualizamos a linha
+    // mantendo a chave literal (skills continuam sem prefixo, então nada muda nelas).
+    const chaveSolicitada = _slugFonte(payload.chave || '');
+    if (chaveSolicitada) {
+      const existentePorChave = fontes.find((f) => String(f.chave || '') === chaveSolicitada);
+      if (existentePorChave) {
+        dbUpdate('SkillFontes', String(existentePorChave.id || ''), { nome, descricao, cor, atualizadoEm: agora });
+        return { ok: true, data: { id: String(existentePorChave.id || ''), chave: chaveSolicitada, nome, descricao, cor } };
+      }
+      if (chaveSolicitada === 'avulsas') {
+        const novoAvulsas = dbCreate('SkillFontes', {
+          chave: 'avulsas', nome, descricao, cor, criadoEm: agora, atualizadoEm: agora,
+        });
+        return { ok: true, data: { id: String(novoAvulsas.id || ''), chave: 'avulsas', nome, descricao, cor } };
+      }
+    }
+
     // Nova: garante chave única.
     const usadas = new Set(fontes.map((f) => String(f.chave || '')));
     let base = _slugFonte(payload.chave || nome);
@@ -18306,6 +18788,28 @@ function skillsExportar(ids: string[]): ServerResult {
     return { ok: true, data: out };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao exportar skills' };
+  }
+}
+
+// v1.152.0 — Espelho de skillsExportar pra Agents. Usado no export de kits
+// mistos e na exportação direta de agents.
+function agentsExportar(ids: string[]): ServerResult {
+  try {
+    const linhas = dbGetAll('Agents') as Array<Record<string, unknown>>;
+    const porId = new Map(linhas.map((l) => [String(l.id || ''), l]));
+    const out = (ids || [])
+      .map((id) => porId.get(String(id)))
+      .filter((l): l is Record<string, unknown> => !!l)
+      .map((l) => ({
+        id: String(l.id || ''),
+        nome: String(l.nome || ''),
+        descricao: String(l.descricaoPt || l.descricao || ''),
+        conteudo: String(l.conteudo || ''),
+        fonte: String(l.fonte || ''),
+      }));
+    return { ok: true, data: out };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao exportar agents' };
   }
 }
 

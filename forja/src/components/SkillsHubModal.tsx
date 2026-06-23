@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   Modal, Button, Input, Tag, App as AntApp, Empty, Spin, Tooltip, Drawer, Upload,
-  Popconfirm, Tabs, Form, Skeleton, Segmented, Collapse, Dropdown, Checkbox,
+  Popconfirm, Tabs, Form, Skeleton, Segmented, Collapse, Dropdown, Checkbox, Progress,
 } from 'antd';
 import {
   BookMarked, Plus, Upload as UploadIcon, Copy, Trash2, Download, Search, Tag as TagIcon,
@@ -18,6 +18,7 @@ import type { ServerResult } from '../types';
 import { GAS_APP_KIT_SKILLS } from '../data/gasAppKitSkills';
 import ComoUsarSkill from './ComoUsarSkill';
 import ImportarLoteModal from './ImportarLoteModal';
+import EstrelasQualidade from './EstrelasQualidade';
 
 interface SkillSummary {
   id: string;
@@ -39,6 +40,10 @@ interface SkillSummary {
   usos?: number;
   relacionadas?: string[];
   quandoUsar?: string;
+  // v1.152.0 — nota global de qualidade (0-5) dada pela Lume.
+  estrelas?: number;
+  estrelasMotivo?: string;
+  avaliadaEm?: string;
 }
 
 // ─── Fontes (pastas) ──────────────────────────────────────────────────────────
@@ -262,6 +267,11 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
   const [loading, setLoading] = useState(false);
   const [filtro, setFiltro] = useState('');
   const [soFavoritas, setSoFavoritas] = useState(false);
+  // v1.152.0 — filtro "só top" (>= 4 estrelas) + ordenação por estrelas + avaliação Lume.
+  const [soTop, setSoTop] = useState(false);
+  const [ordenarPorEstrelas, setOrdenarPorEstrelas] = useState(false);
+  const [avaliando, setAvaliando] = useState(false);
+  const [avalProg, setAvalProg] = useState<{ feitas: number; total: number } | null>(null);
   // v1.151.0 — modal de import em lote (JSON/MD com categoria-no-import).
   const [importLoteAberto, setImportLoteAberto] = useState(false);
   const [openSources, setOpenSources] = useState<string[]>([]);
@@ -665,20 +675,28 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
     void callServer<ServerResult>('skillsRegistrarUso', id).catch(() => { /* silent */ });
   };
 
-  // v1.148.13 — filtro "só favoritas" (☆).
+  // v1.148.13 — filtro "só favoritas" (☆). v1.152.0 — "só top" (>=4 estrelas).
   const filtradas = useMemo(() => {
     let lista = skills;
     if (soFavoritas) lista = lista.filter((s) => !!s.favorita);
-    if (!filtro.trim()) return lista;
-    const q = filtro.toLowerCase();
-    return lista.filter((s) =>
-      s.nome.toLowerCase().indexOf(q) >= 0 ||
-      s.descricao.toLowerCase().indexOf(q) >= 0 ||
-      (s.descricaoPt || '').toLowerCase().indexOf(q) >= 0 ||
-      s.categoria.toLowerCase().indexOf(q) >= 0 ||
-      s.tags.some((tag) => tag.toLowerCase().indexOf(q) >= 0),
-    );
-  }, [skills, filtro, soFavoritas]);
+    if (soTop) lista = lista.filter((s) => (s.estrelas || 0) >= 4);
+    if (filtro.trim()) {
+      const q = filtro.toLowerCase();
+      lista = lista.filter((s) =>
+        s.nome.toLowerCase().indexOf(q) >= 0 ||
+        s.descricao.toLowerCase().indexOf(q) >= 0 ||
+        (s.descricaoPt || '').toLowerCase().indexOf(q) >= 0 ||
+        s.categoria.toLowerCase().indexOf(q) >= 0 ||
+        s.tags.some((tag) => tag.toLowerCase().indexOf(q) >= 0),
+      );
+    }
+    if (ordenarPorEstrelas) {
+      lista = [...lista].sort((a, b) => (b.estrelas || 0) - (a.estrelas || 0) || (a.nome || '').localeCompare(b.nome || ''));
+    }
+    return lista;
+  }, [skills, filtro, soFavoritas, soTop, ordenarPorEstrelas]);
+
+  const qtdAvaliadas = useMemo(() => skills.filter((s) => (s.estrelas || 0) > 0).length, [skills]);
 
   // Contagem de favoritas pra mostrar no badge do botão (decisão informada).
   const qtdFavoritas = useMemo(() => skills.filter((s) => !!s.favorita).length, [skills]);
@@ -762,6 +780,51 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
     } finally { hide(); setClassificando(false); }
   };
 
+  // v1.152.0 — Avalia a qualidade (estrelas 0-5) com a Lume. Loop chunked: o
+  // backend processa ~40 por chamada e devolve `restantes`; repetimos até zerar,
+  // atualizando a barra de progresso. Escopo: respeita o filtro atual (pasta via
+  // soTop não; aqui mandamos só 'pendentes' por padrão pra não re-gastar tokens).
+  const avaliarSkills = async (opcoes?: { escopo?: 'pendentes' | 'todas'; fonte?: string }) => {
+    setAvaliando(true);
+    setAvalProg(null);
+    let totalFeitas = 0;
+    let totalGeral = 0;
+    try {
+      const base = { escopo: opcoes?.escopo || 'pendentes', fonte: opcoes?.fonte };
+      // Primeira chamada descobre o total.
+      let r = await callServer<ServerResult>('skillsAvaliar', base);
+      if (!r.ok) { message.error(r.error || 'Não consegui avaliar'); return; }
+      let d = r.data as { avaliadas: number; restantes: number; total: number };
+      totalGeral = d.total + 0;
+      totalFeitas += d.avaliadas;
+      if (totalGeral === 0) { message.info('Nada pendente pra avaliar nesse escopo.'); return; }
+      setAvalProg({ feitas: totalFeitas, total: totalGeral });
+      // Continua enquanto houver restantes.
+      let restantes = d.restantes;
+      let guarda = 0;
+      while (restantes > 0 && guarda < 200) {
+        guarda++;
+        r = await callServer<ServerResult>('skillsAvaliar', base);
+        if (!r.ok) { message.error(r.error || 'Erro durante avaliação'); break; }
+        d = r.data as { avaliadas: number; restantes: number; total: number };
+        totalFeitas += d.avaliadas;
+        restantes = d.restantes;
+        setAvalProg({ feitas: Math.min(totalFeitas, totalGeral), total: totalGeral });
+      }
+      message.success(`${totalFeitas} skill(s) avaliada(s) pela Lume.`);
+      carregar();
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro ao avaliar');
+    } finally { setAvaliando(false); setAvalProg(null); }
+  };
+
+  // Override manual da nota (drawer).
+  const definirEstrelas = (id: string, n: number) => {
+    setSkills((prev) => prev.map((s) => s.id === id ? { ...s, estrelas: n, estrelasMotivo: 'Ajuste manual' } : s));
+    setAberta((prev) => prev && prev.id === id ? { ...prev, estrelas: n, estrelasMotivo: 'Ajuste manual' } : prev);
+    void callServer<ServerResult>('skillsDefinirEstrelas', id, n).catch(() => { /* silent */ });
+  };
+
   const abrirEditarFonte = (f: SkillFonte) => {
     setEditandoFonte(f);
     setFonteNome(f.nome);
@@ -774,7 +837,7 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
     setSalvandoFonte(true);
     try {
       const r = await callServer<ServerResult>('skillFonteSalvar', {
-        id: editandoFonte?.id, nome: fonteNome, descricao: fonteDesc, cor: fonteCor,
+        id: editandoFonte?.id, chave: editandoFonte?.chave, nome: fonteNome, descricao: fonteDesc, cor: fonteCor,
       });
       if (r.ok) { message.success('Pasta atualizada.'); setEditandoFonte(null); carregar(); }
       else message.error(r.error || 'Erro ao salvar');
@@ -898,6 +961,38 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                         </Button>
                       </Tooltip>
                     )}
+                    {/* v1.152.0 — filtro "só top" (>=4 estrelas) + ordenar por estrelas */}
+                    {qtdAvaliadas > 0 && (
+                      <>
+                        <Tooltip title="Mostrar só as skills com 4 ou 5 estrelas (avaliadas pela Lume).">
+                          <Button
+                            icon={<Star size={14} fill={soTop ? t.accents.peach : 'none'} color={t.accents.peach} />}
+                            onClick={() => setSoTop((v) => !v)}
+                            style={soTop ? { borderColor: t.accents.peach, color: t.accents.peach, background: `${t.accents.peach}0d` } : undefined}
+                          >
+                            Top (4★+)
+                          </Button>
+                        </Tooltip>
+                        <Tooltip title="Ordenar pela nota de qualidade (maior primeiro).">
+                          <Button
+                            type={ordenarPorEstrelas ? 'primary' : 'default'}
+                            ghost={ordenarPorEstrelas}
+                            icon={<Sparkles size={14} />}
+                            onClick={() => setOrdenarPorEstrelas((v) => !v)}
+                          >
+                            Por nota
+                          </Button>
+                        </Tooltip>
+                      </>
+                    )}
+                    {/* v1.152.0 — Avaliar com a Lume: dá nota 0-5 às skills sem nota. */}
+                    {skills.length > 0 && (
+                      <Tooltip title="A Lume lê nome + descrição e dá uma nota de qualidade (0-5) pra cada skill ainda sem nota. Fica guardado — não re-gasta tokens nas próximas.">
+                        <Button icon={<Star size={14} />} loading={avaliando} onClick={() => avaliarSkills({ escopo: 'pendentes' })}>
+                          {avaliando && avalProg ? `Avaliando ${avalProg.feitas}/${avalProg.total}…` : 'Avaliar com a Lume'}
+                        </Button>
+                      </Tooltip>
+                    )}
                     {skills.length > 0 && (
                       <Tooltip title="Traduz para português as descrições ainda no original (fica guardado — não re-gasta tokens nas próximas).">
                         <Button icon={<Languages size={14} />} loading={traduzindoTudo} onClick={traduzirDescricoes}>
@@ -964,6 +1059,21 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                       Adicionar skill
                     </Button>
                   </div>
+
+                  {/* v1.152.0 — barra de progresso da avaliação pela Lume */}
+                  {avaliando && avalProg && (
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>
+                        <Sparkles size={13} color={t.accents.peach} />
+                        Lume avaliando qualidade: <strong>{avalProg.feitas}</strong>/{avalProg.total}
+                      </div>
+                      <Progress
+                        percent={Math.round((avalProg.feitas / Math.max(avalProg.total, 1)) * 100)}
+                        strokeColor={t.accents.peach}
+                        size="small"
+                      />
+                    </div>
+                  )}
 
                   {/* v1.148.5 — banner contextual: skills sem categoria detectadas.
                       O usuário viu o problema na prática (importou skill, ficou sem
@@ -1108,16 +1218,22 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                                 }}
                               />
                             </Tooltip>
-                            {g.meta && (
-                              <Tooltip title="Editar nome e descrição da pasta">
-                                <Button
-                                  type="text"
-                                  size="small"
-                                  icon={<Pencil size={13} />}
-                                  onClick={(e) => { e.stopPropagation(); abrirEditarFonte(g.meta as SkillFonte); }}
-                                />
-                              </Tooltip>
-                            )}
+                            <Tooltip title="Editar nome e descrição da pasta">
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<Pencil size={13} />}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  // v1.152.0 — toda pasta é editável, inclusive a
+                                  // sintética "Avulsas / Importadas". Quando não há
+                                  // linha persistida (g.meta null), montamos uma
+                                  // SkillFonte sintética com a chave do grupo; o
+                                  // backend faz upsert por chave ao salvar.
+                                  abrirEditarFonte(g.meta || { id: '', chave: g.key, nome: g.label, descricao: g.descricao || '', cor: '' });
+                                }}
+                              />
+                            </Tooltip>
                           </div>
                         ),
                         children: (
@@ -1424,6 +1540,28 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
               </p>
             )}
 
+            {/* v1.152.0 — nota de qualidade editável (Lume + ajuste manual) */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14,
+              padding: '8px 12px', borderRadius: 10,
+              background: `${t.accents.peach}0d`, border: `1px solid ${t.accents.peach}30`,
+            }}>
+              <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <Sparkles size={13} color={t.accents.peach} /> Qualidade:
+              </span>
+              <EstrelasQualidade
+                valor={aberta.estrelas || 0}
+                editavel
+                onChange={(n) => definirEstrelas(aberta.id, n)}
+                size={18}
+              />
+              {!!(aberta.estrelas && aberta.estrelas > 0) && aberta.estrelasMotivo && (
+                <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, fontStyle: 'italic' }}>
+                  {aberta.estrelasMotivo}
+                </span>
+              )}
+            </div>
+
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14, alignItems: 'center' }}>
               {/* v1.149.0 — id externo (#0237 do pack) com destaque */}
               {aberta.idExterno && (
@@ -1585,16 +1723,24 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
           </Form.Item>
         </Form>
 
-        <div style={{ borderTop: `1px solid ${t.borderSoft}`, marginTop: 18, paddingTop: 14 }}>
-          <Popconfirm
-            title="Remover esta pasta?"
-            description="As skills dela vão para 'Avulsas' (não são apagadas)."
-            onConfirm={removerFonte}
-            okText="Remover" cancelText="Cancelar" okButtonProps={{ danger: true }}
-          >
-            <Button danger icon={<Trash2 size={14} />} loading={removendoFonte}>Remover pasta</Button>
-          </Popconfirm>
-        </div>
+        {/* v1.152.0 — "Avulsas" é bucket sintético: não dá pra remover (não há
+            pasta real). Editar só personaliza o nome/cor; o lixo some. */}
+        {editandoFonte?.chave !== 'avulsas' && editandoFonte?.id ? (
+          <div style={{ borderTop: `1px solid ${t.borderSoft}`, marginTop: 18, paddingTop: 14 }}>
+            <Popconfirm
+              title="Remover esta pasta?"
+              description="As skills dela vão para 'Avulsas' (não são apagadas)."
+              onConfirm={removerFonte}
+              okText="Remover" cancelText="Cancelar" okButtonProps={{ danger: true }}
+            >
+              <Button danger icon={<Trash2 size={14} />} loading={removendoFonte}>Remover pasta</Button>
+            </Popconfirm>
+          </div>
+        ) : editandoFonte?.chave === 'avulsas' ? (
+          <div style={{ borderTop: `1px solid ${t.borderSoft}`, marginTop: 18, paddingTop: 14, fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary }}>
+            Esta é a pasta padrão de skills importadas avulsas. Você pode renomeá-la, mas ela não pode ser removida.
+          </div>
+        ) : null}
       </Modal>
 
       {/* Modal: importar pacote (vários .md sob um nome) */}
@@ -1919,6 +2065,12 @@ function SkillCard({ skill, onOpen, selMode = false, selecionado = false, onTogg
           <div style={{ fontFamily: FONTS.display, fontSize: 14, fontWeight: 600, color: t.text, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {skill.nome || '(sem nome)'}
           </div>
+          {/* v1.152.0 — nota de qualidade da Lume (some quando 0) */}
+          {!!(skill.estrelas && skill.estrelas > 0) && (
+            <div style={{ marginTop: 3 }}>
+              <EstrelasQualidade valor={skill.estrelas} motivo={skill.estrelasMotivo} avaliadaEm={skill.avaliadaEm} size={12} />
+            </div>
+          )}
         </div>
       </div>
 

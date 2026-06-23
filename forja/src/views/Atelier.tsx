@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat, Compass, HardDrive, Wallet, Hammer, Cpu, Bot } from 'lucide-react';
+import { BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat, Compass, HardDrive, Wallet, Hammer, Cpu, Bot, Boxes } from 'lucide-react';
 import { PageHeader } from '../components/ui';
 import { useForja, useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import SkillsHubModal from '../components/SkillsHubModal';
 import AgentsHubModal from '../components/AgentsHubModal';
+import KitsHubPanel from '../components/KitsHubPanel';
 import HospedagemPanel from '../components/HospedagemPanel';
 import CofrePanel from '../components/CofrePanel';
 import SnippetsPanel from '../components/SnippetsPanel';
@@ -21,7 +22,7 @@ import AtelierGuia from '../components/AtelierGuia';
 // Cada section do Atelier é uma "estação de bancada". A nav é vertical (sidebar
 // interna) pra escalar bem: descrição rica por item, sem overflow nem botão
 // "...". Padrão usado por Linear/Notion settings — premium e familiar.
-export type AtelierTab = 'guia' | 'skills' | 'agents' | 'snippets' | 'templates' | 'bookmarks' | 'driver' | 'contas' | 'servidores' | 'codex' | 'receituario' | 'hospedagem' | 'cofre';
+export type AtelierTab = 'guia' | 'skills' | 'agents' | 'kits' | 'snippets' | 'templates' | 'bookmarks' | 'driver' | 'contas' | 'servidores' | 'codex' | 'receituario' | 'hospedagem' | 'cofre';
 
 interface AtelierProps {
   initialTab?: AtelierTab;
@@ -76,6 +77,15 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
       label: 'Agents',
       descricao: 'Agentes de IA: prompts longos, com persona, modelo e ferramentas — irmãos das Skills.',
       accent: 'blue',
+      novo: true,
+    },
+    {
+      key: 'kits',
+      icon: <Boxes size={17} strokeWidth={1.6} />,
+      iconActive: <Boxes size={17} strokeWidth={1.8} />,
+      label: 'Kits',
+      descricao: 'Kits dos sonhos curados pela Lume: as melhores skills + agents pra cada objetivo, prontos pra exportar.',
+      accent: 'peach',
       novo: true,
     },
     {
@@ -178,6 +188,8 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
         return <SkillsHubModal embedded />;
       case 'agents':
         return wrapCard(<AgentsHubModal embedded />);
+      case 'kits':
+        return wrapCard(<KitsHubPanel />);
       case 'snippets':
         return wrapCard(<SnippetsPanel />);
       case 'templates':

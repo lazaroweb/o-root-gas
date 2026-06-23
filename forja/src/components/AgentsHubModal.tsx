@@ -4,7 +4,7 @@
 // pack pra detalharmos os campos (modelo, ferramentas, system_prompt, etc.).
 // Por hora, oferece: listagem, busca, favoritar, importar avulso e drawer.
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Empty, Input, Spin, Tag, Tooltip, Drawer, message, Skeleton, Segmented } from 'antd';
+import { Button, Empty, Input, Spin, Tag, Tooltip, Drawer, message, Skeleton, Segmented, Progress } from 'antd';
 import {
   Bot, Search, Star, Copy, Download, Trash2, Sparkles, Upload as UploadIcon,
   FileText, ListChecks, BookMarked, Package, CheckCircle2, GitBranch, Workflow,
@@ -15,6 +15,7 @@ import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import type { ServerResult } from '../types';
 import ImportarLoteModal from './ImportarLoteModal';
+import EstrelasQualidade from './EstrelasQualidade';
 
 interface AgentSummary {
   id: string;
@@ -40,6 +41,10 @@ interface AgentSummary {
   tipo?: string;            // "agente-autonomo" / "orquestrador" / etc.
   diretrizFinal?: string;   // 1 frase resumo (vira preview do card)
   dominios?: string[];      // áreas de expertise (### dentro de DOMÍNIOS)
+  // v1.152.0 — nota global de qualidade (0-5).
+  estrelas?: number;
+  estrelasMotivo?: string;
+  avaliadaEm?: string;
 }
 
 interface AgentFull extends AgentSummary {
@@ -84,6 +89,11 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
   const [carregandoAberto, setCarregandoAberto] = useState(false);
   // v1.151.0 — modal de import em lote.
   const [importLoteAberto, setImportLoteAberto] = useState(false);
+  // v1.152.0 — estrelas: filtro top, ordenação e avaliação Lume.
+  const [soTop, setSoTop] = useState(false);
+  const [ordenarPorEstrelas, setOrdenarPorEstrelas] = useState(false);
+  const [avaliando, setAvaliando] = useState(false);
+  const [avalProg, setAvalProg] = useState<{ feitas: number; total: number } | null>(null);
 
   const carregar = async () => {
     setLoading(true);
@@ -102,18 +112,64 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
   const filtrados = useMemo(() => {
     let lista = agents;
     if (soFavoritas) lista = lista.filter((a) => !!a.favorita);
-    if (!filtro.trim()) return lista;
-    const q = filtro.toLowerCase();
-    return lista.filter((a) =>
-      a.nome.toLowerCase().indexOf(q) >= 0 ||
-      a.descricao.toLowerCase().indexOf(q) >= 0 ||
-      (a.descricaoPt || '').toLowerCase().indexOf(q) >= 0 ||
-      a.categoria.toLowerCase().indexOf(q) >= 0 ||
-      a.tags.some((tag) => tag.toLowerCase().indexOf(q) >= 0),
-    );
-  }, [agents, filtro, soFavoritas]);
+    if (soTop) lista = lista.filter((a) => (a.estrelas || 0) >= 4);
+    if (filtro.trim()) {
+      const q = filtro.toLowerCase();
+      lista = lista.filter((a) =>
+        a.nome.toLowerCase().indexOf(q) >= 0 ||
+        a.descricao.toLowerCase().indexOf(q) >= 0 ||
+        (a.descricaoPt || '').toLowerCase().indexOf(q) >= 0 ||
+        a.categoria.toLowerCase().indexOf(q) >= 0 ||
+        a.tags.some((tag) => tag.toLowerCase().indexOf(q) >= 0),
+      );
+    }
+    if (ordenarPorEstrelas) {
+      lista = [...lista].sort((a, b) => (b.estrelas || 0) - (a.estrelas || 0) || (a.nome || '').localeCompare(b.nome || ''));
+    }
+    return lista;
+  }, [agents, filtro, soFavoritas, soTop, ordenarPorEstrelas]);
 
   const qtdFavoritas = useMemo(() => agents.filter((a) => !!a.favorita).length, [agents]);
+  const qtdAvaliados = useMemo(() => agents.filter((a) => (a.estrelas || 0) > 0).length, [agents]);
+
+  // v1.152.0 — Avalia qualidade com a Lume (loop chunked com progresso).
+  const avaliarAgents = async (opcoes?: { escopo?: 'pendentes' | 'todas' }) => {
+    setAvaliando(true);
+    setAvalProg(null);
+    let totalFeitas = 0;
+    let totalGeral = 0;
+    try {
+      const base = { escopo: opcoes?.escopo || 'pendentes' };
+      let r = await callServer<ServerResult>('agentsAvaliar', base);
+      if (!r.ok) { message.error(r.error || 'Não consegui avaliar'); return; }
+      let d = r.data as { avaliadas: number; restantes: number; total: number };
+      totalGeral = d.total;
+      totalFeitas += d.avaliadas;
+      if (totalGeral === 0) { message.info('Nada pendente pra avaliar.'); return; }
+      setAvalProg({ feitas: totalFeitas, total: totalGeral });
+      let restantes = d.restantes;
+      let guarda = 0;
+      while (restantes > 0 && guarda < 200) {
+        guarda++;
+        r = await callServer<ServerResult>('agentsAvaliar', base);
+        if (!r.ok) { message.error(r.error || 'Erro durante avaliação'); break; }
+        d = r.data as { avaliadas: number; restantes: number; total: number };
+        totalFeitas += d.avaliadas;
+        restantes = d.restantes;
+        setAvalProg({ feitas: Math.min(totalFeitas, totalGeral), total: totalGeral });
+      }
+      message.success(`${totalFeitas} agent(s) avaliado(s) pela Lume.`);
+      carregar();
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro ao avaliar');
+    } finally { setAvaliando(false); setAvalProg(null); }
+  };
+
+  const definirEstrelas = (id: string, n: number) => {
+    setAgents((prev) => prev.map((a) => a.id === id ? { ...a, estrelas: n, estrelasMotivo: 'Ajuste manual' } : a));
+    setAberto((prev) => prev && prev.id === id ? { ...prev, estrelas: n, estrelasMotivo: 'Ajuste manual' } : prev);
+    void callServer<ServerResult>('agentsDefinirEstrelas', id, n).catch(() => { /* silent */ });
+  };
 
   const toggleFavorita = async (id: string) => {
     const alvo = agents.find((a) => a.id === id);
@@ -233,6 +289,38 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
             </Button>
           </Tooltip>
         )}
+        {/* v1.152.0 — filtro top + ordenar por estrelas */}
+        {qtdAvaliados > 0 && (
+          <>
+            <Tooltip title="Mostrar só os agents com 4 ou 5 estrelas (avaliados pela Lume).">
+              <Button
+                icon={<Star size={14} fill={soTop ? t.accents.peach : 'none'} color={t.accents.peach} />}
+                onClick={() => setSoTop((v) => !v)}
+                style={soTop ? { borderColor: t.accents.peach, color: t.accents.peach, background: `${t.accents.peach}0d` } : undefined}
+              >
+                Top (4★+)
+              </Button>
+            </Tooltip>
+            <Tooltip title="Ordenar pela nota de qualidade (maior primeiro).">
+              <Button
+                type={ordenarPorEstrelas ? 'primary' : 'default'}
+                ghost={ordenarPorEstrelas}
+                icon={<Sparkles size={14} />}
+                onClick={() => setOrdenarPorEstrelas((v) => !v)}
+              >
+                Por nota
+              </Button>
+            </Tooltip>
+          </>
+        )}
+        {/* v1.152.0 — Avaliar com a Lume */}
+        {agents.length > 0 && (
+          <Tooltip title="A Lume lê nome + descrição e dá uma nota de qualidade (0-5) pra cada agent ainda sem nota. Fica guardado.">
+            <Button icon={<Star size={14} />} loading={avaliando} onClick={() => avaliarAgents({ escopo: 'pendentes' })}>
+              {avaliando && avalProg ? `Avaliando ${avalProg.feitas}/${avalProg.total}…` : 'Avaliar com a Lume'}
+            </Button>
+          </Tooltip>
+        )}
         <label>
           <Button icon={<UploadIcon size={14} />}>
             Importar .md
@@ -255,6 +343,21 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
           </Button>
         </Tooltip>
       </div>
+
+      {/* v1.152.0 — progresso da avaliação Lume */}
+      {avaliando && avalProg && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>
+            <Sparkles size={13} color={t.accents.peach} />
+            Lume avaliando qualidade: <strong>{avalProg.feitas}</strong>/{avalProg.total}
+          </div>
+          <Progress
+            percent={Math.round((avalProg.feitas / Math.max(avalProg.total, 1)) * 100)}
+            strokeColor={t.accents.peach}
+            size="small"
+          />
+        </div>
+      )}
 
       <ImportarLoteModal
         aberto={importLoteAberto}
@@ -341,6 +444,7 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
               setAberto((prev) => prev ? { ...prev, favorita: !era } : prev);
               void toggleFavorita(id);
             }}
+            onDefinirEstrelas={(n) => definirEstrelas(aberto.id, n)}
           />
         )}
       </Drawer>
@@ -409,6 +513,12 @@ function AgentCard({ agent, onOpen, onToggleFavorita }: {
           }}>
             {agent.nome || '(sem nome)'}
           </div>
+          {/* v1.152.0 — nota de qualidade da Lume */}
+          {!!(agent.estrelas && agent.estrelas > 0) && (
+            <div style={{ marginTop: 3 }}>
+              <EstrelasQualidade valor={agent.estrelas} motivo={agent.estrelasMotivo} avaliadaEm={agent.avaliadaEm} size={12} />
+            </div>
+          )}
         </div>
       </div>
       {/* v1.150.0 — Preview prioriza DIRETRIZ FINAL (1 frase resumo do agent),
@@ -484,10 +594,11 @@ function AgentCard({ agent, onOpen, onToggleFavorita }: {
 // 7. PROTOCOLO_COM  → peach + quote (JSON em pre com mono)
 // 8. INTEGRAÇÕES    → lavender + git-branch (chips de slugs)
 // 9. DIRETRIZ_FINAL → peach + quote (epígrafe grande)
-function AgentDrawerConteudo({ agent, onApagar: _onApagar, onToggleFavorita: _onToggleFavorita }: {
+function AgentDrawerConteudo({ agent, onApagar: _onApagar, onToggleFavorita: _onToggleFavorita, onDefinirEstrelas }: {
   agent: AgentFull;
   onApagar: () => void;
   onToggleFavorita: () => void;
+  onDefinirEstrelas: (n: number) => void;
 }): React.ReactElement {
   const t = useTokens();
   const [view, setView] = useState<'estruturado' | 'markdown'>('estruturado');
@@ -559,6 +670,23 @@ function AgentDrawerConteudo({ agent, onApagar: _onApagar, onToggleFavorita: _on
         <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginLeft: 'auto' }}>
           {bytesHumano(agent.tamanhoBytes)} · {relTempo(agent.atualizadoEm)}
         </span>
+      </div>
+
+      {/* v1.152.0 — nota de qualidade editável (Lume + ajuste manual) */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16,
+        padding: '8px 12px', borderRadius: 10,
+        background: `${t.accents.peach}0d`, border: `1px solid ${t.accents.peach}30`,
+      }}>
+        <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          <Sparkles size={13} color={t.accents.peach} /> Qualidade:
+        </span>
+        <EstrelasQualidade valor={agent.estrelas || 0} editavel onChange={onDefinirEstrelas} size={18} />
+        {!!(agent.estrelas && agent.estrelas > 0) && agent.estrelasMotivo && (
+          <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, fontStyle: 'italic' }}>
+            {agent.estrelasMotivo}
+          </span>
+        )}
       </div>
 
       {/* v1.150.0 — Diretriz Final: epígrafe grande, posicionada no topo

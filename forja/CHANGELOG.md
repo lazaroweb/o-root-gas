@@ -36,6 +36,58 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.152.0] — 2026-06-13
+
+### Adicionado — Skills + Agents: renomear pacotes, nota da Lume e Kits dos sonhos
+
+Evolução das estações **Skills** e **Agents** do Atelier, agora com curadoria por
+IA e kits exportáveis. Tudo construído sobre o que já existia (`SkillFontes`,
+`favorita`, `skillsClassificar`, wizard de export, `forjaCallLLM`).
+
+**1. Renomear qualquer pacote — inclusive "Avulsas / Importadas"**
+- `server.ts` — `skillFonteSalvar` agora faz **upsert por chave**: quando recebe
+  uma `chave` que já existe (sem `id`), atualiza em vez de duplicar. Caso especial
+  de `avulsas` cria/atualiza a linha mantendo a chave literal (as skills continuam
+  sem prefixo, nada muda nelas).
+- `SkillsHubModal.tsx` — o lápis de editar aparece em **toda** pasta, inclusive a
+  sintética "Avulsas / Importadas" (monta um `SkillFonte` sintético na hora). O
+  bucket `avulsas` pode ser renomeado mas não removido.
+
+**2. Nota global de qualidade 0-5 pela Lume (Skills + Agents)**
+- Schema: novos campos `estrelas`, `estrelasMotivo`, `avaliadaEm` em `Skills` e
+  `Agents` (SCHEMA_VERSION `v1.75-estrelas-kits`).
+- Backend: `skillsAvaliar(opcoes)` / `agentsAvaliar(opcoes)` — a Lume dá nota de
+  qualidade em **lote chunked** (~40 por chamada, devolve `restantes` pro front
+  fazer o loop com barra de progresso). Escopo por `ids` | `fonte` | `categoria`
+  e por padrão só `pendentes` (sem nota) — re-rodar não re-gasta tokens. Override
+  manual via `skillsDefinirEstrelas` / `agentsDefinirEstrelas`. Novo `uso:
+  'avaliacao'` em `SERVICOS_IA`.
+- UI: estrelas no card e no drawer (tooltip com o motivo da Lume), filtro
+  **"Top (4★+)"**, ordenação **"Por nota"**, e botão **"Avaliar com a Lume"** com
+  progresso. Componente compartilhado `EstrelasQualidade.tsx` (Skills + Agents).
+
+**3. Kits dos sonhos (híbrido) — nova estação "Kits"**
+- Schema: tabela `Kits` (`templateId, nome, skillIds, agentIds, justificativa,
+  montadoPorLume…`).
+- `KIT_TEMPLATES` fixos: **Fundação Essencial**, Full-stack Web, AI Dev / Agentes,
+  Dados & Analytics, Infra & DevOps, Segurança, Produtividade. Cada um com um
+  objetivo que contextualiza o prompt.
+- Backend `kitMontarComLume(templateId)`: monta um **catálogo compacto** só dos
+  candidatos top (ordenados por estrelas → usos, teto ~120 skills + ~60 agents)
+  pra caber no contexto; a Lume escolhe os melhores skills **e** agents com
+  justificativa; persiste (upsert por template). `kitsList`, `kitsGetContent`,
+  `kitSalvar`, `kitRemover`, `kitExportar`. Novo `uso: 'kit'`.
+- UI `KitsHubPanel.tsx`: card por template (montar/re-montar com a Lume, ver
+  membros skills+agents lado a lado, com a justificativa da curadoria).
+
+**4. Exportar kit misto (skills + agents)**
+- `kitExportar` + export no cliente gera um `.zip` com `skills/<slug>/SKILL.md`,
+  `agents/<slug>.md`, `README.md` e um **`install.sh` interativo** que instala
+  ambos no Claude Code (global `~/.claude/` ou projeto `./.claude/`). Novo
+  `agentsExportar` espelhando `skillsExportar`.
+
+---
+
 ## [1.151.3] — 2026-06-23
 
 ### Adicionado — Trava de segurança na importação em lote (anti-duplicata + qualidade)
