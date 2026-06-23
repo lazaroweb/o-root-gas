@@ -970,7 +970,16 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                       categoria, ficou perdido). Em vez de obrigar ele a descobrir o
                       botão "Classificar por tema" sozinho, sugerimos aqui mesmo. */}
                   {(() => {
-                    const semCategoria = skills.filter((s) => !s.categoria || s.categoria.trim() === '').length;
+                    // v1.151.2 — Bug: a agrupação visual usa `tipoIA || categoria` (mesma regra de
+                    // `grupos` acima, linha 709). Mas aqui o banner contava só `categoria`, então
+                    // skills com `tipoIA` preenchido (que JÁ aparecem agrupadas) caíam no alarme
+                    // falso. Agora usamos o MESMO critério da agrupação: só é "sem classificação"
+                    // quem não tem nem `tipoIA` nem `categoria`.
+                    const semCategoria = skills.filter((s) => {
+                      const temTipoIA = (s.tipoIA || '').trim() !== '';
+                      const temCategoria = (s.categoria || '').trim() !== '';
+                      return !temTipoIA && !temCategoria;
+                    }).length;
                     if (semCategoria === 0 || classificando || selMode) return null;
                     return (
                       <div style={{

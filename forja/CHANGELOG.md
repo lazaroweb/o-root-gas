@@ -36,6 +36,38 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.151.2] — 2026-06-23
+
+### Corrigido — 2 bugs reportados na v1.151.1
+
+**Bug 1: botão "Escolher arquivos" do modal de import não abria nada**
+
+- **Causa:** o `<input type="file" hidden>` estava embutido dentro de um
+  `<Button>` do Ant Design dentro de um `<label>`. O Button captura o
+  evento de click pra si mesmo, então o input nunca era acionado, e o
+  `<label htmlFor>` também não funcionava porque o input estava dentro
+  do conteúdo do botão (não do label).
+- **Fix (`ImportarLoteModal.tsx`):** usa `useRef` no input, dispara
+  `inputRef.current?.click()` no `onClick` do Button. Input fica fora do
+  Button como sibling. Funciona em Chrome/Safari/Firefox.
+
+**Bug 2: banner "11 skill(s) sem categoria" aparecia indevidamente**
+
+- **Causa:** a agrupação visual do hub usa `tipoIA || categoria` (linha
+  709 do hub) — se a skill tem `tipoIA` preenchido (Cursor, Claude Code,
+  etc.), ela já aparece classificada visualmente. Mas o banner de
+  "Classificar agora" contava só `categoria`, então skills com `tipoIA`
+  mas sem `categoria` (caso comum no import GAS App Kit, que veio só
+  com `tipoIA`) caíam no alarme falso.
+- **Fix (`SkillsHubModal.tsx`):** banner agora usa o MESMO critério da
+  agrupação. Só é "sem classificação" quem não tem nem `tipoIA` nem
+  `categoria`. Alinhamento consistente entre o que o usuário VÊ
+  (agrupado) e o que o sistema chama de "sem categoria".
+
+**Deploy:** `@339`.
+
+---
+
 ## [1.151.1] — 2026-06-23
 
 ### Melhorado — Multi-arquivo no Importar lote + prioridade da `category` embutida
