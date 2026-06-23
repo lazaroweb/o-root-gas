@@ -15671,13 +15671,19 @@ const _DEBT_SEV_VALIDAS = ['alta', 'media', 'baixa'];
 // Block comments `/* DEBT(...) */` são importantes em código processado por bundlers
 // que removem `//` (esbuild com `target: 'es2020'` é o nosso caso — DEBT em // some
 // no Server.js que vai pro Apps Script). Use `/* */` quando precisar sobreviver ao build.
+//
+// v1.148.8 — fix de falso positivo crítico: regex agora usa `\b` (word boundary)
+// pra evitar match em palavras como "TODOs" (português pra "todos"), "FIXMEd",
+// "HACKy". Bug detectado em produção: "// TODOs os nodes na 11.x" estava
+// matchando como TODO e gerando débito "s os nodes na 11.x" (com 's' sobrando).
+// Word boundary `\b` requer transição word↔non-word, então TODOs (O→s, ambos
+// word chars) NÃO bate em `\bTODO\b`, mas `// TODO: x` bate (O→`:`).
 function _parseLinhaDebito(linha: string, arquivo: string, numLinha: number): DebitoMatchRaw | null {
-  const debtMatch = linha.match(/(?:\/\/|\/\*|#|--|<!--)\s*DEBT\s*\(\s*([a-z]+)\s*,\s*(alta|media|baixa)\s*\)\s*:?\s*(.+?)(?:\*\/|-->)?\s*$/i);
+  const debtMatch = linha.match(/(?:\/\/|\/\*|#|--|<!--)\s*\bDEBT\b\s*\(\s*([a-z]+)\s*,\s*(alta|media|baixa)\s*\)\s*:?\s*(.+?)(?:\*\/|-->)?\s*$/i);
   if (debtMatch) {
     const area = String(debtMatch[1] || '').toLowerCase();
     const sev = String(debtMatch[2] || 'media').toLowerCase();
     let desc = String(debtMatch[3] || '').trim();
-    // Remove `*/` se ficou no fim por causa de bloco inline.
     desc = desc.replace(/\*\/\s*$/, '').trim();
     return {
       tipo: 'debt',
@@ -15688,7 +15694,7 @@ function _parseLinhaDebito(linha: string, arquivo: string, numLinha: number): De
       severidade: _DEBT_SEV_VALIDAS.indexOf(sev) >= 0 ? sev : 'media',
     };
   }
-  const livreMatch = linha.match(/(?:\/\/|\/\*|#|--|<!--)\s*(TODO|FIXME|HACK)\s*[:\-]?\s*(.+?)(?:\*\/|-->)?\s*$/i);
+  const livreMatch = linha.match(/(?:\/\/|\/\*|#|--|<!--)\s*\b(TODO|FIXME|HACK)\b\s*[:\-]?\s*(.+?)(?:\*\/|-->)?\s*$/i);
   if (livreMatch) {
     const tipo = String(livreMatch[1] || '').toLowerCase() as 'todo' | 'fixme' | 'hack';
     let desc = String(livreMatch[2] || '').trim();
@@ -15697,6 +15703,24 @@ function _parseLinhaDebito(linha: string, arquivo: string, numLinha: number): De
     return { tipo, arquivo, linha: numLinha, descricao: desc.slice(0, 280) };
   }
   return null;
+}
+
+// v1.148.8 — Filtra arquivos que FALAM SOBRE débito como exemplo/doc, evitando
+// que o scanner colete "// FIXME: ..." como débito real quando na verdade é
+// documentação (CHANGELOG.md, SKILL.md, AGENTS.md, .mdc do Cursor, README de
+// skills). Bug detectado em produção: "// FIXME ou // DEBT(area,sev): pra
+// acompanhar aqui" aparecia como débito mas era texto da skill forja-debt-tracking.
+function _arquivoFalaSobreDebt(path: string): boolean {
+  const p = String(path || '').toLowerCase();
+  if (p.endsWith('.mdc')) return true; // Cursor rules sempre falam sobre padrão
+  if (p.endsWith('changelog.md')) return true;
+  if (/(^|\/)skill\.md$/.test(p)) return true;
+  if (/(^|\/)agents\.md$/.test(p)) return true;
+  if (/agents-debt-tracking/.test(p)) return true;
+  if (/\.cursor\/rules\//.test(p)) return true;
+  if (/\/skills\/[^/]+\/(readme|reference)/.test(p)) return true;
+  if (/\/docs\/[^/]*debt/.test(p)) return true;
+  return false;
 }
 
 // Hash determinístico curto pra dedup entre syncs.
@@ -15797,8 +15821,11 @@ function _scanRepoTodos(repoUrl: string): { sha: string; matches: DebitoMatchRaw
     }
 
     // Parseia conteúdos linha-a-linha.
+    // v1.148.8 — pula arquivos que falam SOBRE débito como doc/exemplo
+    // (CHANGELOG, SKILL.md, AGENTS.md, .mdc).
     const matches: DebitoMatchRaw[] = [];
     for (const f of selecionados) {
+      if (_arquivoFalaSobreDebt(f.path)) continue;
       const conteudo = conteudos[String(f.sha)];
       if (!conteudo) continue;
       const linhas = conteudo.split('\n');
@@ -15842,6 +15869,7 @@ function _scanGASTodos(scriptId: string): { sha: string; matches: DebitoMatchRaw
       // Reusa convenção de path com extensão (igual auditoria).
       const ext = f.type === 'HTML' ? 'html' : f.type === 'JSON' ? 'json' : 'gs';
       const path = `${f.name}.${ext}`;
+      if (_arquivoFalaSobreDebt(path)) continue;
       const linhas = source.split('\n');
       for (let i = 0; i < linhas.length; i++) {
         const m = _parseLinhaDebito(linhas[i], path, i + 1);
@@ -16089,6 +16117,111 @@ function marcarDebitoComoPago(debitoId: string): ServerResult {
     return { ok: true, data: { ok: true } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// v1.148.8 — Busca contexto completo de um débito: ~10 linhas no entorno do
+// match + descrição não-truncada + URL pra abrir no editor (GitHub ou Apps Script).
+// Usado pelo drawer de detalhes da UI ("ver mais" no card de débito).
+function getDebitoContexto(debitoId: string): ServerResult {
+  try {
+    const debitos = dbGetAll('DebitoTecnico') as Array<Record<string, unknown>>;
+    const d = debitos.find((x) => String(x.id) === debitoId);
+    if (!d) return { ok: false, error: 'Débito não encontrado.' };
+    const sistemaId = String(d.sistemaId || '');
+    const arquivo = String(d.arquivo || '');
+    const linhaNum = Number(d.linha || 0);
+    if (!arquivo || linhaNum <= 0) return { ok: false, error: 'Débito sem ancoragem de arquivo/linha.' };
+
+    const sistemas = dbGetAll('Sistemas') as Array<Record<string, unknown>>;
+    const sist = sistemas.find((s) => String(s.id) === sistemaId);
+    if (!sist) return { ok: false, error: 'Sistema não encontrado.' };
+
+    const repoUrl = String(sist.repoUrl || '').trim();
+    const scriptId = String(sist.scriptId || '').trim();
+
+    let fonte: 'github' | 'gas' = 'github';
+    let conteudo = '';
+    let urlArquivo = '';
+    let urlLinha = '';
+    let branchDetectada = 'main';
+
+    if (repoUrl) {
+      fonte = 'github';
+      const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+      if (!token) return { ok: false, error: 'GitHub não conectado (sem token).' };
+      const full = _ghFullName(repoUrl);
+      if (!/^[^/]+\/[^/]+$/.test(full)) return { ok: false, error: 'repoUrl inválida.' };
+      const headers = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'User-Agent': 'FORJA' };
+      try {
+        const bRes = UrlFetchApp.fetch(`https://api.github.com/repos/${full}`, { headers, muteHttpExceptions: true });
+        if (bRes.getResponseCode() === 200) {
+          branchDetectada = String((JSON.parse(bRes.getContentText()) as { default_branch?: string }).default_branch || 'main');
+        }
+      } catch { /* fallback main */ }
+
+      // GET /contents/:path?ref=:branch retorna { content: base64, encoding, sha }
+      const pathEnc = arquivo.split('/').map((p) => encodeURIComponent(p)).join('/');
+      const cUrl = `https://api.github.com/repos/${full}/contents/${pathEnc}?ref=${encodeURIComponent(branchDetectada)}`;
+      const cRes = UrlFetchApp.fetch(cUrl, { headers, muteHttpExceptions: true });
+      if (cRes.getResponseCode() !== 200) {
+        return { ok: false, error: `Arquivo não encontrado no repo (${cRes.getResponseCode()}). Pode ter sido removido depois do último scan — rode sincronizar.` };
+      }
+      const blob = JSON.parse(cRes.getContentText()) as { content?: string; encoding?: string };
+      if (blob.encoding === 'base64' && blob.content) {
+        conteudo = Utilities.newBlob(Utilities.base64Decode(blob.content)).getDataAsString();
+      }
+      urlArquivo = `https://github.com/${full}/blob/${branchDetectada}/${arquivo}`;
+      urlLinha = `${urlArquivo}#L${linhaNum}`;
+    } else if (scriptId) {
+      fonte = 'gas';
+      const token = ScriptApp.getOAuthToken();
+      const r = UrlFetchApp.fetch(`https://script.googleapis.com/v1/projects/${encodeURIComponent(scriptId)}/content`, {
+        headers: { Authorization: 'Bearer ' + token },
+        muteHttpExceptions: true,
+      });
+      if (r.getResponseCode() !== 200) {
+        return { ok: false, error: `Apps Script API respondeu ${r.getResponseCode()}.` };
+      }
+      const json = JSON.parse(r.getContentText()) as { files?: Array<{ name: string; type: string; source?: string }> };
+      const nomeBase = arquivo.replace(/\.(gs|html|json)$/i, '');
+      const f = (json.files || []).find((x) => x.name === nomeBase);
+      if (!f) return { ok: false, error: 'Arquivo não encontrado no projeto GAS — pode ter sido renomeado.' };
+      conteudo = String(f.source || '');
+      urlArquivo = `https://script.google.com/d/${scriptId}/edit`;
+      urlLinha = urlArquivo; // GAS não tem deep link de linha
+    } else {
+      return { ok: false, error: 'Sistema sem código auditável.' };
+    }
+
+    if (!conteudo) return { ok: false, error: 'Conteúdo do arquivo vazio ou ilegível.' };
+
+    const linhas = conteudo.split('\n');
+    const idx = Math.max(0, Math.min(linhas.length - 1, linhaNum - 1));
+    const ANTES = 6; const DEPOIS = 6;
+    const inicio = Math.max(0, idx - ANTES);
+    const fim = Math.min(linhas.length, idx + DEPOIS + 1);
+    const contextoLinhas = linhas.slice(inicio, fim);
+    const linhaDestaqueIdx = idx - inicio;
+
+    return {
+      ok: true,
+      data: {
+        fonte,
+        arquivo,
+        linha: linhaNum,
+        urlArquivo,
+        urlLinha,
+        contextoInicio: inicio + 1, // 1-indexed pra exibição
+        contextoLinhas,
+        linhaDestaqueIdx,
+        linhaCompleta: String(linhas[idx] || ''),
+        totalLinhas: linhas.length,
+        branch: fonte === 'github' ? branchDetectada : '',
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar contexto' };
   }
 }
 

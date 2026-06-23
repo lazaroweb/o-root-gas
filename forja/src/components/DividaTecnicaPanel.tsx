@@ -2,11 +2,11 @@
 // 4 padrões: TODO, FIXME, HACK (texto livre) + DEBT(area,sev) estruturado.
 // Cada item fica linkado ao arquivo:linha e pode ser promovido pra backlog.
 // Sync acontece automaticamente ao montar (com cache por commit SHA pra ser barato).
-import React, { useState, useEffect, useMemo } from 'react';
-import { App as AntApp, Button, Tooltip, Tag, Empty, Spin, Popconfirm, Segmented, Input } from 'antd';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { App as AntApp, Button, Tooltip, Tag, Empty, Spin, Popconfirm, Segmented, Input, Drawer } from 'antd';
 import {
-  AlertTriangle, ExternalLink, RefreshCw, Bug, Wrench, Flame, ListChecks, FileCode2,
-  CheckCircle2, ArrowUpRight, Search, ShieldAlert,
+  AlertTriangle, ExternalLink, RefreshCw, Bug, Flame, ListChecks, FileCode2,
+  CheckCircle2, ArrowUpRight, Search, ShieldAlert, Eye, Hash, GitBranch, Calendar, Copy,
 } from 'lucide-react';
 import { Panel } from './ui';
 import ProcessoCarregando from './ProcessoCarregando';
@@ -39,6 +39,43 @@ const SEV_META: Record<string, { label: string; corKey: 'rose' | 'peach' | 'sage
   baixa: { label: 'baixa', corKey: 'sage' },
 };
 
+// v1.148.8 — contexto do código no entorno do débito (retornado por getDebitoContexto).
+interface DebitoContexto {
+  fonte: 'github' | 'gas';
+  arquivo: string;
+  linha: number;
+  urlArquivo: string;
+  urlLinha: string;
+  contextoInicio: number; // número da primeira linha do contexto (1-indexed)
+  contextoLinhas: string[]; // ~13 linhas (6 antes + linha + 6 depois)
+  linhaDestaqueIdx: number; // índice da linha do débito dentro de contextoLinhas
+  linhaCompleta: string; // linha do débito sem truncar (texto integral)
+  totalLinhas: number;
+  branch: string;
+}
+
+function formatarData(iso: string): string {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })
+      + ' · ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  } catch { return iso; }
+}
+
+function relTempo(iso: string): string {
+  if (!iso) return '';
+  const diff = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(diff)) return '';
+  const dias = Math.floor(diff / 86400000);
+  if (dias === 0) return 'hoje';
+  if (dias === 1) return 'ontem';
+  if (dias < 7) return `há ${dias}d`;
+  if (dias < 30) return `há ${Math.floor(dias / 7)}sem`;
+  if (dias < 365) return `há ${Math.floor(dias / 30)}m`;
+  return `há ${Math.floor(dias / 365)}a`;
+}
+
 export default function DividaTecnicaPanel({ sistemaId, repoUrl, scriptId, onPromovido }: Props): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
@@ -49,6 +86,12 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, scriptId, onPro
   const [ultimoSync, setUltimoSync] = useState<DebitoSyncResult | null>(null);
   const [filtroTipo, setFiltroTipo] = useState<'todos' | 'debt' | 'todo_fixme_hack' | 'promovidos' | 'pagos'>('todos');
   const [busca, setBusca] = useState('');
+
+  // v1.148.8 — drawer de detalhes (contexto do código no entorno + ações).
+  const [aberto, setAberto] = useState<DebitoTecnico | null>(null);
+  const [contexto, setContexto] = useState<DebitoContexto | null>(null);
+  const [carregandoCtx, setCarregandoCtx] = useState(false);
+  const [erroCtx, setErroCtx] = useState<string>('');
 
   // Aceita qualquer fonte de código que a auditoria também aceita:
   // GitHub (repoUrl) ou Google Apps Script (scriptId).
@@ -160,11 +203,29 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, scriptId, onPro
       if (r && r.ok) {
         message.success('Marcado como pago.');
         carregarLista();
+        if (aberto?.id === d.id) setAberto(null);
       }
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Erro');
     }
   };
+
+  const abrirDetalhe = useCallback((d: DebitoTecnico) => {
+    setAberto(d);
+    setContexto(null);
+    setErroCtx('');
+    setCarregandoCtx(true);
+    callServer<ServerResult>('getDebitoContexto', d.id)
+      .then((r) => {
+        if (r && r.ok && r.data) {
+          setContexto(r.data as DebitoContexto);
+        } else {
+          setErroCtx((r && r.error) || 'Não foi possível buscar o contexto.');
+        }
+      })
+      .catch((e) => setErroCtx(e instanceof Error ? e.message : 'Erro de rede'))
+      .finally(() => setCarregandoCtx(false));
+  }, []);
 
   if (!temCodigo) {
     return (
@@ -313,21 +374,37 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, scriptId, onPro
               scriptId={scriptId || ''}
               onPromover={() => promover(d)}
               onPago={() => marcarPago(d)}
+              onAbrir={() => abrirDetalhe(d)}
             />
           ))}
         </div>
+      )}
+
+      {aberto && (
+        <DebitoDrawer
+          d={aberto}
+          contexto={contexto}
+          carregando={carregandoCtx}
+          erro={erroCtx}
+          temRepo={temRepo}
+          temScript={temScript}
+          onClose={() => setAberto(null)}
+          onPromover={() => promover(aberto)}
+          onPago={() => marcarPago(aberto)}
+        />
       )}
     </div>
   );
 }
 
-function DebitoCard({ d, repoUrl, scriptId, onPromover, onPago }: {
-  d: DebitoTecnico; repoUrl: string; scriptId: string; onPromover: () => void; onPago: () => void;
+function DebitoCard({ d, repoUrl, scriptId, onPromover, onPago, onAbrir }: {
+  d: DebitoTecnico; repoUrl: string; scriptId: string; onPromover: () => void; onPago: () => void; onAbrir: () => void;
 }): React.ReactElement {
   const t = useTokens();
   const meta = TIPO_META[d.tipo] || TIPO_META.todo;
   const corTipo = t.accents[meta.corKey];
   const Icon = meta.Icon;
+  const [hover, setHover] = useState(false);
 
   // Monta link adequado pra fonte: GitHub permalink (arquivo:linha) quando tem
   // repo; editor do Apps Script (sem âncora de linha — GAS não suporta) quando
@@ -351,18 +428,30 @@ function DebitoCard({ d, repoUrl, scriptId, onPromover, onPago }: {
   const ehAtivo = d.status === 'ativo';
   const opacity = ehAtivo ? 1 : 0.65;
 
+  // v1.148.8 — clique no card abre drawer de detalhes (com contexto de código).
+  // Botões de ação param a propagação pra não disparar a abertura junto.
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onAbrir();
+  };
+
   return (
-    <div style={{
-      background: t.surface,
-      border: `1px solid ${ehAtivo ? `${corTipo}33` : t.border}`,
-      borderRadius: 12,
-      padding: '12px 14px',
-      display: 'flex',
-      gap: 12,
-      alignItems: 'flex-start',
-      opacity,
-      transition: 'opacity 0.15s',
-    }}>
+    <div
+      onClick={handleClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        background: hover ? t.surfaceMuted : t.surface,
+        border: `1px solid ${ehAtivo ? `${corTipo}${hover ? '55' : '33'}` : t.border}`,
+        borderRadius: 12,
+        padding: '12px 14px',
+        display: 'flex',
+        gap: 12,
+        alignItems: 'flex-start',
+        opacity,
+        transition: 'all 0.15s',
+        cursor: 'pointer',
+      }}>
       {/* Ícone do tipo */}
       <div style={{
         width: 30, height: 30, borderRadius: 8,
@@ -415,8 +504,11 @@ function DebitoCard({ d, repoUrl, scriptId, onPromover, onPago }: {
         </div>
       </div>
 
-      {/* Ações */}
-      <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+      {/* Ações — stopPropagation evita disparar o onAbrir do card */}
+      <div style={{ display: 'flex', gap: 4, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
+        <Tooltip title="Ver detalhes — código no entorno + metadados">
+          <Button size="small" type="text" icon={<Eye size={13} />} onClick={onAbrir} />
+        </Tooltip>
         {linkExterno && (
           <Tooltip title={linkExterno.tooltip}>
             <Button size="small" type="text" icon={<ExternalLink size={13} />} href={linkExterno.url} target="_blank" />
@@ -442,6 +534,274 @@ function DebitoCard({ d, repoUrl, scriptId, onPromover, onPago }: {
             </Popconfirm>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// v1.148.8 — Drawer de detalhes do débito.
+// Mostra contexto do código (6 linhas antes + linha + 6 depois) com a linha
+// do débito destacada, descrição não-truncada, metadados (criado/atualizado),
+// e botões de ação (Promover, Abrir no editor, Marcar pago, Copiar linha).
+// Solução pro feedback do user (v1.148.8): "não vejo detalhes dos débitos
+// técnicos, só mostra essa descrição".
+function DebitoDrawer({ d, contexto, carregando, erro, temRepo, temScript, onClose, onPromover, onPago }: {
+  d: DebitoTecnico;
+  contexto: DebitoContexto | null;
+  carregando: boolean;
+  erro: string;
+  temRepo: boolean;
+  temScript: boolean;
+  onClose: () => void;
+  onPromover: () => void;
+  onPago: () => void;
+}): React.ReactElement {
+  const t = useTokens();
+  const { message } = AntApp.useApp();
+  const meta = TIPO_META[d.tipo] || TIPO_META.todo;
+  const corTipo = t.accents[meta.corKey];
+  const Icon = meta.Icon;
+  const sev = d.severidade ? SEV_META[d.severidade] : null;
+  const corSev = sev ? t.accents[sev.corKey] : t.textTertiary;
+  const ehAtivo = d.status === 'ativo';
+
+  const copiar = (texto: string, label: string) => {
+    try {
+      navigator.clipboard.writeText(texto);
+      message.success(`${label} copiado`);
+    } catch { message.error('Não foi possível copiar'); }
+  };
+
+  return (
+    <Drawer
+      open
+      onClose={onClose}
+      width={680}
+      destroyOnClose
+      styles={{ body: { padding: 0, background: t.bg } }}
+      title={
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{
+            width: 32, height: 32, borderRadius: 9,
+            background: `${corTipo}22`, color: corTipo,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>
+            <Icon size={16} strokeWidth={1.8} />
+          </div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontFamily: FONTS.display, fontSize: 15, fontWeight: 600, color: t.text, lineHeight: 1.2 }}>
+              {meta.label}
+              {d.area && <span style={{ fontWeight: 400, color: t.textTertiary, marginLeft: 8 }}>· {d.area}</span>}
+              {sev && (
+                <Tag bordered={false} style={{ background: `${corSev}1f`, color: corSev, fontSize: 10.5, fontWeight: 600, marginLeft: 8 }}>
+                  {sev.label}
+                </Tag>
+              )}
+            </div>
+            <div style={{ fontFamily: FONTS.mono, fontSize: 11, color: t.textTertiary, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {d.arquivo}:{d.linha}
+            </div>
+          </div>
+        </div>
+      }
+    >
+      <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 18 }}>
+        {/* Descrição completa (sem truncar como no card) */}
+        <section>
+          <SectionLabel>Descrição</SectionLabel>
+          <div style={{
+            fontFamily: FONTS.ui, fontSize: 14, color: t.text, lineHeight: 1.6,
+            background: t.surface, border: `1px solid ${t.border}`, borderRadius: 10, padding: '12px 14px',
+          }}>
+            {d.descricao || <span style={{ color: t.textTertiary, fontStyle: 'italic' }}>(sem descrição)</span>}
+          </div>
+        </section>
+
+        {/* Contexto do código */}
+        <section>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <SectionLabel>Código no entorno</SectionLabel>
+            {contexto && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {contexto.branch && (
+                  <Tag bordered={false} style={{ fontSize: 10.5, color: t.textSecondary, background: t.surfaceMuted, marginInlineEnd: 0 }}>
+                    <GitBranch size={10} style={{ marginRight: 3, verticalAlign: 'text-top' }} />
+                    {contexto.branch}
+                  </Tag>
+                )}
+                <Tooltip title="Copiar a linha exata do débito">
+                  <Button size="small" type="text" icon={<Copy size={12} />} onClick={() => copiar(contexto.linhaCompleta, 'Linha')} />
+                </Tooltip>
+              </div>
+            )}
+          </div>
+          {carregando ? (
+            <div style={{ padding: 28, textAlign: 'center' }}><Spin size="small" /> <span style={{ marginLeft: 8, color: t.textTertiary, fontSize: 12 }}>buscando o arquivo…</span></div>
+          ) : erro ? (
+            <div style={{
+              fontFamily: FONTS.ui, fontSize: 13, color: t.accents.peach,
+              background: `${t.accents.peach}10`, border: `1px solid ${t.accents.peach}33`,
+              borderRadius: 10, padding: '10px 12px', display: 'flex', alignItems: 'flex-start', gap: 8,
+            }}>
+              <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 2 }} />
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 2 }}>Não consegui carregar o contexto</div>
+                <div style={{ color: t.textSecondary, fontSize: 12 }}>{erro}</div>
+              </div>
+            </div>
+          ) : contexto ? (
+            <CodigoSnippet contexto={contexto} corDestaque={corTipo} />
+          ) : null}
+        </section>
+
+        {/* Metadados */}
+        <section>
+          <SectionLabel>Histórico</SectionLabel>
+          <div style={{
+            display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10,
+            background: t.surface, border: `1px solid ${t.border}`, borderRadius: 10, padding: 14,
+          }}>
+            <Meta icon={<Calendar size={12} />} label="Detectado pela 1ª vez" valor={formatarData(d.criadoEm)} hint={relTempo(d.criadoEm)} t={t} />
+            <Meta icon={<RefreshCw size={12} />} label="Última verificação" valor={formatarData(d.atualizadoEm)} hint={relTempo(d.atualizadoEm)} t={t} />
+            <Meta icon={<Hash size={12} />} label="Hash do débito" valor={d.hash || '—'} mono t={t} />
+            <Meta icon={<FileCode2 size={12} />} label="Tipo" valor={`${meta.label}${d.severidade ? ` · severidade ${d.severidade}` : ''}${d.area ? ` · área ${d.area}` : ''}`} t={t} />
+            {d.promovidoEm && (
+              <Meta icon={<ArrowUpRight size={12} />} label="Promovido pra backlog" valor={formatarData(d.promovidoEm)} hint={relTempo(d.promovidoEm)} t={t} />
+            )}
+            {d.pagoEm && (
+              <Meta icon={<CheckCircle2 size={12} />} label="Pago em" valor={formatarData(d.pagoEm)} hint={relTempo(d.pagoEm)} t={t} />
+            )}
+          </div>
+        </section>
+
+        {/* Ações */}
+        <section style={{ display: 'flex', gap: 8, flexWrap: 'wrap', borderTop: `1px solid ${t.border}`, paddingTop: 16 }}>
+          {contexto && (
+            <Button
+              type="primary"
+              icon={<ExternalLink size={14} />}
+              href={contexto.urlLinha}
+              target="_blank"
+            >
+              {contexto.fonte === 'github' ? 'Abrir no GitHub' : 'Abrir no editor'}
+            </Button>
+          )}
+          {ehAtivo && (
+            <>
+              <Tooltip title="Cria um card em 'A fazer' no Backlog linkado a este débito.">
+                <Button icon={<ArrowUpRight size={14} />} onClick={onPromover}>
+                  Promover pra Backlog
+                </Button>
+              </Tooltip>
+              <Popconfirm
+                title="Marcar como pago?"
+                description="Use quando você já resolveu mas o scan não detectou (refator fora do branch default, por ex)."
+                okText="Marcar"
+                cancelText="Cancelar"
+                onConfirm={onPago}
+              >
+                <Button icon={<CheckCircle2 size={14} />}>
+                  Marcar como pago
+                </Button>
+              </Popconfirm>
+            </>
+          )}
+        </section>
+
+        {/* Dica de remoção */}
+        {ehAtivo && (
+          <div style={{
+            fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, lineHeight: 1.5,
+            background: `${t.accents.lavender}0d`, border: `1px solid ${t.accents.lavender}26`,
+            borderRadius: 10, padding: '10px 12px',
+          }}>
+            <strong style={{ color: t.text }}>Como fechar este débito:</strong> apague o comentário <code style={{ background: t.surfaceMuted, padding: '1px 5px', borderRadius: 4, fontFamily: FONTS.mono, fontSize: 11 }}>{TIPO_META[d.tipo]?.label}</code> da linha <code style={{ background: t.surfaceMuted, padding: '1px 5px', borderRadius: 4, fontFamily: FONTS.mono, fontSize: 11 }}>{d.linha}</code> do arquivo, faça commit
+            {temRepo ? ' (push pro branch default) ' : ' '}
+            e rode <em>Sincronizar</em>. A Forja detecta a remoção e marca como "pago" automaticamente.
+          </div>
+        )}
+      </div>
+    </Drawer>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }): React.ReactElement {
+  const t = useTokens();
+  return (
+    <div style={{
+      fontFamily: FONTS.ui, fontSize: 10.5, fontWeight: 700, letterSpacing: 0.8,
+      textTransform: 'uppercase', color: t.textTertiary, marginBottom: 8,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+function Meta({ icon, label, valor, hint, mono, t }: {
+  icon: React.ReactNode; label: string; valor: string; hint?: string; mono?: boolean; t: ReturnType<typeof useTokens>;
+}): React.ReactElement {
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, color: t.textTertiary, fontSize: 11, fontFamily: FONTS.ui, marginBottom: 3 }}>
+        {icon} <span>{label}</span>
+      </div>
+      <div style={{ fontFamily: mono ? FONTS.mono : FONTS.ui, fontSize: 12.5, color: t.text, lineHeight: 1.35 }}>
+        {valor}
+      </div>
+      {hint && (
+        <div style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary, marginTop: 1 }}>{hint}</div>
+      )}
+    </div>
+  );
+}
+
+// Renderiza o snippet de código com gutter de linhas e destaque na linha do débito.
+function CodigoSnippet({ contexto, corDestaque }: { contexto: DebitoContexto; corDestaque: string }): React.ReactElement {
+  const t = useTokens();
+  return (
+    <div style={{
+      background: t.surface, border: `1px solid ${t.border}`, borderRadius: 10,
+      overflow: 'hidden', fontFamily: FONTS.mono, fontSize: 12, lineHeight: 1.6,
+    }}>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+          <tbody>
+            {contexto.contextoLinhas.map((linhaTexto, i) => {
+              const numLinha = contexto.contextoInicio + i;
+              const ehDestaque = i === contexto.linhaDestaqueIdx;
+              return (
+                <tr
+                  key={numLinha}
+                  style={{
+                    background: ehDestaque ? `${corDestaque}1a` : 'transparent',
+                    borderLeft: ehDestaque ? `3px solid ${corDestaque}` : '3px solid transparent',
+                  }}
+                >
+                  <td style={{
+                    color: ehDestaque ? corDestaque : t.textTertiary,
+                    padding: '2px 12px 2px 10px',
+                    textAlign: 'right',
+                    userSelect: 'none',
+                    fontWeight: ehDestaque ? 700 : 400,
+                    borderRight: `1px solid ${t.borderSoft}`,
+                    fontVariantNumeric: 'tabular-nums',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    {numLinha}
+                  </td>
+                  <td style={{
+                    padding: '2px 14px',
+                    whiteSpace: 'pre',
+                    color: ehDestaque ? t.text : t.textSecondary,
+                    fontWeight: ehDestaque ? 500 : 400,
+                  }}>
+                    {linhaTexto || ' '}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   );

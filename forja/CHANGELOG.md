@@ -36,6 +36,122 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.148.8] — 2026-06-23
+
+### Corrigido — Falso positivo crítico: "TODOs" em português matchava como TODO
+
+**Bug detectado em produção**
+O user abriu a aba "Dívida" do sistema Forja e viu 5 débitos com descrições
+sem sentido, todas começando com `s os …`:
+
+- `s os nodes na 11.x. Aqui detectamos via prefixo do code`
+- `s os lançamentos do cartão`
+- `s os discoveries criados`
+- `s os hooks ANTES de qualquer return condicional`
+
+**Causa raiz**
+O regex do parser era:
+
+```
+/(?:\/\/|\/\*|#|--|<!--)\s*(TODO|FIXME|HACK)\s*[:\-]?\s*(.+?)/i
+```
+
+Faltava **word boundary** (`\b`). Em código em português, comentários como
+`// TODOs os nodes na 11.x` (português pra "todos os nodes") faziam match em
+**TODO** e capturavam `s os nodes na 11.x` como descrição — o `s` era a
+continuação da palavra "TODOs" cortada no meio.
+
+Mesma coisa com "FIXMEd", "HACKy" — qualquer prefixo era ignorado.
+
+**Fix**
+Word boundary `\b` antes e depois dos marcadores:
+
+```
+/(?:\/\/|\/\*|#|--|<!--)\s*\b(TODO|FIXME|HACK)\b\s*[:\-]?\s*(.+?)/i
+```
+
+`\b` exige transição word↔non-word, então:
+- `// TODOs` — entre `O` (word) e `s` (word) não há boundary → NÃO bate ✓
+- `// TODO:` — entre `O` (word) e `:` (non-word) HÁ boundary → bate ✓
+- `// TODO fazer X` — entre `O` (word) e ` ` (non-word) HÁ boundary → bate ✓
+
+Mesma correção aplicada ao regex de `DEBT(area,sev): ...`.
+
+### Corrigido — Falso positivo: arquivos que falam SOBRE débito como exemplo
+
+O 1º item do scan era `', '// FIXME:' ou '// DEBT(area,sev):....' pra acompanhar`
+— texto que vem de **dentro de strings literais** no próprio `forja-debt-tracking/SKILL.md`,
+no `AGENTS.md`, no `CHANGELOG.md`, etc. Esses arquivos falam SOBRE débito como
+exemplo/documentação, não contêm débito real.
+
+**Fix**: nova função `_arquivoFalaSobreDebt(path)` filtra esses arquivos do
+scan, em ambos GitHub e GAS:
+
+| Padrão | Por quê |
+|--------|---------|
+| `*.mdc` | Cursor rules sempre explicam o padrão de débito |
+| `CHANGELOG.md` | Tem `// FIXME` em exemplos de bug fixes |
+| `SKILL.md` (qualquer pasta) | Skills do tipo debt-tracking ensinam o padrão |
+| `AGENTS.md` (qualquer pasta) | Handoff doc que explica o protocolo |
+| `agents-debt-tracking-*` | Template específico do protocolo |
+| `.cursor/rules/**` | Pasta inteira do Cursor |
+| `**/skills/*/readme*` | READMEs de skills |
+| `**/docs/*debt*` | Docs específicas de débito |
+
+### Adicionado — Drawer de detalhes do débito (resposta ao "não vejo detalhes")
+
+**Pergunta do usuário**
+> "Eu não vejo detalhes dos débitos técnicos, só mostra essa descrição. Como
+> eu vou saber os detalhes do que precisa ser feito?"
+
+**Antes**: o card mostrava só a descrição truncada (até 280 chars), tipo
+arquivo + linha, e ações. Sem contexto. Sem código no entorno. Sem metadados.
+
+**Agora**: clica no card (ou no ícone de olho 👁) e abre um **Drawer de 680px** com:
+
+1. **Cabeçalho** — tipo (TODO/FIXME/HACK/Dívida), área, severidade, arquivo:linha
+2. **Descrição completa** — sem truncar
+3. **Código no entorno** — 6 linhas antes + linha do débito (destacada com a cor do tipo)
+   + 6 linhas depois, com gutter de número de linha e fundo colorido
+4. **Histórico**:
+   - Detectado pela 1ª vez (com "há X dias")
+   - Última verificação
+   - Hash determinístico (pra dedup entre syncs)
+   - Tipo + severidade + área
+   - Promovido em / Pago em (quando aplicável)
+5. **Ações**:
+   - Abrir no GitHub (com permalink `#L<linha>`) ou no editor do Apps Script
+   - Promover pra Backlog
+   - Marcar como pago manualmente
+   - Copiar linha do débito
+6. **Dica contextual** — "Como fechar este débito: apague o comentário, commit,
+   sincronizar."
+
+**Backend novo**: RPC `getDebitoContexto(debitoId)` lê:
+- **GitHub**: `GET /repos/:full/contents/:path?ref=:branch` (1 call, retorna conteúdo
+  + sha do arquivo). Usa branch default detectada do repo, não `HEAD` hardcoded.
+- **GAS**: lê do listing existente (1 call que já trazia tudo), faz match pelo
+  nome sem extensão.
+
+Retorna 13 linhas (6 antes + 1 do débito + 6 depois) prontas pra renderização,
+com `linhaDestaqueIdx` apontando pra linha exata e `branch` (pra mostrar tag
+git no drawer).
+
+### Resultado prático
+Antes da v1.148.8 a aba "Dívida" mostrava 5 itens, todos falsos positivos.
+Depois da v1.148.8 + sincronização forçada: a contagem cai pra X reais (vai
+depender do que sobrar quando o user rodar Sincronizar). Cada item agora dá
+pra abrir e ver o código exato no entorno, com botão direto pra GitHub.
+
+### Impacto
+- **Confiança restaurada**: scan não tem mais falso positivo óbvio
+- **Acionabilidade**: drawer fecha o loop "ver problema → entender contexto →
+  ir resolver no editor"
+- **Decisão informada**: histórico (criado/atualizado/promovido) mostra se é
+  débito recente ou crônico
+
+---
+
 ## [1.148.7] — 2026-06-23
 
 ### Adicionado — Wizard de exportação custom: escolha quais skills levar pro Claude Code
