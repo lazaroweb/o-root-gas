@@ -1951,6 +1951,160 @@ function SkillCard({ skill, onOpen, selMode = false, selecionado = false, onTogg
   );
 }
 
+// ─── v1.150.1 — Render adaptativo do conteúdo de um bloco ───────────────
+// Detecta o formato do `conteudo` e escolhe o render certo:
+// - Tabela markdown (linhas com `|` e separador `|---|`)  → <table>
+// - Lista de slugs (capacidades, requisitos, habilidades_relacionadas) → chips
+// - Tudo o mais: texto pre-wrap (preserva quebras e indentação)
+function BlocoConteudoRender({ chave, conteudo, cor }: {
+  chave: string;
+  conteudo: string;
+  cor: string;
+}): React.ReactElement {
+  const t = useTokens();
+
+  // 1) TABELA MARKDOWN — Detecta `| ... | ... |` com linha separadora `|---|---|`.
+  // O exemplo "Arestas Perigosas" do vibeship usa esse padrão.
+  const linhasTab = conteudo.split('\n').filter((l) => l.trim().startsWith('|'));
+  if (linhasTab.length >= 2 && /^\|[\s\-:|]+\|$/.test(linhasTab[1]?.trim() || '')) {
+    const cells = (linha: string): string[] => linha.trim().slice(1, -1).split('|').map((c) => c.trim());
+    const headers = cells(linhasTab[0]);
+    const rows = linhasTab.slice(2).map(cells);
+    const antesTab = conteudo.split('\n').slice(0, conteudo.split('\n').findIndex((l) => l.trim().startsWith('|'))).join('\n').trim();
+    return (
+      <>
+        {antesTab && (
+          <div style={{
+            fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary,
+            lineHeight: 1.65, whiteSpace: 'pre-wrap', marginBottom: 8,
+          }}>
+            {antesTab}
+          </div>
+        )}
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{
+            width: '100%', borderCollapse: 'collapse',
+            fontFamily: FONTS.ui, fontSize: 12,
+          }}>
+            <thead>
+              <tr style={{ background: t.surfaceMuted }}>
+                {headers.map((h, i) => (
+                  <th key={i} style={{
+                    textAlign: 'left', padding: '8px 10px',
+                    border: `1px solid ${t.borderSoft}`,
+                    fontFamily: FONTS.display, fontWeight: 600, color: t.text,
+                    fontSize: 11.5,
+                  }}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, ri) => (
+                <tr key={ri}>
+                  {row.map((cell, ci) => (
+                    <td key={ci} style={{
+                      padding: '8px 10px',
+                      border: `1px solid ${t.borderSoft}`,
+                      color: t.textSecondary, verticalAlign: 'top',
+                      lineHeight: 1.5,
+                    }}>
+                      {/* v1.150.1 — destaca severidade na 2ª coluna se for tabela
+                          tipo "Problema/Severidade/Solução" do vibeship */}
+                      {ci === 1 && /^(critica|alta|media|baixa|critical|high|medium|low)$/i.test(cell.trim())
+                        ? <SeveridadeBadge nivel={cell.trim()} />
+                        : cell
+                      }
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </>
+    );
+  }
+
+  // 2) LISTA DE SLUGS (capacidades, requisitos, habilidades_relacionadas) →
+  // detecta linhas tipo "- foo-bar" ou items em backticks.
+  const ehListaSlugs = ['capacidades', 'requisitos', 'habilidades_relacionadas'].indexOf(chave) >= 0;
+  if (ehListaSlugs) {
+    // Extrai todos os tokens: bullets `- slug`, `\`slug\``, `[slug]`.
+    const slugs: string[] = [];
+    const bulletMatches = conteudo.match(/^[\s\-\*]+([a-z0-9][a-z0-9\-_]*)/gm) || [];
+    for (const b of bulletMatches) slugs.push(b.replace(/^[\s\-\*]+/, '').trim());
+    const tickMatches = conteudo.match(/`([a-z0-9][a-z0-9\-_]*)`/g) || [];
+    for (const bt of tickMatches) slugs.push(bt.slice(1, -1));
+    const seen = new Set<string>();
+    const dedup = slugs.filter((s) => { if (seen.has(s)) return false; seen.add(s); return true; });
+    if (dedup.length > 0) {
+      // Texto livre fora dos slugs (ex.: "Funciona bem com:" do vibeship).
+      const textoLivre = conteudo
+        .split('\n')
+        .filter((l) => !l.trim().match(/^[\s\-\*]+[a-z0-9][a-z0-9\-_]*$/i))
+        .filter((l) => !/^[\s\-\*]*`[a-z0-9\-_]+`[,\s`a-z0-9\-_]*$/i.test(l.trim()))
+        .join('\n').trim();
+      return (
+        <>
+          {textoLivre && (
+            <div style={{
+              fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary,
+              lineHeight: 1.6, marginBottom: 8, whiteSpace: 'pre-wrap',
+            }}>
+              {textoLivre}
+            </div>
+          )}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {dedup.map((s) => (
+              <span key={s} style={{
+                background: `${cor}1a`, color: cor,
+                border: `1px solid ${cor}40`,
+                fontFamily: FONTS.mono, fontSize: 11,
+                padding: '3px 10px', borderRadius: 999,
+              }}>
+                {s}
+              </span>
+            ))}
+          </div>
+        </>
+      );
+    }
+  }
+
+  // 3) Default: texto preservando formatação
+  return (
+    <div style={{
+      fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary, lineHeight: 1.65,
+      whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+    }}>
+      {conteudo}
+    </div>
+  );
+}
+
+function SeveridadeBadge({ nivel }: { nivel: string }): React.ReactElement {
+  const t = useTokens();
+  const n = nivel.toLowerCase();
+  const cor = /critica|critical/.test(n) ? '#dc2626'
+    : /alta|high/.test(n) ? t.accents.peach
+    : /media|medium/.test(n) ? '#f59e0b'
+    : t.accents.sage;
+  return (
+    <span style={{
+      background: `${cor}1a`, color: cor,
+      border: `1px solid ${cor}55`,
+      fontFamily: FONTS.ui, fontSize: 10.5, fontWeight: 700,
+      padding: '2px 8px', borderRadius: 999,
+      textTransform: 'uppercase', letterSpacing: '0.05em',
+      display: 'inline-block',
+    }}>
+      {nivel}
+    </span>
+  );
+}
+
 // ─── v1.149.0 — Renderização rica dos blocos estruturados ─────────────────
 // Substitui o "dump de markdown bruto" por um layout visual baseado nas seções
 // que o parser detectou. Cada bloco vira um card; reconhece os blocos famosos
@@ -1966,6 +2120,7 @@ function SkillBlocosRender({ blocos, conteudoBruto, aberta, comoUsar }: {
   const [view, setView] = useState<'estruturado' | 'markdown'>('estruturado');
 
   // Metadado visual de cada chave canônica (cor + ícone + descrição).
+  // v1.150.1 — Adicionadas chaves do formato vibeship-spawner.
   const META_BLOCO: Record<string, { cor: keyof typeof t.accents; icon: React.ReactNode; sub?: string }> = {
     metadados: { cor: 'lavender', icon: <Info size={13} />, sub: 'Identificação' },
     quando_usar: { cor: 'peach', icon: <Sparkles size={13} />, sub: 'Gatilho de ativação' },
@@ -1978,6 +2133,11 @@ function SkillBlocosRender({ blocos, conteudoBruto, aberta, comoUsar }: {
     checklist: { cor: 'sage', icon: <CheckCircle2 size={13} />, sub: 'Verificação final' },
     exemplos: { cor: 'lavender', icon: <Eye size={13} />, sub: 'Casos de uso' },
     antipadroes: { cor: 'peach', icon: <X size={13} />, sub: 'O que NÃO fazer' },
+    // v1.150.1 — novos
+    capacidades: { cor: 'blue', icon: <CheckCircle2 size={13} />, sub: 'Habilidades nucleares' },
+    requisitos: { cor: 'peach', icon: <ListChecks size={13} />, sub: 'Pré-requisitos / dependências' },
+    arestas_perigosas: { cor: 'peach', icon: <X size={13} />, sub: 'Armadilhas e gotchas' },
+    habilidades_relacionadas: { cor: 'lavender', icon: <FolderInput size={13} />, sub: 'Combina bem com' },
     outra: { cor: 'lavender', icon: <FileText size={13} /> },
   };
 
@@ -2009,7 +2169,7 @@ function SkillBlocosRender({ blocos, conteudoBruto, aberta, comoUsar }: {
                   borderRadius: 10, padding: 14,
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                   <div style={{
                     width: 26, height: 26, borderRadius: 7,
                     background: `${cor}1a`, color: cor,
@@ -2031,12 +2191,11 @@ function SkillBlocosRender({ blocos, conteudoBruto, aberta, comoUsar }: {
                     )}
                   </div>
                 </div>
-                <div style={{
-                  fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary, lineHeight: 1.65,
-                  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                }}>
-                  {bloco.conteudo}
-                </div>
+                {/* v1.150.1 — Render adaptativo do conteúdo: tabelas markdown
+                    viram <table>, blocos "lista de slugs" (capacidades, requisitos,
+                    habilidades_relacionadas) viram chips. Cai pro texto pre-wrap
+                    quando não bate nenhum desses padrões. */}
+                <BlocoConteudoRender chave={bloco.chave} conteudo={bloco.conteudo} cor={cor} />
               </div>
             );
           })}

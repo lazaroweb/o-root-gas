@@ -36,6 +36,65 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.150.1] — 2026-06-23
+
+### Refinado — Parser absorve o formato `vibeship-spawner-skills` (e qualquer Anthropic-style)
+
+**Contexto:** O user mandou o `agent-evaluation.md` (formato `vibeship-spawner-
+skills (Apache 2.0)`) e o render saiu confuso. Antes do bulk import de 1036
+skills + 422 agents, refinamos o parser pra absorver mais variações de formato
+sem perder estrutura.
+
+**Problemas que apareceram:**
+
+| Sintoma | Causa raiz | Fix |
+|---|---|---|
+| Card mostrava `agent-evaluation` (kebab) ao invés de "Avaliação de Agentes" | Frontmatter `name:` é o slug, não o nome | Se `name` é kebab-case E existe H1, H1 vira `nome` e `name` vira `slug` |
+| `## Capacidades`, `## Requisitos`, `## Padrões` caíam todos em `outra` | Regras de regex não cobriam esses títulos | 4 novas chaves: `capacidades`, `requisitos`, `arestas_perigosas`, `habilidades_relacionadas`. `Padrões` mapeia pra `boas_praticas` |
+| `## ⚠️ Arestas Perigosas` não casava com regex | Emoji no início do título | Strip de emojis/símbolos Unicode antes do regex |
+| Tabela markdown `\| Problema \| Severidade \| Solução \|` saia como texto puro | Drawer só fazia `pre-wrap` | Render adaptativo: detecta `\|---\|---\|` e renderiza `<table>` real |
+| Severidade `crítica/alta/média/baixa` sem destaque | Texto plano | `SeveridadeBadge` colorido (vermelho/peach/âmbar/sage) |
+| Slugs em `\`backticks\`` viravam texto | Sem extração | Em `capacidades`/`requisitos`/`habilidades_relacionadas` viram **chips** automaticamente |
+| Descrição do frontmatter muito longa estourava o card | Sem limite | Corta inteligente em 240 chars na 1ª pontuação após 80 chars |
+
+**Parser (`server.ts`):**
+
+- `_chaveSecao` ganha **4 chaves novas** + 2 sinônimos (`padroes` → `boas_praticas`).
+- Strip de emojis Unicode no título antes do regex.
+- Heurística nome/slug: detecta `name: agent-evaluation` + H1 "Avaliação..."
+  e promove o H1 a nome legível.
+- Recorte inteligente da `description` do frontmatter (mantém 1ª frase
+  completa se houver pontuação após 80 chars; senão `…`).
+- Frontmatter `source:` (vibeship usa) vai pra tags automaticamente.
+- `habilidades_relacionadas` extrai slugs em \`backticks\` e mergeia em
+  `relacionadas` (mesmo extrator de `integracoes` dos agents).
+
+**UI (`SkillsHubModal.tsx`):**
+
+- `META_BLOCO` ganha entradas pras 4 chaves novas (cor/ícone/sub coerentes).
+- Novo componente `BlocoConteudoRender` (render adaptativo):
+  - Detecta tabela markdown → `<table>` com header/body/borders e
+    `SeveridadeBadge` colorido na coluna de severidade quando aplicável.
+  - Detecta lista de slugs em blocos `capacidades`/`requisitos`/
+    `habilidades_relacionadas` → renderiza como **chips coloridos** com o
+    texto livre acima (ex.: "Funciona bem com:").
+  - Fallback: pre-wrap tradicional.
+
+**Resultado prático:** o `agent-evaluation.md` que você baixou agora deve
+renderizar:
+- Card com nome **"Avaliação de Agentes"** (não mais `agent-evaluation`)
+- Bloco **Capacidades** como chips azuis (`agent-testing`, `benchmark-design`…)
+- Bloco **Requisitos** como chips peach (`testing-fundamentals`, `llm-fundamentals`)
+- Bloco **Padrões** como card sage (boas práticas) com os 3 sub-items
+- Bloco **Anti-Padrões** como card peach com os 3 ❌
+- Bloco **⚠️ Arestas Perigosas** como **TABELA real** com `crítica`/`alta`/`média`
+  em badges coloridos
+- Bloco **Habilidades Relacionadas** como chips lavender clicáveis
+- A lista geral `aberta.relacionadas` mergeada com `multi-agent-orchestration`,
+  `agent-communication`, `autonomous-agents`
+
+---
+
 ## [1.150.0] — 2026-06-23
 
 ### Adicionado — Parser do "Pack PT-BR" para Agents (8 blocos específicos)

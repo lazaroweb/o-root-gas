@@ -16936,10 +16936,17 @@ interface SkillParsed {
 // Reconhece tanto o formato PT-BR do novo pack quanto variações em inglês.
 // v1.150.0 — Adicionadas chaves específicas de Agent: protocolo_inicializacao,
 // dominios, workflow, protocolo_comunicacao, integracoes, diretriz_final.
+// v1.150.1 — Adicionadas chaves do formato vibeship-spawner: capacidades,
+// requisitos, arestas_perigosas, habilidades_relacionadas. Padrões → boas_praticas.
+// Limpa emoji/símbolo do início do título antes do regex (### ⚠️ X → x).
 function _chaveSecao(tituloRaw: string): string {
   const t = tituloRaw
     .toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // tira acentos
+    // v1.150.1 — Remove emojis/símbolos do início (⚠️, 🚨, ❌, ✅, etc.).
+    // Range cobre os blocos Unicode comuns de emoji/símbolo + as variantes
+    // de seleção (FE0F/200D). Mantém pontuação ASCII básica.
+    .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/gu, '')
     .trim();
   if (/^metadados|^metadata$/.test(t)) return 'metadados';
   if (/quando\s+usar|when\s+to\s+use/.test(t)) return 'quando_usar';
@@ -16949,10 +16956,15 @@ function _chaveSecao(tituloRaw: string): string {
   if (/protocolo\s+de\s+inicializ|protocol(?:o)?\s+de\s+ativacao|inicializacao|initialization|invoked|startup/.test(t)) return 'protocolo_inicializacao';
   // v1.150.0 — Domínios de conhecimento (áreas + sub-skills do agent).
   if (/dominios?\s+de\s+conhec|knowledge\s+domains?|areas\s+de\s+expertise|expertise\s+areas/.test(t)) return 'dominios';
+  // v1.150.1 — Capacidades (vibeship-spawner): lista de tags/skills nucleares.
+  if (/^capacidades?$|^capabilities$|^skills$|^habilidades$/.test(t)) return 'capacidades';
+  // v1.150.1 — Requisitos (vibeship-spawner): pré-requisitos / dependências.
+  if (/^requisitos$|^requirements$|^prerequisit|^pre.?requis|^dependencias$|^dependencies$|^depende\s+de/.test(t)) return 'requisitos';
   if (/pre.?execucao|context|coleta\s+de\s+contexto|prerequisit/.test(t)) return 'pre_execucao';
   if (/principios|principles/.test(t)) return 'principios';
   if (/regras|rules|estilo|style/.test(t)) return 'regras';
-  if (/boas\s+praticas|best\s+practices|good\s+practices/.test(t)) return 'boas_praticas';
+  // v1.150.1 — "Padrões" mapeia pra boas_praticas (sinônimos contextuais).
+  if (/boas\s+praticas|best\s+practices|good\s+practices|^padroes$|^patterns$/.test(t)) return 'boas_praticas';
   if (/framework\s+de\s+entrega|delivery\s+framework|output\s+format|entrega|formato\s+da\s+resposta/.test(t)) return 'framework';
   // v1.150.0 — Workflow de execução (fases) — agent específico.
   if (/workflow\s+de\s+execucao|execution\s+workflow|fluxo\s+de\s+execucao|workflow|execution\s+flow/.test(t)) return 'workflow';
@@ -16960,7 +16972,12 @@ function _chaveSecao(tituloRaw: string): string {
   if (/checklist|qualidade|quality\s+check/.test(t)) return 'checklist';
   // v1.150.0 — Protocolo de comunicação (JSON entre agents).
   if (/protocolo\s+de\s+comunicacao|communication\s+protocol|agent\s+protocol/.test(t)) return 'protocolo_comunicacao';
-  // v1.150.0 — Integrações com outros agents.
+  // v1.150.1 — Arestas perigosas / armadilhas / gotchas / pitfalls (geralmente
+  // vem com tabela Problema/Severidade/Solução).
+  if (/arestas?\s+perigosas|armadilhas?|gotchas|pitfalls|edge\s+cases?|riscos/.test(t)) return 'arestas_perigosas';
+  // v1.150.1 — Habilidades relacionadas (geralmente lista slugs em backticks).
+  if (/habilidades\s+relacionadas|skills?\s+relacionadas?|related\s+(?:skills|capabilities)|see\s+also|works?\s+well\s+with/.test(t)) return 'habilidades_relacionadas';
+  // v1.150.0 — Integrações com outros agents (mais específico que habilidades_relacionadas).
   if (/integracao\s+com\s+outros\s+agen|colabora|colaboracao|integration|interacts?\s+with/.test(t)) return 'integracoes';
   // v1.150.0 — Diretriz final (1 frase resumo, vira preview do card).
   if (/diretriz\s+final|princip(?:io|al)\s+(?:de\s+ouro|guideline)|final\s+directive|golden\s+rule/.test(t)) return 'diretriz_final';
@@ -17114,6 +17131,11 @@ function _parseSkillMd(conteudo: string): SkillParsed {
       else if (k === 'category' || k === 'categoria') out.categoria = v;
       else if (k === 'slug') out.slug = v;
       else if (k === 'id' || k === 'id_externo') out.idExterno = v;
+      else if (k === 'source' || k === 'fonte' || k === 'origem') {
+        // v1.150.1 — frontmatter `source: vibeship-spawner-skills (Apache 2.0)`
+        // pode ser usado pra agrupar packs. Por ora vai pra tags como sinal.
+        if (v && !out.tags.includes(v)) out.tags.push(v.split('(')[0].trim());
+      }
       else if (k === 'tags') {
         v = v.replace(/^\[|\]$/g, '');
         out.tags = v.split(',').map((x) => x.trim()).filter(Boolean);
@@ -17121,16 +17143,34 @@ function _parseSkillMd(conteudo: string): SkillParsed {
     }
   }
 
-  // 2) Fallback: H1 + primeiro parágrafo (pro `nome` e `descricao` quando o
-  // frontmatter não tiver).
-  if (!out.nome) {
-    const h1 = corpo.match(/^#\s+(.+)$/m);
-    if (h1) out.nome = h1[1].trim();
+  // v1.150.1 — Heurística nome/slug: se o frontmatter `name` veio como
+  // kebab-case (sem espaço, ex.: "agent-evaluation") E existe um H1 PT-BR,
+  // promove o H1 a `nome` legível e o `name` vira `slug`. Isso evita cards
+  // feios tipo "agent-evaluation" quando o autor já escreveu "Avaliação de
+  // Agentes" como título principal.
+  const h1Match = corpo.match(/^#\s+(.+)$/m);
+  const h1Texto = h1Match ? h1Match[1].trim() : '';
+  if (out.nome && /^[a-z0-9][a-z0-9\-_]*$/.test(out.nome) && h1Texto && h1Texto.toLowerCase() !== out.nome) {
+    if (!out.slug) out.slug = out.nome;
+    out.nome = h1Texto;
+  } else if (!out.nome && h1Texto) {
+    out.nome = h1Texto;
   }
   if (!out.descricao) {
     const aposH1 = corpo.replace(/^#\s+.+$/m, '').trim();
     const par = aposH1.match(/^([^\n#][^\n]+(?:\n[^\n#][^\n]+)*)/);
     if (par) out.descricao = par[1].trim().slice(0, 240);
+  } else {
+    // v1.150.1 — Frontmatter pode trazer descrição enorme (ex.: vibeship usa
+    // o description como "system prompt do trigger"). Pra preview do card e
+    // do drawer, cortar a 240 chars na 1ª frase mantendo legibilidade.
+    if (out.descricao.length > 240) {
+      const recorte = out.descricao.slice(0, 240);
+      const ultimaPontuacao = Math.max(recorte.lastIndexOf('. '), recorte.lastIndexOf('! '), recorte.lastIndexOf('? '));
+      out.descricao = ultimaPontuacao > 80
+        ? recorte.slice(0, ultimaPontuacao + 1).trim()
+        : recorte.trim() + '…';
+    }
   }
 
   // 3) Extrai TODAS as seções H2 com conteúdo. Vai do "## X" até o próximo "## Y"
@@ -17185,6 +17225,16 @@ function _parseSkillMd(conteudo: string): SkillParsed {
     const integracoes = _extrairIntegracoes(blocoIntegracoes.conteudo);
     if (integracoes.length > 0) {
       const set = new Set([...out.relacionadas, ...integracoes]);
+      out.relacionadas = Array.from(set);
+    }
+  }
+  // v1.150.1 — Habilidades relacionadas (vibeship-spawner format): tem o mesmo
+  // shape de slugs em `backticks` ou [colchetes] — reusa o extrator e mergeia.
+  const blocoHabRel = blocos.find((b) => b.chave === 'habilidades_relacionadas');
+  if (blocoHabRel) {
+    const habs = _extrairIntegracoes(blocoHabRel.conteudo);
+    if (habs.length > 0) {
+      const set = new Set([...out.relacionadas, ...habs]);
       out.relacionadas = Array.from(set);
     }
   }
