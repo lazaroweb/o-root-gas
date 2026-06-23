@@ -36,6 +36,22 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.153.1] — 2026-06-23
+
+### Alterado — Cards de Agents premium minimalista (respiro + estrutura)
+
+Feedback: a estação de Agents estava "sem nada de premium, sem respiro". Repaginei
+os cards e a grade com mais ar e hierarquia, mantendo minimalismo.
+
+- **Card do agent** (`AgentsHubModal.tsx`): padding maior (18px), cantos 16px,
+  **faixa de acento sutil no topo** (gradiente), avatar 40px com tint + borda,
+  nome em destaque, **tipo como pill uppercase**, nota da Lume, preview com
+  `line-height` arejado, tags discretas, e **rodapé com divisor** (id · tamanho ·
+  usos · tempo) pra dar estrutura. Hover mais suave (eleva + sombra).
+- **Grade** mais arejada: colunas `minmax(290px)` e `gap: 16`.
+- **Cabeçalho de resultados** acima da grade ("N agents de M" + "X avaliados pela
+  Lume") pra dar contexto e estrutura.
+
 ## [1.153.0] — 2026-06-23
 
 ### Alterado — Barra de ações premium + favorito vira coração (Skills + Agents)

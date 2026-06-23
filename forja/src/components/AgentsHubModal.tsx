@@ -407,11 +407,32 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
           }
         />
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
-          {filtrados.map((a) => (
-            <AgentCard key={a.id} agent={a} onOpen={() => abrir(a.id)} onToggleFavorita={() => toggleFavorita(a.id)} />
-          ))}
-        </div>
+        <>
+          {/* v1.153.1 — cabeçalho de resultados: dá contexto e estrutura à grade */}
+          <div style={{
+            display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+            marginBottom: 14, gap: 8,
+          }}>
+            <span style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary }}>
+              <strong style={{ color: t.text, fontFamily: FONTS.display, fontSize: 14 }}>{filtrados.length}</strong>
+              {' '}{filtrados.length === 1 ? 'agent' : 'agents'}
+              {filtrados.length !== agents.length && (
+                <span style={{ color: t.textTertiary }}> de {agents.length}</span>
+              )}
+            </span>
+            {qtdAvaliados > 0 && (
+              <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <Sparkles size={11} color={t.accents.peach} />
+                {qtdAvaliados} avaliado{qtdAvaliados === 1 ? '' : 's'} pela Lume
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 16 }}>
+            {filtrados.map((a) => (
+              <AgentCard key={a.id} agent={a} onOpen={() => abrir(a.id)} onToggleFavorita={() => toggleFavorita(a.id)} />
+            ))}
+          </div>
+        </>
       )}
 
       {/* Drawer */}
@@ -484,116 +505,125 @@ function AgentCard({ agent, onOpen, onToggleFavorita }: {
   const t = useTokens();
   const corFav = t.accents.peach;
   const corBot = t.accents.blue;
+  const acento = agent.favorita ? corFav : corBot;
+  const preview = agent.diretrizFinal || agent.quandoUsar || agent.descricaoPt || agent.descricao;
   return (
     <div
       onClick={onOpen}
       style={{
-        background: agent.favorita ? `${corFav}06` : t.surface,
-        border: `1.5px solid ${agent.favorita ? `${corFav}55` : t.border}`,
-        borderRadius: 12, padding: 14, cursor: 'pointer',
-        transition: 'all 0.18s',
-        display: 'flex', flexDirection: 'column', gap: 8, minHeight: 140,
-        position: 'relative',
+        background: t.surface,
+        border: `1px solid ${agent.favorita ? `${corFav}40` : t.border}`,
+        borderRadius: 16, padding: 18, cursor: 'pointer',
+        transition: 'transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease',
+        display: 'flex', flexDirection: 'column', gap: 12, minHeight: 168,
+        position: 'relative', overflow: 'hidden',
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = agent.favorita ? corFav : corBot;
-        e.currentTarget.style.transform = 'translateY(-1px)';
-        e.currentTarget.style.boxShadow = `0 4px 14px ${t.shadowSoft || 'rgba(0,0,0,0.05)'}`;
+        e.currentTarget.style.borderColor = acento;
+        e.currentTarget.style.transform = 'translateY(-2px)';
+        e.currentTarget.style.boxShadow = `0 8px 24px ${t.shadowSoft || 'rgba(0,0,0,0.06)'}`;
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = agent.favorita ? `${corFav}55` : t.border;
+        e.currentTarget.style.borderColor = agent.favorita ? `${corFav}40` : t.border;
         e.currentTarget.style.transform = 'translateY(0)';
         e.currentTarget.style.boxShadow = 'none';
       }}
     >
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); onToggleFavorita(); }}
-        title={agent.favorita ? 'Remover dos favoritos' : 'Marcar como favorita'}
-        style={{
-          position: 'absolute', top: 8, right: 8,
-          width: 28, height: 28, borderRadius: 8,
-          background: agent.favorita ? `${corFav}1a` : 'transparent',
-          border: 'none', cursor: 'pointer',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}
-      >
-        <Heart size={14} color={corFav} fill={agent.favorita ? corFav : 'none'} strokeWidth={agent.favorita ? 1.5 : 1.8} />
-      </button>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, paddingRight: 32 }}>
+      {/* Faixa de acento sutil no topo — dá identidade sem poluir */}
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg, ${acento}, ${acento}00)` }} />
+
+      {/* Cabeçalho: avatar + nome/tipo + coração */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
         <div style={{
-          width: 30, height: 30, borderRadius: 8,
-          background: agent.favorita ? `${corFav}1a` : `${corBot}1a`,
+          width: 40, height: 40, borderRadius: 11,
+          background: `${acento}14`, border: `1px solid ${acento}26`,
           display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
         }}>
-          <Bot size={15} color={agent.favorita ? corFav : corBot} />
+          <Bot size={19} color={acento} strokeWidth={1.8} />
         </div>
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{
-            fontFamily: FONTS.display, fontSize: 14, fontWeight: 600,
+            fontFamily: FONTS.display, fontSize: 14.5, fontWeight: 600,
             color: t.text, lineHeight: 1.3,
-            overflow: 'hidden', textOverflow: 'ellipsis',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
             {agent.nome || '(sem nome)'}
           </div>
-          {/* v1.152.0 — nota de qualidade da Lume */}
-          {!!(agent.estrelas && agent.estrelas > 0) && (
-            <div style={{ marginTop: 3 }}>
-              <EstrelasQualidade valor={agent.estrelas} motivo={agent.estrelasMotivo} avaliadaEm={agent.avaliadaEm} size={12} />
-            </div>
+          {agent.tipo && (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 5,
+              background: `${corBot}10`, color: corBot,
+              fontFamily: FONTS.ui, fontSize: 9.5, fontWeight: 700,
+              letterSpacing: '0.04em', textTransform: 'uppercase',
+              padding: '2px 8px', borderRadius: 999,
+            }}>
+              {agent.tipo}
+            </span>
           )}
         </div>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onToggleFavorita(); }}
+          title={agent.favorita ? 'Remover dos favoritos' : 'Marcar como favorito'}
+          style={{
+            width: 30, height: 30, borderRadius: 9, flexShrink: 0,
+            background: agent.favorita ? `${corFav}14` : 'transparent',
+            border: 'none', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'background 0.15s',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = `${corFav}22`; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = agent.favorita ? `${corFav}14` : 'transparent'; }}
+        >
+          <Heart size={15} color={corFav} fill={agent.favorita ? corFav : 'none'} strokeWidth={agent.favorita ? 1.5 : 1.8} />
+        </button>
       </div>
-      {/* v1.150.0 — Preview prioriza DIRETRIZ FINAL (1 frase resumo do agent),
-          cai pra QUANDO USAR, depois descrição. Render em itálico quando é a
-          diretriz pra sinalizar visualmente que é a "alma" do agent. */}
-      {(agent.diretrizFinal || agent.quandoUsar || agent.descricaoPt || agent.descricao) && (
+
+      {/* Nota de qualidade da Lume (some quando 0) */}
+      {!!(agent.estrelas && agent.estrelas > 0) && (
+        <EstrelasQualidade valor={agent.estrelas} motivo={agent.estrelasMotivo} avaliadaEm={agent.avaliadaEm} size={12} />
+      )}
+
+      {/* Preview — diretriz final em itálico (a "alma" do agent) */}
+      {preview && (
         <p style={{
-          margin: 0, fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary,
-          lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box',
+          margin: 0, fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary,
+          lineHeight: 1.6, overflow: 'hidden', display: '-webkit-box',
           WebkitLineClamp: 3, WebkitBoxOrient: 'vertical' as const,
           fontStyle: agent.diretrizFinal ? 'italic' : 'normal',
         }}>
-          {agent.diretrizFinal || agent.quandoUsar || agent.descricaoPt || agent.descricao}
+          {preview}
         </p>
       )}
 
-      {/* v1.150.0 — Tipo do agent (agente-autonomo, etc) — badge sutil */}
-      {agent.tipo && (
-        <div style={{
-          display: 'inline-flex', alignItems: 'center', gap: 4,
-          background: `${corFav}0a`, color: corFav,
-          fontFamily: FONTS.ui, fontSize: 10, fontWeight: 600,
-          padding: '2px 7px', borderRadius: 999, width: 'fit-content',
-        }}>
-          <Bot size={9} />{agent.tipo}
-        </div>
-      )}
-
       {agent.tags.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 'auto' }}>
-          {agent.tags.slice(0, 4).map((tag) => (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+          {agent.tags.slice(0, 3).map((tag) => (
             <span key={tag} style={{
               background: t.surfaceMuted, color: t.textTertiary,
-              fontFamily: FONTS.ui, fontSize: 10,
-              padding: '1px 7px', borderRadius: 999,
+              fontFamily: FONTS.ui, fontSize: 10, fontWeight: 500,
+              padding: '2px 8px', borderRadius: 6,
             }}>
               {tag}
             </span>
           ))}
-          {agent.tags.length > 4 && <span style={{ fontSize: 10, color: t.textTertiary }}>+{agent.tags.length - 4}</span>}
+          {agent.tags.length > 3 && <span style={{ fontSize: 10, color: t.textTertiary, alignSelf: 'center' }}>+{agent.tags.length - 3}</span>}
         </div>
       )}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto', fontFamily: FONTS.ui, fontSize: 10, color: t.textTertiary, gap: 6 }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+
+      {/* Rodapé estruturado: divisor + meta */}
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        marginTop: 'auto', paddingTop: 10, borderTop: `1px solid ${t.borderSoft}`,
+        fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary, gap: 6,
+      }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
           {agent.idExterno && (
-            <span style={{ fontFamily: FONTS.mono, color: corBot, fontWeight: 600 }}>
-              {agent.idExterno}
-            </span>
+            <span style={{ fontFamily: FONTS.mono, color: corBot, fontWeight: 600 }}>{agent.idExterno}</span>
           )}
           <span>{bytesHumano(agent.tamanhoBytes)}</span>
         </span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
           {typeof agent.usos === 'number' && agent.usos > 0 && (
             <span style={{ fontFamily: FONTS.ui, fontWeight: 600, color: corFav, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
               <Sparkles size={9} />{agent.usos}
