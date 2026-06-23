@@ -12,7 +12,8 @@ import dayjs from 'dayjs';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
-import type { ServerResult } from '../types';
+import CartaoSelectorModal, { descreverCartao } from './CartaoSelectorModal';
+import type { ServerResult, CartaoPessoal } from '../types';
 
 interface Login {
   email: string;
@@ -43,6 +44,7 @@ interface Conta {
   recNotas: string;
   criadoEm: string;
   atualizadoEm: string;
+  cartaoId?: string;
 }
 
 // ─── Catálogos de apoio ───────────────────────────────────────────────────────
@@ -140,6 +142,12 @@ export default function ContasPanel({ onAbrirCofre }: { onAbrirCofre?: (label?: 
   const [salvando, setSalvando] = useState(false);
   const [form] = Form.useForm();
   const temSegredoWatch = Form.useWatch('temSegredo', form);
+  const cartaoIdSel = Form.useWatch('cartaoId', form) as string | undefined;
+
+  // Cartões pessoais (do Financeiro Pessoal) — usados pra autofill da forma de
+  // pagamento. Carrega uma vez junto com as contas; reusa entre aberturas do modal.
+  const [cartoes, setCartoes] = useState<CartaoPessoal[]>([]);
+  const [cartaoModalOpen, setCartaoModalOpen] = useState(false);
 
   const carregar = () => {
     setLoading(true);
@@ -149,12 +157,18 @@ export default function ContasPanel({ onAbrirCofre }: { onAbrirCofre?: (label?: 
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { carregar(); }, []);
+  const carregarCartoes = () => {
+    callServer<ServerResult>('getCartoesPessoais')
+      .then((r) => { if (r.ok && Array.isArray(r.data)) setCartoes(r.data as CartaoPessoal[]); })
+      .catch(() => { /* sem cartões, segue normal */ });
+  };
+
+  useEffect(() => { carregar(); carregarCartoes(); }, []);
 
   const abrirNova = () => {
     setEditando(null);
     form.resetFields();
-    form.setFieldsValue({ categoria: 'ia', status: 'ativa', tipoCobranca: 'gratuito', moeda: 'BRL', custo: 0, logins: [{ email: '', rotulo: '' }] });
+    form.setFieldsValue({ categoria: 'ia', status: 'ativa', tipoCobranca: 'gratuito', moeda: 'BRL', custo: 0, logins: [{ email: '', rotulo: '' }], cartaoId: '' });
     setModalAberto(true);
   };
 
@@ -180,6 +194,7 @@ export default function ContasPanel({ onAbrirCofre }: { onAbrirCofre?: (label?: 
       recEmail: c.recEmail,
       recTelefone: c.recTelefone,
       recNotas: c.recNotas,
+      cartaoId: c.cartaoId || '',
     });
     setModalAberto(true);
   };
@@ -211,6 +226,7 @@ export default function ContasPanel({ onAbrirCofre }: { onAbrirCofre?: (label?: 
         recEmail: v.recEmail || '',
         recTelefone: v.recTelefone || '',
         recNotas: v.recNotas || '',
+        cartaoId: v.cartaoId || '',
       };
       const r = await callServer<ServerResult>('contasSave', payload);
       if (r.ok) {
@@ -687,8 +703,57 @@ export default function ContasPanel({ onAbrirCofre }: { onAbrirCofre?: (label?: 
             </Form.Item>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="formaPagamento" label="Forma de pagamento" extra="ex.: cartão final 1234, PIX, boleto">
-              <Input placeholder="cartão final ****" />
+            {/* Forma de pagamento: texto livre (PIX, boleto, etc.) + atalho pra
+                puxar um cartão cadastrado no Financeiro Pessoal — quando o user
+                escolhe, preenchemos o texto com "Cartão X (Bandeira)" + gravamos
+                o cartaoId pra ligar as duas áreas do app. */}
+            <Form.Item label={(
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, width: '100%' }}>
+                Forma de pagamento
+                <span style={{ flex: 1 }} />
+                <Tooltip title={cartoes.length ? 'Puxar um cartão do Financeiro Pessoal' : 'Cadastre cartões em Financeiro > Pessoal > Cartões'}>
+                  <Button
+                    size="small"
+                    type="link"
+                    icon={<CreditCard size={12} />}
+                    onClick={() => setCartaoModalOpen(true)}
+                    style={{ padding: 0, height: 'auto', fontSize: 11.5 }}
+                  >
+                    {cartaoIdSel ? 'Trocar cartão' : 'Escolher cartão'}
+                  </Button>
+                </Tooltip>
+              </span>
+            )} extra="ex.: cartão final 1234, PIX, boleto, débito automático">
+              <Form.Item name="formaPagamento" noStyle>
+                <Input placeholder="cartão final ****" />
+              </Form.Item>
+              {cartaoIdSel && (() => {
+                const c = cartoes.find((x) => x.id === cartaoIdSel);
+                if (!c) return null;
+                const cor = c.cor || t.accents.lavender;
+                return (
+                  <div style={{
+                    marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 6,
+                    padding: '3px 9px', borderRadius: 999,
+                    background: `${cor}12`, border: `1px solid ${cor}40`,
+                    fontFamily: FONTS.ui, fontSize: 11, color: t.text,
+                  }}>
+                    <CreditCard size={11} color={cor} />
+                    Vinculado a: <strong style={{ fontWeight: 600 }}>{descreverCartao(c)}</strong>
+                    <Button
+                      type="text" size="small"
+                      onClick={() => form.setFieldsValue({ cartaoId: '' })}
+                      style={{ padding: '0 4px', height: 18, fontSize: 10, color: t.textTertiary }}
+                    >
+                      desvincular
+                    </Button>
+                  </div>
+                );
+              })()}
+              {/* campo escondido — só pro Form reconhecer o cartaoId */}
+              <Form.Item name="cartaoId" hidden>
+                <Input />
+              </Form.Item>
             </Form.Item>
             <Form.Item name="proximaCobranca" label="Próxima cobrança / renovação">
               <DatePicker style={{ width: '100%' }} format="DD/MM/YYYY" placeholder="selecione" />
@@ -1038,6 +1103,29 @@ export default function ContasPanel({ onAbrirCofre }: { onAbrirCofre?: (label?: 
           )}
         </div>
       </Modal>
+
+      {/* Modal de seleção de cartão — compartilhado com FinAssinaturas. Quando
+          o user escolhe um cartão, preenchemos `formaPagamento` com um texto
+          legível ("Cartão X (Bandeira)") e gravamos o `cartaoId` num campo
+          escondido, mantendo o ponteiro pro Financeiro Pessoal. */}
+      <CartaoSelectorModal
+        open={cartaoModalOpen}
+        cartoes={cartoes}
+        selectedId={cartaoIdSel}
+        onClose={() => setCartaoModalOpen(false)}
+        onSelect={(c) => {
+          if (c) {
+            form.setFieldsValue({
+              cartaoId: c.id,
+              formaPagamento: descreverCartao(c),
+            });
+          } else {
+            form.setFieldsValue({ cartaoId: '' });
+          }
+          setCartaoModalOpen(false);
+        }}
+        title="Cartão usado para pagar esta conta"
+      />
     </div>
   );
 }

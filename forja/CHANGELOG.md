@@ -36,6 +36,62 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.144.0] — 2026-06-22
+
+### Adicionado — Ligando Atelier > Contas e Financeiro Pessoal via cartão
+
+**Por quê.** Antes você cadastrava um cartão em `Financeiro > Pessoal > Cartões`
+e digitava de novo "cartão final 1234" em `Atelier > Contas` e no `cartaoId` plano
+de cada assinatura. Informação duplicada, sem ligação entre as áreas — se trocasse
+o cartão, precisava editar tudo manualmente.
+
+**O que mudou.** Um único componente visual de seleção de cartão, usado nas duas
+telas. Você vê a cara do cartão (cor que escolheu no cadastro, bandeira, dia de
+vencimento, limite) e clica — nada de dropdown plano onde todos parecem iguais.
+
+#### Novo: `CartaoSelectorModal` compartilhado (`forja/src/components/`)
+- Modal de 620px com grid responsivo de mini-cards do cartão.
+- Cada mini-card mostra: ícone na cor escolhida, apelido > nome, bandeira (chip
+  colorido por marca: Visa azul, Mastercard vermelho, Elo ciano, Amex azul,
+  Hipercard bordô), dia de vencimento, limite formatado em BRL.
+- Busca por apelido, banco ou bandeira.
+- Estado vazio orienta a cadastrar em `Financeiro > Pessoal > Cartões`.
+- Helper `descreverCartao(c)` exportado: gera texto curto e legível
+  ("Cartão Nubank (Mastercard)") pra exibir fora do modal.
+
+#### `Financeiro > Pessoal > Assinaturas` — `FinAssinaturas.tsx`
+- Quando método de pagamento = "Cartão", em vez do `<Select>` plano antigo,
+  aparece um **trigger visual** (botão com a cor do cartão, nome e ícone) que
+  abre o `CartaoSelectorModal`.
+- Botão "Limpar" inline pra desvincular sem precisar reabrir o modal.
+- Integração transparente com `Form.Item` via `cloneElement` — validação do
+  Ant Design continua funcionando igual.
+
+#### `Atelier > Contas` — `ContasPanel.tsx`
+- Novo campo `cartaoId` (opcional) no schema da tabela `Contas`.
+- No formulário de cadastro/edição de conta, atalho **"Escolher cartão"** ao
+  lado do label "Forma de pagamento". Abre o `CartaoSelectorModal`.
+- Quando você escolhe um cartão, o app preenche automaticamente o texto da
+  forma de pagamento ("Cartão Nubank (Master)") **e** grava o `cartaoId`
+  apontando pro cartão real — ponteiro pro Financeiro Pessoal.
+- Chip visual abaixo do campo mostra "Vinculado a: …" com a cor do cartão e
+  botão `desvincular` inline.
+
+#### Backend — `forja/src/server.ts`
+- Tabela `Contas`: nova coluna `cartaoId` (append, sem breaking change).
+- `contasSave`: aceita e persiste `cartaoId`.
+- `SCHEMA_VERSION` bumpado pra `v1.67-contas-cartao`.
+- `getCartoesPessoais` reusado nas duas telas (já existia).
+
+### Não mexido (por quê)
+- Não criamos uma rota nova nem tabela nova — o cartão continua sendo
+  cadastrado **só** no Financeiro Pessoal (fonte única). Contas e Assinaturas
+  só guardam o ponteiro (`cartaoId`).
+- Não bloqueamos o campo texto livre `formaPagamento` — quem quiser continuar
+  digitando "PIX" ou "boleto" segue podendo.
+
+---
+
 ## [1.143.0] — 2026-06-22
 
 ### Mudado — Fusão Centelha em Ideias (caixa única)

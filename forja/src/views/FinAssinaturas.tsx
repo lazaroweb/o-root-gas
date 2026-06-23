@@ -21,6 +21,7 @@ import { Panel, formatBRL } from '../components/ui';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
+import CartaoSelectorModal, { descreverCartao } from '../components/CartaoSelectorModal';
 import type {
   AssinaturaPessoal, ResumoAssinaturas, CartaoPessoal, ServerResponse,
   StatusAssinatura,
@@ -561,6 +562,8 @@ function ModalAssinatura({ open, onClose, assinatura, cartoes, onSaved }: {
   const [categoria, setCategoria] = useState('streaming');
   const [metodo, setMetodo] = useState('cartao');
   const [nomePreview, setNomePreview] = useState('');
+  const [cartaoModalOpen, setCartaoModalOpen] = useState(false);
+  const cartaoIdSel = Form.useWatch('cartaoId', form) as string | undefined;
 
   useEffect(() => {
     if (open) {
@@ -725,10 +728,12 @@ function ModalAssinatura({ open, onClose, assinatura, cartoes, onSaved }: {
 
         {isCartao && (
           <Form.Item name="cartaoId" label="Cartão">
-            <Select
-              placeholder={cartoes.length ? 'Selecione o cartão' : 'Nenhum cartão cadastrado ainda'}
-              options={cartoes.map((c) => ({ value: c.id, label: `${c.apelido || c.nome} (${c.bandeira})` }))}
-              allowClear
+            {/* trigger visual — abre o CartaoSelectorModal pra escolher um cartão
+                cadastrado (Financeiro Pessoal). Decisão: mais escaneável que um
+                Select plano, mesmo padrão usado em Atelier > Contas. */}
+            <CartaoTrigger
+              cartoes={cartoes}
+              onOpen={() => setCartaoModalOpen(true)}
             />
           </Form.Item>
         )}
@@ -765,6 +770,70 @@ function ModalAssinatura({ open, onClose, assinatura, cartoes, onSaved }: {
           <Input.TextArea rows={2} placeholder="Ex: conta dividida com a família, renova em dezembro…" />
         </Form.Item>
       </Form>
+
+      <CartaoSelectorModal
+        open={cartaoModalOpen}
+        cartoes={cartoes}
+        selectedId={cartaoIdSel}
+        onClose={() => setCartaoModalOpen(false)}
+        onSelect={(c) => {
+          form.setFieldsValue({ cartaoId: c ? c.id : '' });
+          setCartaoModalOpen(false);
+        }}
+        title="Cartão usado para esta assinatura"
+      />
     </Modal>
+  );
+}
+
+// ─── Trigger visual do cartão (substitui Select plano) ────────────────────────
+// Recebe `value` e `onChange` do Form.Item via cloneElement — mantém integração
+// com Ant Form sem reescrever a lógica de validação.
+function CartaoTrigger({
+  cartoes, onOpen, value, onChange,
+}: {
+  cartoes: CartaoPessoal[];
+  onOpen: () => void;
+  value?: string;
+  onChange?: (v: string) => void;
+}): React.ReactElement {
+  const t = useTokens();
+  const selecionado = value ? cartoes.find((c) => c.id === value) || null : null;
+  const cor = selecionado?.cor || t.accents.lavender;
+  return (
+    <div style={{ display: 'flex', gap: 8 }}>
+      <button
+        type="button"
+        onClick={onOpen}
+        style={{
+          flex: 1, display: 'flex', alignItems: 'center', gap: 10,
+          padding: '7px 11px', borderRadius: 8, cursor: 'pointer',
+          background: selecionado ? `${cor}10` : t.surface,
+          border: `1px solid ${selecionado ? `${cor}55` : t.border}`,
+          textAlign: 'left', minHeight: 36, transition: 'all 0.15s',
+        }}
+      >
+        <span style={{
+          width: 24, height: 24, borderRadius: 6, background: `${cor}1f`, color: cor,
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        }}>
+          <CreditCard size={13} />
+        </span>
+        <span style={{
+          fontFamily: FONTS.ui, fontSize: 13, color: selecionado ? t.text : t.textTertiary,
+          flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          fontWeight: selecionado ? 500 : 400,
+        }}>
+          {selecionado
+            ? descreverCartao(selecionado)
+            : (cartoes.length ? 'Selecionar cartão…' : 'Nenhum cartão cadastrado')}
+        </span>
+      </button>
+      {selecionado && (
+        <Button type="text" size="small" onClick={() => onChange && onChange('')}>
+          Limpar
+        </Button>
+      )}
+    </div>
   );
 }

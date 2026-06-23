@@ -169,7 +169,10 @@ const SCHEMA: SheetSchema[] = [
   // `recEmail`/`recTelefone`/`recNotas` (append v1.53): dados de recuperação da
   // conta (e-mail/telefone de recuperação, códigos de backup) — base do relatório
   // que ajuda a achar/atualizar antes de cancelar um e-mail/telefone antigo.
-  { name: 'Contas', columns: ['id', 'categoria', 'servico', 'rotulo', 'email', 'url', 'plano', 'tipoCobranca', 'custo', 'moeda', 'formaPagamento', 'proximaCobranca', 'status', 'temSegredo', 'segredoLabel', 'tags', 'notas', 'criadoEm', 'atualizadoEm', 'logins', 'recEmail', 'recTelefone', 'recNotas'] },
+  // v1.144.0: `cartaoId` (opcional) vincula a forma de pagamento a um cartão
+  // cadastrado no Financeiro Pessoal — permite reutilizar info do cartão
+  // (apelido, bandeira, dia de vencimento) sem digitar de novo.
+  { name: 'Contas', columns: ['id', 'categoria', 'servico', 'rotulo', 'email', 'url', 'plano', 'tipoCobranca', 'custo', 'moeda', 'formaPagamento', 'proximaCobranca', 'status', 'temSegredo', 'segredoLabel', 'tags', 'notas', 'criadoEm', 'atualizadoEm', 'logins', 'recEmail', 'recTelefone', 'recNotas', 'cartaoId'] },
   // ─── Finanças pessoais (v1.3) ──────────────────────────────────────────────
   // FinPessoalLancamentos: cada despesa/entrada pessoal. `valor` sempre positivo
   // — o `tipo` ('despesa'|'entrada') é quem dita o sinal nos cálculos.
@@ -318,7 +321,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.66-ideias-fusao';
+const SCHEMA_VERSION = 'v1.67-contas-cartao';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -15001,6 +15004,7 @@ function contasSave(payload: {
   plano?: string; tipoCobranca?: string; custo?: number | string; moeda?: string; formaPagamento?: string;
   proximaCobranca?: string; status?: string; temSegredo?: string; segredoLabel?: string; tags?: string; notas?: string;
   recEmail?: string; recTelefone?: string; recNotas?: string;
+  cartaoId?: string;
 }): ServerResult {
   try {
     const servico = String(payload.servico || '').trim();
@@ -15035,6 +15039,7 @@ function contasSave(payload: {
       recEmail: String(payload.recEmail || '').trim(),
       recTelefone: String(payload.recTelefone || '').trim(),
       recNotas: String(payload.recNotas || '').trim(),
+      cartaoId: String(payload.cartaoId || '').trim(),
       atualizadoEm: agora,
     };
     if (payload.id) {
