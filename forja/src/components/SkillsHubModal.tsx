@@ -121,8 +121,65 @@ function umaLinha(s: string): string {
 const TARGET_INFO: Record<ExportTarget, { label: string; pasta: (slug: string) => string; instrucao: string }> = {
   generic: { label: 'Genérico / Claude.ai', pasta: (s) => `skills/${s}/SKILL.md`, instrucao: 'Coloque a pasta `skills/` na raiz do projeto.' },
   cursor: { label: 'Cursor', pasta: (s) => `.cursor/rules/${s}.mdc`, instrucao: 'Coloque a pasta `.cursor/` na raiz do projeto — o Cursor carrega as rules automaticamente.' },
-  claude: { label: 'Claude Code', pasta: (s) => `.claude/skills/${s}/SKILL.md`, instrucao: 'Coloque a pasta `.claude/` na raiz do projeto.' },
+  claude: { label: 'Claude Code', pasta: (s) => `${s}/SKILL.md`, instrucao: 'Rode `bash install.sh` no terminal — o script pergunta se você quer instalar global (`~/.claude/skills/`) ou só neste projeto (`.claude/skills/`).' },
 };
+
+// v1.148.7 — Gera o conteúdo do install.sh interativo pro Claude Code.
+// POSIX bash puro, sem dependências. Pergunta global vs projeto e copia tudo.
+// Reusado por: 1) "Exportar tudo (Claude Code)" no header, 2) "Montar kit"
+// quando o destino escolhido é Claude Code (fluxo wizard de seleção custom).
+function gerarInstallShClaude(qtdSkills: number): string {
+  return `#!/usr/bin/env bash
+set -euo pipefail
+
+cat <<'BANNER'
+
+  ╔═══════════════════════════════════════════════════════════╗
+  ║  Forja — instalar skills no Claude Code                    ║
+  ╚═══════════════════════════════════════════════════════════╝
+
+  ${qtdSkills} skill(s) neste pacote prontas pra instalar.
+
+  Onde voce quer instalar?
+
+    1) Global  ->  ~/.claude/skills/
+       (vale em TODOS os seus projetos sem precisar copiar de novo)
+
+    2) Projeto ->  ./.claude/skills/  no diretorio atual
+       (so este projeto, vai versionado no git, time inteiro adota)
+
+BANNER
+
+read -p "  Escolha [1/2]: " escolha
+
+case "\${escolha:-}" in
+  1) DEST="\$HOME/.claude/skills" ;;
+  2) DEST="\$(pwd)/.claude/skills" ;;
+  *) echo "  Escolha invalida ('1' ou '2'). Saindo."; exit 1 ;;
+esac
+
+mkdir -p "\$DEST"
+SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+
+count=0
+for dir in "\$SCRIPT_DIR"/*/; do
+  if [ -f "\$dir/SKILL.md" ]; then
+    slug="\$(basename "\$dir")"
+    target="\$DEST/\$slug"
+    rm -rf "\$target"
+    cp -r "\$dir" "\$target"
+    echo "  - \$slug -> \$target"
+    count=\$((count + 1))
+  fi
+done
+
+echo
+echo "  OK - \$count skills instaladas em:"
+echo "       \$DEST"
+echo
+echo "  Reabra o Claude Code pra ele detectar as novas skills."
+`;
+}
 
 // Empacota um conjunto de skills num .zip no layout do destino escolhido +
 // README. Se `ambienteTexto` vier, injeta cabeçalho de contexto em cada arquivo
@@ -157,6 +214,12 @@ function baixarKitZip(nomeKit: string, skills: ExportSkill[], ambienteTexto?: st
       + 'Ao usar as skills deste kit, assuma este ambiente para comandos de terminal, '
       + 'caminhos de arquivo e exemplos.\n\n## Skills\n\n' + linhas.join('\n') + '\n';
     entries.push({ path: 'AGENTS.md', content: agents });
+  }
+  // v1.148.7 — Destino Claude Code: inclui install.sh interativo que pergunta
+  // global vs projeto. Funciona tanto via "Exportar tudo" (atalho) quanto via
+  // "Montar kit" + seleção custom (wizard).
+  if (target === 'claude') {
+    entries.push({ path: 'install.sh', content: gerarInstallShClaude(skills.length) });
   }
   baixarBlob(criarZipBlob(entries), `${slugSkill(nomeKit)}.zip`);
 }
@@ -439,9 +502,8 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
   };
 
   // v1.148.6 — exporta TODAS as skills do hub em 1 clique no formato Claude Code.
-  // Gera zip contendo `<slug>/SKILL.md` por skill + install.sh interativo (escolhe
-  // entre instalar global em ~/.claude/skills/ ou local em .claude/skills/) +
-  // README com instruções. Honra o padrão "respeite operações longas" (v1.148.4).
+  // v1.148.7 — refatorado pra delegar ao `baixarKitZip` (que agora inclui install.sh
+  // pra destino `claude`). DRY com o fluxo wizard "Montar kit + Claude Code".
   const exportarTodasParaClaudeCode = async () => {
     if (skills.length === 0) {
       message.warning('Nenhuma skill no hub pra exportar.');
@@ -455,107 +517,9 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
         message.error(r.error || 'Erro ao buscar conteúdo das skills.');
         return;
       }
-      const exportadas = r.data as ExportSkill[];
-      const entries: ZipEntry[] = [];
-      const slugs: string[] = [];
-      const usados = new Set<string>();
-      for (const s of exportadas) {
-        const base = slugSkill(s.nome);
-        let u = base; let n = 2;
-        while (usados.has(u)) { u = `${base}-${n}`; n++; }
-        usados.add(u);
-        slugs.push(u);
-        entries.push({ path: `${u}/SKILL.md`, content: s.conteudo });
-      }
-
-      // install.sh interativo: pergunta global vs projeto, copia tudo, reporta.
-      const installSh = `#!/usr/bin/env bash
-set -euo pipefail
-
-cat <<'BANNER'
-
-  ╔═══════════════════════════════════════════════════════════╗
-  ║  Forja — instalar skills no Claude Code                    ║
-  ╚═══════════════════════════════════════════════════════════╝
-
-  ${exportadas.length} skills neste pacote prontas pra instalar.
-
-  Onde voce quer instalar?
-
-    1) Global  ->  ~/.claude/skills/
-       (vale em TODOS os seus projetos sem precisar copiar de novo)
-
-    2) Projeto ->  ./.claude/skills/  no diretorio atual
-       (so este projeto, vai versionado no git, time inteiro adota)
-
-BANNER
-
-read -p "  Escolha [1/2]: " escolha
-
-case "\${escolha:-}" in
-  1) DEST="\$HOME/.claude/skills" ;;
-  2) DEST="\$(pwd)/.claude/skills" ;;
-  *) echo "Escolha invalida ('1' ou '2'). Saindo."; exit 1 ;;
-esac
-
-mkdir -p "\$DEST"
-SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-
-count=0
-for dir in "\$SCRIPT_DIR"/*/; do
-  if [ -f "\$dir/SKILL.md" ]; then
-    slug="\$(basename "\$dir")"
-    target="\$DEST/\$slug"
-    rm -rf "\$target"
-    cp -r "\$dir" "\$target"
-    echo "  - \$slug -> \$target"
-    count=\$((count + 1))
-  fi
-done
-
-echo
-echo "  OK - \$count skills instaladas em:"
-echo "       \$DEST"
-echo
-echo "  Reabra o Claude Code pra ele detectar as novas skills."
-`;
-      entries.push({ path: 'install.sh', content: installSh });
-
-      // README orientando o usuário leigo (BA, não dev).
-      const readme = `# Skills da Forja — pacote pro Claude Code
-
-${exportadas.length} skills exportadas do hub de Skills da Forja, prontas pra usar no **Claude Code**.
-
-## Como instalar (1 comando)
-
-\`\`\`bash
-unzip skills-claude-code.zip -d skills-temp
-cd skills-temp
-bash install.sh
-\`\`\`
-
-O \`install.sh\` pergunta interativamente onde voce quer instalar:
-
-| Opção | Caminho | Quando usar |
-|-------|---------|-------------|
-| **1) Global** | \`~/.claude/skills/\` | Vale em todos os seus projetos sem copiar de novo |
-| **2) Projeto** | \`./.claude/skills/\` no diretório atual | Só este projeto, vai versionado no Git, time inteiro adota |
-
-Depois reabra o Claude Code pra ele detectar.
-
-## Skills inclusas (${exportadas.length})
-
-${exportadas.map((s, i) => `- **${s.nome}** — \`${slugs[i]}/SKILL.md\`${s.descricao ? '\n  > ' + umaLinha(s.descricao) : ''}`).join('\n')}
-
----
-
-Gerado pela Forja em ${new Date().toISOString().slice(0, 10)}.
-Pra atualizar uma skill no futuro: re-exporte e rode \`bash install.sh\` de novo — sobrescreve in-place.
-`;
-      entries.unshift({ path: 'README.md', content: readme });
-
-      baixarBlob(criarZipBlob(entries), `forja-skills-claude-code-${new Date().toISOString().slice(0, 10)}.zip`);
-      message.success(`${exportadas.length} skills exportadas — execute "bash install.sh" no terminal pra instalar.`);
+      const lista = r.data as ExportSkill[];
+      baixarKitZip(`forja-skills-claude-code-${new Date().toISOString().slice(0, 10)}`, lista, '', 'claude');
+      message.success(`${lista.length} skills exportadas — rode "bash install.sh" no terminal pra instalar.`);
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Erro ao exportar');
     } finally {
@@ -886,6 +850,16 @@ Pra atualizar uma skill no futuro: re-exporte e rode \`bash install.sh\` de novo
                         </Button>
                       </Tooltip>
                     )}
+                    {skills.length > 0 && !selMode && (
+                      <Tooltip title="Wizard de exportação custom — marque as skills que quer levar (1 a 1 ou por categoria), escolha o destino (Claude Code, Cursor, Genérico) e baixe um zip com install.sh interativo.">
+                        <Button
+                          icon={<ListChecks size={14} />}
+                          onClick={() => { setSelMode(true); setSelecionados(new Set()); }}
+                        >
+                          Selecionar skills…
+                        </Button>
+                      </Tooltip>
+                    )}
                     <Tooltip title="Crie uma pasta com nome e descrição e suba vários .md de uma vez — tudo entra sob esse pacote.">
                       <Button icon={<FolderPlus size={14} />} onClick={() => setImportOpen(true)}>
                         Importar pacote
@@ -946,19 +920,40 @@ Pra atualizar uma skill no futuro: re-exporte e rode \`bash install.sh\` de novo
                     }}>
                       <ListChecks size={16} color={t.accents.lavender} />
                       <span style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.text }}>
-                        <strong>{selecionados.size}</strong> skill(s) selecionada(s)
+                        <strong>{selecionados.size}</strong> de {filtradas.length} skill(s) selecionada(s)
+                        {filtro && (
+                          <span style={{ color: t.textTertiary, marginLeft: 6 }}>
+                            (filtro: "{filtro}")
+                          </span>
+                        )}
                       </span>
                       <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                        <Tooltip title={filtro ? `Marca todas as ${filtradas.length} skills que combinam com o filtro atual` : `Marca todas as ${filtradas.length} skills da biblioteca`}>
+                          <Button
+                            size="small"
+                            disabled={filtradas.length === 0 || filtradas.every((s) => selecionados.has(s.id))}
+                            onClick={() => setSelecionados((prev) => {
+                              const next = new Set(prev);
+                              filtradas.forEach((s) => next.add(s.id));
+                              return next;
+                            })}
+                          >
+                            {filtro ? 'Selecionar visíveis' : 'Selecionar todas'}
+                          </Button>
+                        </Tooltip>
                         {selecionados.size > 0 && (
                           <Button size="small" onClick={() => setSelecionados(new Set())}>Limpar</Button>
                         )}
-                        <Button
-                          size="small" type="primary" icon={<Archive size={13} />}
-                          disabled={selecionados.size === 0}
-                          onClick={() => abrirExport('Meu Kit', Array.from(selecionados))}
-                        >
-                          Gerar kit
-                        </Button>
+                        <Button size="small" onClick={() => { setSelMode(false); setSelecionados(new Set()); }}>Cancelar</Button>
+                        <Tooltip title={selecionados.size === 0 ? 'Marque ao menos uma skill' : 'Próximo passo: escolhe o destino (Claude Code, Cursor, Genérico). Claude Code inclui install.sh interativo.'}>
+                          <Button
+                            size="small" type="primary" icon={<Archive size={13} />}
+                            disabled={selecionados.size === 0}
+                            onClick={() => abrirExport('Meu Kit', Array.from(selecionados))}
+                          >
+                            Gerar kit ({selecionados.size})
+                          </Button>
+                        </Tooltip>
                       </span>
                     </div>
                   )}
@@ -1610,7 +1605,14 @@ Pra atualizar uma skill no futuro: re-exporte e rode \`bash install.sh\` de novo
             />
             <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, marginTop: 6 }}>
               {expTarget === 'cursor' && 'Gera .cursor/rules/<skill>.mdc (com frontmatter) — extrai na raiz e o Cursor lê sozinho.'}
-              {expTarget === 'claude' && 'Gera .claude/skills/<skill>/SKILL.md — extrai na raiz do projeto.'}
+              {expTarget === 'claude' && (
+                <>
+                  Gera <code>&lt;skill&gt;/SKILL.md</code> + <strong><code>install.sh</code> interativo</strong>.
+                  Você roda <code>bash install.sh</code> e ele pergunta:
+                  global (<code>~/.claude/skills/</code>, vale em todos os projetos)
+                  ou local (<code>./.claude/skills/</code>, só este projeto, versionado).
+                </>
+              )}
               {expTarget === 'generic' && 'Gera skills/<skill>/SKILL.md — formato padrão de agent-skills (Claude.ai e outras).'}
             </div>
           </Form.Item>

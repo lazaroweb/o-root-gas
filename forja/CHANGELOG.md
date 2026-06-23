@@ -36,6 +36,85 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.148.7] — 2026-06-23
+
+### Adicionado — Wizard de exportação custom: escolha quais skills levar pro Claude Code
+
+**Pergunta do usuário (continuação da v1.148.6)**
+> "Outro ponto: eu consigo nessa seção customizar quais skills eu quero
+> e ele gerar um install.sh somente com o que eu escolhi? Tipo um wizard.
+> Seria uma boa feature, não?"
+
+**Sim, seria — e agora tem.**
+
+A v1.148.6 só tinha o atalho "Exportar TUDO". Agora tem o wizard custom.
+
+### Como funciona
+
+No header do Hub de Skills (`Atelier → Skills`) agora tem **2 botões lado a lado**:
+
+| Botão | Quando usar |
+|-------|-------------|
+| **Exportar tudo (Claude Code)** | Atalho: leva todas as skills sem perguntar |
+| **Selecionar skills…** | Wizard: você escolhe quais |
+
+**Wizard (passo a passo)**
+
+1. Clica em **"Selecionar skills…"** → entra no modo seleção
+2. Aparece uma **barra sticky no topo** com:
+   - Contador `X de Y skills selecionadas` (e filtro atual, se houver)
+   - Botão **"Selecionar todas"** (ou "Selecionar visíveis" se você filtrou)
+   - Botão **"Limpar"** (se já tem alguma marcada)
+   - Botão **"Cancelar"** (sai do modo)
+   - Botão **"Gerar kit (N)"** com contador embutido
+3. Clica nos cards das skills pra marcar/desmarcar (ou use a busca pra filtrar antes)
+4. Clica em **"Gerar kit"** → abre o modal de export
+5. Escolhe destino:
+   - **Cursor** → `.cursor/rules/<skill>.mdc`
+   - **Claude Code** → `<skill>/SKILL.md` + **install.sh interativo** ✨
+   - **Genérico** → `skills/<skill>/SKILL.md`
+6. Baixa o zip → descompacta → `bash install.sh` → escolhe global/projeto → pronto
+
+### Mudanças técnicas
+
+**Refatoração DRY**: `baixarKitZip` agora inclui `install.sh` automaticamente
+quando `target === 'claude'`. Antes só o botão "Exportar tudo" gerava o
+install.sh, e o "Montar kit" + Claude Code gerava só os arquivos crus.
+Agora os 2 fluxos compartilham o mesmo gerador (`gerarInstallShClaude`).
+
+**Mudança no layout do zip Claude Code**: antes era `.claude/skills/<slug>/SKILL.md`
+(forçava local-only). Agora é `<slug>/SKILL.md` no zip + install.sh decide o
+destino (global ou local). Mais flexível.
+
+**Barra do modo seleção mais útil**:
+- Mostra `X de Y` (não só `X`)
+- Indica quando há filtro ativo
+- 2 novos botões: "Selecionar todas/visíveis" + "Cancelar"
+- "Gerar kit" mostra contador e tooltip explicando destinos disponíveis
+
+**Modal de export — destino Claude Code mais informativo**:
+Antes: *"Gera .claude/skills/<skill>/SKILL.md — extrai na raiz do projeto."*
+Agora: *"Gera `<skill>/SKILL.md` + **install.sh interativo**. Você roda
+`bash install.sh` e ele pergunta: global (`~/.claude/skills/`, vale em todos
+os projetos) ou local (`./.claude/skills/`, só este projeto, versionado)."*
+
+### Casos de uso típicos
+
+- **"Quero levar só as 3 skills de design pro projeto novo"**
+  Wizard → filtra por "design" → "Selecionar visíveis" → "Gerar kit" → Claude Code → bash install.sh
+
+- **"Quero compartilhar com o time só as skills de governança via Git"**
+  Wizard → marca skills de governança → "Gerar kit" → Claude Code → bash install.sh → escolhe **2 (Projeto)** → commit `.claude/skills/`
+
+- **"Quero minhas skills sempre disponíveis em qualquer projeto novo"**
+  Atalho "Exportar tudo" → bash install.sh → escolhe **1 (Global)** → fim
+
+### Impacto
+Granularidade total: do "instalar 100% global" ao "instalar só 2 skills no
+projeto X versionado no Git". Mesmo install.sh, mesma UX, sem código duplicado.
+
+---
+
 ## [1.148.6] — 2026-06-23
 
 ### Adicionado — Exportar TODAS as skills em 1 clique pro Claude Code
