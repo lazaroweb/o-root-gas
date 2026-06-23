@@ -36,6 +36,82 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.148.9] — 2026-06-23
+
+### Adicionado — Apagar débito definitivamente + limpeza em massa de fantasmas
+
+**Pergunta do usuário (decorrente do fix da v1.148.8)**
+> "Oxente, ele de alguma forma achou 4 pagos e deixou apenas 1, por que isso?"
+
+**Explicação**
+O sync da v1.148.8 rodou com o regex novo (com `\b`). 4 dos 5 itens não foram
+detectados (eram falsos positivos de `// TODOs` em português). A rotina de
+limpeza automática do `sincronizarDebitos` viu que sumiram e marcou como
+`pago` — comportamento intencional pra preservar histórico de débitos
+genuinamente resolvidos.
+
+**Problema**: esses 4 não eram débito real — eram fantasmas do bug. Ficar
+como `pago` polui a métrica "quantos débitos fechamos" e dá falsa sensação
+de produtividade.
+
+### O que vem nesta versão
+
+**1. Apagar definitivamente (item único)**
+
+- Novo botão **🗑 lixeira** no card de débito (visível quando status = `pago`
+  ou `promovido`)
+- Mesmo botão no Drawer de detalhes (sempre disponível)
+- Popconfirm pede confirmação
+- Backend: nova RPC `apagarDebito(debitoId)` usa `dbDelete('DebitoTecnico', id)`
+- Segurança: bloqueia apagar `promovido` que ainda tem `backlogId` vivo (pra
+  não orfanizar card no kanban)
+
+**2. Limpar fantasmas em massa**
+
+Heurística: **fantasma = pago que nunca foi promovido pra backlog**.
+Se nunca virou card no backlog, não houve trabalho real envolvido — é
+candidato a apagar.
+
+- Novo banner contextual na aba **"Pagos"** quando há fantasmas:
+  > "**4 fantasmas detectados** — 4 de 4 pagos nunca passaram por promoção
+  > pra backlog. São típicos falsos positivos limpos automaticamente pelo
+  > scan (regex pegou bobeira ou comentário não era débito real)."
+  > **[Limpar 4]** (botão vermelho)
+
+- Backend: nova RPC `apagarDebitosPagosSemPromocao(sistemaId)` filtra
+  `status === 'pago' && !promovidoEm && !backlogId` e apaga em batch via
+  `dbDeleteMany`. Preserva pagos que VIERAM de promoção real (trabalho legítimo).
+
+**3. Tipos atualizados**
+
+`resumo` agora calcula:
+- `pagosReais`: pagos com `promovidoEm` (trabalho de verdade preservado)
+- `fantasmas`: pagos sem `promovidoEm` (provavelmente lixo de regex)
+
+Distinção fica visível no banner: "Os outros X foram trabalho de verdade e
+ficam preservados."
+
+### Diferença entre as 3 ações de remoção
+
+| Ação | O que faz | Quando usar |
+|------|-----------|-------------|
+| **Marcar como pago** | Status → `pago`, mantém histórico | Você resolveu fora do scan |
+| **Promover pra Backlog** | Status → `promovido`, cria card no kanban | Vai virar trabalho rastreado |
+| **Apagar definitivamente** ✨ | Remove do banco, zero rastro | Falso positivo, lixo, exemplo em doc |
+
+### Como usar pra resolver os 4 fantasmas atuais
+1. Abre a aba **Dívida** → segmento **"Pagos"**
+2. Aparece banner laranja: "4 fantasmas detectados"
+3. Clica **"Limpar 4"** → confirma → some
+4. Métricas voltam ao limpo (0 pagos, 1 ativo real)
+
+### Impacto
+Fechamento do ciclo iniciado em v1.148.8 — bug do regex corrigido +
+mecanismo pra limpar o lixo que ele deixou. Próximos falsos positivos
+(se algum aparecer) também têm caminho de resolução em 1 clique.
+
+---
+
 ## [1.148.8] — 2026-06-23
 
 ### Corrigido — Falso positivo crítico: "TODOs" em português matchava como TODO

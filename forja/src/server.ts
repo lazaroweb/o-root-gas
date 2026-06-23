@@ -16120,6 +16120,49 @@ function marcarDebitoComoPago(debitoId: string): ServerResult {
   }
 }
 
+// v1.148.9 — Apaga definitivamente um débito do banco.
+// Use quando o débito é claramente falso positivo (bug do parser, exemplo em doc)
+// ou quando você quer limpar lixo histórico sem manter rastro.
+// Segurança: bloqueia apagar 'promovido' com backlogId vivo (pra não orfanizar card).
+function apagarDebito(debitoId: string): ServerResult {
+  try {
+    const todos = dbGetAll('DebitoTecnico') as Array<Record<string, unknown>>;
+    const d = todos.find((x) => String(x.id) === debitoId);
+    if (!d) return { ok: false, error: 'Débito não encontrado.' };
+    if (d.status === 'promovido' && d.backlogId) {
+      return {
+        ok: false,
+        error: 'Débito promovido pra backlog — apague o card do backlog primeiro (ou marque como pago).',
+      };
+    }
+    const ok = dbDelete('DebitoTecnico', debitoId);
+    if (!ok) return { ok: false, error: 'Falha ao apagar.' };
+    return { ok: true, data: { ok: true } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// v1.148.9 — Limpeza em massa: apaga todos os débitos 'pago' que nunca foram
+// promovidos pra backlog (típico de falso positivo limpo automaticamente pelo
+// scan). Preserva pagos que tinham sido promovidos antes (rastro de trabalho real).
+// Retorna quantos foram apagados.
+function apagarDebitosPagosSemPromocao(sistemaId: string): ServerResult {
+  try {
+    const todos = dbGetAll('DebitoTecnico') as Array<Record<string, unknown>>;
+    const alvos = todos
+      .filter((d) => String(d.sistemaId || '') === sistemaId)
+      .filter((d) => String(d.status || '') === 'pago')
+      .filter((d) => !d.promovidoEm && !d.backlogId) // nunca passou por promoção
+      .map((d) => String(d.id));
+    if (alvos.length === 0) return { ok: true, data: { apagados: 0 } };
+    const n = dbDeleteMany('DebitoTecnico', alvos);
+    return { ok: true, data: { apagados: n } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
 // v1.148.8 — Busca contexto completo de um débito: ~10 linhas no entorno do
 // match + descrição não-truncada + URL pra abrir no editor (GitHub ou Apps Script).
 // Usado pelo drawer de detalhes da UI ("ver mais" no card de débito).

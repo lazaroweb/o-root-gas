@@ -7,6 +7,7 @@ import { App as AntApp, Button, Tooltip, Tag, Empty, Spin, Popconfirm, Segmented
 import {
   AlertTriangle, ExternalLink, RefreshCw, Bug, Flame, ListChecks, FileCode2,
   CheckCircle2, ArrowUpRight, Search, ShieldAlert, Eye, Hash, GitBranch, Calendar, Copy,
+  Trash2, Sparkles,
 } from 'lucide-react';
 import { Panel } from './ui';
 import ProcessoCarregando from './ProcessoCarregando';
@@ -170,14 +171,19 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, scriptId, onPro
   }, [itens, filtroTipo, busca]);
 
   // Resumo por tipo dos ATIVOS (pros segmented counts).
+  // v1.148.9 — `fantasmas` = pagos que nunca foram promovidos (típico falso positivo
+  // limpo automaticamente pelo scan — provável lixo, não trabalho real).
   const resumo = useMemo(() => {
     const ativos = itens.filter((d) => d.status === 'ativo');
+    const pagos = itens.filter((d) => d.status === 'pago');
     return {
       total: ativos.length,
       debts: ativos.filter((d) => d.tipo === 'debt').length,
       livres: ativos.filter((d) => d.tipo !== 'debt').length,
       promovidos: itens.filter((d) => d.status === 'promovido').length,
-      pagos: itens.filter((d) => d.status === 'pago').length,
+      pagos: pagos.length,
+      pagosReais: pagos.filter((d) => d.promovidoEm).length,
+      fantasmas: pagos.filter((d) => !d.promovidoEm).length,
       alta: ativos.filter((d) => d.severidade === 'alta').length,
     };
   }, [itens]);
@@ -207,6 +213,45 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, scriptId, onPro
       }
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Erro');
+    }
+  };
+
+  // v1.148.9 — apaga DEFINITIVAMENTE um débito (sem virar histórico).
+  // Pensado pra falsos positivos do scan (bug de regex, exemplos em doc, etc).
+  const apagar = async (d: DebitoTecnico) => {
+    try {
+      const r = await callServer<ServerResult>('apagarDebito', d.id);
+      if (r && r.ok) {
+        message.success('Débito apagado definitivamente.');
+        carregarLista();
+        if (aberto?.id === d.id) setAberto(null);
+      } else {
+        message.error((r && r.error) || 'Erro ao apagar');
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro');
+    }
+  };
+
+  // v1.148.9 — Limpeza em massa: apaga todos os 'pago' que nunca foram promovidos
+  // (típico fantasma deixado pelo bug do regex v1.148.7 que foi corrigido em v1.148.8).
+  const [limpandoFantasmas, setLimpandoFantasmas] = useState(false);
+  const limparFantasmas = async () => {
+    setLimpandoFantasmas(true);
+    try {
+      const r = await callServer<ServerResult>('apagarDebitosPagosSemPromocao', sistemaId);
+      if (r && r.ok && r.data) {
+        const n = (r.data as { apagados: number }).apagados;
+        if (n === 0) message.info('Nenhum fantasma pra apagar — todos os pagos têm rastro real de promoção.');
+        else message.success(`${n} fantasma(s) apagado(s) definitivamente.`);
+        carregarLista();
+      } else {
+        message.error((r && r.error) || 'Erro ao limpar');
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro');
+    } finally {
+      setLimpandoFantasmas(false);
     }
   };
 
@@ -348,6 +393,48 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, scriptId, onPro
         />
       </div>
 
+      {/* v1.148.9 — Banner contextual quando há fantasmas (pagos sem promoção).
+          Aparece SÓ na aba "Pagos" pra não poluir as outras visões. Princípio
+          "alertas com ação": botão direto pra limpar em massa. */}
+      {filtroTipo === 'pagos' && resumo.fantasmas > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 12,
+          background: `${t.accents.peach}10`, border: `1px solid ${t.accents.peach}33`,
+          borderRadius: 12, padding: '12px 16px',
+        }}>
+          <Sparkles size={18} color={t.accents.peach} style={{ flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.text, fontWeight: 600, marginBottom: 2 }}>
+              {resumo.fantasmas} fantasma{resumo.fantasmas > 1 ? 's' : ''} detectado{resumo.fantasmas > 1 ? 's' : ''}
+            </div>
+            <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, lineHeight: 1.5 }}>
+              {resumo.fantasmas === resumo.pagos ? 'Todos' : `${resumo.fantasmas} de ${resumo.pagos}`} pagos nunca passaram por promoção pra backlog —
+              são típicos falsos positivos limpos automaticamente pelo scan
+              (regex pegou bobeira ou comentário não era débito real).
+              {resumo.pagosReais > 0 && ` Os outros ${resumo.pagosReais} foram trabalho de verdade e ficam preservados.`}
+            </div>
+          </div>
+          <Popconfirm
+            title={`Apagar ${resumo.fantasmas} fantasma${resumo.fantasmas > 1 ? 's' : ''}?`}
+            description="Eles somem do banco pra sempre. Pagos que vieram de promoção real ficam preservados."
+            okText="Apagar"
+            okButtonProps={{ danger: true }}
+            cancelText="Cancelar"
+            onConfirm={limparFantasmas}
+          >
+            <Button
+              danger
+              type="primary"
+              size="small"
+              icon={<Trash2 size={13} />}
+              loading={limpandoFantasmas}
+            >
+              Limpar {resumo.fantasmas}
+            </Button>
+          </Popconfirm>
+        </div>
+      )}
+
       {/* Lista */}
       {loading ? (
         <Spin style={{ display: 'block', margin: '40px auto' }} />
@@ -374,6 +461,7 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, scriptId, onPro
               scriptId={scriptId || ''}
               onPromover={() => promover(d)}
               onPago={() => marcarPago(d)}
+              onApagar={() => apagar(d)}
               onAbrir={() => abrirDetalhe(d)}
             />
           ))}
@@ -391,14 +479,15 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, scriptId, onPro
           onClose={() => setAberto(null)}
           onPromover={() => promover(aberto)}
           onPago={() => marcarPago(aberto)}
+          onApagar={() => apagar(aberto)}
         />
       )}
     </div>
   );
 }
 
-function DebitoCard({ d, repoUrl, scriptId, onPromover, onPago, onAbrir }: {
-  d: DebitoTecnico; repoUrl: string; scriptId: string; onPromover: () => void; onPago: () => void; onAbrir: () => void;
+function DebitoCard({ d, repoUrl, scriptId, onPromover, onPago, onApagar, onAbrir }: {
+  d: DebitoTecnico; repoUrl: string; scriptId: string; onPromover: () => void; onPago: () => void; onApagar: () => void; onAbrir: () => void;
 }): React.ReactElement {
   const t = useTokens();
   const meta = TIPO_META[d.tipo] || TIPO_META.todo;
@@ -534,6 +623,24 @@ function DebitoCard({ d, repoUrl, scriptId, onPromover, onPago, onAbrir }: {
             </Popconfirm>
           </>
         )}
+        {/* v1.148.9 — Apagar definitivamente. Mostra só em status pago/promovido pra
+            não confundir com "Marcar como pago" no fluxo de débito ativo. */}
+        {(d.status === 'pago' || d.status === 'promovido') && (
+          <Popconfirm
+            title="Apagar definitivamente?"
+            description={d.status === 'promovido' && d.backlogId
+              ? 'Atenção: este débito tem card no backlog — vai falhar. Apague o card primeiro.'
+              : 'Remove do banco pra sempre. Use pra limpar falsos positivos do scan.'}
+            okText="Apagar"
+            okButtonProps={{ danger: true }}
+            cancelText="Cancelar"
+            onConfirm={onApagar}
+          >
+            <Tooltip title="Apagar definitivamente do banco">
+              <Button size="small" type="text" danger icon={<Trash2 size={13} />} />
+            </Tooltip>
+          </Popconfirm>
+        )}
       </div>
     </div>
   );
@@ -545,7 +652,7 @@ function DebitoCard({ d, repoUrl, scriptId, onPromover, onPago, onAbrir }: {
 // e botões de ação (Promover, Abrir no editor, Marcar pago, Copiar linha).
 // Solução pro feedback do user (v1.148.8): "não vejo detalhes dos débitos
 // técnicos, só mostra essa descrição".
-function DebitoDrawer({ d, contexto, carregando, erro, temRepo, temScript, onClose, onPromover, onPago }: {
+function DebitoDrawer({ d, contexto, carregando, erro, temRepo, temScript, onClose, onPromover, onPago, onApagar }: {
   d: DebitoTecnico;
   contexto: DebitoContexto | null;
   carregando: boolean;
@@ -555,6 +662,7 @@ function DebitoDrawer({ d, contexto, carregando, erro, temRepo, temScript, onClo
   onClose: () => void;
   onPromover: () => void;
   onPago: () => void;
+  onApagar: () => void;
 }): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
@@ -706,6 +814,20 @@ function DebitoDrawer({ d, contexto, carregando, erro, temRepo, temScript, onClo
               </Popconfirm>
             </>
           )}
+          <Popconfirm
+            title="Apagar definitivamente?"
+            description={d.status === 'promovido' && d.backlogId
+              ? 'Atenção: este débito tem card no backlog — vai falhar. Apague o card primeiro.'
+              : 'Remove do banco pra sempre. Use pra limpar falso positivo do scan.'}
+            okText="Apagar"
+            okButtonProps={{ danger: true }}
+            cancelText="Cancelar"
+            onConfirm={onApagar}
+          >
+            <Button danger icon={<Trash2 size={14} />}>
+              Apagar
+            </Button>
+          </Popconfirm>
         </section>
 
         {/* Dica de remoção */}
