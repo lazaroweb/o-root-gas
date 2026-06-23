@@ -36,6 +36,32 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.148.2] — 2026-06-23
+
+### Adicionado — Suporte a `/* */` e `/*! */` no parser de dívida + 2 dívidas reais marcadas no código + AGENTS.md template portátil
+
+**Por quê**: testando a feature no próprio sistema "Forja - CRM Gestão 360", descobrimos que comentários `// DEBT(...)` somem do build output (esbuild com `target: 'es2020'` remove todos `//` no `transform`). Como esse sistema é GAS sem `repoUrl` cadastrado, o scan lê o Server.js (build), não o source TS — comentários comidos. Resolvido em 3 frentes:
+
+**Parser estendido (`forja/src/server.ts`)**
+
+- `_parseLinhaDebito` agora aceita também `/* DEBT(...) */` e `/*! DEBT(...) */` (block comments). O `/*!` (legal comment) sobrevive a bundlers que removem comentários — esbuild, terser, webpack com remove-comments. Mesma extensão pra TODO/FIXME/HACK.
+- Regex ajustada pra strip de `*/` final quando bloco fecha na mesma linha.
+
+**Dívidas reais marcadas (provando que funciona)**
+
+- `/*! DEBT(arquitetura,media): AuditFontes duplicada entre types.ts e server.ts ... */` — toda extensão precisa ser feita em 2 lugares (já mordeu na v1.147 com `batchesUsados`). Extrair pra source-of-truth única.
+- `/*! DEBT(performance,baixa): Apps Script API não tem HEAD/ETag — toda abertura da aba Dívida em sistema GAS baixa o content completo. Investigar If-None-Match ou cachear versionNumber do último deploy. */`
+
+Esses 2 vão aparecer na aba Dívida do próprio sistema da Forja assim que sincronizar.
+
+**Documentação portátil**
+
+- `forja/docs/AGENTS-debt-tracking-template.md`: template autocontido pra copiar pra qualquer outro repositório. Inclui o protocolo completo + tabela comparativa de instalação (AGENTS.md vs `.cursor/rules/` vs User Rule global), com recomendação de AGENTS.md (universal: Cursor + Claude + Codex + Continue).
+- `AGENTS.md` da raiz do o-root-gas: nova seção `## 13. Protocolo de dívida técnica & TODOs` com instruções resumidas pro próximo agente AI que pegar este repo.
+- Skill `forja-debt-tracking` (gas-app-kit) + Cursor rule (`.cursor/rules/forja-debt-tracking.mdc`) atualizadas pra documentar a nova sintaxe.
+
+---
+
 ## [1.148.1] — 2026-06-23
 
 ### Corrigido — Dívida técnica também escaneia projetos Apps Script (sem repoUrl)

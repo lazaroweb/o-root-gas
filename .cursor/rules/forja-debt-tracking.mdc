@@ -45,9 +45,10 @@ const map = { ... };
 
 ## Sintaxe aceita
 
-- Prefixos: `//`, `#`, `--`, `<!-- ... -->`
+- Prefixos: `//`, `/* */`, `/*! */`, `#`, `--`, `<!-- ... -->`
 - Case-insensitive: `// TODO:`, `// todo:`, `// Todo:` valem
 - Descrição máx: 280 caracteres (trunca além)
+- **Bundler agressivo (esbuild/terser/webpack)**: use `/*! DEBT(...) */` — o `!` faz o comentário sobreviver como "legal comment".
 
 ## Regras pro agente de IA (Cursor, Claude, etc.)
 

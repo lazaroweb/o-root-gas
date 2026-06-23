@@ -13209,6 +13209,7 @@ function _contextoSistemaProfundo(sistemaId: string): string {
 // Também retornamos as "fontes consultadas" — contagem real de cada tabela
 // que foi enviada à IA, pra o usuário saber sobre o que ela tem visibilidade.
 
+/*! DEBT(arquitetura,media): AuditFontes está duplicada entre types.ts e server.ts — toda extensão precisa ser feita em 2 lugares (já mordeu na v1.147 com batchesUsados). Extrair pra source-of-truth única quando reorganizarmos o backend em módulos. */
 interface AuditFontes {
   custos: number;
   decisoes: number;
@@ -15639,26 +15640,33 @@ const _DEBT_AREAS_VALIDAS = ['governanca', 'arquitetura', 'seguranca', 'dependen
 const _DEBT_SEV_VALIDAS = ['alta', 'media', 'baixa'];
 
 // Parseia uma linha de código procurando por TODO/FIXME/HACK/DEBT.
-// Aceita prefixos: `//`, `#`, `--`, `<!--` (basta o marcador). Case-insensitive.
+// Aceita prefixos: `//`, `#`, `--`, `<!--`, `/*` (basta o marcador). Case-insensitive.
+// Block comments `/* DEBT(...) */` são importantes em código processado por bundlers
+// que removem `//` (esbuild com `target: 'es2020'` é o nosso caso — DEBT em // some
+// no Server.js que vai pro Apps Script). Use `/* */` quando precisar sobreviver ao build.
 function _parseLinhaDebito(linha: string, arquivo: string, numLinha: number): DebitoMatchRaw | null {
-  const debtMatch = linha.match(/(?:\/\/|#|--|<!--)\s*DEBT\s*\(\s*([a-z]+)\s*,\s*(alta|media|baixa)\s*\)\s*:?\s*(.+?)(?:-->)?\s*$/i);
+  const debtMatch = linha.match(/(?:\/\/|\/\*|#|--|<!--)\s*DEBT\s*\(\s*([a-z]+)\s*,\s*(alta|media|baixa)\s*\)\s*:?\s*(.+?)(?:\*\/|-->)?\s*$/i);
   if (debtMatch) {
     const area = String(debtMatch[1] || '').toLowerCase();
     const sev = String(debtMatch[2] || 'media').toLowerCase();
+    let desc = String(debtMatch[3] || '').trim();
+    // Remove `*/` se ficou no fim por causa de bloco inline.
+    desc = desc.replace(/\*\/\s*$/, '').trim();
     return {
       tipo: 'debt',
       arquivo,
       linha: numLinha,
-      descricao: String(debtMatch[3] || '').trim().slice(0, 280),
+      descricao: desc.slice(0, 280),
       area: _DEBT_AREAS_VALIDAS.indexOf(area) >= 0 ? area : 'codigo',
       severidade: _DEBT_SEV_VALIDAS.indexOf(sev) >= 0 ? sev : 'media',
     };
   }
-  const livreMatch = linha.match(/(?:\/\/|#|--|<!--)\s*(TODO|FIXME|HACK)\s*[:\-]?\s*(.+?)(?:-->)?\s*$/i);
+  const livreMatch = linha.match(/(?:\/\/|\/\*|#|--|<!--)\s*(TODO|FIXME|HACK)\s*[:\-]?\s*(.+?)(?:\*\/|-->)?\s*$/i);
   if (livreMatch) {
     const tipo = String(livreMatch[1] || '').toLowerCase() as 'todo' | 'fixme' | 'hack';
-    const desc = String(livreMatch[2] || '').trim();
-    if (desc.length < 3) return null; // ignora "// TODO" sem descrição
+    let desc = String(livreMatch[2] || '').trim();
+    desc = desc.replace(/\*\/\s*$/, '').trim();
+    if (desc.length < 3) return null; // ignora marcadores sem descrição real
     return { tipo, arquivo, linha: numLinha, descricao: desc.slice(0, 280) };
   }
   return null;
@@ -15847,6 +15855,7 @@ function _mudouDesdeUltimoScan(sistema: Record<string, unknown>, ultimoScanSha: 
     return { mudou: true, novaShaSePararAqui: '' };
   }
   // GAS: sem HEAD barato — sempre re-escaneia (Apps Script API é rápida).
+  /*! DEBT(performance,baixa): Apps Script API não tem HEAD/ETag — toda abertura da aba Dívida em sistema GAS baixa o content completo. Investigar If-None-Match ou cachear versionNumber do último deploy pra evitar o roundtrip quando nada mudou. */
   return { mudou: true, novaShaSePararAqui: '' };
 }
 

@@ -59,11 +59,15 @@ async function syncTudo() { /* ... */ }
 Forja parseia em qualquer linha de código (`.ts`, `.tsx`, `.js`, `.py`, `.go`, `.rs`, `.rb`, `.java`, `.kt`, `.swift`, `.cs`, `.php`, `.sh`, `.sql`, `.md`, etc.). Os prefixos aceitos pra começar o comentário:
 
 - `// ...` (C-like)
+- `/* ... */` (C-like block)
+- `/*! ... */` (legal comment — sobrevive a bundlers que removem comentários: esbuild, terser, etc.)
 - `# ...` (Python, Ruby, shell)
 - `-- ...` (SQL, Haskell, Lua)
 - `<!-- ... -->` (HTML, XML, Markdown)
 
 Forja é **case-insensitive** pros marcadores (`// TODO:`, `// todo:`, `// Todo:` — todos valem). A descrição é truncada em 280 caracteres.
+
+> **Importante pra projetos que passam por bundler**: se o seu código é processado por esbuild/terser/webpack e a Forja escaneia o BUILD OUTPUT (não o source), use `/*! DEBT(...) */`. O `!` sinaliza pro bundler preservar o comentário como "legal comment". A solução melhor, claro, é cadastrar o `repoUrl` direto no Sistema da Forja — aí ela escaneia o source TS/JS diretamente do GitHub.
 
 ## Regras de comportamento pro agente IA
 

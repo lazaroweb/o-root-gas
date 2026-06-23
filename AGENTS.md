@@ -375,7 +375,53 @@ Próximo agente: a partir daqui, **commit por feature/fix** (não acumule mais).
 
 ---
 
-## 13. Como começar (TL;DR pro agente novo)
+## 13. Protocolo de dívida técnica & TODOs (Forja v1.148+)
+
+A Forja escaneia este repositório procurando 4 marcadores em comentários do código e os apresenta na aba **Dívida técnica** do Sistema correspondente. Itens fecham automaticamente quando você apaga o comentário do código + faz commit.
+
+### Marcadores reconhecidos
+
+| Marcador | Quando usar | Vira na Forja |
+|----------|-------------|---------------|
+| `// DEBT(area,severidade): desc` | Dívida formal — atalho consciente que vai ficar | Card estruturado (categoria + severidade) |
+| `// TODO: desc` | Tarefa pequena sem categoria clara | Item TODO |
+| `// FIXME: desc` | Bug conhecido ainda não consertado | Item FIXME |
+| `// HACK: desc` | Gambiarra consciente que funciona mas vai voltar | Item HACK |
+
+**Prefira `DEBT(...)` sempre que conseguir classificar** — os outros 3 são pra rascunho rápido.
+
+### `DEBT(area, severidade)`: valores válidos
+
+- **areas**: `governanca` · `arquitetura` · `seguranca` · `dependencias` · `testes` · `operacional` · `performance` · `ux` · `codigo`
+- **severidades**: `alta` · `media` · `baixa`
+
+### Sintaxe aceita
+
+- Prefixos: `//`, `/* */`, `/*! */`, `#`, `--`, `<!-- -->`
+- Case-insensitive (`// TODO:`, `// todo:`, `// Todo:` valem)
+- Descrição máx: 280 caracteres
+- **Em código que passa por bundler que remove comentários** (esbuild, terser, etc.), use `/*! DEBT(...) */` (legal comment) — o `!` sinaliza pra preservar.
+
+### Regras pro agente IA (Cursor/Claude/Codex)
+
+1. **Antes de refatorar dívida silenciosamente, marque-a primeiro.** Identificou problema fora do escopo? Insere `// DEBT(...)` e segue. Não "consertar de bônus" — usuário perde controle do PR.
+2. **Não use `DEBT` pra trivialidades resolvíveis na hora.** Renomear, formatar, ajustar 3 linhas? Conserte. `DEBT` é pra coisa que **fica**.
+3. **Não duplique.** Antes de marcar, verifique se já existe TODO/FIXME/DEBT no mesmo contexto.
+4. **Não marque em testes, gerados, vendor/lib.** Forja filtra `node_modules`, `dist`, `build`, `.min.`, mas seja consciente.
+5. **Descrição curta, acionável, no infinitivo.** Não `// TODO: melhorar`. Sim `// DEBT(arquitetura,media): essa fn faz fetch+parse+escrita — quebrar em 3`.
+6. **Quando user fala "registra essa dívida" ou "vou pagar depois", use `DEBT(area,sev)`** formal, não `TODO:`.
+
+### Resumo de bolso
+
+> Resolver **agora**? → Resolva.
+> Resolver **depois**? → `// DEBT(area,sev): ...`
+> Tarefinha **trivial**? → `// TODO: ...`
+> **Bug** conhecido? → `// FIXME: ...`
+> **Gambiarra** consciente? → `// HACK: ...`
+
+---
+
+## 14. Como começar (TL;DR pro agente novo)
 
 1. **Leia este arquivo inteiro** (você acabou — bom trabalho).
 2. **Leia `forja/ROADMAP.md`** seção "Fila > Auditoria Forja IA — alta prioridade" pra saber o que está mais quente.
