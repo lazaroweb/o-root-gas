@@ -17998,6 +17998,23 @@ const KIT_TEMPLATES: KitTemplate[] = [
       + 'de altíssimo impacto e reuso, que todo dev deveria ter desde o primeiro dia.',
   },
   {
+    id: 'gas', nome: 'Google Apps Script', accent: 'sage', alvoSkills: 12, alvoAgents: 5,
+    descricao: 'Sua stack: Sheets como banco, google.script.run (RPC), clasp, limites de execução.',
+    objetivo: 'Desenvolvimento na stack Google Apps Script (GAS) — exatamente como a Forja é feita. '
+      + 'Contexto e restrições da plataforma que as skills/agents devem respeitar: '
+      + '(1) runtime V8 do Apps Script, SEM ecossistema npm/node (nada de instalar pacote arbitrário), '
+      + 'com LIMITE de ~6 minutos por execução e sem processo/servidor sempre ligado nem websockets; '
+      + '(2) persistência em Google Sheets como banco (padrão SheetDB: full-scan, sem índices, sujeito a cotas), '
+      + 'mais PropertiesService e CacheService pra config/cache; '
+      + '(3) frontend via HtmlService + comunicação por google.script.run (RPC), NÃO REST — '
+      + 'na Forja o frontend React/TypeScript é bundlado em App.html + Server.js; '
+      + '(4) HTTP de saída só por UrlFetchApp; auth por escopos OAuth do Google; '
+      + '(5) deploy versionado via clasp (clasp push/deploy), não containers/CI tradicional. '
+      + 'Priorize skills e agents de: JavaScript/TypeScript, frontend React, design de dados e API adaptado a Sheets/RPC, '
+      + 'performance dentro de cotas, testes, automação, e qualquer coisa específica de Apps Script / clasp / Sheets. '
+      + 'Evite itens que dependam de npm, containers, bancos relacionais ou servidores de longa duração.',
+  },
+  {
     id: 'fullstack-web', nome: 'Full-stack Web', accent: 'blue', alvoSkills: 14, alvoAgents: 6,
     descricao: 'Front + back + banco + deploy de aplicações web modernas.',
     objetivo: 'Desenvolvimento full-stack web moderno: frontend (UI, componentes, React/JS), '

@@ -36,6 +36,21 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.153.2] — 2026-06-23
+
+### Adicionado — Kit template "Google Apps Script" (a stack da Forja)
+
+Novo template de kit focado na stack GAS, pra Lume curar skills/agents que
+respeitam as restrições da plataforma (não só "o banco é Sheets"):
+
+- `KIT_TEMPLATES` ganhou `gas` (accent sage). O `objetivo` dá à Lume o contexto
+  real do GAS: runtime V8 sem npm e com limite de ~6min, Sheets como banco
+  (SheetDB, full-scan, cotas) + Properties/Cache, frontend via HtmlService +
+  `google.script.run` (RPC, não REST), `UrlFetchApp` pra HTTP, OAuth do Google e
+  deploy via clasp. Pede pra priorizar JS/TS, React, dados/API adaptados a
+  Sheets/RPC e itens de Apps Script/clasp; e evitar o que depende de npm,
+  containers ou bancos relacionais.
+
 ## [1.153.1] — 2026-06-23
 
 ### Alterado — Cards de Agents premium minimalista (respiro + estrutura)
