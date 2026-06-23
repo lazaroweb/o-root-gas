@@ -825,6 +825,38 @@ export interface CartaoPessoal {
   aPagarMes?: number; // pendente da fatura do mês selecionado (competência); 0 = paga
 }
 
+// v1.146.0: Servidores no Atelier — instâncias que o user roda (proxies LLM,
+// automações, mística, DBs, workers, self-hosted). Diferente de "Hospedagem"
+// (provedores cloud). cofreLabel referencia item no Cofre se tem API key.
+export type ServidorStatus = 'rodando' | 'parado' | 'dev' | 'erro';
+export type ServidorAmbiente = 'local' | 'vps' | 'cloud' | 'edge' | 'outro';
+export interface ServidorPath { label: string; valor: string }
+export interface Servidor {
+  id: string;
+  nome: string;
+  tipo: string; // chip livre: 'LiteLLM', 'Ollama', 'n8n', 'Postgres', 'ComfyUI', etc.
+  descricao: string;
+  status: ServidorStatus | string;
+  host: string;
+  porta: string;
+  url: string;
+  ambiente: ServidorAmbiente | string;
+  tecnologia: string; // 'docker' | 'native' | 'binario' | 'pip' | 'npm' | etc.
+  sistemaId: string;
+  comandoStart: string;
+  paths: ServidorPath[]; // config, logs, data, etc.
+  dependencias: string; // CSV: 'Redis, Postgres'
+  recursos: string; // texto livre: '4 vCPU, 8GB RAM, 20GB SSD'
+  custoMensal: number;
+  moeda: string;
+  docsUrl: string;
+  cofreLabel: string;
+  tags: string;
+  notas: string;
+  criadoEm?: string;
+  atualizadoEm?: string;
+}
+
 // Resumo agregado de um mês: alimenta os cards do dashboard pessoal.
 export interface ResumoFinPessoal {
   mes: string; // YYYY-MM

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat, Compass, HardDrive, Wallet, Hammer } from 'lucide-react';
+import { BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat, Compass, HardDrive, Wallet, Hammer, Cpu } from 'lucide-react';
 import { PageHeader } from '../components/ui';
 import { useForja, useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -13,13 +13,14 @@ import CodexPanel from '../components/CodexPanel';
 import ReceituarioPanel from '../components/ReceituarioPanel';
 import DriverPanel from '../components/DriverPanel';
 import ContasPanel from '../components/ContasPanel';
+import ServidoresPanel from '../components/ServidoresPanel';
 import AtelierGuia from '../components/AtelierGuia';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 // Cada section do Atelier é uma "estação de bancada". A nav é vertical (sidebar
 // interna) pra escalar bem: descrição rica por item, sem overflow nem botão
 // "...". Padrão usado por Linear/Notion settings — premium e familiar.
-export type AtelierTab = 'guia' | 'skills' | 'snippets' | 'templates' | 'bookmarks' | 'driver' | 'contas' | 'codex' | 'receituario' | 'hospedagem' | 'cofre';
+export type AtelierTab = 'guia' | 'skills' | 'snippets' | 'templates' | 'bookmarks' | 'driver' | 'contas' | 'servidores' | 'codex' | 'receituario' | 'hospedagem' | 'cofre';
 
 interface AtelierProps {
   initialTab?: AtelierTab;
@@ -134,6 +135,15 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
       accent: 'sage',
     },
     {
+      key: 'servidores',
+      icon: <Cpu size={17} strokeWidth={1.6} />,
+      iconActive: <Cpu size={17} strokeWidth={1.8} />,
+      label: 'Servidores',
+      descricao: 'Instâncias que você roda: proxies LLM, automações, mística, bancos locais e self-hosted.',
+      accent: 'sage',
+      novo: true,
+    },
+    {
       key: 'cofre',
       icon: <Shield size={17} strokeWidth={1.6} />,
       iconActive: <Shield size={17} strokeWidth={1.8} />,
@@ -172,6 +182,8 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
         return wrapCard(<ReceituarioPanel />);
       case 'hospedagem':
         return wrapCard(<HospedagemPanel />);
+      case 'servidores':
+        return wrapCard(<ServidoresPanel onAbrirCofre={abrirCofre} />);
       case 'cofre':
         return wrapCard(<CofrePanel initialFiltro={cofreFiltro} />);
       default:

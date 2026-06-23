@@ -36,6 +36,50 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.146.0] — 2026-06-22
+
+### Adicionado — Atelier > Servidores
+
+Nova estação no Atelier pra inventário das **instâncias que você roda**:
+proxies LLM (LiteLLM, Ollama, vLLM), automações (n8n, Node-RED), mística
+(ComfyUI, Stable Diffusion), bancos locais (Postgres, Redis), workers e
+self-hosted (Plex, Home Assistant). **Distinto de "Hospedagem"**, que é
+sobre provedores cloud onde você pode rodar coisas.
+
+#### UI premium e minimalista
+- Lista em grid com cards limpos: ícone semântico por tipo (detecta LiteLLM/
+  Ollama/n8n/Postgres etc. automaticamente), nome, descrição, status pill
+  colorido (Rodando/Dev/Parado/Erro), URL em mono, ambiente + tecnologia,
+  custo, sistema vinculado.
+- Modal de detalhe que **não empurra a lista** — abre flutuante, mostra
+  comando de start em terminal escuro com botão copiar, paths como lista
+  copiável, dependências como chips, atalhos pra docs/abrir URL/Cofre.
+- Modal de cadastro com **5 seções enxutas**: Identidade · Conexão ·
+  Operação (com paths dinâmicos via Form.List) · Custo & manutenção ·
+  Tags & notas. Cada uma com headerzinho discreto.
+- **10 presets de tipos famosos** pré-configurados — clique em "Ollama" e
+  o form já vem com porta 11434, URL, comando start e link da doc.
+- 4 stat tiles: Total · Rodando · Com erro · Custo mensal.
+- Filtros: busca livre + ambiente + status.
+
+#### Ficha completa
+- Identidade: nome, tipo (chip livre), descrição, status, ambiente
+  (local/VPS/cloud/edge), tecnologia (Docker/native/python/node/systemd),
+  sistema vinculado (puxa da tabela Sistemas).
+- Conexão: host, porta, URL.
+- Operação: comando para subir, paths importantes (config/logs/data),
+  dependências, recursos (RAM/CPU/etc).
+- Custo & manutenção: custo mensal + moeda, docs URL, ref ao Cofre.
+- Tags + notas livres.
+
+#### Backend
+- Nova tabela `Servidores` com 23 colunas (paths como JSON na célula).
+- `servidoresList` / `servidoresSave` / `servidoresDelete` (RPC global).
+- `SCHEMA_VERSION` → `v1.69-servidores`.
+- Decisão: **nada de senha aqui** — `cofreLabel` referencia o item no Cofre.
+
+---
+
 ## [1.145.1] — 2026-06-22
 
 ### Corrigido — Seletor de cartão: contraste e layout em Contas

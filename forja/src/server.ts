@@ -179,6 +179,11 @@ const SCHEMA: SheetSchema[] = [
   // cadastrado no Financeiro Pessoal — permite reutilizar info do cartão
   // (apelido, bandeira, dia de vencimento) sem digitar de novo.
   { name: 'Contas', columns: ['id', 'categoria', 'servico', 'rotulo', 'email', 'url', 'plano', 'tipoCobranca', 'custo', 'moeda', 'formaPagamento', 'proximaCobranca', 'status', 'temSegredo', 'segredoLabel', 'tags', 'notas', 'criadoEm', 'atualizadoEm', 'logins', 'recEmail', 'recTelefone', 'recNotas', 'cartaoId'] },
+  // v1.146.0: Servidores — inst\u00e2ncias que o user roda (proxies LLM, automa\u00e7\u00f5es,
+  // m\u00edstria, DBs, workers, self-hosted). Diferente de "Hospedagem" (provedores
+  // cloud que vendem infra). `paths` \u00e9 JSON com {config, logs, data, etc}.
+  // `cofreLabel` referencia um item do Cofre quando o servidor tem API key/senha.
+  { name: 'Servidores', columns: ['id', 'nome', 'tipo', 'descricao', 'status', 'host', 'porta', 'url', 'ambiente', 'tecnologia', 'sistemaId', 'comandoStart', 'paths', 'dependencias', 'recursos', 'custoMensal', 'moeda', 'docsUrl', 'cofreLabel', 'tags', 'notas', 'criadoEm', 'atualizadoEm'] },
   // ─── Finanças pessoais (v1.3) ──────────────────────────────────────────────
   // FinPessoalLancamentos: cada despesa/entrada pessoal. `valor` sempre positivo
   // — o `tipo` ('despesa'|'entrada') é quem dita o sinal nos cálculos.
@@ -327,7 +332,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.68-ideia-trilha';
+const SCHEMA_VERSION = 'v1.69-servidores';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -15108,6 +15113,107 @@ function contasDelete(id: string): ServerResult {
     return { ok: true };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover conta' };
+  }
+}
+
+// ─── Servidores (v1.146.0) ────────────────────────────────────────────────────
+// CRUD pra inst\u00e2ncias que o user roda — proxies LLM (LiteLLM, Ollama), workers,
+// automa\u00e7\u00f5es, m\u00edstria, DBs locais. paths e dependencias s\u00e3o JSON em string.
+// Decis\u00e3o: nada de senha aqui — sempre via Cofre (cofreLabel referencia o item).
+
+interface PathItem { label?: string; valor?: string }
+
+function servidoresList(): ServerResult {
+  try {
+    const todos = (dbGetAll('Servidores') as Array<Record<string, unknown>>).map((s) => {
+      // Normaliza paths: aceita string JSON, array ou vazio.
+      let paths: PathItem[] = [];
+      const rawPaths = s.paths;
+      if (Array.isArray(rawPaths)) {
+        paths = rawPaths as PathItem[];
+      } else if (rawPaths && typeof rawPaths === 'string' && rawPaths.trim()) {
+        try {
+          const parsed = JSON.parse(rawPaths);
+          if (Array.isArray(parsed)) paths = parsed;
+        } catch { /* ignora valores inv\u00e1lidos */ }
+      }
+      return {
+        ...s,
+        paths,
+        porta: s.porta ? String(s.porta) : '',
+        custoMensal: Number(s.custoMensal || 0) || 0,
+      };
+    });
+    return { ok: true, data: todos };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar servidores' };
+  }
+}
+
+function servidoresSave(payload: {
+  id?: string; nome?: string; tipo?: string; descricao?: string; status?: string;
+  host?: string; porta?: string | number; url?: string;
+  ambiente?: string; tecnologia?: string; sistemaId?: string;
+  comandoStart?: string; paths?: PathItem[] | string;
+  dependencias?: string; recursos?: string;
+  custoMensal?: number | string; moeda?: string;
+  docsUrl?: string; cofreLabel?: string;
+  tags?: string; notas?: string;
+}): ServerResult {
+  try {
+    const nome = String(payload.nome || '').trim();
+    if (!nome) throw new Error('Informe o nome do servidor (ex.: LiteLLM Proxy).');
+    const agora = new Date().toISOString();
+    const custoNum = typeof payload.custoMensal === 'number'
+      ? payload.custoMensal
+      : parseFloat(String(payload.custoMensal || '0').replace(',', '.'));
+
+    // paths chega como array do front; gravamos como JSON pra caber numa c\u00e9lula.
+    const pathsArr: PathItem[] = Array.isArray(payload.paths)
+      ? payload.paths.filter((p) => p && (p.label || p.valor))
+        .map((p) => ({ label: String(p.label || '').trim(), valor: String(p.valor || '').trim() }))
+      : [];
+
+    const base = {
+      nome,
+      tipo: String(payload.tipo || '').trim(),
+      descricao: String(payload.descricao || '').trim(),
+      status: String(payload.status || 'rodando').trim(),
+      host: String(payload.host || '').trim(),
+      porta: String(payload.porta || '').trim(),
+      url: String(payload.url || '').trim(),
+      ambiente: String(payload.ambiente || 'local').trim(),
+      tecnologia: String(payload.tecnologia || '').trim(),
+      sistemaId: String(payload.sistemaId || '').trim(),
+      comandoStart: String(payload.comandoStart || '').trim(),
+      paths: JSON.stringify(pathsArr),
+      dependencias: String(payload.dependencias || '').trim(),
+      recursos: String(payload.recursos || '').trim(),
+      custoMensal: Number.isFinite(custoNum) ? custoNum : 0,
+      moeda: String(payload.moeda || 'BRL').trim(),
+      docsUrl: String(payload.docsUrl || '').trim(),
+      cofreLabel: String(payload.cofreLabel || '').trim(),
+      tags: String(payload.tags || '').trim(),
+      notas: String(payload.notas || '').trim(),
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('Servidores', payload.id, base);
+      return { ok: true, data: { id: payload.id } };
+    }
+    const novo = dbCreate('Servidores', { ...base, criadoEm: agora });
+    return { ok: true, data: { id: String(novo.id || '') } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar servidor' };
+  }
+}
+
+function servidoresDelete(id: string): ServerResult {
+  try {
+    dbDelete('Servidores', id);
+    return { ok: true };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover servidor' };
   }
 }
 
