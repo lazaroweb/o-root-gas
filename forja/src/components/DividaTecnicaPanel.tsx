@@ -782,6 +782,35 @@ function DebitoDrawer({ d, contexto, carregando, erro, temRepo, temScript, onClo
           </div>
         </section>
 
+        {/* v1.148.10 — Seção explicativa "O que acontece" antes das ações.
+            Resposta ao feedback do user: "eu promovo para backlog ele leva o que
+            especificamente, o que acontece, como funciona esse processo, poderia
+            ter uma instrução não?". Mostra preview do card + fluxo em 4 passos. */}
+        {ehAtivo && (
+          <PromocaoPreview d={d} />
+        )}
+
+        {/* Estado quando já está promovido: mostra info do card no backlog */}
+        {d.status === 'promovido' && d.backlogId && (
+          <div style={{
+            background: `${t.accents.lavender}0d`,
+            border: `1px solid ${t.accents.lavender}33`,
+            borderRadius: 10, padding: '12px 14px',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <ArrowUpRight size={14} color={t.accents.lavender} />
+              <span style={{ fontFamily: FONTS.ui, fontSize: 13, fontWeight: 600, color: t.text }}>
+                Já está no Backlog
+              </span>
+            </div>
+            <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, lineHeight: 1.5 }}>
+              Este débito foi promovido pra Backlog em <strong>{formatarData(d.promovidoEm || '')}</strong> ({relTempo(d.promovidoEm || '')}).
+              O card vive lá com sua própria régua (status, gravidade, comentários).
+              Quando você apagar o comentário do código E commitar, o débito vira <code>pago</code> automaticamente na próxima sincronização.
+            </div>
+          </div>
+        )}
+
         {/* Ações */}
         <section style={{ display: 'flex', gap: 8, flexWrap: 'wrap', borderTop: `1px solid ${t.border}`, paddingTop: 16 }}>
           {contexto && (
@@ -796,11 +825,21 @@ function DebitoDrawer({ d, contexto, carregando, erro, temRepo, temScript, onClo
           )}
           {ehAtivo && (
             <>
-              <Tooltip title="Cria um card em 'A fazer' no Backlog linkado a este débito.">
-                <Button icon={<ArrowUpRight size={14} />} onClick={onPromover}>
+              <Popconfirm
+                title="Promover pra Backlog agora?"
+                description={
+                  <div style={{ maxWidth: 320, fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, lineHeight: 1.5 }}>
+                    Cria card em "A fazer" com título <strong>[{(TIPO_META[d.tipo] || TIPO_META.todo).label}] {d.descricao.slice(0, 60)}{d.descricao.length > 60 ? '…' : ''}</strong> e move este débito pra status "promovido".
+                  </div>
+                }
+                okText="Promover"
+                cancelText="Cancelar"
+                onConfirm={onPromover}
+              >
+                <Button type="primary" ghost icon={<ArrowUpRight size={14} />}>
                   Promover pra Backlog
                 </Button>
-              </Tooltip>
+              </Popconfirm>
               <Popconfirm
                 title="Marcar como pago?"
                 description="Use quando você já resolveu mas o scan não detectou (refator fora do branch default, por ex)."
@@ -875,6 +914,110 @@ function Meta({ icon, label, valor, hint, mono, t }: {
       )}
     </div>
   );
+}
+
+// v1.148.10 — Preview do que acontece ao clicar "Promover pra Backlog".
+// Resposta ao feedback do user (v1.148.10): "eu promovo para backlog ele leva
+// o que especificamente, o que acontece, como funciona esse processo, poderia
+// ter uma instrução não?". Mostra título exato do card que será criado +
+// fluxo numerado em 4 passos, ZERO ambiguidade.
+function PromocaoPreview({ d }: { d: DebitoTecnico }): React.ReactElement {
+  const t = useTokens();
+  const meta = TIPO_META[d.tipo] || TIPO_META.todo;
+  const cor = t.accents.lavender;
+
+  // Espelha exatamente a lógica do backend `promoverDebitoParaBacklog`:
+  // título = `[<tipoLabel>] <descricao truncada em 80 chars>`
+  const tituloCard = `[${meta.label}] ${d.descricao.slice(0, 80)}${d.descricao.length > 80 ? '…' : ''}`;
+
+  return (
+    <section>
+      <SectionLabel>O que acontece se você promover pra Backlog</SectionLabel>
+      <div style={{
+        background: `${cor}08`,
+        border: `1px solid ${cor}26`,
+        borderRadius: 10, padding: 14,
+        display: 'flex', flexDirection: 'column', gap: 12,
+      }}>
+        {/* Preview do card */}
+        <div>
+          <div style={{
+            fontFamily: FONTS.ui, fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6,
+            textTransform: 'uppercase', color: t.textTertiary, marginBottom: 6,
+          }}>
+            ✦ Card que será criado em "A fazer"
+          </div>
+          <div style={{
+            background: t.surface, border: `1px solid ${t.border}`, borderRadius: 8,
+            padding: '10px 12px',
+          }}>
+            <div style={{ fontFamily: FONTS.display, fontSize: 13.5, fontWeight: 600, color: t.text, lineHeight: 1.4, marginBottom: 6 }}>
+              {tituloCard}
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <Tag bordered={false} style={{ background: `${t.accents.peach}1a`, color: t.accents.peach, fontSize: 10.5, marginInlineEnd: 0 }}>
+                coluna: A fazer
+              </Tag>
+              {d.area && (
+                <Tag bordered={false} style={{ background: t.surfaceMuted, color: t.textSecondary, fontSize: 10.5, marginInlineEnd: 0 }}>
+                  área: {d.area}
+                </Tag>
+              )}
+              <Tag bordered={false} style={{ background: t.surfaceMuted, color: t.textSecondary, fontSize: 10.5, marginInlineEnd: 0 }}>
+                gravidade: {d.severidade || 'media'}
+              </Tag>
+              <Tag bordered={false} style={{ background: t.surfaceMuted, color: t.textSecondary, fontSize: 10.5, marginInlineEnd: 0 }}>
+                link: {d.arquivo}:{d.linha}
+              </Tag>
+            </div>
+          </div>
+        </div>
+
+        {/* Fluxo numerado: 4 passos do que acontece */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <FluxoPasso n={1} cor={cor}>
+            <strong>Card novo em <em>Decisões → Backlog → A fazer</em></strong> com a descrição completa, arquivo+linha de origem e instrução de fechamento.
+          </FluxoPasso>
+          <FluxoPasso n={2} cor={cor}>
+            Este débito muda de <code style={pillStyle(t.accents.rose, t)}>ativo</code> pra <code style={pillStyle(cor, t)}>promovido</code> e <strong>some da lista de ativos</strong> (vai aparecer só na aba "Promovidos").
+          </FluxoPasso>
+          <FluxoPasso n={3} cor={cor}>
+            Os dois ficam <strong>linkados pelo hash do débito</strong> (<code style={pillStyle(t.textTertiary, t)}>{d.hash}</code>). Próximas sincronizações respeitam isso: <em>não vai recriar este débito</em> enquanto o card existir.
+          </FluxoPasso>
+          <FluxoPasso n={4} cor={cor}>
+            Quando você <strong>apagar o comentário do código</strong> e fizer commit, a próxima sincronização detecta a remoção e marca como <code style={pillStyle(t.accents.sage, t)}>pago</code> automaticamente. O card no backlog você fecha por lá.
+          </FluxoPasso>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function FluxoPasso({ n, cor, children }: { n: number; cor: string; children: React.ReactNode }): React.ReactElement {
+  const t = useTokens();
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+      <div style={{
+        width: 20, height: 20, borderRadius: '50%',
+        background: `${cor}1f`, color: cor,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontFamily: FONTS.ui, fontSize: 11, fontWeight: 700,
+        flexShrink: 0, marginTop: 1,
+      }}>{n}</div>
+      <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, lineHeight: 1.55 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function pillStyle(cor: string, t: ReturnType<typeof useTokens>): React.CSSProperties {
+  return {
+    background: `${cor}1a`, color: cor,
+    padding: '1px 6px', borderRadius: 4,
+    fontFamily: FONTS.mono, fontSize: 10.5, fontWeight: 600,
+    border: `1px solid ${cor}26`,
+  };
 }
 
 // Renderiza o snippet de código com gutter de linhas e destaque na linha do débito.

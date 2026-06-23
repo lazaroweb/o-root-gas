@@ -36,6 +36,85 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.148.10] — 2026-06-23
+
+### Adicionado — "Promover pra Backlog" agora explica o que vai acontecer
+
+**Pergunta do usuário**
+> "A partir dessa visão eu promovo pra backlog, ele leva o que especificamente?
+> O que acontece? Como funciona esse processo? Poderia ter uma instrução, não?"
+
+**Problema**
+O botão "Promover pra Backlog" estava lá, sem dizer nada. O user não sabia:
+- Qual seria o título do card?
+- Em que coluna ia parar?
+- Quais campos seriam preenchidos?
+- O que acontece com o débito depois?
+- Como o card e o débito ficam conectados?
+- E quando eu fechar o card, o débito some sozinho?
+
+**Solução: PromocaoPreview no Drawer**
+
+Antes dos botões de ação, agora aparece uma seção dedicada quando o débito
+está ativo: **"O que acontece se você promover pra Backlog"**.
+
+Conteúdo:
+
+**1. Preview do card** (que será criado, com dados exatos):
+- Título: `[<TIPO>] <descrição truncada em 80>` (espelha 1:1 a lógica do backend)
+- Tags: coluna `A fazer`, área (se houver), gravidade, link `<arquivo>:<linha>`
+
+**2. Fluxo numerado em 4 passos** (pílulas de código pra ressaltar transições de status):
+
+1. **Card novo** em *Decisões → Backlog → A fazer* com descrição completa,
+   arquivo+linha de origem e instrução de fechamento embutida.
+2. Este débito muda de `ativo` → `promovido` e **some da lista de ativos**
+   (passa a aparecer só na aba "Promovidos").
+3. Os dois ficam **linkados pelo hash do débito** (mostra o hash exato).
+   Próximas sincronizações respeitam isso: **não recriam o débito** enquanto
+   o card existir.
+4. Quando você **apagar o comentário do código + commit**, próximo sync detecta
+   a remoção e marca como `pago` automaticamente. O card no backlog você fecha
+   manualmente lá.
+
+**3. Estado pós-promoção**
+
+Quando o débito já está com status `promovido`, em vez do preview aparece:
+
+> ✦ **Já está no Backlog**
+> Este débito foi promovido pra Backlog em 23 de jun. 2026, 09:35 (há 2 min).
+> O card vive lá com sua própria régua (status, gravidade, comentários).
+> Quando você apagar o comentário do código E commitar, o débito vira `pago`
+> automaticamente na próxima sincronização.
+
+### Bônus: Popconfirm reforça a instrução
+
+O botão "Promover pra Backlog" agora tem `Popconfirm` que repete o resumo
+("Cria card em 'A fazer' com título [TODO] ... e move este débito pra
+status 'promovido'") antes de executar. Dupla rede de segurança: instrução
+visível na seção dedicada + confirmação no clique.
+
+### Botão promovido a `type="primary" ghost`
+
+Era um botão neutro entre os três (Promover, Marcar pago, Apagar). Agora
+"Promover" é o **caminho preferencial** visualmente — destacado em ghost
+primary — porque é a ação canônica pra trabalhar débitos sérios.
+
+### Componentes novos (reusáveis)
+
+- `<PromocaoPreview d={...} />` — pode ser reusado em qualquer contexto
+  futuro onde queiramos explicar promoção (ex: ações em lote)
+- `<FluxoPasso n={...} cor={...} />` — passos numerados em círculo com texto
+- `pillStyle(cor, t)` — helper pra pílulas de código com cor semântica
+
+### Impacto
+Fim do "botão misterioso". O user vê exatamente o que vai acontecer,
+incluindo o título do card, antes de clicar. Reduz ansiedade, aumenta
+confiança no fluxo, e ensina o modelo mental da Forja (débito → card →
+fechamento via commit).
+
+---
+
 ## [1.148.9] — 2026-06-23
 
 ### Adicionado — Apagar débito definitivamente + limpeza em massa de fantasmas
