@@ -49,7 +49,13 @@ const SCHEMA: SheetSchema[] = [
   // processo|pessoal) classifica intenção da ideia além do `tipo` (que continua
   // separando 'sistema'/'melhoria' pra manter compat com gênese). `arquivadaEm`
   // marca quando virou arquivo/descarte (distinto de concluidaEm que é "feito").
-  { name: 'Ideias', columns: ['id', 'titulo', 'descricao', 'notaImpacto', 'notaEsforco', 'estado', 'tipo', 'sistemaId', 'prioridade', 'criadoEm', 'atualizadoEm', 'concluidaEm', 'categoria', 'arquivadaEm'] },
+  // v1.145.0: trilha de vida da ideia.
+  // - `reabertaEm`: timestamp ISO da última reabertura (ou vazio se nunca foi reaberta).
+  // - `reaberturas`: contador (string num sheet, num no app) de quantas vezes foi reaberta.
+  // - `concluidaEmHist`: JSON array com TODAS as datas anteriores de conclusão
+  //   (antes da última). Preserva histórico mesmo após reabrir → permite calcular
+  //   tempo total ativo, ver padrão de re-trabalho.
+  { name: 'Ideias', columns: ['id', 'titulo', 'descricao', 'notaImpacto', 'notaEsforco', 'estado', 'tipo', 'sistemaId', 'prioridade', 'criadoEm', 'atualizadoEm', 'concluidaEm', 'categoria', 'arquivadaEm', 'reabertaEm', 'reaberturas', 'concluidaEmHist'] },
   // Centelha (v1.141.0): caixa global de captura zero-fricção. Você joga ideias,
   // pendências, percepções aqui sem amarras (sem sistema/cliente/categoria) — só
   // título + Enter — e depois TRIA com calma: classifica, vincula a sistema/
@@ -321,7 +327,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.67-contas-cartao';
+const SCHEMA_VERSION = 'v1.68-ideia-trilha';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -2034,7 +2040,16 @@ function gerarPassaporte(sistemaId: string): ServerResult {
 
 function getIdeias(): ServerResult {
   try {
-    return { ok: true, data: dbGetAll('Ideias') };
+    // Normaliza os campos novos de trilha (v1.145.0):
+    // - `reaberturas` vem como string do sheet → convertemos pra number.
+    // - `concluidaEmHist` vem como string JSON → parseamos pra array.
+    // Ideias legadas (sem esses campos) ficam com defaults seguros.
+    const todas = (dbGetAll('Ideias') as Array<Record<string, unknown>>).map((i) => ({
+      ...i,
+      reaberturas: Number(i.reaberturas || 0) || 0,
+      concluidaEmHist: _historicoConclusao(i),
+    }));
+    return { ok: true, data: todas };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar ideias' };
   }
@@ -2060,6 +2075,9 @@ function createIdeia(data: Record<string, unknown>): ServerResult {
       concluidaEm: '',
       categoria: String(data.categoria || ''),
       arquivadaEm: '',
+      reabertaEm: '',
+      reaberturas: '0',
+      concluidaEmHist: '[]',
     });
     return { ok: true, data: created };
   } catch (e: unknown) {
@@ -2111,13 +2129,30 @@ function deleteIdeia(id: string): ServerResult {
   }
 }
 
+// Helper: lê o histórico de conclusões anteriores. Tolera valores ausentes,
+// não-JSON e tipos errados — sempre devolve um array de ISO strings.
+function _historicoConclusao(ideia: Record<string, unknown>): string[] {
+  const raw = ideia.concluidaEmHist;
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
+  try {
+    const parsed = JSON.parse(String(raw));
+    return Array.isArray(parsed) ? parsed.map(String).filter(Boolean) : [];
+  } catch { return []; }
+}
+
 function concluirIdeia(id: string): ServerResult {
   try {
     if (!id) return { ok: false, error: 'id é obrigatório' };
+    const agora = new Date().toISOString();
+    // Se concluindo após uma reabertura, limpamos `reabertaEm` (sinaliza que a
+    // ideia está fechada de novo). Mantemos `reaberturas` como histórico —
+    // mostra "concluída após 2 reaberturas" no card.
     const updated = dbUpdate('Ideias', id, {
       estado: 'concluida',
-      concluidaEm: new Date().toISOString(),
-      atualizadoEm: new Date().toISOString(),
+      concluidaEm: agora,
+      reabertaEm: '',
+      atualizadoEm: agora,
     });
     if (!updated) return { ok: false, error: 'Ideia não encontrada' };
     return { ok: true, data: updated };
@@ -2129,10 +2164,24 @@ function concluirIdeia(id: string): ServerResult {
 function reabrirIdeia(id: string): ServerResult {
   try {
     if (!id) return { ok: false, error: 'id é obrigatório' };
+    const ideia = dbGetById('Ideias', id) as Record<string, unknown> | null;
+    if (!ideia) return { ok: false, error: 'Ideia não encontrada' };
+    const agora = new Date().toISOString();
+    // Trilha de vida: NÃO apagamos `concluidaEm` (perdia histórico). Em vez
+    // disso, empilhamos a conclusão anterior em `concluidaEmHist` e gravamos
+    // a reabertura em `reabertaEm` + incrementamos o contador. Permite ver:
+    //   "Concluída há 4d → Reaberta há 1d (já foi reaberta 2x)"
+    const historico = _historicoConclusao(ideia);
+    const concluidaAnterior = String(ideia.concluidaEm || '').trim();
+    if (concluidaAnterior) historico.push(concluidaAnterior);
+    const reaberturasAnt = Number(ideia.reaberturas || 0) || 0;
     const updated = dbUpdate('Ideias', id, {
       estado: 'em andamento',
-      concluidaEm: '',
-      atualizadoEm: new Date().toISOString(),
+      concluidaEm: '', // a próxima conclusão sobrescreve este campo
+      reabertaEm: agora,
+      reaberturas: String(reaberturasAnt + 1),
+      concluidaEmHist: JSON.stringify(historico),
+      atualizadoEm: agora,
     });
     if (!updated) return { ok: false, error: 'Ideia não encontrada' };
     return { ok: true, data: updated };

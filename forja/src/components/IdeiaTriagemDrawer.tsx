@@ -15,7 +15,7 @@ import {
 } from 'antd';
 import {
   Sparkles, Archive, Trash2, AlertTriangle, Lightbulb, ListChecks,
-  Rocket, Check, RotateCcw, Save, XCircle,
+  Rocket, Check, RotateCcw, Save, XCircle, Clock, CheckCheck, PlusCircle,
 } from 'lucide-react';
 import callServer from '../gas-client';
 import { useTokens } from '../themeContext';
@@ -300,6 +300,11 @@ export default function IdeiaTriagemDrawer({
         }
         styles={{ body: { padding: '20px 24px' } }}
       >
+        {/* Timeline de vida (v1.145.0) — só aparece se a ideia já tem alguma
+            atividade. Mostra o fluxo: Criada → Concluída → Reaberta → Concluída
+            de novo, etc. Resume "tempo de resolução" pra ideia atualmente concluída. */}
+        <IdeiaTimeline ideia={ideia} />
+
         <Form form={form} layout="vertical" requiredMark={false}>
           <Form.Item
             name="titulo"
@@ -495,4 +500,152 @@ export default function IdeiaTriagemDrawer({
       />
     </>
   );
+}
+
+// ─── Timeline de vida da ideia ───────────────────────────────────────────────
+// Resume em uma linha compacta os eventos no ciclo de vida: criação,
+// conclusões anteriores (do `concluidaEmHist`), reaberturas e a conclusão
+// atual. Cada evento é um ponto colorido com tooltip de data exata.
+// Desenho propositadamente discreto — não deve concorrer com o form.
+
+interface TimelineEvento {
+  tipo: 'criada' | 'concluida' | 'reaberta';
+  data: string;
+  label: string;
+}
+
+function IdeiaTimeline({ ideia }: { ideia: Ideia }): React.ReactElement | null {
+  const t = useTokens();
+
+  // Monta a sequência cronológica de eventos a partir dos campos persistidos.
+  // Não temos timestamp pra cada reabertura individual (só o contador e a
+  // última); então mostramos: Criada → [Concluídas anteriores em sequência] →
+  // (se reabertaEm existe) Reaberta agora; (se concluida agora) Concluída.
+  const eventos: TimelineEvento[] = useMemo(() => {
+    const evs: TimelineEvento[] = [];
+    if (ideia.criadoEm) evs.push({ tipo: 'criada', data: ideia.criadoEm, label: 'Criada' });
+    const histConclusoes = Array.isArray(ideia.concluidaEmHist) ? ideia.concluidaEmHist : [];
+    for (const c of histConclusoes) {
+      if (c) evs.push({ tipo: 'concluida', data: c, label: 'Concluída' });
+    }
+    // Última reabertura (se a ideia ainda está reaberta ou se foi concluída de novo
+    // depois). Apenas uma data conhecida — o contador `reaberturas` totaliza.
+    if (ideia.reabertaEm) {
+      evs.push({ tipo: 'reaberta', data: ideia.reabertaEm, label: 'Reaberta' });
+    }
+    if (ideia.concluidaEm && String(ideia.estado || '').toLowerCase() === 'concluida') {
+      evs.push({ tipo: 'concluida', data: ideia.concluidaEm, label: 'Concluída' });
+    }
+    return evs.sort((a, b) => a.data.localeCompare(b.data));
+  }, [ideia]);
+
+  if (eventos.length <= 1) return null;
+
+  const corEvento = (tipo: TimelineEvento['tipo']) => {
+    if (tipo === 'criada') return t.accents.blue;
+    if (tipo === 'concluida') return t.accents.sage;
+    return t.accents.clay; // reaberta
+  };
+  const iconeEvento = (tipo: TimelineEvento['tipo']) => {
+    if (tipo === 'criada') return <PlusCircle size={11} />;
+    if (tipo === 'concluida') return <CheckCheck size={11} />;
+    return <RotateCcw size={11} />;
+  };
+
+  // Tempo total (criação até última conclusão, se houver).
+  const tempoMs = (() => {
+    if (!ideia.criadoEm) return 0;
+    const fim = (String(ideia.estado || '').toLowerCase() === 'concluida' && ideia.concluidaEm)
+      ? new Date(ideia.concluidaEm).getTime()
+      : Date.now();
+    return fim - new Date(ideia.criadoEm).getTime();
+  })();
+  const formatDur = (ms: number): string => {
+    if (ms <= 0) return '';
+    const min = Math.floor(ms / 60000);
+    if (min < 60) return `${min}min`;
+    const h = Math.floor(min / 60);
+    if (h < 24) return `${h}h`;
+    const d = Math.floor(h / 24);
+    if (d < 30) return `${d}d`;
+    return `${Math.floor(d / 30)}mes`;
+  };
+  const reaberturasTotal = ideia.reaberturas || 0;
+  const ehConcluida = String(ideia.estado || '').toLowerCase() === 'concluida';
+
+  return (
+    <div style={{
+      background: t.surfaceMuted,
+      border: `1px solid ${t.borderSoft}`,
+      borderRadius: 10,
+      padding: '10px 12px',
+      marginBottom: 16,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <Clock size={12} color={t.textTertiary} />
+        <span style={{ fontSize: 11, color: t.textTertiary, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>
+          Trilha de vida
+        </span>
+        <span style={{ flex: 1 }} />
+        {tempoMs > 0 && (
+          <span style={{ fontSize: 11, color: t.textSecondary }}>
+            {ehConcluida ? 'Total: ' : 'Ativa há: '}
+            <strong style={{ color: t.text, fontFamily: FONTS.mono }}>{formatDur(tempoMs)}</strong>
+          </span>
+        )}
+        {reaberturasTotal > 0 && (
+          <Tooltip title={`Reaberta ${reaberturasTotal} vez${reaberturasTotal > 1 ? 'es' : ''}`}>
+            <span style={{
+              fontSize: 10, fontWeight: 600,
+              color: t.accents.clay, background: `${t.accents.clay}1f`,
+              borderRadius: 999, padding: '1px 7px',
+            }}>
+              {reaberturasTotal}× reabertas
+            </span>
+          </Tooltip>
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        {eventos.map((ev, idx) => {
+          const cor = corEvento(ev.tipo);
+          return (
+            <React.Fragment key={`${ev.tipo}-${ev.data}-${idx}`}>
+              <Tooltip title={`${ev.label} em ${new Date(ev.data).toLocaleString('pt-BR')}`}>
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  fontSize: 11, fontWeight: 500,
+                  background: `${cor}1a`, color: cor,
+                  border: `1px solid ${cor}33`,
+                  borderRadius: 999, padding: '2px 8px',
+                  cursor: 'help',
+                }}>
+                  {iconeEvento(ev.tipo)}
+                  {ev.label}
+                  <span style={{ color: t.textTertiary, fontWeight: 400, marginLeft: 2 }}>
+                    {tempoRelativoCurto(ev.data)}
+                  </span>
+                </span>
+              </Tooltip>
+              {idx < eventos.length - 1 && (
+                <span style={{ color: t.textTertiary, fontSize: 11 }}>→</span>
+              )}
+            </React.Fragment>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function tempoRelativoCurto(iso?: string): string {
+  if (!iso) return '';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(ms) || ms < 0) return '';
+  const min = Math.floor(ms / 60000);
+  if (min < 60) return `${min}min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d}d`;
+  return `${Math.floor(d / 30)}mes`;
 }

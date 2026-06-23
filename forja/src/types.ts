@@ -382,6 +382,15 @@ export interface Ideia {
   // - `arquivadaEm`: timestamp ISO de quando virou arquivada/descartada.
   categoria?: IdeiaCategoria;
   arquivadaEm?: string;
+  // v1.145.0 (trilha de vida): histórico completo de fechar/reabrir.
+  // - `reabertaEm`: timestamp ISO da última reabertura. Vazio se nunca reaberta
+  //   ou se já foi concluída de novo após reabrir.
+  // - `reaberturas`: contador de quantas vezes a ideia foi reaberta (0 default).
+  // - `concluidaEmHist`: array com as datas ISO de TODAS as conclusões anteriores
+  //   (antes da última). A conclusão atual fica em `concluidaEm`.
+  reabertaEm?: string;
+  reaberturas?: number;
+  concluidaEmHist?: string[];
 }
 
 // Proposta da IA refinando uma Ideia (v1.143.0). Usada pelo IdeiaTriagemDrawer

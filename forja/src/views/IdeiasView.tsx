@@ -35,13 +35,15 @@ interface IdeiasViewProps {
   onGenese: (ideiaId: string) => void;
 }
 
-type Visao = 'inbox' | 'foco' | 'ativas' | 'concluidas' | 'arquivo';
+// v1.145.0: 4 visões em vez de 5 — "Foco" sumiu como aba e virou ordenação
+// interna em "Em andamento" (alta prioridade no topo). "Ativas" virou
+// "Em andamento" pra deixar claro que é o trabalho em fluxo.
+type Visao = 'inbox' | 'andamento' | 'concluidas' | 'arquivo';
 
 const VISAO_META: Record<Visao, { label: string; icon: React.ReactNode; descricao: string }> = {
-  inbox: { label: 'Inbox', icon: <Inbox size={13} />, descricao: 'Capturadas brutas, sem categoria nem sistema. Triar com calma.' },
-  foco: { label: 'Foco', icon: <Target size={13} />, descricao: 'Alta prioridade ou criadas nos últimos 3 dias. Atenção primeiro.' },
-  ativas: { label: 'Ativas', icon: <Flame size={13} />, descricao: 'Todas em movimento (nova/validando/em andamento) já triadas.' },
-  concluidas: { label: 'Concluídas', icon: <CheckCheck size={13} />, descricao: 'Histórico do que virou realidade. Orgulho.' },
+  inbox: { label: 'Inbox', icon: <Inbox size={13} />, descricao: 'Capturadas brutas, sem categoria nem sistema. Esperando triagem.' },
+  andamento: { label: 'Em andamento', icon: <Flame size={13} />, descricao: 'Tudo o que já foi triado e ainda está vivo. Alta prioridade primeiro.' },
+  concluidas: { label: 'Concluídas', icon: <CheckCheck size={13} />, descricao: 'Histórico do que virou realidade. Mostra tempo de resolução.' },
   arquivo: { label: 'Arquivo', icon: <Box size={13} />, descricao: 'Arquivadas + descartadas. Memória sem ação.' },
 };
 
@@ -142,7 +144,12 @@ export default function IdeiasView({ onGenese }: IdeiasViewProps): React.ReactEl
   const [ideias, setIdeias] = useState<Ideia[]>([]);
   const [sistemas, setSistemas] = useState<Sistema[]>([]);
   const [loading, setLoading] = useState(true);
-  const [visao, setVisao] = useState<Visao>('inbox');
+  // Default smart: começa em Inbox SÓ se houver itens brutos a triar.
+  // Senão, abre direto em "Em andamento" — onde está o trabalho real.
+  // Cálculo é feito uma vez no mount, dentro do useEffect abaixo (depois que
+  // carregar as ideias). Inicial = 'andamento' (estado seguro / sem badge laranja).
+  const [visao, setVisao] = useState<Visao>('andamento');
+  const visaoSetadaPeloUser = useRef(false);
   const [triando, setTriando] = useState<Ideia | null>(null);
   const [modoFoco, setModoFoco] = useState(false);
   const [novoTitulo, setNovoTitulo] = useState('');
@@ -215,22 +222,29 @@ export default function IdeiasView({ onGenese }: IdeiasViewProps): React.ReactEl
   const descartar = (id: string) => acaoSimples('descartarIdeia', id, 'Descartada');
   const remover = (id: string) => acaoSimples('deleteIdeia', id, 'Apagada');
 
-  // Filtragem pela visão escolhida (inbox/foco/ativas/concluidas/arquivo).
+  // Filtragem pela visão escolhida (inbox/andamento/concluidas/arquivo).
   const matchVisao = useCallback((i: Ideia, v: Visao): boolean => {
     const est = String(i.estado || 'nova').toLowerCase();
     if (est === 'promovida') return false; // promovida não aparece em lugar nenhum (virou backlog/sistema)
     switch (v) {
       case 'inbox': return ehBruta(i);
-      case 'foco': return ehFoco(i);
-      case 'ativas': return ATIVAS.has(est) && !ehBruta(i);
+      case 'andamento': return ATIVAS.has(est) && !ehBruta(i);
       case 'concluidas': return est === 'concluida';
       case 'arquivo': return est === 'arquivada' || est === 'descartada';
     }
   }, []);
 
+  // Default smart: aplicado uma vez quando as ideias carregam pela primeira vez.
+  // Se o user já mexeu na visão (mudou aba), respeitamos a escolha dele.
+  useEffect(() => {
+    if (loading || visaoSetadaPeloUser.current || ideias.length === 0) return;
+    const temInbox = ideias.some((i) => ehBruta(i));
+    if (temInbox) setVisao('inbox');
+  }, [loading, ideias]);
+
   const visiveis = useMemo(() => {
     const lista = ideias.filter((i) => matchVisao(i, visao));
-    // Ordenação por visão. Inbox/foco/ativas: prioridade primeiro (impacto - esforço).
+    // Ordenação por visão. Inbox/andamento: prioridade primeiro (impacto - esforço).
     // Concluídas: por concluidaEm desc. Arquivo: arquivadaEm desc.
     return lista.sort((a, b) => {
       if (visao === 'concluidas') return String(b.concluidaEm || '').localeCompare(String(a.concluidaEm || ''));
@@ -243,9 +257,25 @@ export default function IdeiasView({ onGenese }: IdeiasViewProps): React.ReactEl
     });
   }, [ideias, visao, matchVisao]);
 
-  // Agrupamento por tempo (somente em arquivo / concluídas — pra dar referência
-  // histórica). Inbox/foco/ativas listam sem agrupar (atenção é o eixo, não o tempo).
+  // Agrupamento visual:
+  // - Em andamento: agrupa por prioridade (Foco/Alta → Média → Baixa).
+  // - Concluídas/Arquivo: agrupa por bucket de tempo (Hoje, Ontem, …).
+  // - Inbox: sem agrupamento (lista corrida — atenção é o eixo).
   const agrupadas = useMemo(() => {
+    if (visao === 'andamento') {
+      const buckets = new Map<string, Ideia[]>();
+      for (const it of visiveis) {
+        // Foco = bate o critério antigo de "foco" (alta prioridade OU criada
+        // nos últimos 3 dias). Mantém a noção sem ter uma aba separada.
+        const k = ehFoco(it) ? 'Foco' : it.prioridade === 'media' ? 'Importante' : 'Outras';
+        const arr = buckets.get(k) || [];
+        arr.push(it);
+        buckets.set(k, arr);
+      }
+      return ['Foco', 'Importante', 'Outras']
+        .filter((o) => buckets.has(o))
+        .map((label) => ({ label, itens: buckets.get(label) || [] }));
+    }
     if (visao !== 'concluidas' && visao !== 'arquivo') {
       return [{ label: '', itens: visiveis }];
     }
@@ -265,27 +295,26 @@ export default function IdeiasView({ onGenese }: IdeiasViewProps): React.ReactEl
 
   // Contagens pra os badges das visões.
   const contagens = useMemo(() => {
-    const c = { inbox: 0, foco: 0, ativas: 0, concluidas: 0, arquivo: 0 };
+    const c = { inbox: 0, andamento: 0, concluidas: 0, arquivo: 0 };
     for (const i of ideias) {
       const est = String(i.estado || 'nova').toLowerCase();
       if (est === 'promovida') continue;
       if (matchVisao(i, 'inbox')) c.inbox++;
-      if (matchVisao(i, 'foco')) c.foco++;
-      if (matchVisao(i, 'ativas')) c.ativas++;
+      if (matchVisao(i, 'andamento')) c.andamento++;
       if (est === 'concluida') c.concluidas++;
       if (est === 'arquivada' || est === 'descartada') c.arquivo++;
     }
     return c;
   }, [ideias, matchVisao]);
 
-  // Lista pro modo Foco: pega o que tá na visão atual SE for inbox, foco ou ativas.
-  // Senão, abre o batch sobre o inbox (que é o caso de uso natural).
+  // Lista pro "Triar 1 por 1" (batch): sempre o que tá no inbox quando estamos
+  // em inbox/andamento; nas visões de histórico volta ao inbox (caso natural).
   const filaModoFoco = useMemo(() => {
-    if (visao === 'concluidas' || visao === 'arquivo') {
+    if (visao === 'inbox' || visao === 'andamento') {
       return ideias.filter((i) => matchVisao(i, 'inbox'));
     }
-    return visiveis;
-  }, [ideias, visao, visiveis, matchVisao]);
+    return ideias.filter((i) => matchVisao(i, 'inbox'));
+  }, [ideias, matchVisao]);
 
   const nomeSistema = (id?: string) => {
     if (!id) return '';
@@ -344,6 +373,11 @@ export default function IdeiasView({ onGenese }: IdeiasViewProps): React.ReactEl
     </Tag>
   );
 
+  const handleVisaoChange = (v: Visao) => {
+    visaoSetadaPeloUser.current = true;
+    setVisao(v);
+  };
+
   const labelComBadge = (visaoKey: Visao) => {
     const n = contagens[visaoKey];
     const meta = VISAO_META[visaoKey];
@@ -374,13 +408,13 @@ export default function IdeiasView({ onGenese }: IdeiasViewProps): React.ReactEl
         extra={
           <div style={{ display: 'flex', gap: 8 }}>
             {contagens.inbox >= 3 && (
-              <Tooltip title="Despacha o inbox em modo foco — 1 ideia por vez, decide com 1 tecla">
+              <Tooltip title="Modo rajada: 1 ideia por vez, decide com 1 tecla (C/A/D/G/T). Acelera quando o inbox tá cheio.">
                 <Button
                   icon={<Zap size={14} />}
-                  onClick={() => { setVisao('inbox'); setModoFoco(true); }}
+                  onClick={() => { handleVisaoChange('inbox'); setModoFoco(true); }}
                   style={{ background: `${t.accents.peach}1f`, color: t.accents.peach, borderColor: `${t.accents.peach}77` }}
                 >
-                  Triar {contagens.inbox} no Foco
+                  Triar {contagens.inbox} em rajada
                 </Button>
               </Tooltip>
             )}
@@ -392,7 +426,7 @@ export default function IdeiasView({ onGenese }: IdeiasViewProps): React.ReactEl
       />
 
       {/* Captura inline sticky no topo — só aparece quando NÃO estamos olhando histórico */}
-      {(visao === 'inbox' || visao === 'foco' || visao === 'ativas') && (
+      {(visao === 'inbox' || visao === 'andamento') && (
         <div style={{
           background: t.surface,
           border: `1px solid ${t.border}`,
@@ -431,29 +465,29 @@ export default function IdeiasView({ onGenese }: IdeiasViewProps): React.ReactEl
         </div>
       )}
 
-      {/* Visões inteligentes (Segmented com badges) */}
+      {/* Visões inteligentes (Segmented com badges) — 4 abas, sem sobreposição:
+          Inbox (não triadas) · Em andamento (triadas vivas) · Concluídas · Arquivo. */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
         <Segmented
           value={visao}
-          onChange={(v) => setVisao(v as Visao)}
+          onChange={(v) => handleVisaoChange(v as Visao)}
           options={[
             { label: labelComBadge('inbox'), value: 'inbox' },
-            { label: labelComBadge('foco'), value: 'foco' },
-            { label: labelComBadge('ativas'), value: 'ativas' },
+            { label: labelComBadge('andamento'), value: 'andamento' },
             { label: labelComBadge('concluidas'), value: 'concluidas' },
             { label: labelComBadge('arquivo'), value: 'arquivo' },
           ]}
         />
         <div style={{ flex: 1 }} />
-        {visao === 'inbox' && contagens.inbox > 0 && (
-          <Tooltip title="Modo Foco — uma ideia por vez, decide com 1 tecla (C/A/D/G/T)">
+        {contagens.inbox > 0 && (visao === 'inbox' || visao === 'andamento') && (
+          <Tooltip title="Modo rajada — uma ideia do inbox por vez, decide com 1 tecla (C/A/D/G/T)">
             <Button
               size="middle"
               icon={<Target size={13} />}
               onClick={() => setModoFoco(true)}
               type="dashed"
             >
-              Modo Foco
+              Triar 1 por 1
             </Button>
           </Tooltip>
         )}
@@ -472,10 +506,8 @@ export default function IdeiasView({ onGenese }: IdeiasViewProps): React.ReactEl
           description={
             visao === 'inbox'
               ? 'Inbox vazio. Capture algo no campo acima ou aperte g+x em qualquer tela.'
-              : visao === 'foco'
-              ? 'Nenhuma ideia em foco no momento. Coloque prioridade "alta" em algo ou capture algo novo.'
-              : visao === 'ativas'
-              ? 'Sem ideias ativas triadas. Tria algo do Inbox pra aparecer aqui.'
+              : visao === 'andamento'
+              ? 'Sem ideias em andamento. Tria algo do Inbox pra aparecer aqui.'
               : visao === 'concluidas'
               ? 'Nenhuma concluída ainda. Marque uma ideia como "concluída" pra construir histórico.'
               : 'Nenhuma ideia no arquivo.'
@@ -621,6 +653,28 @@ function IdeiaCard({
   const score = (ideia.notaImpacto || 0) - (ideia.notaEsforco || 0);
   const barPreenchido = Math.max(0, Math.min(10, Math.round(score + 5)));
   const barVazio = 10 - barPreenchido;
+
+  // Trilha de vida (v1.145.0): tempo de resolução + contador de reaberturas.
+  // tempoResolucao = ms entre criada e a primeira conclusão (preferimos a mais
+  // antiga do histórico — senão, a conclusão atual).
+  const reaberturas = ideia.reaberturas || 0;
+  const primeiraConclusao = (ideia.concluidaEmHist && ideia.concluidaEmHist.length > 0)
+    ? ideia.concluidaEmHist[0]
+    : ideia.concluidaEm;
+  const tempoResolucaoMs = (concluida && ideia.criadoEm && ideia.concluidaEm)
+    ? (new Date(ideia.concluidaEm).getTime() - new Date(ideia.criadoEm).getTime())
+    : 0;
+  const formatarDuracao = (ms: number): string => {
+    if (!ms || ms < 0) return '';
+    const min = Math.floor(ms / 60000);
+    if (min < 60) return `${min}min`;
+    const h = Math.floor(min / 60);
+    if (h < 24) return `${h}h`;
+    const d = Math.floor(h / 24);
+    if (d < 30) return `${d}d`;
+    const me = Math.floor(d / 30);
+    return `${me}mes${me > 1 ? 'es' : ''}`;
+  };
 
   // Cor primária do CTA conforme tipo (Gênese = peach, Promover melhoria = clay).
   const ctaCor = tipo === 'melhoria' ? t.accents.clay : t.accents.peach;
@@ -769,14 +823,54 @@ function IdeiaCard({
         borderTop: `1px solid ${t.borderSoft}`,
         position: 'relative',
       }}>
-        {/* Timestamp + ícone */}
-        <div style={{ fontSize: 11, color: t.textTertiary, display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, flex: '0 1 auto' }}>
+        {/* Trilha de vida — concluída: 'Levou Xd' + 'Reaberta Nx' (se houve).
+            Em andamento (mas já foi concluída antes): 'Reaberta há Xd' + 'Nx'.
+            Resto: 'Criada há Xd'. Tooltip sempre traz data exata. */}
+        <div style={{ fontSize: 11, color: t.textTertiary, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: '1 1 auto', flexWrap: 'wrap' }}>
           {concluida && ideia.concluidaEm ? (
-            <Tooltip title={new Date(ideia.concluidaEm).toLocaleString('pt-BR')}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: t.accents.sage }}>
-                <CheckCheck size={11} /> {tempoRelativo(ideia.concluidaEm)}
-              </span>
-            </Tooltip>
+            <>
+              <Tooltip title={`Concluída em ${new Date(ideia.concluidaEm).toLocaleString('pt-BR')}`}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: t.accents.sage, fontWeight: 500 }}>
+                  <CheckCheck size={11} /> {tempoRelativo(ideia.concluidaEm)}
+                </span>
+              </Tooltip>
+              {tempoResolucaoMs > 0 && (
+                <Tooltip title={`Da criação à última conclusão: ${formatarDuracao(tempoResolucaoMs)}${ideia.criadoEm ? ` · Criada em ${new Date(ideia.criadoEm).toLocaleString('pt-BR')}` : ''}`}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: t.textTertiary }}>
+                    · levou {formatarDuracao(tempoResolucaoMs)}
+                  </span>
+                </Tooltip>
+              )}
+              {reaberturas > 0 && (
+                <Tooltip title={`Foi reaberta ${reaberturas} vez${reaberturas > 1 ? 'es' : ''} antes desta conclusão`}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: t.accents.clay, fontWeight: 500 }}>
+                    · {reaberturas}× reabertas
+                  </span>
+                </Tooltip>
+              )}
+            </>
+          ) : ideia.reabertaEm ? (
+            <>
+              <Tooltip title={`Reaberta em ${new Date(ideia.reabertaEm).toLocaleString('pt-BR')}`}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: t.accents.clay, fontWeight: 500 }}>
+                  <RotateCcw size={11} /> reaberta {tempoRelativo(ideia.reabertaEm)}
+                </span>
+              </Tooltip>
+              {primeiraConclusao && (
+                <Tooltip title={`Tinha sido concluída em ${new Date(primeiraConclusao).toLocaleString('pt-BR')}`}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: t.textTertiary }}>
+                    · antes: {tempoRelativo(primeiraConclusao)}
+                  </span>
+                </Tooltip>
+              )}
+              {reaberturas > 1 && (
+                <Tooltip title={`Já foi reaberta ${reaberturas} vezes no total`}>
+                  <span style={{ color: t.textTertiary }}>
+                    · {reaberturas}×
+                  </span>
+                </Tooltip>
+              )}
+            </>
           ) : ideia.criadoEm ? (
             <Tooltip title={`Criada em ${new Date(ideia.criadoEm).toLocaleString('pt-BR')}`}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>

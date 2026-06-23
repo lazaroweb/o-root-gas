@@ -36,6 +36,69 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.145.0] — 2026-06-22
+
+### Mudado — Ideias: trilha de vida + reorganização das visões
+
+**Por quê.** Dois problemas concretos:
+1. Reabrir uma ideia **apagava** a data de conclusão anterior. Sem como ver o
+   tempo de resolução nem detectar padrão de re-trabalho.
+2. As 5 visões (Inbox · Foco · Ativas · Concluídas · Arquivo) + botão "MODO
+   FOCO" criavam sobreposição confusa: "Foco" e "Ativas" mostravam basicamente
+   as mesmas ideias, e o botão tinha o mesmo nome que uma das abas.
+
+#### Backend — trilha de eventos preservada
+
+- Novas colunas em `Ideias`:
+  - `reabertaEm` — timestamp ISO da última reabertura.
+  - `reaberturas` — contador (quantas vezes foi reaberta).
+  - `concluidaEmHist` — JSON array com TODAS as datas anteriores de conclusão.
+- `reabrirIdeia` agora **empilha** a conclusão anterior em `concluidaEmHist`
+  (em vez de apagar `concluidaEm`), grava `reabertaEm` e incrementa o contador.
+  Permite ler: "Concluída há 4d → Reaberta há 1d (já foi reaberta 2×)".
+- `concluirIdeia` limpa `reabertaEm` quando fecha de novo após reabertura
+  (mantém `reaberturas` como histórico cumulativo).
+- `getIdeias` normaliza os campos novos pra UI (`reaberturas: number`,
+  `concluidaEmHist: string[]`). Compatível com ideias legadas.
+- `SCHEMA_VERSION` → `v1.68-ideia-trilha`.
+
+#### Frontend — 4 visões claras (em vez de 5 confusas)
+
+**Antes:** Inbox · Foco · Ativas · Concluídas · Arquivo + botão "MODO FOCO".
+
+**Agora:** Inbox · Em andamento · Concluídas · Arquivo + botão "Triar 1 por 1".
+
+- **Removida** a aba "Foco" como visão separada. O conceito virou
+  **agrupamento interno** dentro de "Em andamento": as ideias são agrupadas
+  em `Foco` (alta prioridade ou criadas há ≤ 3 dias), `Importante` (média),
+  `Outras`. Sem perder a noção de prioridade — só sem aba duplicada.
+- **Renomeada** "Ativas" → **"Em andamento"** (deixa claro que é o trabalho em
+  fluxo, não estado abstrato).
+- **Renomeado** o botão "MODO FOCO" → **"Triar 1 por 1"** (e o atalho
+  "Triar N no Foco" → "Triar N em rajada"). Acaba a colisão semântica.
+- **Default smart**: ao abrir, se houver pelo menos 1 ideia no Inbox → abre
+  em Inbox (algo pra triar). Senão → abre em "Em andamento". Se você mudar
+  manualmente de aba, sua escolha é respeitada na sessão.
+
+#### Trilha visual nas cards e no drawer
+
+- **Card de ideia** mostra no rodapé:
+  - Concluída: `✓ há 2h · levou 4d · 2× reabertas` (tudo com tooltip de data
+    exata e duração).
+  - Em andamento mas já foi concluída antes: `↻ reaberta há 1d · antes: há 5d`.
+  - Nova/em andamento sem histórico: só `🕐 criada há 3d`.
+- **Drawer de triagem** ganha bloco **"Trilha de vida"** no topo (só aparece
+  se houver mais de 1 evento): timeline horizontal `Criada → Concluída →
+  Reaberta → Concluída`, cada evento com cor semântica e data ao hover,
+  resumo "Total: 4d" ou "Ativa há: 2d" + chip "2× reabertas".
+
+### Não mexido
+- IdeiaTriagemBatch (modo rajada): não recebeu timeline porque ele só roda
+  sobre o Inbox bruto (ideias sem histórico ainda).
+- Hotkey `g+x` continua igual (captura rápida global).
+
+---
+
 ## [1.144.0] — 2026-06-22
 
 ### Adicionado — Ligando Atelier > Contas e Financeiro Pessoal via cartão
