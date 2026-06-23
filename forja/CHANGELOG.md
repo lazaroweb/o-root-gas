@@ -36,6 +36,39 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.148.3] — 2026-06-23
+
+### Adicionado — Self-bootstrap do FORJA + seção "Como usar essa skill em cada IDE"
+
+**Self-bootstrap do sistema Forja (migration `MIGRATION_V148_FORJA_REPO`)**
+
+Detecta automaticamente o sistema próprio da Forja (codinome `forja` OU nome contém "forja" + tem `scriptId` GAS) e preenche `repoUrl` com `https://github.com/lazaroweb/o-root-gas` se estiver vazio. Idempotente — só preenche quando vazio, e roda uma única vez (registra a flag em ScriptProperties).
+
+Por quê: na v1.148.1 o usuário descobriu que escanear o build output (`Server.js` no GAS) não pega `// DEBT(...)` porque esbuild remove comentários. Cadastrar o `repoUrl` faz a Forja ler o source TS direto do GitHub (com comentários intactos). Em vez de o usuário editar a ficha do sistema na mão, a migration faz isso na próxima abertura do app.
+
+`SCHEMA_VERSION` bumped pra `v1.71-forja-self-repo`.
+
+**Componente `ComoUsarSkill.tsx` (novo)**
+
+Cada skill no Atelier → Skills agora mostra uma nova seção **"Como usar essa skill em cada IDE"** dentro do drawer de detalhe, com Segmented control entre 8 destinos:
+
+| IDE | Caminho | Cobre |
+|-----|---------|-------|
+| `AGENTS.md` | raiz do repo | Cursor + Claude Code + Codex + Continue (recomendado) |
+| Cursor User Rule | Settings → Rules → User Rules | Todos os repos do user (só Cursor) |
+| Cursor `.mdc` | `.cursor/rules/<slug>.mdc` | Por repo, versionado (só Cursor) |
+| Claude Code | `~/.claude/skills/<slug>/SKILL.md` | Claude Code CLI |
+| Codex | `AGENTS.md` (mesmo método #1) | Codex CLI |
+| Continue | `~/.continue/config.json → systemMessage` | Continue.dev |
+| GitHub Copilot | `.github/copilot-instructions.md` | Copilot (anexa se já existe) |
+| Windsurf | `.windsurfrules` | Windsurf / Codeium IDE |
+
+Cada destino mostra: descrição do que cobre · path destino (mono lavanda) · texto explicando como instalar · alerta de limitações (quando há) · **comando bash pronto** (`cat > arquivo << EOF`) que cria/atualiza o arquivo com o conteúdo da skill. Botão "Copiar comando" e "Copiar conteúdo da skill" pra zero fricção. Quando a skill veio do `gas-app-kit/`, também aparece "Ver no GitHub".
+
+**Por quê**: o usuário pediu — ele quer importar a skill `forja-debt-tracking` (e qualquer outra) com instruções claras de como aplicar em IDEs diferentes, sem precisar lembrar dos caminhos de cada uma. A feature funciona pra TODAS as skills do hub, não só pra `forja-debt-tracking`.
+
+---
+
 ## [1.148.2] — 2026-06-23
 
 ### Adicionado — Suporte a `/* */` e `/*! */` no parser de dívida + 2 dívidas reais marcadas no código + AGENTS.md template portátil

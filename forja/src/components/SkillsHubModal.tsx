@@ -15,6 +15,7 @@ import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import type { ServerResult } from '../types';
 import { GAS_APP_KIT_SKILLS } from '../data/gasAppKitSkills';
+import ComoUsarSkill from './ComoUsarSkill';
 
 interface SkillSummary {
   id: string;
@@ -1180,6 +1181,15 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                 </div>
               </div>
             )}
+
+            {/* v1.148.3 — instruções de como instalar essa skill em cada IDE.
+                Sempre mostra (toda skill é instalável em qualquer agente).
+                Usa o conteúdo TRADUZIDO se disponível pra os comandos saírem em pt. */}
+            <ComoUsarSkill
+              skillNome={aberta.nome}
+              skillFonte={aberta.fonte}
+              conteudoMd={traduzido && !verOriginal ? traduzido.conteudo : aberta.conteudo}
+            />
 
             {/* Conteúdo bruto */}
             <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, marginBottom: 6 }}>

@@ -344,7 +344,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.70-debito-tecnico';
+const SCHEMA_VERSION = 'v1.71-forja-self-repo';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -415,7 +415,34 @@ function _executarMigracoes(): void {
       try { migrarSaudeNaoAvaliada(); } catch { /* segue baile */ }
       props.setProperty('MIGRATION_F14_SAUDE', 'done');
     }
+    // v1.148.3 — self-bootstrap do sistema FORJA: detecta o sistema próprio
+    // da Forja (codinome='forja' + scriptId não-vazio) e preenche repoUrl com
+    // o repositório oficial se estiver vazio. Isso libera a aba "Dívida técnica"
+    // pra ler diretamente do source TS (com comentários intactos) em vez de cair
+    // no fallback GAS que lê o build output (sem comentários removidos por esbuild).
+    if (props.getProperty('MIGRATION_V148_FORJA_REPO') !== 'done') {
+      try { _migrarForjaSelfRepoUrl(); } catch { /* segue baile */ }
+      props.setProperty('MIGRATION_V148_FORJA_REPO', 'done');
+    }
   } catch { /* PropertiesService pode falhar em contextos limitados */ }
+}
+
+// Self-bootstrap: cadastra repoUrl do repo oficial Forja quando detecta o
+// sistema próprio cadastrado sem repoUrl. Idempotente (só preenche se vazio).
+function _migrarForjaSelfRepoUrl(): void {
+  const REPO_OFICIAL = 'https://github.com/lazaroweb/o-root-gas';
+  const todos = dbGetAll('Sistemas') as Array<Record<string, unknown>>;
+  for (const s of todos) {
+    const codinome = String(s.codinome || '').toLowerCase().trim();
+    const nome = String(s.nome || '').toLowerCase();
+    const scriptId = String(s.scriptId || '').trim();
+    const repoUrl = String(s.repoUrl || '').trim();
+    // Heurística: codinome 'forja' (seed) OU nome contém "forja" + tem scriptId GAS + repoUrl vazio.
+    const ehForja = codinome === 'forja' || /forja/.test(nome);
+    if (ehForja && scriptId && !repoUrl) {
+      dbUpdate('Sistemas', String(s.id), { repoUrl: REPO_OFICIAL });
+    }
+  }
 }
 
 function generateId(): string {
