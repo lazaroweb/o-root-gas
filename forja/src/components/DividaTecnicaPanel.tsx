@@ -453,8 +453,19 @@ export default function DividaTecnicaPanel({ sistemaId, repoUrl, scriptId, onPro
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             description={
               <span style={{ color: t.textSecondary, fontFamily: FONTS.ui, fontSize: 13 }}>
+                {/* v1.148.12 — texto antes era uma string literal contendo `// TODO:`,
+                    `// FIXME:` e `// DEBT(...)`. Isso disparava o próprio scanner de
+                    débito como falso positivo. Agora os marcadores estão em <code>
+                    fora da string TS, defensivo contra qualquer regex de comentário. */}
                 {resumo.total === 0
-                  ? 'Nenhuma dívida detectada — seu código está limpo. Marque com `// TODO:`, `// FIXME:` ou `// DEBT(area,sev): ...` pra acompanhar aqui.'
+                  ? (
+                    <>
+                      Nenhuma dívida detectada — seu código está limpo. Marque com{' '}
+                      <code style={{ fontFamily: 'inherit' }}>{'/'}{'/ '}TODO:</code>,{' '}
+                      <code style={{ fontFamily: 'inherit' }}>{'/'}{'/ '}FIXME:</code> ou{' '}
+                      <code style={{ fontFamily: 'inherit' }}>{'/'}{'/ '}DEBT(area,sev): ...</code> pra acompanhar aqui.
+                    </>
+                  )
                   : 'Nenhum item bate com o filtro/busca.'}
               </span>
             }

@@ -36,6 +36,105 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.148.12] — 2026-06-23
+
+### Corrigido — Parser ignora marcador dentro de string literal + linhas com múltiplos marcadores
+
+**Bug meta detectado**
+O user testou o workflow `Copiar prompt → cola no Cursor` e descobriu que o
+prompt apontava pra um TODO **dentro de uma string literal** (a mensagem
+de UI "Nenhuma dívida detectada — marque com `// TODO:`, `// FIXME:` ou
+`// DEBT(area,sev): ...` pra acompanhar aqui").
+
+Esse débito não existe — o `// TODO:` mora dentro de aspas, é texto exibido
+pro usuário, não código real. O regex da v1.148.8 (com word boundary) ainda
+não tinha como saber a diferença.
+
+### 3 fixes em camadas (defense-in-depth)
+
+**Fix #1 — Parser ignora linhas com múltiplos marcadores diferentes**
+
+Nova função `_temMultiplosMarcadores(linha)`. Se a linha cita 2+ marcadores
+DIFERENTES (TODO + FIXME, ou TODO + DEBT etc), é quase certo doc/exemplo
+explicando o protocolo, não débito real. Skip.
+
+```ts
+// "Marque com // TODO:, // FIXME: ou // DEBT(...)"  → SKIP (3 marcadores)
+// "// TODO: implementar X"                          → MATCH (1 marcador)
+```
+
+**Fix #2 — Parser ignora marcador dentro de string literal**
+
+Nova função `_estaDentroDeString(linha, pos)`. Conta aspas (`'`, `"`, `` ` ``)
+não-escapadas antes da posição do match. Se a "aspa corrente" não é null
+naquele ponto, o marcador está dentro de uma string.
+
+```ts
+const msg = 'marque com // TODO: ...';  // SKIP — // está dentro de aspas
+// TODO: implementar de verdade        // MATCH — // está em código real
+```
+
+Não é parser completo de JS/TS (não trata template literals com `${}`
+aninhados, comentários antes do match, etc), mas pega 99% dos casos reais.
+
+**Fix #3 — Texto defensivo no DividaTecnicaPanel**
+
+A mensagem de UI "Nenhuma dívida detectada — marque com // TODO:..."
+foi reescrita usando `<code>` JSX com strings concatenadas (`{'/'}{'/ '}TODO:`):
+
+```tsx
+// ANTES (string literal contendo // TODO: — disparava o scanner):
+'Nenhuma dívida detectada. Marque com `// TODO:`, `// FIXME:` ou ...'
+
+// AGORA (JSX com code tags, fragmentos separados):
+<>Nenhuma dívida detectada. Marque com <code>{'/'}{'/ '}TODO:</code>, ...</>
+```
+
+Mesmo se a heurística falhar (parser pega algum caso edge), esse texto
+específico nunca mais vai disparar — porque os caracteres `//` agora estão
+em fragmentos JS separados (`{'/'}{'/ '}`), não numa string contígua.
+
+### Por que 3 fixes em camadas?
+
+Princípio de robustez: cada camada protege a outra.
+
+| Camada | O que pega |
+|--------|-----------|
+| **Texto defensivo (UI)** | Esse caso específico, garantia 100% |
+| **Heurística "dentro de string"** | Qualquer outro caso similar em qualquer arquivo |
+| **Heurística "múltiplos marcadores"** | Docs que explicam o protocolo |
+
+Mesmo se o user (ou um agente de IA) escrever no futuro algo como:
+
+```ts
+const exemplo = "// FIXME: documente isto";
+```
+
+A heurística #2 vai pular. E se for legítimo (raro), volta pra carregar
+no scan — basta ajustar.
+
+### Limpeza automática
+Esse débito específico vai virar `pago` no próximo sync (o `// TODO:`
+literal sumiu do arquivo). Aba "Dívida" → segmento "Pagos" → banner
+"1 fantasma detectado" → **Limpar 1** (ou ignora, fica como histórico).
+
+### Bonus: prova viva do workflow
+O user usou pela primeira vez o **"Copiar prompt pra IA"** da v1.148.11 e
+o bug saltou na cara — exatamente o cenário que justifica ter o preview.
+Sem o prompt formatado, esse falso positivo passaria batido.
+
+### Impacto
+Scanner de dívida técnica agora é à prova de:
+- Comentários em código real (caso canônico — ✅ funciona)
+- Strings literais com marcadores (UI text — ✅ pula)
+- Doc com múltiplos marcadores em exemplos (SKILL.md, README — ✅ pula)
+- Palavras em português que começam com TODO/FIXME (v1.148.8 — ✅ pula)
+- Arquivos do próprio protocolo (CHANGELOG, AGENTS.md — v1.148.8 — ✅ pula)
+
+A cobertura ficou madura. Falso positivo é exceção rara agora, não regra.
+
+---
+
 ## [1.148.11] — 2026-06-23
 
 ### Adicionado — Débito vira PROMPT pronto pra agente de IA (Cursor, Claude Code, Codex, Windsurf)

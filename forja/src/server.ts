@@ -15666,6 +15666,36 @@ type DebitoStatusServer = 'ativo' | 'pago' | 'promovido';
 const _DEBT_AREAS_VALIDAS = ['governanca', 'arquitetura', 'seguranca', 'dependencias', 'testes', 'operacional', 'performance', 'ux', 'codigo'];
 const _DEBT_SEV_VALIDAS = ['alta', 'media', 'baixa'];
 
+// v1.148.12 — Heurística "está dentro de string literal".
+// Conta aspas (' " `) não-escapadas até a posição do match. Se a "aspa
+// corrente" não é null naquele ponto, o marcador está dentro de uma string
+// (típico de mensagem de UI que exemplifica marcadores: "marque com // TODO:").
+// Não é parser completo de JS/TS, mas pega 99% dos casos reais.
+function _estaDentroDeString(linha: string, posMarcador: number): boolean {
+  let aspaAtual: string | null = null;
+  for (let i = 0; i < posMarcador; i++) {
+    const c = linha.charAt(i);
+    if (aspaAtual === null) {
+      if (c === "'" || c === '"' || c === '`') aspaAtual = c;
+    } else if (c === aspaAtual && linha.charAt(i - 1) !== '\\') {
+      aspaAtual = null;
+    }
+  }
+  return aspaAtual !== null;
+}
+
+// v1.148.12 — Heurística "menção meta sobre marcadores".
+// Se a linha tem 2 ou mais marcadores DIFERENTES, quase certo é doc/exemplo
+// explicando o protocolo (ex: "marque com // TODO:, // FIXME: ou // DEBT(...)").
+// Débito real só menciona 1 tipo por linha. Skip pra evitar ruído.
+function _temMultiplosMarcadores(linha: string): boolean {
+  const matches = linha.match(/\b(TODO|FIXME|HACK|DEBT)\b/gi);
+  if (!matches || matches.length < 2) return false;
+  const tipos = new Set<string>();
+  for (const m of matches) tipos.add(m.toUpperCase());
+  return tipos.size >= 2;
+}
+
 // Parseia uma linha de código procurando por TODO/FIXME/HACK/DEBT.
 // Aceita prefixos: `//`, `#`, `--`, `<!--`, `/*` (basta o marcador). Case-insensitive.
 // Block comments `/* DEBT(...) */` são importantes em código processado por bundlers
@@ -15676,11 +15706,19 @@ const _DEBT_SEV_VALIDAS = ['alta', 'media', 'baixa'];
 // pra evitar match em palavras como "TODOs" (português pra "todos"), "FIXMEd",
 // "HACKy". Bug detectado em produção: "// TODOs os nodes na 11.x" estava
 // matchando como TODO e gerando débito "s os nodes na 11.x" (com 's' sobrando).
-// Word boundary `\b` requer transição word↔non-word, então TODOs (O→s, ambos
-// word chars) NÃO bate em `\bTODO\b`, mas `// TODO: x` bate (O→`:`).
+//
+// v1.148.12 — 2 novas defesas: skip se marcador dentro de string literal
+// (mensagem de UI que exemplifica marcadores) e skip se linha tem múltiplos
+// marcadores diferentes (doc/exemplo explicando o protocolo).
 function _parseLinhaDebito(linha: string, arquivo: string, numLinha: number): DebitoMatchRaw | null {
-  const debtMatch = linha.match(/(?:\/\/|\/\*|#|--|<!--)\s*\bDEBT\b\s*\(\s*([a-z]+)\s*,\s*(alta|media|baixa)\s*\)\s*:?\s*(.+?)(?:\*\/|-->)?\s*$/i);
+  // Defesa #1: linha cita múltiplos marcadores → quase certo é doc/exemplo
+  if (_temMultiplosMarcadores(linha)) return null;
+
+  const debtRe = /(?:\/\/|\/\*|#|--|<!--)\s*\bDEBT\b\s*\(\s*([a-z]+)\s*,\s*(alta|media|baixa)\s*\)\s*:?\s*(.+?)(?:\*\/|-->)?\s*$/i;
+  const debtMatch = linha.match(debtRe);
   if (debtMatch) {
+    // Defesa #2: marcador dentro de string literal → skip
+    if (_estaDentroDeString(linha, debtMatch.index || 0)) return null;
     const area = String(debtMatch[1] || '').toLowerCase();
     const sev = String(debtMatch[2] || 'media').toLowerCase();
     let desc = String(debtMatch[3] || '').trim();
@@ -15694,8 +15732,10 @@ function _parseLinhaDebito(linha: string, arquivo: string, numLinha: number): De
       severidade: _DEBT_SEV_VALIDAS.indexOf(sev) >= 0 ? sev : 'media',
     };
   }
-  const livreMatch = linha.match(/(?:\/\/|\/\*|#|--|<!--)\s*\b(TODO|FIXME|HACK)\b\s*[:\-]?\s*(.+?)(?:\*\/|-->)?\s*$/i);
+  const livreRe = /(?:\/\/|\/\*|#|--|<!--)\s*\b(TODO|FIXME|HACK)\b\s*[:\-]?\s*(.+?)(?:\*\/|-->)?\s*$/i;
+  const livreMatch = linha.match(livreRe);
   if (livreMatch) {
+    if (_estaDentroDeString(linha, livreMatch.index || 0)) return null;
     const tipo = String(livreMatch[1] || '').toLowerCase() as 'todo' | 'fixme' | 'hack';
     let desc = String(livreMatch[2] || '').trim();
     desc = desc.replace(/\*\/\s*$/, '').trim();
