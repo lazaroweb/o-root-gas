@@ -309,6 +309,10 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
   const [tagsOverride, setTagsOverride] = useState('');
   const [salvando, setSalvando] = useState(false);
   const [importandoKit, setImportandoKit] = useState(false);
+  // v1.148.6 — exportação 1-clique de TODAS as skills pra Claude Code (global ou projeto).
+  // User pediu: "se eu quiser num projeto novo levar todas essas skills de uma vez,
+  // pensando em usar o claude code, o que devo fazer?". Resposta: 1 botão + install.sh.
+  const [exportandoTodas, setExportandoTodas] = useState(false);
   const [preview, setPreview] = useState<{ nome: string; descricao: string; categoria: string; tags: string[]; secoes: string[] } | null>(null);
   const [previewing, setPreviewing] = useState(false);
 
@@ -431,6 +435,131 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
       message.error('Não foi possível importar as skills do GAS App Kit.');
     } else {
       message.success(`GAS App Kit importado — ${novas} nova(s), ${atualizadas} atualizada(s)${erros ? `, ${erros} com erro` : ''}.`);
+    }
+  };
+
+  // v1.148.6 — exporta TODAS as skills do hub em 1 clique no formato Claude Code.
+  // Gera zip contendo `<slug>/SKILL.md` por skill + install.sh interativo (escolhe
+  // entre instalar global em ~/.claude/skills/ ou local em .claude/skills/) +
+  // README com instruções. Honra o padrão "respeite operações longas" (v1.148.4).
+  const exportarTodasParaClaudeCode = async () => {
+    if (skills.length === 0) {
+      message.warning('Nenhuma skill no hub pra exportar.');
+      return;
+    }
+    setExportandoTodas(true);
+    try {
+      const ids = skills.map((s) => s.id);
+      const r = await callServer<ServerResult>('skillsExportar', ids);
+      if (!r.ok || !r.data) {
+        message.error(r.error || 'Erro ao buscar conteúdo das skills.');
+        return;
+      }
+      const exportadas = r.data as ExportSkill[];
+      const entries: ZipEntry[] = [];
+      const slugs: string[] = [];
+      const usados = new Set<string>();
+      for (const s of exportadas) {
+        const base = slugSkill(s.nome);
+        let u = base; let n = 2;
+        while (usados.has(u)) { u = `${base}-${n}`; n++; }
+        usados.add(u);
+        slugs.push(u);
+        entries.push({ path: `${u}/SKILL.md`, content: s.conteudo });
+      }
+
+      // install.sh interativo: pergunta global vs projeto, copia tudo, reporta.
+      const installSh = `#!/usr/bin/env bash
+set -euo pipefail
+
+cat <<'BANNER'
+
+  ╔═══════════════════════════════════════════════════════════╗
+  ║  Forja — instalar skills no Claude Code                    ║
+  ╚═══════════════════════════════════════════════════════════╝
+
+  ${exportadas.length} skills neste pacote prontas pra instalar.
+
+  Onde voce quer instalar?
+
+    1) Global  ->  ~/.claude/skills/
+       (vale em TODOS os seus projetos sem precisar copiar de novo)
+
+    2) Projeto ->  ./.claude/skills/  no diretorio atual
+       (so este projeto, vai versionado no git, time inteiro adota)
+
+BANNER
+
+read -p "  Escolha [1/2]: " escolha
+
+case "\${escolha:-}" in
+  1) DEST="\$HOME/.claude/skills" ;;
+  2) DEST="\$(pwd)/.claude/skills" ;;
+  *) echo "Escolha invalida ('1' ou '2'). Saindo."; exit 1 ;;
+esac
+
+mkdir -p "\$DEST"
+SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+
+count=0
+for dir in "\$SCRIPT_DIR"/*/; do
+  if [ -f "\$dir/SKILL.md" ]; then
+    slug="\$(basename "\$dir")"
+    target="\$DEST/\$slug"
+    rm -rf "\$target"
+    cp -r "\$dir" "\$target"
+    echo "  - \$slug -> \$target"
+    count=\$((count + 1))
+  fi
+done
+
+echo
+echo "  OK - \$count skills instaladas em:"
+echo "       \$DEST"
+echo
+echo "  Reabra o Claude Code pra ele detectar as novas skills."
+`;
+      entries.push({ path: 'install.sh', content: installSh });
+
+      // README orientando o usuário leigo (BA, não dev).
+      const readme = `# Skills da Forja — pacote pro Claude Code
+
+${exportadas.length} skills exportadas do hub de Skills da Forja, prontas pra usar no **Claude Code**.
+
+## Como instalar (1 comando)
+
+\`\`\`bash
+unzip skills-claude-code.zip -d skills-temp
+cd skills-temp
+bash install.sh
+\`\`\`
+
+O \`install.sh\` pergunta interativamente onde voce quer instalar:
+
+| Opção | Caminho | Quando usar |
+|-------|---------|-------------|
+| **1) Global** | \`~/.claude/skills/\` | Vale em todos os seus projetos sem copiar de novo |
+| **2) Projeto** | \`./.claude/skills/\` no diretório atual | Só este projeto, vai versionado no Git, time inteiro adota |
+
+Depois reabra o Claude Code pra ele detectar.
+
+## Skills inclusas (${exportadas.length})
+
+${exportadas.map((s, i) => `- **${s.nome}** — \`${slugs[i]}/SKILL.md\`${s.descricao ? '\n  > ' + umaLinha(s.descricao) : ''}`).join('\n')}
+
+---
+
+Gerado pela Forja em ${new Date().toISOString().slice(0, 10)}.
+Pra atualizar uma skill no futuro: re-exporte e rode \`bash install.sh\` de novo — sobrescreve in-place.
+`;
+      entries.unshift({ path: 'README.md', content: readme });
+
+      baixarBlob(criarZipBlob(entries), `forja-skills-claude-code-${new Date().toISOString().slice(0, 10)}.zip`);
+      message.success(`${exportadas.length} skills exportadas — execute "bash install.sh" no terminal pra instalar.`);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro ao exportar');
+    } finally {
+      setExportandoTodas(false);
     }
   };
 
@@ -747,6 +876,13 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                       <Tooltip title={`Adiciona as ${GAS_APP_KIT_SKILLS.length} skills do GAS App Kit à sua biblioteca. Reimportar atualiza, não duplica.`}>
                         <Button icon={<Download size={14} />} loading={importandoKit} onClick={importarKit}>
                           Importar GAS App Kit
+                        </Button>
+                      </Tooltip>
+                    )}
+                    {skills.length > 0 && (
+                      <Tooltip title={`Exporta TODAS as ${skills.length} skills no formato Claude Code (uma pasta por skill com SKILL.md) + install.sh que pergunta se você quer instalar global (~/.claude/skills/) ou no projeto atual (./.claude/skills/).`}>
+                        <Button icon={<Package size={14} />} loading={exportandoTodas} onClick={exportarTodasParaClaudeCode}>
+                          Exportar tudo (Claude Code)
                         </Button>
                       </Tooltip>
                     )}

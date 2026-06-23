@@ -36,6 +36,79 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.148.6] — 2026-06-23
+
+### Adicionado — Exportar TODAS as skills em 1 clique pro Claude Code
+
+**Pergunta do usuário**
+> "Se eu quiser num projeto novo levar todas essas skills de uma única vez,
+> pensando em usar o Claude Code, o que devo fazer?"
+
+**Resposta antes desta versão**
+Tinha que entrar em "Montar kit", clicar uma a uma em ~11 skills, configurar
+destino "Claude Code", baixar `.zip`, descompactar, copiar manualmente cada
+pasta pra `~/.claude/skills/`. Trabalhoso e frágil — 6 passos manuais.
+
+**Resposta agora — 1 botão, 1 zip, 1 comando**
+
+Novo botão **"Exportar tudo (Claude Code)"** no header do Hub de Skills
+(`Atelier → Skills`), ao lado de "Importar GAS App Kit".
+
+Ao clicar:
+1. Pega TODAS as skills do hub (não precisa selecionar uma a uma)
+2. Gera `forja-skills-claude-code-YYYY-MM-DD.zip` contendo:
+   - `<slug>/SKILL.md` — uma pasta por skill, formato nativo Claude Code
+   - `install.sh` — script bash interativo
+   - `README.md` — instruções pro usuário leigo
+
+**O `install.sh` é interativo** — pergunta onde instalar:
+
+| Opção | Destino | Quando usar |
+|-------|---------|-------------|
+| **1) Global** | `~/.claude/skills/` | Vale em TODOS seus projetos sem copiar de novo |
+| **2) Projeto** | `./.claude/skills/` no diretório atual | Só este projeto, vai versionado no Git, time inteiro adota |
+
+**Workflow do usuário (de 6 passos pra 3)**
+
+```bash
+# 1. Baixa o zip pelo botão na Forja
+# 2. Descompacta + roda install
+unzip forja-skills-claude-code-2026-06-23.zip -d skills-temp
+cd skills-temp && bash install.sh
+# 3. Reabre Claude Code — todas as skills disponíveis
+```
+
+**Detalhes técnicos**
+- `SkillsHubModal.tsx`: nova função `exportarTodasParaClaudeCode` reusa o RPC
+  existente `skillsExportar` (que já busca conteúdo bruto de N skills em
+  paralelo). Gera o zip client-side com `criarZipBlob` + `baixarBlob`.
+- O `install.sh` usa apenas POSIX bash (sem dependências). Tem heredoc, `read`
+  interativo, `rm -rf + cp -r` pra sobrescrever skills existentes
+  (re-exportações futuras atualizam in-place).
+- Slugs duplicados são auto-resolvidos com sufixo numérico
+  (`debt-tracking-2`, `debt-tracking-3` etc).
+- Honra o padrão **"toda operação > 600ms mostra feedback"** (v1.148.4):
+  botão tem `loading={exportandoTodas}` durante a geração do zip.
+
+**Como propagar pra outros agentes (não só Claude Code)**
+
+O destino padrão deste botão é Claude Code porque foi o que o user pediu.
+Pra outros destinos, o fluxo "Montar kit" existente já cobre:
+
+| Destino | Formato | Como gerar |
+|---------|---------|------------|
+| **Claude Code** | `.claude/skills/<slug>/SKILL.md` | ← este botão novo (1 clique) |
+| **Cursor rules** | `.cursor/rules/<slug>.mdc` | Montar kit → destino "Cursor" |
+| **Anthropic genérico** | `skills/<slug>/SKILL.md` | Montar kit → destino "Genérico" |
+| **AGENTS.md universal** | Single file concatenado | Hoje só via export por skill (`ComoUsarSkill`) — backlog: gerar `AGENTS.md` consolidado em 1 clique |
+
+### Impacto
+Zero friction pra adotar a biblioteca de skills da Forja em qualquer projeto
+novo. Antes: 6 passos manuais por projeto, fácil de errar. Agora: baixar, rodar,
+pronto.
+
+---
+
 ## [1.148.5] — 2026-06-23
 
 ### Corrigido — Skill `forja-debt-tracking` sem categoria + banner contextual no Hub
