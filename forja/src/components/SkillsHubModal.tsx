@@ -7,7 +7,7 @@ import {
   BookMarked, Plus, Upload as UploadIcon, Copy, Trash2, Download, Search, Tag as TagIcon,
   ExternalLink, Sparkles, Eye, FileText, Save, X, FolderOpen, Folder, FolderPlus, Pencil,
   FolderInput, Palette, Check, CheckCircle2, Info, Languages, Package, Archive, ListChecks,
-  Star, Boxes,
+  Star, Boxes, Heart, ArrowDownWideNarrow, Wand2, FolderDown,
 } from 'lucide-react';
 import { criarZipBlob, baixarBlob, type ZipEntry } from '../zip';
 import ModeloBadge from './ModeloBadge';
@@ -19,6 +19,7 @@ import { GAS_APP_KIT_SKILLS } from '../data/gasAppKitSkills';
 import ComoUsarSkill from './ComoUsarSkill';
 import ImportarLoteModal from './ImportarLoteModal';
 import EstrelasQualidade from './EstrelasQualidade';
+import { FiltroChip, ChipGroup, GrupoAcoes, GrupoDivisor, CommandBar } from './HubToolbar';
 
 interface SkillSummary {
   id: string;
@@ -941,124 +942,144 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                     </span>
                   </div>
 
-                  <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {/* v1.153.0 — Barra de comando repaginada: busca + chips de
+                      filtro numa linha; ações agrupadas e rotuladas (Curadoria
+                      IA com destaque, Biblioteca com dropdowns) noutra. Dá
+                      respiro, hierarquia e discoverability. */}
+                  <div style={{ display: 'flex', gap: 10, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                     <Input
-                      prefix={<Search size={13} color={t.textTertiary} />}
+                      prefix={<Search size={14} color={t.textTertiary} />}
                       placeholder="Filtrar por nome, descrição, categoria ou tag…"
                       value={filtro}
                       onChange={(e) => setFiltro(e.target.value)}
                       allowClear
                       style={{ flex: 1, minWidth: 240 }}
                     />
-                    {qtdFavoritas > 0 && (
-                      <Tooltip title={soFavoritas ? `Mostrando só as ${qtdFavoritas} favorita${qtdFavoritas > 1 ? 's' : ''} — clique pra ver todas` : `Filtrar pelas ${qtdFavoritas} skill${qtdFavoritas > 1 ? 's' : ''} marcada${qtdFavoritas > 1 ? 's' : ''} como favorita`}>
-                        <Button
-                          icon={<Star size={14} fill={soFavoritas ? t.accents.peach : 'none'} color={t.accents.peach} strokeWidth={soFavoritas ? 1.5 : 1.8} />}
-                          onClick={() => setSoFavoritas((v) => !v)}
-                          style={soFavoritas ? { borderColor: t.accents.peach, color: t.accents.peach, background: `${t.accents.peach}0d` } : undefined}
-                        >
-                          Favoritas ({qtdFavoritas})
-                        </Button>
-                      </Tooltip>
+                    {(qtdFavoritas > 0 || qtdAvaliadas > 0) && (
+                      <ChipGroup>
+                        {qtdFavoritas > 0 && (
+                          <FiltroChip
+                            active={soFavoritas}
+                            onClick={() => setSoFavoritas((v) => !v)}
+                            accent={t.accents.peach}
+                            fill
+                            title={soFavoritas ? 'Mostrando só as favoritas — clique pra ver todas' : 'Filtrar só as favoritas (coração)'}
+                            label={`Favoritas ${qtdFavoritas}`}
+                            icon={(cor, filled) => <Heart size={14} color={cor} fill={filled ? cor : 'none'} strokeWidth={1.8} />}
+                          />
+                        )}
+                        {qtdAvaliadas > 0 && (
+                          <>
+                            <FiltroChip
+                              active={soTop}
+                              onClick={() => setSoTop((v) => !v)}
+                              accent={t.accents.peach}
+                              fill
+                              title="Mostrar só as skills com 4 ou 5 estrelas (avaliadas pela Lume)."
+                              label="Top 4★+"
+                              icon={(cor, filled) => <Star size={14} color={cor} fill={filled ? cor : 'none'} strokeWidth={1.8} />}
+                            />
+                            <FiltroChip
+                              active={ordenarPorEstrelas}
+                              onClick={() => setOrdenarPorEstrelas((v) => !v)}
+                              accent={t.accents.lavender}
+                              title="Ordenar pela nota de qualidade (maior primeiro)."
+                              label="Por nota"
+                              icon={(cor) => <ArrowDownWideNarrow size={14} color={cor} strokeWidth={1.8} />}
+                            />
+                          </>
+                        )}
+                      </ChipGroup>
                     )}
-                    {/* v1.152.0 — filtro "só top" (>=4 estrelas) + ordenar por estrelas */}
-                    {qtdAvaliadas > 0 && (
-                      <>
-                        <Tooltip title="Mostrar só as skills com 4 ou 5 estrelas (avaliadas pela Lume).">
-                          <Button
-                            icon={<Star size={14} fill={soTop ? t.accents.peach : 'none'} color={t.accents.peach} />}
-                            onClick={() => setSoTop((v) => !v)}
-                            style={soTop ? { borderColor: t.accents.peach, color: t.accents.peach, background: `${t.accents.peach}0d` } : undefined}
-                          >
-                            Top (4★+)
-                          </Button>
-                        </Tooltip>
-                        <Tooltip title="Ordenar pela nota de qualidade (maior primeiro).">
-                          <Button
-                            type={ordenarPorEstrelas ? 'primary' : 'default'}
-                            ghost={ordenarPorEstrelas}
-                            icon={<Sparkles size={14} />}
-                            onClick={() => setOrdenarPorEstrelas((v) => !v)}
-                          >
-                            Por nota
-                          </Button>
-                        </Tooltip>
-                      </>
-                    )}
-                    {/* v1.152.0 — Avaliar com a Lume: dá nota 0-5 às skills sem nota. */}
-                    {skills.length > 0 && (
-                      <Tooltip title="A Lume lê nome + descrição e dá uma nota de qualidade (0-5) pra cada skill ainda sem nota. Fica guardado — não re-gasta tokens nas próximas.">
-                        <Button icon={<Star size={14} />} loading={avaliando} onClick={() => avaliarSkills({ escopo: 'pendentes' })}>
-                          {avaliando && avalProg ? `Avaliando ${avalProg.feitas}/${avalProg.total}…` : 'Avaliar com a Lume'}
-                        </Button>
-                      </Tooltip>
-                    )}
-                    {skills.length > 0 && (
-                      <Tooltip title="Traduz para português as descrições ainda no original (fica guardado — não re-gasta tokens nas próximas).">
-                        <Button icon={<Languages size={14} />} loading={traduzindoTudo} onClick={traduzirDescricoes}>
-                          Traduzir descrições
-                        </Button>
-                      </Tooltip>
-                    )}
-                    {skills.length > 0 && (
-                      <Tooltip title="A IA lê nome + descrição e agrupa cada skill num tema de alto nível (Design, Frontend, Backend…). Fica guardado — não re-gasta tokens.">
-                        <Button icon={<Sparkles size={14} />} loading={classificando} onClick={classificarSkills}>
-                          Classificar por tema
-                        </Button>
-                      </Tooltip>
-                    )}
-                    {/* v1.151.0 — Importar lote: aceita .json [{slug, markdown}] ou
-                        .md concatenado. Permite atribuir categoria/fonte na hora. */}
-                    <Tooltip title="Importa um lote de skills de um .json ou .md concatenado. Atribua a categoria pra todas de uma vez.">
-                      <Button icon={<Boxes size={14} />} onClick={() => setImportLoteAberto(true)}>
-                        Importar lote
-                      </Button>
-                    </Tooltip>
-                    {GAS_APP_KIT_SKILLS.length > 0 && (
-                      <Tooltip title={`Adiciona as ${GAS_APP_KIT_SKILLS.length} skills do GAS App Kit à sua biblioteca. Reimportar atualiza, não duplica.`}>
-                        <Button icon={<Download size={14} />} loading={importandoKit} onClick={importarKit}>
-                          Importar GAS App Kit
-                        </Button>
-                      </Tooltip>
-                    )}
-                    {skills.length > 0 && (
-                      <Tooltip title={`Exporta TODAS as ${skills.length} skills no formato Claude Code (uma pasta por skill com SKILL.md) + install.sh que pergunta se você quer instalar global (~/.claude/skills/) ou no projeto atual (./.claude/skills/).`}>
-                        <Button icon={<Package size={14} />} loading={exportandoTodas} onClick={exportarTodasParaClaudeCode}>
-                          Exportar tudo (Claude Code)
-                        </Button>
-                      </Tooltip>
-                    )}
-                    {skills.length > 0 && !selMode && (
-                      <Tooltip title="Wizard de exportação custom — marque as skills que quer levar (1 a 1 ou por categoria), escolha o destino (Claude Code, Cursor, Genérico) e baixe um zip com install.sh interativo.">
-                        <Button
-                          icon={<ListChecks size={14} />}
-                          onClick={() => { setSelMode(true); setSelecionados(new Set()); }}
-                        >
-                          Selecionar skills…
-                        </Button>
-                      </Tooltip>
-                    )}
-                    <Tooltip title="Crie uma pasta com nome e descrição e suba vários .md de uma vez — tudo entra sob esse pacote.">
-                      <Button icon={<FolderPlus size={14} />} onClick={() => setImportOpen(true)}>
-                        Importar pacote
-                      </Button>
-                    </Tooltip>
-                    {skills.length > 0 && (
-                      <Tooltip title="Selecione skills de qualquer pasta e gere um .zip pronto pra levar pro seu projeto.">
-                        <Button
-                          icon={<ListChecks size={14} />}
-                          type={selMode ? 'primary' : 'default'}
-                          ghost={selMode}
-                          onClick={() => { setSelMode((v) => !v); setSelecionados(new Set()); }}
-                        >
-                          {selMode ? 'Cancelar seleção' : 'Montar kit'}
-                        </Button>
-                      </Tooltip>
-                    )}
-                    <Button type="primary" icon={<Plus size={14} />} onClick={() => { resetForm(); setTab('adicionar'); }}>
-                      Adicionar skill
-                    </Button>
                   </div>
+
+                  <CommandBar>
+                    {/* Grupo 1 — Curadoria com a Lume (destaque) */}
+                    {skills.length > 0 && (
+                      <GrupoAcoes label="Curadoria com a Lume" accent={t.accents.peach} icon={<Sparkles size={11} />}>
+                        <Tooltip title="A Lume lê nome + descrição e dá uma nota de qualidade (0-5) pra cada skill ainda sem nota. Fica guardado — não re-gasta tokens nas próximas.">
+                          <Button
+                            icon={<Star size={14} />}
+                            loading={avaliando}
+                            onClick={() => avaliarSkills({ escopo: 'pendentes' })}
+                            style={{ borderColor: `${t.accents.peach}66`, color: t.accents.peach, background: `${t.accents.peach}0d` }}
+                          >
+                            {avaliando && avalProg ? `Avaliando ${avalProg.feitas}/${avalProg.total}…` : 'Avaliar com a Lume'}
+                          </Button>
+                        </Tooltip>
+                        <Tooltip title="A IA lê nome + descrição e agrupa cada skill num tema de alto nível (Design, Frontend, Backend…). Fica guardado — não re-gasta tokens.">
+                          <Button icon={<Wand2 size={14} />} loading={classificando} onClick={classificarSkills}>
+                            Classificar por tema
+                          </Button>
+                        </Tooltip>
+                        <Tooltip title="Traduz para português as descrições ainda no original (fica guardado — não re-gasta tokens nas próximas).">
+                          <Button icon={<Languages size={14} />} loading={traduzindoTudo} onClick={traduzirDescricoes}>
+                            Traduzir descrições
+                          </Button>
+                        </Tooltip>
+                      </GrupoAcoes>
+                    )}
+
+                    {skills.length > 0 && <GrupoDivisor />}
+
+                    {/* Grupo 2 — Biblioteca (importar / exportar em dropdowns) */}
+                    <GrupoAcoes label="Biblioteca" icon={<BookMarked size={11} />}>
+                      <Dropdown
+                        trigger={['click']}
+                        menu={{
+                          items: [
+                            { key: 'lote', icon: <Boxes size={14} />, label: 'Importar lote (.json / .md)' },
+                            { key: 'pacote', icon: <FolderPlus size={14} />, label: 'Importar pacote (vários .md)' },
+                            ...(GAS_APP_KIT_SKILLS.length > 0 ? [{ key: 'gas', icon: <Download size={14} />, label: `Importar GAS App Kit (${GAS_APP_KIT_SKILLS.length})` }] : []),
+                          ],
+                          onClick: ({ key }) => {
+                            if (key === 'lote') setImportLoteAberto(true);
+                            else if (key === 'pacote') setImportOpen(true);
+                            else if (key === 'gas') void importarKit();
+                          },
+                        }}
+                      >
+                        <Button icon={<FolderDown size={14} />} loading={importandoKit}>Importar ▾</Button>
+                      </Dropdown>
+                      {skills.length > 0 && (
+                        <Dropdown
+                          trigger={['click']}
+                          menu={{
+                            items: [
+                              { key: 'tudo', icon: <Package size={14} />, label: 'Exportar tudo (Claude Code)' },
+                              { key: 'selecionar', icon: <ListChecks size={14} />, label: 'Selecionar skills pra exportar…' },
+                            ],
+                            onClick: ({ key }) => {
+                              if (key === 'tudo') void exportarTodasParaClaudeCode();
+                              else if (key === 'selecionar') { setSelMode(true); setSelecionados(new Set()); }
+                            },
+                          }}
+                        >
+                          <Button icon={<Package size={14} />} loading={exportandoTodas}>Exportar ▾</Button>
+                        </Dropdown>
+                      )}
+                    </GrupoAcoes>
+
+                    {/* Grupo 3 — direita: montar kit + adicionar (primário) */}
+                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+                      {skills.length > 0 && (
+                        <Tooltip title="Selecione skills de qualquer pasta e gere um .zip pronto pra levar pro seu projeto.">
+                          <Button
+                            icon={<ListChecks size={14} />}
+                            type={selMode ? 'primary' : 'default'}
+                            ghost={selMode}
+                            onClick={() => { setSelMode((v) => !v); setSelecionados(new Set()); }}
+                          >
+                            {selMode ? 'Cancelar seleção' : 'Montar kit'}
+                          </Button>
+                        </Tooltip>
+                      )}
+                      <Button type="primary" icon={<Plus size={14} />} onClick={() => { resetForm(); setTab('adicionar'); }}>
+                        Adicionar skill
+                      </Button>
+                    </div>
+                  </CommandBar>
+                  <div style={{ height: 14 }} />
 
                   {/* v1.152.0 — barra de progresso da avaliação pela Lume */}
                   {avaliando && avalProg && (
@@ -1442,7 +1463,7 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                   Atualiza tanto o objeto `aberta` (drawer) quanto a lista geral via toggleFavorita. */}
               <Tooltip title={aberta.favorita ? 'Remover dos favoritos' : 'Marcar como favorita'}>
                 <Button
-                  icon={<Star size={14} color={t.accents.peach} fill={aberta.favorita ? t.accents.peach : 'none'} strokeWidth={aberta.favorita ? 1.5 : 1.8} />}
+                  icon={<Heart size={14} color={t.accents.peach} fill={aberta.favorita ? t.accents.peach : 'none'} strokeWidth={aberta.favorita ? 1.5 : 1.8} />}
                   onClick={() => {
                     if (!aberta) return;
                     const id = aberta.id;
@@ -2043,7 +2064,7 @@ function SkillCard({ skill, onOpen, selMode = false, selecionado = false, onTogg
           onMouseEnter={(e) => { e.currentTarget.style.background = `${corFavorita}26`; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = skill.favorita ? `${corFavorita}1a` : 'transparent'; }}
         >
-          <Star
+          <Heart
             size={14}
             color={corFavorita}
             fill={skill.favorita ? corFavorita : 'none'}

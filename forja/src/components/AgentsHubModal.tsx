@@ -3,12 +3,12 @@
 // Espera o user trazer o prompt com a ESTRUTURA específica dos 422 agents do
 // pack pra detalharmos os campos (modelo, ferramentas, system_prompt, etc.).
 // Por hora, oferece: listagem, busca, favoritar, importar avulso e drawer.
-import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Empty, Input, Spin, Tag, Tooltip, Drawer, message, Skeleton, Segmented, Progress } from 'antd';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
+import { Button, Empty, Input, Spin, Tag, Tooltip, Drawer, message, Skeleton, Segmented, Progress, Dropdown } from 'antd';
 import {
   Bot, Search, Star, Copy, Download, Trash2, Sparkles, Upload as UploadIcon,
   FileText, ListChecks, BookMarked, Package, CheckCircle2, GitBranch, Workflow,
-  Network, Quote, Zap, Boxes,
+  Network, Quote, Zap, Boxes, Heart, ArrowDownWideNarrow,
 } from 'lucide-react';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -16,6 +16,7 @@ import callServer from '../gas-client';
 import type { ServerResult } from '../types';
 import ImportarLoteModal from './ImportarLoteModal';
 import EstrelasQualidade from './EstrelasQualidade';
+import { FiltroChip, ChipGroup, GrupoAcoes, GrupoDivisor, CommandBar } from './HubToolbar';
 
 interface AgentSummary {
   id: string;
@@ -94,6 +95,7 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
   const [ordenarPorEstrelas, setOrdenarPorEstrelas] = useState(false);
   const [avaliando, setAvaliando] = useState(false);
   const [avalProg, setAvalProg] = useState<{ feitas: number; total: number } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const carregar = async () => {
     setLoading(true);
@@ -268,81 +270,102 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
         </div>
       )}
 
-      {/* Barra de ações */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+      {/* v1.153.0 — Barra de comando repaginada (mesma linguagem do hub de Skills) */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".md,.markdown,.txt"
+        hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) importarArquivo(f);
+          e.target.value = '';
+        }}
+      />
+      <div style={{ display: 'flex', gap: 10, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <Input
-          prefix={<Search size={13} color={t.textTertiary} />}
+          prefix={<Search size={14} color={t.textTertiary} />}
           placeholder="Filtrar por nome, descrição, categoria ou tag…"
           value={filtro}
           onChange={(e) => setFiltro(e.target.value)}
           allowClear
           style={{ flex: 1, minWidth: 240 }}
         />
-        {qtdFavoritas > 0 && (
-          <Tooltip title={soFavoritas ? `Mostrando só as ${qtdFavoritas} favorita(s) — clique pra ver todos` : `Filtrar pelos ${qtdFavoritas} agent(s) marcado(s) como favorito`}>
-            <Button
-              icon={<Star size={14} fill={soFavoritas ? t.accents.peach : 'none'} color={t.accents.peach} strokeWidth={soFavoritas ? 1.5 : 1.8} />}
-              onClick={() => setSoFavoritas((v) => !v)}
-              style={soFavoritas ? { borderColor: t.accents.peach, color: t.accents.peach, background: `${t.accents.peach}0d` } : undefined}
-            >
-              Favoritas ({qtdFavoritas})
-            </Button>
-          </Tooltip>
+        {(qtdFavoritas > 0 || qtdAvaliados > 0) && (
+          <ChipGroup>
+            {qtdFavoritas > 0 && (
+              <FiltroChip
+                active={soFavoritas}
+                onClick={() => setSoFavoritas((v) => !v)}
+                accent={t.accents.peach}
+                fill
+                title={soFavoritas ? 'Mostrando só os favoritos — clique pra ver todos' : 'Filtrar só os favoritos (coração)'}
+                label={`Favoritos ${qtdFavoritas}`}
+                icon={(cor, filled) => <Heart size={14} color={cor} fill={filled ? cor : 'none'} strokeWidth={1.8} />}
+              />
+            )}
+            {qtdAvaliados > 0 && (
+              <>
+                <FiltroChip
+                  active={soTop}
+                  onClick={() => setSoTop((v) => !v)}
+                  accent={t.accents.peach}
+                  fill
+                  title="Mostrar só os agents com 4 ou 5 estrelas (avaliados pela Lume)."
+                  label="Top 4★+"
+                  icon={(cor, filled) => <Star size={14} color={cor} fill={filled ? cor : 'none'} strokeWidth={1.8} />}
+                />
+                <FiltroChip
+                  active={ordenarPorEstrelas}
+                  onClick={() => setOrdenarPorEstrelas((v) => !v)}
+                  accent={t.accents.lavender}
+                  title="Ordenar pela nota de qualidade (maior primeiro)."
+                  label="Por nota"
+                  icon={(cor) => <ArrowDownWideNarrow size={14} color={cor} strokeWidth={1.8} />}
+                />
+              </>
+            )}
+          </ChipGroup>
         )}
-        {/* v1.152.0 — filtro top + ordenar por estrelas */}
-        {qtdAvaliados > 0 && (
-          <>
-            <Tooltip title="Mostrar só os agents com 4 ou 5 estrelas (avaliados pela Lume).">
-              <Button
-                icon={<Star size={14} fill={soTop ? t.accents.peach : 'none'} color={t.accents.peach} />}
-                onClick={() => setSoTop((v) => !v)}
-                style={soTop ? { borderColor: t.accents.peach, color: t.accents.peach, background: `${t.accents.peach}0d` } : undefined}
-              >
-                Top (4★+)
-              </Button>
-            </Tooltip>
-            <Tooltip title="Ordenar pela nota de qualidade (maior primeiro).">
-              <Button
-                type={ordenarPorEstrelas ? 'primary' : 'default'}
-                ghost={ordenarPorEstrelas}
-                icon={<Sparkles size={14} />}
-                onClick={() => setOrdenarPorEstrelas((v) => !v)}
-              >
-                Por nota
-              </Button>
-            </Tooltip>
-          </>
-        )}
-        {/* v1.152.0 — Avaliar com a Lume */}
-        {agents.length > 0 && (
-          <Tooltip title="A Lume lê nome + descrição e dá uma nota de qualidade (0-5) pra cada agent ainda sem nota. Fica guardado.">
-            <Button icon={<Star size={14} />} loading={avaliando} onClick={() => avaliarAgents({ escopo: 'pendentes' })}>
-              {avaliando && avalProg ? `Avaliando ${avalProg.feitas}/${avalProg.total}…` : 'Avaliar com a Lume'}
-            </Button>
-          </Tooltip>
-        )}
-        <label>
-          <Button icon={<UploadIcon size={14} />}>
-            Importar .md
-            <input
-              type="file"
-              accept=".md,.markdown,.txt"
-              hidden
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) importarArquivo(f);
-                e.target.value = '';
-              }}
-            />
-          </Button>
-        </label>
-        {/* v1.151.0 — Importar lote (JSON/MD com categoria-no-import) */}
-        <Tooltip title="Importa um lote de agents de um .json ou .md concatenado. Atribua a categoria pra todos de uma vez.">
-          <Button icon={<Boxes size={14} />} onClick={() => setImportLoteAberto(true)}>
-            Importar lote
-          </Button>
-        </Tooltip>
       </div>
+
+      <CommandBar>
+        {agents.length > 0 && (
+          <GrupoAcoes label="Curadoria com a Lume" accent={t.accents.peach} icon={<Sparkles size={11} />}>
+            <Tooltip title="A Lume lê nome + descrição e dá uma nota de qualidade (0-5) pra cada agent ainda sem nota. Fica guardado.">
+              <Button
+                icon={<Star size={14} />}
+                loading={avaliando}
+                onClick={() => avaliarAgents({ escopo: 'pendentes' })}
+                style={{ borderColor: `${t.accents.peach}66`, color: t.accents.peach, background: `${t.accents.peach}0d` }}
+              >
+                {avaliando && avalProg ? `Avaliando ${avalProg.feitas}/${avalProg.total}…` : 'Avaliar com a Lume'}
+              </Button>
+            </Tooltip>
+          </GrupoAcoes>
+        )}
+
+        {agents.length > 0 && <GrupoDivisor />}
+
+        <GrupoAcoes label="Biblioteca" icon={<BookMarked size={11} />}>
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: [
+                { key: 'md', icon: <UploadIcon size={14} />, label: 'Importar um .md (avulso)' },
+                { key: 'lote', icon: <Boxes size={14} />, label: 'Importar lote (.json / .md)' },
+              ],
+              onClick: ({ key }) => {
+                if (key === 'md') fileInputRef.current?.click();
+                else if (key === 'lote') setImportLoteAberto(true);
+              },
+            }}
+          >
+            <Button icon={<UploadIcon size={14} />}>Importar ▾</Button>
+          </Dropdown>
+        </GrupoAcoes>
+      </CommandBar>
+      <div style={{ height: 14 }} />
 
       {/* v1.152.0 — progresso da avaliação Lume */}
       {avaliando && avalProg && (
@@ -406,7 +429,7 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
           <div style={{ display: 'flex', gap: 6 }}>
             <Tooltip title={aberto.favorita ? 'Remover dos favoritos' : 'Marcar como favorita'}>
               <Button
-                icon={<Star size={14} color={t.accents.peach} fill={aberto.favorita ? t.accents.peach : 'none'} strokeWidth={aberto.favorita ? 1.5 : 1.8} />}
+                icon={<Heart size={14} color={t.accents.peach} fill={aberto.favorita ? t.accents.peach : 'none'} strokeWidth={aberto.favorita ? 1.5 : 1.8} />}
                 onClick={() => {
                   const id = aberto.id; const era = !!aberto.favorita;
                   setAberto((prev) => prev ? { ...prev, favorita: !era } : prev);
@@ -495,7 +518,7 @@ function AgentCard({ agent, onOpen, onToggleFavorita }: {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}
       >
-        <Star size={14} color={corFav} fill={agent.favorita ? corFav : 'none'} strokeWidth={agent.favorita ? 1.5 : 1.8} />
+        <Heart size={14} color={corFav} fill={agent.favorita ? corFav : 'none'} strokeWidth={agent.favorita ? 1.5 : 1.8} />
       </button>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, paddingRight: 32 }}>
         <div style={{

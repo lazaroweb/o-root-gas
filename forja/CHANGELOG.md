@@ -36,6 +36,27 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.153.0] — 2026-06-23
+
+### Alterado — Barra de ações premium + favorito vira coração (Skills + Agents)
+
+Feedback do user: a barra de ações estava "sem graça, sem respiro, sem destaque,
+muito solta — quem entra nem sabe o que pode fazer". E o **favoritar usava estrela**,
+o que confundia com a nota de qualidade (uma skill favoritada parecia ter "1 estrela").
+
+- **Favorito vira coração** — `Heart` no lugar de `Star` no card, no drawer e no
+  filtro (Skills + Agents). Agora **coração = favorito** e **estrelas = nota da
+  Lume**, sem ambiguidade. (No plano o próprio user já chamava o favorito de "coração".)
+- **Barra de comando repaginada** (`HubToolbar.tsx` novo, compartilhado):
+  - Linha 1: busca + **chips de filtro** num grupo coeso (Favoritos, Top 4★+,
+    Por nota) com estado on/off claro.
+  - Linha 2: um **command bar** com respiro (card + padding + sombra), ações
+    **agrupadas e rotuladas**: **"Curadoria com a Lume"** em destaque (Avaliar /
+    Classificar / Traduzir) e **"Biblioteca"** com os imports/exports recolhidos
+    em dropdowns **"Importar ▾"** e **"Exportar ▾"** (de ~10 botões soltos pra
+    grupos claros). Primário "Adicionar skill" destacado à direita.
+- Removida a duplicata "Selecionar skills…" vs "Montar kit" (faziam a mesma coisa).
+
 ## [1.152.0] — 2026-06-13
 
 ### Adicionado — Skills + Agents: renomear pacotes, nota da Lume e Kits dos sonhos
