@@ -36,6 +36,69 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.151.1] — 2026-06-23
+
+### Melhorado — Multi-arquivo no Importar lote + prioridade da `category` embutida
+
+**Contexto:** o user recebeu da outra AI **23 arquivos `.json` por categoria**
+(`skills-01-ai-research.json` com 129 skills da categoria `ai-research`,
+`skills-06-database.json` com 332 da `database`, etc., total ~944 skills).
+Era inviável fazer 23 uploads manuais um por um — agora rola num único drop.
+
+**Backend (`server.ts` — `skillsBulkSave` / `agentsBulkSave`):**
+
+- **Prioridade da categoria invertida:** agora o que o item do JSON traz vence
+  o `categoriaDefault` do modal. Antes era o contrário (default vencia tudo).
+  - Ordem nova: `item.categoria` → `parsed.categoria` (do markdown) → `categoriaDefault` (fallback)
+  - Faz sentido: como o JSON da AI já vem com `category` correto, não dá pra
+    permitir que o modal sobrescreva sem querer.
+
+**Frontend (`ImportarLoteModal.tsx` — reescrita):**
+
+- **Input `multiple`:** seleciona N arquivos de uma vez (Ctrl/Cmd+clique).
+  Botão muda pra "+ Adicionar mais" depois do primeiro select.
+- **Cada arquivo vira um "Lote"** com estado próprio (`pendente` → `processando`
+  → `ok`/`erro`), parseado individualmente. Erros de parse em 1 arquivo não
+  bloqueiam os outros.
+- **Detecção automática de categoria por arquivo:** se 100% dos itens do JSON
+  têm a mesma `category`, vira o "selo verde" do card (`✓ ai-research`) e
+  signaliza que o backend vai respeitar (override do modal não é enviado).
+  Se o arquivo NÃO tem `category` nos itens, marca em peach "sem categoria —
+  usa o default abaixo".
+- **Lista visual dos arquivos selecionados:** nome + ícone (json/md/erro) +
+  contagem de itens + selo de categoria + botão de remover individual.
+- **Campo "Categoria padrão" passa a ser opcional/fallback** — só aparece como
+  obrigatório quando algum dos arquivos não tem categoria detectada.
+- **Progresso global em 2 níveis durante import:**
+  - Barra: `Arquivo 3/23 · 287/944 skills` + % real.
+  - Lista ao vivo: cada arquivo com seu próprio status (hourglass / spin /
+    check verde / triângulo vermelho) e relatório parcial (`127 criadas`).
+- **Resumo final consolidado:** "23 arquivos processados · 941 criadas ·
+  2 atualizadas · 1 erro", com `<details>` clicável pra ver erros por arquivo
+  (até 20 por arquivo, scrollável).
+- Botão "Importar mais arquivos" no final pra continuar a guerra sem fechar.
+
+**Como usar (caso atual — 23 .json da AI):**
+
+1. Atelier → Skills → **"Importar lote"**
+2. **Selecionar os 23 `.json`** de uma vez (Ctrl+clique ou Cmd+clique)
+3. Cada arquivo vai aparecer com seu selo verde de categoria já detectada
+   (`✓ ai-research`, `✓ database`, etc.) — você não digita nada
+4. (Opcional) "Fonte / pasta" → `pack-vibeship-2026` pra agrupar
+5. Botão fica `Importar 23 arquivos (944 skills)`. Click.
+6. Acompanha arquivo por arquivo na lista ao vivo
+7. Fim: resumo consolidado com tudo
+
+**Por que isso é GG:** transformou uma operação de horas (944 uploads
+manuais com risco de erro em cada categoria digitada) em **2 cliques + uma
+seleção múltipla**. E o multi-file também serve pra packs futuros sem precisar
+mudar nada.
+
+**Deploy:** `@338` (deploy estável).
+**Branch:** `cursor/criar-cards-financeiros-para-bancos-bras-cab2`.
+
+---
+
 ## [1.151.0] — 2026-06-23
 
 ### Adicionado — Importar lote (JSON/MD) com categoria atribuída na hora

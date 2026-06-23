@@ -17479,8 +17479,11 @@ function _bulkSaveGenerico(
 
         const slugFinal = (item.slug || parsed.slug || _slugify(parsed.nome) || '').trim();
         const nome = (parsed.nome || item.slug || 'Sem nome').trim();
-        // v1.151.0 — Override de categoria explicito > vindo no item > parsed > vazio.
-        const categoria = (op.categoriaDefault || item.categoria || parsed.categoria || '').trim();
+        // v1.151.1 — Prioridade da categoria invertida: o que o ARQUIVO já traz
+        // ganha do default do modal. O `categoriaDefault` agora é só FALLBACK
+        // pra itens sem categoria. Faz sentido porque a outra AI já vem com
+        // `category` correto nos JSONs por categoria.
+        const categoria = (item.categoria || parsed.categoria || op.categoriaDefault || '').trim();
         const fonte = (item.fonte || op.fonteDefault || '').trim();
         const tags = (item.tags || parsed.tags.join(', ')).trim();
         const descricao = parsed.descricao;
