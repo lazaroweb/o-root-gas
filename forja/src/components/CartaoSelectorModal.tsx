@@ -7,22 +7,24 @@ import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import type { CartaoPessoal } from '../types';
 
-// Mapa visual das bandeiras — só pra deixar o card com a cara da bandeira sem
-// depender de imagens externas. Mantemos legível mesmo se faltar acento.
-const BANDEIRAS: Record<string, { label: string; cor: string }> = {
-  visa: { label: 'Visa', cor: '#1A1F71' },
-  master: { label: 'Mastercard', cor: '#EB001B' },
-  mastercard: { label: 'Mastercard', cor: '#EB001B' },
-  elo: { label: 'Elo', cor: '#00A4E0' },
-  amex: { label: 'Amex', cor: '#006FCF' },
-  hiper: { label: 'Hipercard', cor: '#822124' },
-  hipercard: { label: 'Hipercard', cor: '#822124' },
-  outra: { label: 'Outra', cor: '#6b7280' },
+// Bandeira agora é texto secundário neutro, não chip colorido. Cores oficiais
+// das marcas (Visa azul-marinho, Mastercard vermelho-Pantone) ficavam horríveis
+// no dark mode — perdiam contraste ou viravam neons agressivos. Padrão Stripe/
+// Linear: bandeira é metadado, não enfeite.
+const BANDEIRAS: Record<string, string> = {
+  visa: 'Visa',
+  master: 'Mastercard',
+  mastercard: 'Mastercard',
+  elo: 'Elo',
+  amex: 'Amex',
+  hiper: 'Hipercard',
+  hipercard: 'Hipercard',
+  outra: 'Outra',
 };
 
-function bandeiraInfo(b: string): { label: string; cor: string } {
+function bandeiraLabel(b: string): string {
   const k = String(b || '').toLowerCase().trim();
-  return BANDEIRAS[k] || BANDEIRAS.outra;
+  return BANDEIRAS[k] || 'Outra';
 }
 
 // Resumo curto pra mostrar fora do modal (no formaPagamento da Conta, p.ex.).
@@ -30,7 +32,7 @@ function bandeiraInfo(b: string): { label: string; cor: string } {
 export function descreverCartao(c: CartaoPessoal | null | undefined): string {
   if (!c) return '';
   const nome = String(c.apelido || c.nome || '').trim();
-  const banda = bandeiraInfo(c.bandeira).label;
+  const banda = bandeiraLabel(c.bandeira);
   if (!nome) return `Cartão ${banda}`;
   return `Cartão ${nome} (${banda})`;
 }
@@ -170,7 +172,8 @@ export default function CartaoSelectorModal({
 }
 
 // Card visual compacto — usa a cor que o user escolheu no cadastro do cartão
-// como gradiente sutil, mostra apelido > nome, bandeira e dia de vencimento.
+// como detalhe sutil (ícone + fio no topo + borda quando selecionado). Bandeira
+// fica como metadado em texto neutro, junto com vencimento/limite.
 function CartaoMiniCard({ cartao, selecionado, onPick }: {
   cartao: CartaoPessoal;
   selecionado: boolean;
@@ -179,11 +182,18 @@ function CartaoMiniCard({ cartao, selecionado, onPick }: {
   const t = useTokens();
   const [hover, setHover] = useState(false);
   const cor = cartao.cor || t.accents.lavender;
-  const banda = bandeiraInfo(cartao.bandeira);
+  const banda = bandeiraLabel(cartao.bandeira);
   const display = String(cartao.apelido || cartao.nome || '').trim() || 'Cartão sem nome';
   const subtitle = cartao.apelido && cartao.nome && cartao.apelido !== cartao.nome
     ? cartao.nome
     : '';
+
+  // Metadados em uma linha só (bandeira · vence dia X · R$ Y) — leve e legível.
+  const metaParts: string[] = [banda];
+  if (cartao.diaVencimento > 0) metaParts.push(`vence dia ${cartao.diaVencimento}`);
+  if (typeof cartao.limite === 'number' && cartao.limite > 0) {
+    metaParts.push(`R$ ${cartao.limite.toLocaleString('pt-BR')}`);
+  }
 
   return (
     <button
@@ -201,7 +211,7 @@ function CartaoMiniCard({ cartao, selecionado, onPick }: {
         borderRadius: 12, padding: '12px 14px', cursor: 'pointer',
         transition: 'all 0.15s',
         boxShadow: selecionado ? `0 0 0 3px ${cor}22` : 'none',
-        display: 'flex', flexDirection: 'column', gap: 10,
+        display: 'flex', alignItems: 'center', gap: 11,
       }}
     >
       {/* fio de cor no topo, igual aos StatTile — dá identidade visual */}
@@ -210,68 +220,43 @@ function CartaoMiniCard({ cartao, selecionado, onPick }: {
         background: `linear-gradient(90deg, ${cor}00, ${cor}, ${cor}00)`,
         borderRadius: '12px 12px 0 0', opacity: selecionado ? 1 : 0.55,
       }} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{
-          width: 34, height: 34, borderRadius: 8, background: `${cor}1f`, color: cor,
-          display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+      <span style={{
+        width: 36, height: 36, borderRadius: 9, background: `${cor}1f`, color: cor,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+      }}>
+        <CreditCard size={18} />
+      </span>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{
+          fontFamily: FONTS.ui, fontSize: 13.5, fontWeight: 600, color: t.text,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
-          <CreditCard size={17} />
-        </span>
-        <div style={{ minWidth: 0, flex: 1 }}>
+          {display}
+        </div>
+        {subtitle && (
           <div style={{
-            fontFamily: FONTS.ui, fontSize: 13.5, fontWeight: 600, color: t.text,
+            fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
-            {display}
+            {subtitle}
           </div>
-          {subtitle && (
-            <div style={{
-              fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>
-              {subtitle}
-            </div>
-          )}
-        </div>
-        {selecionado && (
-          <span style={{
-            width: 22, height: 22, borderRadius: '50%', background: cor, color: '#fff',
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-          }}>
-            <Check size={13} strokeWidth={3} />
-          </span>
         )}
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-        <span style={{
-          display: 'inline-flex', alignItems: 'center', gap: 5,
-          fontFamily: FONTS.ui, fontSize: 10.5, fontWeight: 700,
-          padding: '2px 8px', borderRadius: 999,
-          color: banda.cor, background: `${banda.cor}14`, border: `1px solid ${banda.cor}33`,
-          textTransform: 'uppercase', letterSpacing: '0.04em',
+        <div style={{
+          fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginTop: 3,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          fontVariantNumeric: 'tabular-nums',
         }}>
-          {banda.label}
-        </span>
-        {cartao.diaVencimento > 0 && (
-          <span style={{
-            fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary,
-            background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
-            borderRadius: 999, padding: '2px 8px',
-          }}>
-            vence dia {cartao.diaVencimento}
-          </span>
-        )}
-        {typeof cartao.limite === 'number' && cartao.limite > 0 && (
-          <span style={{
-            fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary,
-            background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
-            borderRadius: 999, padding: '2px 8px',
-            fontVariantNumeric: 'tabular-nums',
-          }}>
-            limite R$ {cartao.limite.toLocaleString('pt-BR')}
-          </span>
-        )}
+          {metaParts.join(' · ')}
+        </div>
       </div>
+      {selecionado && (
+        <span style={{
+          width: 22, height: 22, borderRadius: '50%', background: cor, color: '#fff',
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        }}>
+          <Check size={13} strokeWidth={3} />
+        </span>
+      )}
     </button>
   );
 }

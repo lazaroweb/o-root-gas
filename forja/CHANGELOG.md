@@ -36,6 +36,25 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.145.1] — 2026-06-22
+
+### Corrigido — Seletor de cartão: contraste e layout em Contas
+
+- **Modal de cartões**: o chip colorido da bandeira (Visa azul-marinho,
+  Mastercard vermelho-Pantone, etc.) sumia ou virava neon agressivo no
+  dark mode. Removido. Bandeira agora é metadado em texto secundário,
+  numa linha única: `Visa · vence dia 19 · R$ 13.350`. Mini-card ficou
+  horizontal (não mais grid de 2 linhas), mais escaneável e premium.
+- **Form "Forma de pagamento" (Atelier > Contas)**: o chip "Vinculado a:"
+  ficava maior que o input, quebrava em 2 linhas e o user não conseguia
+  voltar pra outro método. Reformulado: agora o input texto e o
+  chip-cartão são **mutuamente exclusivos** — quando você vincula um
+  cartão, ele substitui o input por um card compacto (ícone + apelido +
+  bandeira + vencimento). Dois botões inline: `editar` (troca cartão) e
+  `X` (desvincula e volta pro texto livre vazio). Sem mais empilhamento.
+
+---
+
 ## [1.145.0] — 2026-06-22
 
 ### Mudado — Ideias: trilha de vida + reorganização das visões

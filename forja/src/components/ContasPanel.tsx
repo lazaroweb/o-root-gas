@@ -6,7 +6,7 @@ import {
 import {
   Plus, Search, Trash2, Pencil, ExternalLink, Sparkles, Code2, Server, AtSign,
   Clapperboard, Boxes, ShieldCheck, CreditCard, CalendarClock, Wand2, Tag as TagIcon, ChevronRight, Copy, Crown, Leaf,
-  LifeBuoy, Phone, Mail, BarChart3, AlertTriangle, Star,
+  LifeBuoy, Phone, Mail, BarChart3, AlertTriangle, Star, XCircle,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { useTokens } from '../themeContext';
@@ -703,57 +703,83 @@ export default function ContasPanel({ onAbrirCofre }: { onAbrirCofre?: (label?: 
             </Form.Item>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            {/* Forma de pagamento: texto livre (PIX, boleto, etc.) + atalho pra
-                puxar um cartão cadastrado no Financeiro Pessoal — quando o user
-                escolhe, preenchemos o texto com "Cartão X (Bandeira)" + gravamos
-                o cartaoId pra ligar as duas áreas do app. */}
-            <Form.Item label={(
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, width: '100%' }}>
-                Forma de pagamento
-                <span style={{ flex: 1 }} />
-                <Tooltip title={cartoes.length ? 'Puxar um cartão do Financeiro Pessoal' : 'Cadastre cartões em Financeiro > Pessoal > Cartões'}>
-                  <Button
-                    size="small"
-                    type="link"
-                    icon={<CreditCard size={12} />}
-                    onClick={() => setCartaoModalOpen(true)}
-                    style={{ padding: 0, height: 'auto', fontSize: 11.5 }}
-                  >
-                    {cartaoIdSel ? 'Trocar cartão' : 'Escolher cartão'}
-                  </Button>
-                </Tooltip>
-              </span>
-            )} extra="ex.: cartão final 1234, PIX, boleto, débito automático">
-              <Form.Item name="formaPagamento" noStyle>
-                <Input placeholder="cartão final ****" />
-              </Form.Item>
-              {cartaoIdSel && (() => {
+            {/* Forma de pagamento — dois estados:
+                1) Vinculado a cartão: mostra um chip-card que substitui o input.
+                   Botões "Outro método" volta pro texto livre; X desvincula só.
+                2) Texto livre (default): input + atalho "Escolher cartão" embaixo.
+                Decisão: nunca empilhar input + chip ao mesmo tempo — eram dois
+                componentes brigando pelo mesmo dado e poluíam visualmente. */}
+            <Form.Item label="Forma de pagamento" extra={!cartaoIdSel ? 'ex.: cartão final 1234, PIX, boleto, débito automático' : undefined}>
+              {cartaoIdSel ? (() => {
                 const c = cartoes.find((x) => x.id === cartaoIdSel);
                 if (!c) return null;
                 const cor = c.cor || t.accents.lavender;
+                const apelido = String(c.apelido || c.nome || '').trim() || 'Cartão sem nome';
                 return (
-                  <div style={{
-                    marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 6,
-                    padding: '3px 9px', borderRadius: 999,
-                    background: `${cor}12`, border: `1px solid ${cor}40`,
-                    fontFamily: FONTS.ui, fontSize: 11, color: t.text,
-                  }}>
-                    <CreditCard size={11} color={cor} />
-                    Vinculado a: <strong style={{ fontWeight: 600 }}>{descreverCartao(c)}</strong>
-                    <Button
-                      type="text" size="small"
-                      onClick={() => form.setFieldsValue({ cartaoId: '' })}
-                      style={{ padding: '0 4px', height: 18, fontSize: 10, color: t.textTertiary }}
-                    >
-                      desvincular
-                    </Button>
+                  <div>
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      padding: '8px 10px', borderRadius: 8,
+                      background: `${cor}10`, border: `1px solid ${cor}55`,
+                      transition: 'all 0.15s',
+                    }}>
+                      <span style={{
+                        width: 28, height: 28, borderRadius: 7, background: `${cor}1f`, color: cor,
+                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                      }}>
+                        <CreditCard size={15} />
+                      </span>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{
+                          fontFamily: FONTS.ui, fontSize: 13, fontWeight: 600, color: t.text,
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {apelido}
+                        </div>
+                        <div style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary }}>
+                          {String(c.bandeira || '').replace(/^./, (x) => x.toUpperCase())}
+                          {c.diaVencimento ? ` · vence dia ${c.diaVencimento}` : ''}
+                        </div>
+                      </div>
+                      <Tooltip title="Escolher outro cartão">
+                        <Button
+                          type="text" size="small"
+                          icon={<Pencil size={12} />}
+                          onClick={() => setCartaoModalOpen(true)}
+                          style={{ color: t.textTertiary }}
+                        />
+                      </Tooltip>
+                      <Tooltip title="Desvincular cartão e usar outro método (PIX, boleto, etc.)">
+                        <Button
+                          type="text" size="small"
+                          icon={<XCircle size={12} />}
+                          onClick={() => form.setFieldsValue({ cartaoId: '', formaPagamento: '' })}
+                          style={{ color: t.textTertiary }}
+                        />
+                      </Tooltip>
+                    </div>
+                    <Form.Item name="formaPagamento" hidden><Input /></Form.Item>
+                    <Form.Item name="cartaoId" hidden><Input /></Form.Item>
                   </div>
                 );
-              })()}
-              {/* campo escondido — só pro Form reconhecer o cartaoId */}
-              <Form.Item name="cartaoId" hidden>
-                <Input />
-              </Form.Item>
+              })() : (
+                <div>
+                  <Form.Item name="formaPagamento" noStyle>
+                    <Input placeholder="cartão final ****" />
+                  </Form.Item>
+                  {cartoes.length > 0 && (
+                    <Button
+                      type="link" size="small"
+                      icon={<CreditCard size={12} />}
+                      onClick={() => setCartaoModalOpen(true)}
+                      style={{ padding: 0, height: 'auto', fontSize: 11.5, marginTop: 4 }}
+                    >
+                      ou puxe um cartão cadastrado
+                    </Button>
+                  )}
+                  <Form.Item name="cartaoId" hidden><Input /></Form.Item>
+                </div>
+              )}
             </Form.Item>
             <Form.Item name="proximaCobranca" label="Próxima cobrança / renovação">
               <DatePicker style={{ width: '100%' }} format="DD/MM/YYYY" placeholder="selecione" />
