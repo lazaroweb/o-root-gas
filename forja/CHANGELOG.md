@@ -36,6 +36,48 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.148.13] — 2026-06-23
+
+### Adicionado — ⭐ Favoritar skills (botão estrela no Hub)
+
+**Por quê?** O Hub de Skills cresceu — com gas-app-kit + skills avulsas, o user
+fica com dezenas de skills e perde tempo achando as que mais usa no dia-a-dia.
+
+**O que mudou (UX):**
+
+- **Estrela clicável no canto superior direito de cada card** (no SkillsHub).
+  Toggle silencioso (sem alert, sem confirmação). Cor: âmbar (`accents.peach`).
+- **Cards favoritos ganham destaque sutil**: borda âmbar (`peach 55`), fundo
+  levemente colorido (`peach 06`) e o ícone do livro também na cor âmbar. Não
+  rouba a cena — só guia o olho.
+- **Favoritas sobem pro topo** automaticamente. Ordenação: favoritas primeiro
+  (mais recente favoritada no topo), depois resto por `atualizadoEm`.
+- **Novo botão "Favoritas (N)"** na barra de filtros (só aparece quando tem ao
+  menos 1 favorita). Toggle: clica → mostra só favoritas; clica de novo → volta.
+  Quando ativo, fica destacado em âmbar.
+- **Estrela também no Drawer de detalhe da skill** (header, ao lado de Copiar
+  e Baixar). Toggla sem precisar fechar o drawer.
+
+**Por baixo do capô:**
+
+- Schema bumpado pra `v1.72-skill-favorita`: tabela `Skills` ganhou colunas
+  `favorita` (boolean string) e `favoritadaEm` (ISO timestamp).
+- Nova RPC `skillsToggleFavorita(id)` — idempotente, faz toggle e devolve
+  `{ favorita, favoritadaEm }`.
+- `skillsList` e `skillsGetContent` agora retornam `favorita` + `favoritadaEm`.
+- UI faz **optimistic update**: marca como favorita na hora, reverte só se o
+  backend responder erro. Sem flicker.
+
+**Como usar:**
+
+1. Abra **Atelier → Skills**.
+2. Passe o mouse sobre qualquer card → clique na **estrela** no canto superior
+   direito. Vira amarelo preenchido = favoritada.
+3. Suba a página: as favoritas já estão no topo.
+4. Quer filtrar? Clique no botão **"⭐ Favoritas (N)"** ao lado da busca.
+
+---
+
 ## [1.148.12] — 2026-06-23
 
 ### Corrigido — Parser ignora marcador dentro de string literal + linhas com múltiplos marcadores

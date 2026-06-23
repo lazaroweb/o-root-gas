@@ -7,6 +7,7 @@ import {
   BookMarked, Plus, Upload as UploadIcon, Copy, Trash2, Download, Search, Tag as TagIcon,
   ExternalLink, Sparkles, Eye, FileText, Save, X, FolderOpen, Folder, FolderPlus, Pencil,
   FolderInput, Palette, Check, CheckCircle2, Info, Languages, Package, Archive, ListChecks,
+  Star,
 } from 'lucide-react';
 import { criarZipBlob, baixarBlob, type ZipEntry } from '../zip';
 import ModeloBadge from './ModeloBadge';
@@ -29,6 +30,8 @@ interface SkillSummary {
   tamanhoBytes: number;
   criadoEm: string;
   atualizadoEm: string;
+  favorita?: boolean;
+  favoritadaEm?: string;
 }
 
 // ─── Fontes (pastas) ──────────────────────────────────────────────────────────
@@ -242,6 +245,7 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
   const [fontes, setFontes] = useState<SkillFonte[]>([]);
   const [loading, setLoading] = useState(false);
   const [filtro, setFiltro] = useState('');
+  const [soFavoritas, setSoFavoritas] = useState(false);
   const [openSources, setOpenSources] = useState<string[]>([]);
   // Categorias abertas por pasta: { [chaveDaPasta]: string[] }. Tudo recolhido
   // por padrão; o usuário expande só o tema que quer ver.
@@ -290,6 +294,35 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
+  };
+
+  // v1.148.13 — toggle favorita com optimistic update: marca na UI imediatamente,
+  // reverte se o backend falhar. Skill favoritada sobe pro topo na próxima ordenação.
+  const toggleFavorita = async (id: string) => {
+    const alvo = skills.find((s) => s.id === id);
+    if (!alvo) return;
+    const eraFavorita = !!alvo.favorita;
+    // Optimistic: atualiza UI antes da resposta do backend.
+    setSkills((prev) => prev.map((s) => s.id === id ? { ...s, favorita: !eraFavorita, favoritadaEm: eraFavorita ? '' : new Date().toISOString() } : s));
+    try {
+      const r = await callServer<ServerResult>('skillsToggleFavorita', id);
+      if (!r || !r.ok) {
+        // Rollback se falhar.
+        setSkills((prev) => prev.map((s) => s.id === id ? { ...s, favorita: eraFavorita } : s));
+        message.error((r && r.error) || 'Não foi possível alterar o favorito.');
+      } else {
+        // Re-ordena: favoritas vão pro topo. Backend já retorna ordenado mas mantemos local
+        // só pra dar a sensação visual imediata sem precisar de outro fetch.
+        setSkills((prev) => [...prev].sort((a, b) => {
+          if (!!a.favorita !== !!b.favorita) return a.favorita ? -1 : 1;
+          if (a.favorita) return (b.favoritadaEm || '').localeCompare(a.favoritadaEm || '');
+          return (b.atualizadoEm || '').localeCompare(a.atualizadoEm || '');
+        }));
+      }
+    } catch (e) {
+      setSkills((prev) => prev.map((s) => s.id === id ? { ...s, favorita: eraFavorita } : s));
+      message.error(e instanceof Error ? e.message : 'Erro');
+    }
   };
 
   const abrirExport = (nome: string, ids: string[]) => {
@@ -606,17 +639,23 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
+  // v1.148.13 — filtro "só favoritas" (☆).
   const filtradas = useMemo(() => {
-    if (!filtro.trim()) return skills;
+    let lista = skills;
+    if (soFavoritas) lista = lista.filter((s) => !!s.favorita);
+    if (!filtro.trim()) return lista;
     const q = filtro.toLowerCase();
-    return skills.filter((s) =>
+    return lista.filter((s) =>
       s.nome.toLowerCase().indexOf(q) >= 0 ||
       s.descricao.toLowerCase().indexOf(q) >= 0 ||
       (s.descricaoPt || '').toLowerCase().indexOf(q) >= 0 ||
       s.categoria.toLowerCase().indexOf(q) >= 0 ||
       s.tags.some((tag) => tag.toLowerCase().indexOf(q) >= 0),
     );
-  }, [skills, filtro]);
+  }, [skills, filtro, soFavoritas]);
+
+  // Contagem de favoritas pra mostrar no badge do botão (decisão informada).
+  const qtdFavoritas = useMemo(() => skills.filter((s) => !!s.favorita).length, [skills]);
 
   const fonteMeta = useMemo(() => {
     const m: Record<string, SkillFonte> = {};
@@ -822,6 +861,17 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                       allowClear
                       style={{ flex: 1, minWidth: 240 }}
                     />
+                    {qtdFavoritas > 0 && (
+                      <Tooltip title={soFavoritas ? `Mostrando só as ${qtdFavoritas} favorita${qtdFavoritas > 1 ? 's' : ''} — clique pra ver todas` : `Filtrar pelas ${qtdFavoritas} skill${qtdFavoritas > 1 ? 's' : ''} marcada${qtdFavoritas > 1 ? 's' : ''} como favorita`}>
+                        <Button
+                          icon={<Star size={14} fill={soFavoritas ? t.accents.peach : 'none'} color={t.accents.peach} strokeWidth={soFavoritas ? 1.5 : 1.8} />}
+                          onClick={() => setSoFavoritas((v) => !v)}
+                          style={soFavoritas ? { borderColor: t.accents.peach, color: t.accents.peach, background: `${t.accents.peach}0d` } : undefined}
+                        >
+                          Favoritas ({qtdFavoritas})
+                        </Button>
+                      </Tooltip>
+                    )}
                     {skills.length > 0 && (
                       <Tooltip title="Traduz para português as descrições ainda no original (fica guardado — não re-gasta tokens nas próximas).">
                         <Button icon={<Languages size={14} />} loading={traduzindoTudo} onClick={traduzirDescricoes}>
@@ -1064,6 +1114,7 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                                       selMode={selMode}
                                       selecionado={selecionados.has(s.id)}
                                       onToggleSel={() => toggleSelecionado(s.id)}
+                                      onToggleFavorita={() => toggleFavorita(s.id)}
                                     />
                                   ))}
                                 </div>
@@ -1220,6 +1271,21 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
         extra={
           aberta && (
             <div style={{ display: 'flex', gap: 6 }}>
+              {/* v1.148.13 — Estrela de favoritar.
+                  Atualiza tanto o objeto `aberta` (drawer) quanto a lista geral via toggleFavorita. */}
+              <Tooltip title={aberta.favorita ? 'Remover dos favoritos' : 'Marcar como favorita'}>
+                <Button
+                  icon={<Star size={14} color={t.accents.peach} fill={aberta.favorita ? t.accents.peach : 'none'} strokeWidth={aberta.favorita ? 1.5 : 1.8} />}
+                  onClick={() => {
+                    if (!aberta) return;
+                    const id = aberta.id;
+                    const era = !!aberta.favorita;
+                    setAberta((prev) => prev ? { ...prev, favorita: !era, favoritadaEm: era ? '' : new Date().toISOString() } : prev);
+                    toggleFavorita(id);
+                  }}
+                  style={aberta.favorita ? { borderColor: t.accents.peach, color: t.accents.peach, background: `${t.accents.peach}0d` } : undefined}
+                />
+              </Tooltip>
               <Tooltip title="Copiar conteúdo">
                 <Button icon={<Copy size={14} />} onClick={() => copiarConteudo(aberta.conteudo)} />
               </Tooltip>
@@ -1684,20 +1750,28 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
 }
 
 // ─── Sub-componente: card de uma skill na lista ───────────────────────────
-function SkillCard({ skill, onOpen, selMode = false, selecionado = false, onToggleSel }: {
+function SkillCard({ skill, onOpen, selMode = false, selecionado = false, onToggleSel, onToggleFavorita }: {
   skill: SkillSummary;
   onOpen: () => void;
   selMode?: boolean;
   selecionado?: boolean;
   onToggleSel?: () => void;
+  onToggleFavorita?: () => void;
 }): React.ReactElement {
   const t = useTokens();
+  // v1.148.13 — favorita: borda dourada + estrela preenchida.
+  // Cor `gold` aproximada do design system Forja: laranja-âmbar (`peach`).
+  const corFavorita = t.accents.peach;
   return (
     <div
       onClick={() => { if (selMode) { onToggleSel?.(); } else { onOpen(); } }}
       style={{
-        background: selMode && selecionado ? `${t.accents.lavender}10` : t.surface,
-        border: `1.5px solid ${selMode && selecionado ? t.accents.lavender : t.border}`,
+        background: selMode && selecionado ? `${t.accents.lavender}10` : skill.favorita ? `${corFavorita}06` : t.surface,
+        border: `1.5px solid ${
+          selMode && selecionado ? t.accents.lavender
+          : skill.favorita ? `${corFavorita}55`
+          : t.border
+        }`,
         borderRadius: 12,
         padding: 14,
         cursor: 'pointer',
@@ -1706,26 +1780,55 @@ function SkillCard({ skill, onOpen, selMode = false, selecionado = false, onTogg
         flexDirection: 'column',
         gap: 8,
         minHeight: 140,
+        position: 'relative',
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = t.accents.lavender;
+        e.currentTarget.style.borderColor = skill.favorita ? corFavorita : t.accents.lavender;
         e.currentTarget.style.transform = 'translateY(-1px)';
         e.currentTarget.style.boxShadow = `0 4px 14px ${t.shadowSoft || 'rgba(0,0,0,0.05)'}`;
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = selMode && selecionado ? t.accents.lavender : t.border;
+        e.currentTarget.style.borderColor = selMode && selecionado ? t.accents.lavender : skill.favorita ? `${corFavorita}55` : t.border;
         e.currentTarget.style.transform = 'translateY(0)';
         e.currentTarget.style.boxShadow = 'none';
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+      {/* v1.148.13 — Estrela de favoritar no canto superior direito.
+          stopPropagation evita disparar onOpen. Em selMode fica oculta pra não
+          competir visualmente com o checkbox. */}
+      {!selMode && onToggleFavorita && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onToggleFavorita(); }}
+          aria-label={skill.favorita ? 'Desfavoritar' : 'Favoritar'}
+          title={skill.favorita ? 'Remover dos favoritos' : 'Marcar como favorita (sobe pro topo)'}
+          style={{
+            position: 'absolute', top: 8, right: 8,
+            width: 28, height: 28, borderRadius: 8,
+            background: skill.favorita ? `${corFavorita}1a` : 'transparent',
+            border: 'none', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'all 0.15s',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = `${corFavorita}26`; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = skill.favorita ? `${corFavorita}1a` : 'transparent'; }}
+        >
+          <Star
+            size={14}
+            color={corFavorita}
+            fill={skill.favorita ? corFavorita : 'none'}
+            strokeWidth={skill.favorita ? 1.5 : 1.8}
+          />
+        </button>
+      )}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, paddingRight: !selMode && onToggleFavorita ? 32 : 0 }}>
         {selMode ? (
           <div style={{ width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <Checkbox checked={selecionado} />
           </div>
         ) : (
-          <div style={{ width: 30, height: 30, borderRadius: 8, background: `${t.accents.lavender}1a`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <BookMarked size={15} color={t.accents.lavender} />
+          <div style={{ width: 30, height: 30, borderRadius: 8, background: skill.favorita ? `${corFavorita}1a` : `${t.accents.lavender}1a`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <BookMarked size={15} color={skill.favorita ? corFavorita : t.accents.lavender} />
           </div>
         )}
         <div style={{ minWidth: 0, flex: 1 }}>

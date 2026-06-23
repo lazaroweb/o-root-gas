@@ -132,7 +132,7 @@ const SCHEMA: SheetSchema[] = [
   // (Design, Frontend, Backend...), usado pra agrupar quando não há categoria.
   // `adaptacoes`: cache JSON { [ambiente]: {conteudo, em} } das adaptações por IA
   // pra export parametrizado — evita re-gastar tokens no mesmo ambiente.
-  { name: 'Skills', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes'] },
+  { name: 'Skills', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes', 'favorita', 'favoritadaEm'] },
   // SkillFontes: metadados das "pastas" de skills. `chave` é o prefixo usado em
   // Skills.fonte ("<chave>/<skill>"); `nome`/`descricao`/`cor` são editáveis.
   { name: 'SkillFontes', columns: ['id', 'chave', 'nome', 'descricao', 'cor', 'criadoEm', 'atualizadoEm'] },
@@ -344,7 +344,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.71-forja-self-repo';
+const SCHEMA_VERSION = 'v1.72-skill-favorita';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -17202,9 +17202,38 @@ function skillsList(): ServerResult {
         tamanhoBytes: Number(s.tamanhoBytes || 0),
         criadoEm: String(s.criadoEm || ''),
         atualizadoEm: String(s.atualizadoEm || ''),
+        // v1.148.13 — favorita (boolean) + favoritadaEm (timestamp pra ordenação estável).
+        favorita: String(s.favorita || '') === 'true' || s.favorita === true,
+        favoritadaEm: String(s.favoritadaEm || ''),
       }))
-      .sort((a, b) => b.atualizadoEm.localeCompare(a.atualizadoEm));
+      // Ordena favoritas primeiro (mais recente favoritada no topo), depois resto por atualizadoEm.
+      .sort((a, b) => {
+        if (a.favorita !== b.favorita) return a.favorita ? -1 : 1;
+        if (a.favorita) return b.favoritadaEm.localeCompare(a.favoritadaEm);
+        return b.atualizadoEm.localeCompare(a.atualizadoEm);
+      });
     return { ok: true, data: todas };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// v1.148.13 — Toggle favorita de uma skill. Idempotente.
+// Resposta ao user: "pensei em ter um campo na skill que eu possa favoritar com
+// uma estrela as mais tops". Ordenação faz favoritas subirem pro topo da lista.
+function skillsToggleFavorita(id: string): ServerResult {
+  try {
+    const linhas = dbGetAll('Skills') as Array<Record<string, unknown>>;
+    const s = linhas.find((l) => String(l.id || '') === id);
+    if (!s) return { ok: false, error: 'Skill não encontrada.' };
+    const eraFavorita = String(s.favorita || '') === 'true' || s.favorita === true;
+    const agora = new Date().toISOString();
+    dbUpdate('Skills', id, {
+      favorita: eraFavorita ? '' : 'true',
+      favoritadaEm: eraFavorita ? '' : agora,
+      atualizadoEm: agora,
+    });
+    return { ok: true, data: { favorita: !eraFavorita, favoritadaEm: eraFavorita ? '' : agora } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
   }
@@ -17231,6 +17260,8 @@ function skillsGetContent(id: string): ServerResult {
         atualizadoEm: String(s.atualizadoEm || ''),
         parsed: _parseSkillMd(String(s.conteudo || '')),
         traducao: _parseTraducaoPt(s.traducaoPt),
+        favorita: String(s.favorita || '') === 'true' || s.favorita === true,
+        favoritadaEm: String(s.favoritadaEm || ''),
       },
     };
   } catch (e: unknown) {
