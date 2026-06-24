@@ -17405,6 +17405,7 @@ function skillsBulkSave(payload: {
   opcoes?: {
     categoriaDefault?: string;
     fonteDefault?: string;
+    segmento?: string;
     modo?: 'criar' | 'upsert';
   };
 }): ServerResult {
@@ -17425,6 +17426,7 @@ function agentsBulkSave(payload: {
   opcoes?: {
     categoriaDefault?: string;
     fonteDefault?: string;
+    segmento?: string;
     modo?: 'criar' | 'upsert';
   };
 }): ServerResult {
@@ -17487,6 +17489,7 @@ function _bulkSaveGenerico(
     opcoes?: {
       categoriaDefault?: string;
       fonteDefault?: string;
+      segmento?: string;
       modo?: 'criar' | 'upsert';
     };
   },
@@ -17501,6 +17504,13 @@ function _bulkSaveGenerico(
     const op = payload.opcoes || {};
     const modo = op.modo || 'upsert';
     const agora = new Date().toISOString();
+
+    // v1.156.0 — Segmento de destino: quando informado, TODO item do lote vai pra
+    // pasta/seção desse segmento (fonte = "<segKey>/<slug>"), e garantimos o
+    // registro de metadados da fonte. Assim packs de domínio (contabilidade,
+    // fiscal...) caem numa seção própria nos hubs — de onde se monta o kit.
+    const segKey = op.segmento ? _slugFonte(op.segmento) : '';
+    if (segKey) _garantirFonteMeta(segKey, String(op.segmento || '').trim());
 
     // Pré-busca: slugs já existentes (caso modo upsert/criar precise checar).
     const existentes = dbGetAll(tabela) as Array<Record<string, unknown>>;
@@ -17544,7 +17554,11 @@ function _bulkSaveGenerico(
         // pra itens sem categoria. Faz sentido porque a outra AI já vem com
         // `category` correto nos JSONs por categoria.
         const categoria = (item.categoria || parsed.categoria || op.categoriaDefault || '').trim();
-        const fonte = (item.fonte || op.fonteDefault || '').trim();
+        // Com segmento: força a fonte pra "<segKey>/<slug>" (agrupa na seção).
+        // Sem segmento: comportamento legado (item.fonte ou fonteDefault).
+        const fonte = segKey
+          ? `${segKey}/${slugFinal || _slugify(nome) || 'item'}`
+          : (item.fonte || op.fonteDefault || '').trim();
         const tags = (item.tags || parsed.tags.join(', ')).trim();
         const descricao = parsed.descricao;
 
@@ -18100,9 +18114,11 @@ function kitTemplatesList(): ServerResult {
 
 // Monta um pool compacto de candidatos (top por estrelas → usos) pra caber no
 // contexto do LLM sem mandar a base inteira.
-function _poolCandidatos(tabela: 'Skills' | 'Agents', teto: number): Array<Record<string, unknown>> {
+function _poolCandidatos(tabela: 'Skills' | 'Agents', teto: number, fonteEscopo?: string): Array<Record<string, unknown>> {
   const linhas = dbGetAll(tabela) as Array<Record<string, unknown>>;
-  const comTexto = linhas.filter((l) => String(l.nome || '').trim());
+  let comTexto = linhas.filter((l) => String(l.nome || '').trim());
+  // Escopo por segmento (chave da fonte): restringe o pool a um único segmento.
+  if (fonteEscopo) comTexto = comTexto.filter((l) => _chaveDaFonte(String(l.fonte || '')) === fonteEscopo);
   // Preferimos avaliados (estrelas>=3); se houver poucos, completa com o resto
   // ordenado por estrelas/usos pra nunca devolver vazio.
   const ordenado = [...comTexto].sort((a, b) => {
@@ -18134,12 +18150,14 @@ function _parseKitSelecao(resp: string): { skills: number[]; agents: number[]; j
 // Faz o upsert por templateId (cada template/domínio tem no máximo 1 kit salvo).
 function _montarKitCore(opts: {
   templateId: string; nome: string; descricao: string; objetivo: string;
-  alvoSkills: number; alvoAgents: number;
+  alvoSkills: number; alvoAgents: number; fonteEscopo?: string;
 }): ServerResult {
-  const poolSkills = _poolCandidatos('Skills', 120);
-  const poolAgents = _poolCandidatos('Agents', 60);
+  const poolSkills = _poolCandidatos('Skills', 120, opts.fonteEscopo);
+  const poolAgents = _poolCandidatos('Agents', 60, opts.fonteEscopo);
   if (poolSkills.length === 0 && poolAgents.length === 0) {
-    throw new Error('Sua base de skills/agents está vazia — importe antes de montar kits.');
+    throw new Error(opts.fonteEscopo
+      ? 'Esse segmento não tem skills nem agents ainda — importe um pack pra ele antes.'
+      : 'Sua base de skills/agents está vazia — importe antes de montar kits.');
   }
 
   const compacto = (l: Record<string, unknown>, i: number) => ({
@@ -18279,6 +18297,63 @@ function kitMontarDominio(nome: string, objetivo: string, alvoSkills?: number, a
     });
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao montar coleção' };
+  }
+}
+
+// Lista os segmentos (chaves de fonte) existentes na base, com contagem de
+// skills e agents. Um "segmento" é a pasta/seção pra onde um pack importado vai
+// (ex.: "contabilidade", "fiscal"). Usado nos hubs e pra montar kit do segmento.
+function segmentosList(): ServerResult {
+  try {
+    const fontes = dbGetAll('SkillFontes') as Array<Record<string, unknown>>;
+    const meta: Record<string, Record<string, unknown>> = {};
+    for (const f of fontes) meta[String(f.chave || '')] = f;
+    const contar = (tabela: 'Skills' | 'Agents'): Record<string, number> => {
+      const m: Record<string, number> = {};
+      for (const l of dbGetAll(tabela) as Array<Record<string, unknown>>) {
+        if (!String(l.nome || '').trim()) continue;
+        const k = _chaveDaFonte(String(l.fonte || ''));
+        m[k] = (m[k] || 0) + 1;
+      }
+      return m;
+    };
+    const cs = contar('Skills');
+    const ca = contar('Agents');
+    const chaves = new Set<string>([...Object.keys(cs), ...Object.keys(ca)]);
+    const data = Array.from(chaves).map((k) => ({
+      chave: k,
+      nome: String(meta[k]?.nome || (k === 'avulsas' ? 'Avulsas / Importadas' : k)),
+      cor: String(meta[k]?.cor || ''),
+      skills: cs[k] || 0,
+      agents: ca[k] || 0,
+      total: (cs[k] || 0) + (ca[k] || 0),
+    })).filter((s) => s.total > 0).sort((a, b) => b.total - a.total);
+    return { ok: true, data };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar segmentos' };
+  }
+}
+
+// Monta o "kit dos sonhos" de UM segmento específico — escopa o pool só aos
+// itens daquele segmento (skills + agents). Chamado a partir dos hubs.
+function kitMontarSegmento(segKey: string, nome?: string): ServerResult {
+  try {
+    const key = _slugFonte(String(segKey || ''));
+    if (!key) throw new Error('Segmento inválido.');
+    const nomeSeg = String(nome || '').trim() || key;
+    return _montarKitCore({
+      templateId: `segmento:${key}`,
+      nome: `Segmento — ${nomeSeg}`,
+      descricao: `Kit dos sonhos do segmento "${nomeSeg}" (apenas skills + agents desse segmento).`,
+      objetivo: `Monte o kit dos sonhos usando SOMENTE as skills e agents do segmento "${nomeSeg}". `
+        + 'Selecione os melhores, mais completos e mais bem avaliados que, juntos, formam um conjunto '
+        + 'coeso e de alto nível pra desenvolver nessa área/vertical. Se houver uma boa skill de design/UI, '
+        + 'inclua (interface premium, com identidade própria, anti "cara de IA"). Evite redundância.',
+      alvoSkills: 24, alvoAgents: 10,
+      fonteEscopo: key,
+    });
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao montar kit do segmento' };
   }
 }
 
@@ -18771,6 +18846,18 @@ function _slugFonte(s: string): string {
   return String(s || '')
     .toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'pacote';
+}
+
+// Garante que existe um registro de metadados (SkillFontes) pra uma chave de
+// fonte/segmento. Idempotente: não duplica nem mexe em 'avulsas'.
+function _garantirFonteMeta(chave: string, nome: string): void {
+  if (!chave || chave === 'avulsas') return;
+  const fontes = dbGetAll('SkillFontes') as Array<Record<string, unknown>>;
+  if (fontes.some((f) => String(f.chave || '') === chave)) return;
+  const agora = new Date().toISOString();
+  dbCreate('SkillFontes', {
+    chave, nome: nome || chave, descricao: '', cor: '', criadoEm: agora, atualizadoEm: agora,
+  });
 }
 
 // Mesma regra do front: prefixo antes da "/" é a chave da pasta.

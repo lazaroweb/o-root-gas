@@ -4,11 +4,11 @@
 // pack pra detalharmos os campos (modelo, ferramentas, system_prompt, etc.).
 // Por hora, oferece: listagem, busca, favoritar, importar avulso e drawer.
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { Button, Empty, Input, Spin, Tag, Tooltip, Drawer, message, Skeleton, Segmented, Progress, Dropdown } from 'antd';
+import { Button, Empty, Input, Spin, Tag, Tooltip, Drawer, message, Skeleton, Segmented, Progress, Dropdown, Collapse } from 'antd';
 import {
   Bot, Search, Star, Copy, Download, Trash2, Sparkles, Upload as UploadIcon,
   FileText, ListChecks, BookMarked, Package, CheckCircle2, GitBranch, Workflow,
-  Network, Quote, Zap, Boxes, Heart, ArrowDownWideNarrow,
+  Network, Quote, Zap, Boxes, Heart, ArrowDownWideNarrow, Folder,
 } from 'lucide-react';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -17,6 +17,20 @@ import type { ServerResult } from '../types';
 import ImportarLoteModal from './ImportarLoteModal';
 import EstrelasQualidade from './EstrelasQualidade';
 import { FiltroChip, ChipGroup, GrupoAcoes, GrupoDivisor, CommandBar } from './HubToolbar';
+
+// v1.156.0 — segmento = prefixo da fonte antes da "/" (ex.: "contabilidade/x").
+// Mesma convenção do hub de Skills; permite seções por segmento aqui também.
+function fonteKey(fonte: string): string {
+  if (!fonte) return 'avulsas';
+  const i = fonte.indexOf('/');
+  return i > 0 ? fonte.slice(0, i) : 'avulsas';
+}
+function fonteLabel(key: string): string {
+  if (key === 'avulsas') return 'Avulsas / Importadas';
+  return key.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+interface FonteMeta { chave: string; nome: string; cor: string }
 
 interface AgentSummary {
   id: string;
@@ -96,12 +110,20 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
   const [avaliando, setAvaliando] = useState(false);
   const [avalProg, setAvalProg] = useState<{ feitas: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // v1.156.0 — seções por segmento (fonte).
+  const [fontes, setFontes] = useState<FonteMeta[]>([]);
+  const [openSources, setOpenSources] = useState<string[]>([]);
+  const [montandoSeg, setMontandoSeg] = useState<string | null>(null);
 
   const carregar = async () => {
     setLoading(true);
     try {
-      const r = await callServer<ServerResult>('agentsList');
+      const [r, rf] = await Promise.all([
+        callServer<ServerResult>('agentsList'),
+        callServer<ServerResult>('skillFontesList'),
+      ]);
       if (r.ok && r.data) setAgents(r.data as AgentSummary[]);
+      if (rf.ok && rf.data) setFontes(rf.data as FonteMeta[]);
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Erro ao carregar agents');
     } finally {
@@ -110,6 +132,23 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
   };
 
   useEffect(() => { void carregar(); }, []);
+
+  // v1.156.0 — monta o kit dos sonhos do segmento (só itens dessa seção).
+  const montarKitSegmento = async (chave: string, nome: string) => {
+    setMontandoSeg(chave);
+    const hide = message.loading(`A Lume está montando o kit do segmento "${nome}"…`, 0);
+    try {
+      const r = await callServer<ServerResult>('kitMontarSegmento', chave, nome);
+      if (r.ok) {
+        const d = r.data as { skills: number; agents: number };
+        message.success(`Kit de "${nome}": ${d.skills} skills + ${d.agents} agents. Veja na estação Kits.`);
+      } else {
+        message.error(r.error || 'Não consegui montar o kit do segmento');
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro ao montar kit');
+    } finally { hide(); setMontandoSeg(null); }
+  };
 
   const filtrados = useMemo(() => {
     let lista = agents;
@@ -133,6 +172,31 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
 
   const qtdFavoritas = useMemo(() => agents.filter((a) => !!a.favorita).length, [agents]);
   const qtdAvaliados = useMemo(() => agents.filter((a) => (a.estrelas || 0) > 0).length, [agents]);
+
+  const fonteMeta = useMemo(() => {
+    const m: Record<string, FonteMeta> = {};
+    for (const f of fontes) m[f.chave] = f;
+    return m;
+  }, [fontes]);
+
+  // v1.156.0 — agrupa agents por segmento (fonte). Seções colapsáveis.
+  const grupos = useMemo(() => {
+    const porFonte: Record<string, AgentSummary[]> = {};
+    for (const a of filtrados) (porFonte[fonteKey(a.fonte)] = porFonte[fonteKey(a.fonte)] || []).push(a);
+    const chaves = Object.keys(porFonte).sort((x, y) => {
+      if (x === 'avulsas') return 1;
+      if (y === 'avulsas') return -1;
+      return porFonte[y].length - porFonte[x].length;
+    });
+    return chaves.map((k) => ({
+      key: k,
+      label: fonteMeta[k]?.nome || fonteLabel(k),
+      cor: fonteMeta[k]?.cor || '',
+      lista: porFonte[k],
+    }));
+  }, [filtrados, fonteMeta]);
+
+  const activeSources = filtro.trim() ? grupos.map((g) => g.key) : openSources;
 
   // v1.152.0 — Avalia qualidade com a Lume (loop chunked com progresso).
   const avaliarAgents = async (opcoes?: { escopo?: 'pendentes' | 'todas' }) => {
@@ -427,11 +491,46 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
               </span>
             )}
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 16 }}>
-            {filtrados.map((a) => (
-              <AgentCard key={a.id} agent={a} onOpen={() => abrir(a.id)} onToggleFavorita={() => toggleFavorita(a.id)} />
-            ))}
-          </div>
+          <Collapse
+            bordered={false}
+            activeKey={activeSources}
+            onChange={(k) => setOpenSources(Array.isArray(k) ? (k as string[]) : [k as string])}
+            style={{ background: 'transparent' }}
+            items={grupos.map((g) => ({
+              key: g.key,
+              style: { background: t.surface, border: `1px solid ${t.border}`, borderRadius: 12, marginBottom: 10, overflow: 'hidden' },
+              label: (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ width: 30, height: 30, borderRadius: 8, background: `${g.cor || corDestaque}1a`, color: g.cor || corDestaque, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    {g.key === 'avulsas' ? <Folder size={15} /> : <Package size={15} />}
+                  </span>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontFamily: FONTS.display, fontSize: 14.5, fontWeight: 600, color: t.text }}>{g.label}</span>
+                      <span style={{ fontFamily: FONTS.ui, fontSize: 11, fontWeight: 600, color: t.textTertiary, background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 999, padding: '0 8px', lineHeight: '18px' }}>
+                        {g.lista.length} {g.lista.length === 1 ? 'agent' : 'agents'}
+                      </span>
+                    </div>
+                  </div>
+                  <Tooltip title="Montar o kit dos sonhos DESTE segmento (a Lume cura as melhores skills + agents desta seção). Aparece na estação Kits.">
+                    <Button
+                      type="text" size="small" icon={<Sparkles size={13} />}
+                      loading={montandoSeg === g.key}
+                      style={{ color: t.accents.peach }}
+                      onClick={(e) => { e.stopPropagation(); void montarKitSegmento(g.key, g.label); }}
+                    />
+                  </Tooltip>
+                </div>
+              ),
+              children: (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 16 }}>
+                  {g.lista.map((a) => (
+                    <AgentCard key={a.id} agent={a} onOpen={() => abrir(a.id)} onToggleFavorita={() => toggleFavorita(a.id)} />
+                  ))}
+                </div>
+              ),
+            }))}
+          />
         </>
       )}
 

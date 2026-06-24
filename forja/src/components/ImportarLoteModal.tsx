@@ -117,7 +117,9 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [lotes, setLotes] = useState<Lote[]>([]);
   const [categoriaDefault, setCategoriaDefault] = useState('');
-  const [fonteDefault, setFonteDefault] = useState('');
+  // v1.156.0 — "segmento de destino": rota o pack inteiro pra uma seção própria
+  // (ex.: Contabilidade), de onde se monta o kit dos sonhos daquele segmento.
+  const [segmento, setSegmento] = useState('');
   const [modo, setModo] = useState<'upsert' | 'criar'>('upsert');
   const [importando, setImportando] = useState(false);
   // Progresso global agregado (todos os lotes).
@@ -196,7 +198,7 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
             itens: chunk,
             opcoes: {
               categoriaDefault: lote.categoriaDetectada ? undefined : (categoriaDefault.trim() || undefined),
-              fonteDefault: fonteDefault.trim() || undefined,
+              segmento: segmento.trim() || undefined,
               modo,
             },
           });
@@ -461,12 +463,12 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
 
               <div>
                 <label style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, display: 'block', marginBottom: 4 }}>
-                  Fonte / pasta <span style={{ color: t.textTertiary }}>(agrupa visualmente — vira a pasta no Hub)</span>
+                  Segmento de destino <span style={{ color: t.textTertiary }}>(cria/usa uma seção própria no Hub — depois você monta o kit dos sonhos dela)</span>
                 </label>
                 <Input
-                  value={fonteDefault}
-                  onChange={(e) => setFonteDefault(e.target.value)}
-                  placeholder="ex.: vibeship-spawner, pack-ai-2026…"
+                  value={segmento}
+                  onChange={(e) => setSegmento(e.target.value)}
+                  placeholder="ex.: Contabilidade, Fiscal, Folha de pagamento, CRM…"
                 />
               </div>
 

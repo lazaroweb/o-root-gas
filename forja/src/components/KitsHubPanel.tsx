@@ -251,9 +251,13 @@ export default function KitsHubPanel(): React.ReactElement {
     return m;
   }, [kits]);
 
-  // Coleções por domínio = kits cujo templateId começa com "dominio:".
+  // Coleções = kits por domínio ("dominio:") ou por segmento ("segmento:",
+  // gerados a partir das seções dos hubs de Skills/Agents).
   const colecoes = useMemo(
-    () => kits.filter((k) => String(k.templateId || '').startsWith('dominio:')),
+    () => kits.filter((k) => {
+      const tid = String(k.templateId || '');
+      return tid.startsWith('dominio:') || tid.startsWith('segmento:');
+    }),
     [kits],
   );
 
@@ -292,6 +296,22 @@ export default function KitsHubPanel(): React.ReactElement {
       }
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Erro ao montar coleção');
+    } finally { hide(); setMontando(null); }
+  };
+
+  const remontarSegmento = async (segKey: string, nomeKit: string) => {
+    setMontando(`segmento:${segKey}`);
+    const hide = message.loading(`A Lume está re-montando "${nomeKit}"…`, 0);
+    try {
+      const r = await callServer<ServerResult>('kitMontarSegmento', segKey, nomeKit.replace(/^Segmento\s*[—-]\s*/, ''));
+      if (r.ok) {
+        const d = r.data as { id: string; skills: number; agents: number };
+        message.success(`Coleção re-montada: ${d.skills} skills + ${d.agents} agents.`);
+        await carregar();
+        void abrir(d.id);
+      } else message.error(r.error || 'Não consegui re-montar');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro ao re-montar');
     } finally { hide(); setMontando(null); }
   };
 
@@ -538,7 +558,8 @@ export default function KitsHubPanel(): React.ReactElement {
         {colecoes.length > 0 && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14, marginBottom: 16 }}>
             {colecoes.map((kit) => {
-              const emMontagem = montando === `dominio:${kit.nome}`;
+              const emMontagem = montando === `dominio:${kit.nome}`
+                || montando === kit.templateId;
               return (
                 <div key={kit.id} style={{
                   background: t.surface, border: `1.5px solid ${t.accents.blue}55`,
@@ -578,7 +599,11 @@ export default function KitsHubPanel(): React.ReactElement {
                     <Tooltip title="Re-monta a coleção com a Lume.">
                       <Button
                         size="small" icon={<RefreshCw size={13} />} loading={emMontagem}
-                        onClick={() => montarDominio(kit.nome, kit.descricao)}
+                        onClick={() => {
+                          const tid = String(kit.templateId || '');
+                          if (tid.startsWith('segmento:')) void remontarSegmento(tid.slice('segmento:'.length), kit.nome);
+                          else void montarDominio(kit.nome, kit.descricao);
+                        }}
                       />
                     </Tooltip>
                     <Tooltip title="Remover coleção.">

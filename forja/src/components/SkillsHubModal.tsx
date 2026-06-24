@@ -863,6 +863,25 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
     } finally { setRemovendoFonte(false); }
   };
 
+  // v1.156.0 — monta o "kit dos sonhos" do segmento (só itens dessa seção:
+  // skills + agents). A coleção aparece na estação Kits.
+  const [montandoSeg, setMontandoSeg] = useState<string | null>(null);
+  const montarKitSegmento = async (chave: string, nome: string) => {
+    setMontandoSeg(chave);
+    const hide = message.loading(`A Lume está montando o kit do segmento "${nome}"…`, 0);
+    try {
+      const r = await callServer<ServerResult>('kitMontarSegmento', chave, nome);
+      if (r.ok) {
+        const d = r.data as { skills: number; agents: number };
+        message.success(`Kit de "${nome}": ${d.skills} skills + ${d.agents} agents. Veja na estação Kits.`);
+      } else {
+        message.error(r.error || 'Não consegui montar o kit do segmento');
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro ao montar kit');
+    } finally { hide(); setMontandoSeg(null); }
+  };
+
   const moverSkill = async (chaveDestino: string) => {
     if (!aberta) return;
     setMovendo(true);
@@ -1228,6 +1247,19 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                               )}
                             </div>
                             <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, flexShrink: 0 }}>{bytesHumano(g.bytes)}</span>
+                            <Tooltip title="Montar o kit dos sonhos DESTE segmento (a Lume cura as melhores skills + agents desta seção). Aparece na estação Kits.">
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<Sparkles size={13} />}
+                                loading={montandoSeg === g.key}
+                                style={{ color: t.accents.peach }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void montarKitSegmento(g.key, g.label);
+                                }}
+                              />
+                            </Tooltip>
                             <Tooltip title="Exportar pasta como .zip (skills/<nome>/SKILL.md) pra levar pro projeto">
                               <Button
                                 type="text"

@@ -36,6 +36,28 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.156.0] — 2026-06-24
+
+### Adicionado — Segmentos: importar pack → seção própria → kit do segmento
+
+Fecha o conceito de domínio também em Skills e Agents. Agora um pack que você
+compra (contabilidade, fiscal, folha, arquitetura…) cai numa **seção própria** e
+dela você gera o kit dos sonhos só com aqueles itens.
+
+- **Import em lote** ganhou o campo **"Segmento de destino"**: ao informar (ex.:
+  "Contabilidade"), TODO o pack vai pra essa seção (skills e agents), criando/
+  reusando a fonte automaticamente. Vale pros dois hubs.
+- **Hub de Agents agora tem seções** por segmento (colapsáveis), em paridade com o
+  de Skills.
+- **Botão "montar kit do segmento"** (✨) no cabeçalho de cada seção (Skills e
+  Agents): a Lume cura as melhores skills **+** agents **só daquele segmento**. O
+  resultado aparece em "Coleções" na estação Kits.
+- Coleções agora englobam kits por domínio e por segmento.
+
+Backend: `_poolCandidatos` e `_montarKitCore` aceitam escopo por fonte; novas RPCs
+`segmentosList` e `kitMontarSegmento`; `_bulkSaveGenerico` roteia o lote pra
+`<segmento>/<slug>` e registra a fonte (`_garantirFonteMeta`). Sem migração de schema.
+
 ## [1.155.0] — 2026-06-23
 
 ### Adicionado — Coleções por domínio de negócio (sob demanda pela Lume)
