@@ -15,7 +15,7 @@ import {
 import dayjs, { Dayjs } from 'dayjs';
 import {
   Plus, Trash2, Copy, QrCode, FileText, RefreshCw, Settings, Barcode,
-  CircleDollarSign, Clock, CheckCircle2, XCircle, Filter, Link2, Check,
+  CircleDollarSign, Clock, CheckCircle2, XCircle, Filter, Link2, Check, Bell, Send,
 } from 'lucide-react';
 import { Panel, formatBRL } from '../components/ui';
 import { useTokens } from '../themeContext';
@@ -47,6 +47,7 @@ export default function FinCobrancas({ sistemas }: { sistemas: Sistema[] }): Rea
   const [configOpen, setConfigOpen] = useState(false);
   const [detalhe, setDetalhe] = useState<EmpresaCobranca | null>(null);
   const [marcarPaga, setMarcarPaga] = useState<EmpresaCobranca | null>(null);
+  const [lembretesOpen, setLembretesOpen] = useState(false);
   const [statusFiltro, setStatusFiltro] = useState<string>('todos');
   const [busy, setBusy] = useState<string>('');
 
@@ -106,6 +107,17 @@ export default function FinCobrancas({ sistemas }: { sistemas: Sistema[] }): Rea
       .finally(() => setBusy(''));
   };
 
+  const enviarLembrete = (id: string) => {
+    setBusy(id);
+    callServer<ServerResponse<{ canais: string[] }>>('cobrancaEnviarLembrete', id)
+      .then((res) => {
+        if (res.ok) { const d = res.data as { canais?: string[] }; message.success(`Lembrete enviado (${(d?.canais || []).join(', ') || 'ok'})`); }
+        else message.error(res.error || 'Erro');
+      })
+      .catch(() => message.error('Erro ao enviar lembrete'))
+      .finally(() => setBusy(''));
+  };
+
   const naoConfigurado = !!config && !config.configurado;
 
   return (
@@ -128,6 +140,7 @@ export default function FinCobrancas({ sistemas }: { sistemas: Sistema[] }): Rea
           </div>
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <Button icon={<Bell size={16} />} onClick={() => setLembretesOpen(true)}>Lembretes</Button>
           <Button icon={<Settings size={16} />} onClick={() => setConfigOpen(true)}>Configurar PSP</Button>
           <Button type="primary" icon={<Plus size={16} />} onClick={() => setEmitirOpen(true)} style={{ background: t.accents.sage, borderColor: t.accents.sage }}>
             Emitir cobrança
@@ -175,7 +188,7 @@ export default function FinCobrancas({ sistemas }: { sistemas: Sistema[] }): Rea
             { title: 'Vencimento', dataIndex: 'vencimento', render: (v: string) => <span style={{ color: t.textTertiary, fontFamily: FONTS.mono, fontSize: 12.5 }}>{v || '—'}</span> },
             { title: 'Status', dataIndex: 'status', render: (s: string) => <StatusTag status={s} /> },
             {
-              title: '', key: 'acoes', align: 'right', width: 190, render: (_: unknown, c: EmpresaCobranca) => (
+              title: '', key: 'acoes', align: 'right', width: 230, render: (_: unknown, c: EmpresaCobranca) => (
                 <span style={{ display: 'inline-flex', gap: 2 }}>
                   <Tooltip title="Ver boleto / PIX">
                     <Button type="text" size="small" icon={<QrCode size={15} />} style={{ color: t.accents.blue }} onClick={() => setDetalhe(c)} />
@@ -193,6 +206,11 @@ export default function FinCobrancas({ sistemas }: { sistemas: Sistema[] }): Rea
                   {c.urlBoleto && (
                     <Tooltip title="Abrir boleto (PDF)">
                       <Button type="text" size="small" icon={<FileText size={15} />} onClick={() => window.open(c.urlBoleto, '_blank')} />
+                    </Tooltip>
+                  )}
+                  {(c.status === 'emitida' || c.status === 'vencida') && (
+                    <Tooltip title="Enviar lembrete ao cliente">
+                      <Button type="text" size="small" icon={<Bell size={15} />} loading={busy === c.id} style={{ color: t.accents.peach }} onClick={() => enviarLembrete(c.id)} />
                     </Tooltip>
                   )}
                   {c.status !== 'paga' && c.status !== 'cancelada' && (
@@ -234,7 +252,115 @@ export default function FinCobrancas({ sistemas }: { sistemas: Sistema[] }): Rea
       <ModalDetalhe cobranca={detalhe} onClose={() => setDetalhe(null)} onCopiar={copiar} />
 
       <ModalMarcarPaga cobranca={marcarPaga} onClose={() => setMarcarPaga(null)} onSaved={() => { setMarcarPaga(null); load(); }} />
+
+      <ModalLembretes open={lembretesOpen} onClose={() => setLembretesOpen(false)} onRan={load} />
     </div>
+  );
+}
+
+// ─── Modal: régua de cobrança (lembretes de inadimplência) ───────────────────
+
+interface ReguaCfg {
+  ativo: boolean; email: boolean; whatsapp: boolean;
+  diasAntes: number; diasApos: number; hora: number; whatsappDisponivel?: boolean;
+}
+
+function ModalLembretes({ open, onClose, onRan }: {
+  open: boolean; onClose: () => void; onRan: () => void;
+}): React.ReactElement {
+  const t = useTokens();
+  const { message } = AntApp.useApp();
+  const [cfg, setCfg] = useState<ReguaCfg | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    callServer<ServerResponse<ReguaCfg>>('cobrancaLembretesConfigGet')
+      .then((res) => { if (res.ok && res.data) setCfg(res.data as ReguaCfg); })
+      .catch(() => { /* preview */ })
+      .finally(() => setLoading(false));
+  }, [open]);
+
+  const patch = (p: Partial<ReguaCfg>) => setCfg((c) => (c ? { ...c, ...p } : c));
+
+  const salvar = async () => {
+    if (!cfg) return;
+    setSaving(true);
+    try {
+      const res = await callServer<ServerResponse<ReguaCfg>>('cobrancaLembretesConfigSalvar', cfg);
+      if (res.ok) { if (res.data) setCfg(res.data as ReguaCfg); message.success('Régua salva'); }
+      else message.error(res.error || 'Erro');
+    } catch { message.error('Erro ao salvar'); }
+    finally { setSaving(false); }
+  };
+
+  const rodarAgora = async () => {
+    setRunning(true);
+    try {
+      const res = await callServer<ServerResponse<{ enviados: number; semContato?: number; avaliadas?: number }>>('cobrancaLembretesRodarAgora');
+      if (res.ok) {
+        const d = res.data as { enviados?: number; semContato?: number };
+        message.success(`${d?.enviados || 0} lembrete(s) enviado(s)${d?.semContato ? ` · ${d.semContato} sem contato` : ''}`);
+        onRan();
+      } else message.error(res.error || 'Erro');
+    } catch { message.error('Erro ao rodar a régua'); }
+    finally { setRunning(false); }
+  };
+
+  const Row = ({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) => (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '11px 0', borderTop: `1px solid ${t.borderSoft}` }}>
+      <div>
+        <div style={{ color: t.text, fontSize: 13.5, fontWeight: 500 }}>{label}</div>
+        {hint && <div style={{ color: t.textTertiary, fontSize: 11.5, marginTop: 1 }}>{hint}</div>}
+      </div>
+      <div>{children}</div>
+    </div>
+  );
+
+  return (
+    <Modal
+      title="Régua de cobrança"
+      open={open}
+      onCancel={onClose}
+      destroyOnClose
+      footer={[
+        <Button key="run" icon={<Send size={15} />} loading={running} onClick={rodarAgora}>Rodar agora</Button>,
+        <Button key="save" type="primary" loading={saving} onClick={salvar}>Salvar</Button>,
+      ]}
+    >
+      {loading || !cfg ? <Spin style={{ display: 'block', margin: '32px auto' }} /> : (
+        <>
+          <div style={{ fontSize: 12.5, color: t.textSecondary, marginBottom: 6 }}>
+            Lembretes automáticos ao cliente em 3 momentos: antes do vencimento, no dia e em atraso.
+            Cada estágio é enviado uma única vez por cobrança.
+          </div>
+          <Row label="Régua ativa" hint="Roda automaticamente todo dia no horário escolhido">
+            <Segmented size="small" value={cfg.ativo ? 'sim' : 'nao'} onChange={(v) => patch({ ativo: v === 'sim' })}
+              options={[{ value: 'sim', label: 'Ativa' }, { value: 'nao', label: 'Pausada' }]} />
+          </Row>
+          <Row label="Canal: e-mail" hint="Usa o e-mail cadastrado do cliente">
+            <Segmented size="small" value={cfg.email ? 'sim' : 'nao'} onChange={(v) => patch({ email: v === 'sim' })}
+              options={[{ value: 'sim', label: 'On' }, { value: 'nao', label: 'Off' }]} />
+          </Row>
+          <Row label="Canal: WhatsApp" hint={cfg.whatsappDisponivel ? 'Usa o telefone do cliente' : 'Configure o WhatsApp em Automações primeiro'}>
+            <Segmented size="small" disabled={!cfg.whatsappDisponivel} value={cfg.whatsapp ? 'sim' : 'nao'} onChange={(v) => patch({ whatsapp: v === 'sim' })}
+              options={[{ value: 'sim', label: 'On' }, { value: 'nao', label: 'Off' }]} />
+          </Row>
+          <Row label="Dias antes do vencimento" hint="0 desativa o lembrete prévio">
+            <InputNumber size="small" min={0} max={30} value={cfg.diasAntes} onChange={(v) => patch({ diasAntes: Number(v || 0) })} style={{ width: 80 }} />
+          </Row>
+          <Row label="Dias após (em atraso)" hint="0 desativa o lembrete de atraso">
+            <InputNumber size="small" min={0} max={60} value={cfg.diasApos} onChange={(v) => patch({ diasApos: Number(v || 0) })} style={{ width: 80 }} />
+          </Row>
+          <Row label="Horário do envio diário" hint="Hora local (0–23)">
+            <InputNumber size="small" min={0} max={23} value={cfg.hora} onChange={(v) => patch({ hora: Number(v || 0) })} style={{ width: 80 }} />
+          </Row>
+        </>
+      )}
+    </Modal>
   );
 }
 

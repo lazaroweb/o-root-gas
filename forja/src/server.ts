@@ -4506,6 +4506,240 @@ function _cobrancaBaixaPorWebhook(payment: { id?: string; value?: number; paymen
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// RÉGUA DE COBRANÇA (v1.160.0) — lembretes automáticos de inadimplência
+//   Manda lembrete ao CLIENTE (e-mail + WhatsApp) em 3 estágios:
+//     • antes   — N dias antes do vencimento ("vai vencer")
+//     • venc    — no vencimento / logo após ("vence hoje")
+//     • apos    — N dias depois ("em atraso")
+//   Idempotente por estágio via CobrancaEventos (não reenvia o mesmo estágio).
+//   Roda via trigger diário e também sob demanda ("rodar agora").
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface ReguaConfig { ativo: boolean; email: boolean; whatsapp: boolean; diasAntes: number; diasApos: number; hora: number }
+
+function _reguaConfig(): ReguaConfig {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty('PSP_DUNNING');
+    const p = raw ? JSON.parse(raw) : {};
+    return {
+      ativo: !!p.ativo,
+      email: p.email !== undefined ? !!p.email : true,
+      whatsapp: !!p.whatsapp,
+      diasAntes: Number(p.diasAntes >= 0 ? p.diasAntes : 3),
+      diasApos: Number(p.diasApos >= 0 ? p.diasApos : 3),
+      hora: Number(p.hora >= 0 ? p.hora : 9),
+    };
+  } catch { return { ativo: false, email: true, whatsapp: false, diasAntes: 3, diasApos: 3, hora: 9 }; }
+}
+
+function _diasAteVencimento(venc: string): number {
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  const d = new Date(String(venc) + 'T00:00:00');
+  if (isNaN(d.getTime())) return NaN;
+  return Math.round((d.getTime() - hoje.getTime()) / 86400000);
+}
+
+// Envia uma mensagem WhatsApp pra um número específico (cliente), usando as
+// credenciais configuradas em Automações. Retorna true se enviou.
+function _enviarWhatsappPara(numRaw: string, titulo: string, mensagem: string): boolean {
+  const w = getAutomationConfig().whatsapp;
+  if (!w) return false;
+  const num = _normalizarTelefone(numRaw);
+  if (!num) return false;
+  const texto = `*${titulo}*\n${mensagem}\n\n— FORJA`;
+  try {
+    if (w.provider === 'twilio') {
+      if (!w.twilioSid || !w.twilioToken) return false;
+      _enviarWhatsappTwilio(w, num, texto);
+    } else {
+      if (!w.metaToken || !w.metaPhoneNumberId) return false;
+      _enviarWhatsappMeta(w, num, titulo, mensagem, texto);
+    }
+    return true;
+  } catch { return false; }
+}
+
+function _lembreteJaEnviado(rowId: string, stage: string): boolean {
+  const evid = `lembrete:${rowId}:${stage}`;
+  const evs = dbGetAll('CobrancaEventos') as Array<Record<string, unknown>>;
+  return evs.some((e) => String(e.eventoId) === evid);
+}
+
+function _registrarLembreteEvento(rowId: string, stage: string, canais: string[]): void {
+  dbCreate('CobrancaEventos', {
+    provedor: 'forja', eventoId: `lembrete:${rowId}:${stage}`, cobrancaId: rowId,
+    tipo: 'lembrete', payloadJson: JSON.stringify({ stage, canais, em: new Date().toISOString() }),
+    recebidoEm: new Date().toISOString(),
+  });
+}
+
+// Monta assunto + corpo (texto p/ WhatsApp e HTML p/ e-mail) do lembrete.
+function _lembreteConteudo(cob: Record<string, unknown>, pessoa: Record<string, unknown>, stage: string): { assunto: string; texto: string; html: string } {
+  const nome = String(pessoa['nome'] || pessoa['nomeContato'] || 'Cliente');
+  const valor = _fmtBRLpdf(Number(cob['valor'] || 0));
+  const venc = _fmtDataBR(String(cob['vencimento'] || ''));
+  const desc = String(cob['descricao'] || 'Cobrança');
+  let assunto = ''; let abertura = '';
+  if (stage === 'antes') { assunto = `Lembrete: ${desc} vence em ${venc}`; abertura = `Passando pra lembrar que sua cobrança vence em ${venc}.`; }
+  else if (stage === 'venc') { assunto = `Sua cobrança vence hoje (${venc})`; abertura = `Hoje é o vencimento da sua cobrança. Se já pagou, é só desconsiderar.`; }
+  else { assunto = `Cobrança em atraso desde ${venc}`; abertura = `Identificamos que a cobrança venceu em ${venc} e ainda consta em aberto.`; }
+
+  const pix = String(cob['pixCopiaCola'] || '');
+  const linha = String(cob['linhaDigitavel'] || '');
+  const link = String(cob['urlFatura'] || cob['urlBoleto'] || '');
+
+  const blocosTxt: string[] = [];
+  if (pix) blocosTxt.push(`PIX copia e cola:\n${pix}`);
+  if (linha) blocosTxt.push(`Linha digitável:\n${linha}`);
+  const texto = `Olá, ${nome}!\n${abertura}\n\n${desc}\nValor: ${valor}\nVencimento: ${venc}\n\n`
+    + blocosTxt.join('\n\n') + (link ? `${blocosTxt.length ? '\n\n' : ''}Página de pagamento: ${link}` : '');
+
+  const caixa = (titulo: string, conteudo: string) =>
+    `<div style="margin:10px 0;"><div style="font-size:11px;color:#8C8378;margin-bottom:4px;">${_escHtml(titulo)}</div>`
+    + `<div style="font-family:ui-monospace,Menlo,monospace;font-size:12px;background:#F5F1EA;border:1px solid #E7E1D8;border-radius:8px;padding:10px;word-break:break-all;">${_escHtml(conteudo)}</div></div>`;
+  const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:520px;margin:0 auto;color:#2B2B2B;line-height:1.5;">`
+    + `<p style="font-size:15px;">Olá, ${_escHtml(nome)}!</p>`
+    + `<p>${_escHtml(abertura)}</p>`
+    + `<table style="width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;">`
+    + `<tr><td style="padding:6px 0;color:#8C8378;">Descrição</td><td style="padding:6px 0;text-align:right;font-weight:600;">${_escHtml(desc)}</td></tr>`
+    + `<tr><td style="padding:6px 0;color:#8C8378;">Valor</td><td style="padding:6px 0;text-align:right;font-weight:700;">${_escHtml(valor)}</td></tr>`
+    + `<tr><td style="padding:6px 0;color:#8C8378;">Vencimento</td><td style="padding:6px 0;text-align:right;">${_escHtml(venc)}</td></tr>`
+    + `</table>`
+    + (pix ? caixa('PIX copia e cola', pix) : '')
+    + (linha ? caixa('Linha digitável do boleto', linha) : '')
+    + (link ? `<p style="margin:16px 0;"><a href="${_escHtml(link)}" style="display:inline-block;background:#2B2B2B;color:#fff;text-decoration:none;padding:11px 20px;border-radius:8px;font-weight:600;">Abrir página de pagamento</a></p>` : '')
+    + `<p style="color:#8C8378;font-size:11px;margin-top:18px;border-top:1px solid #E7E1D8;padding-top:12px;">Se o pagamento já foi feito, desconsidere este aviso. Mensagem enviada automaticamente.</p></div>`;
+  return { assunto, texto, html };
+}
+
+// Dispara o lembrete pelos canais habilitados. Retorna os canais que de fato saíram.
+function _enviarLembreteCobranca(cob: Record<string, unknown>, pessoa: Record<string, unknown>, stage: string, cfg: { email: boolean; whatsapp: boolean }): string[] {
+  const cont = _lembreteConteudo(cob, pessoa, stage);
+  const canais: string[] = [];
+  const email = String(pessoa['email'] || '').trim();
+  if (cfg.email && email) {
+    try { MailApp.sendEmail({ to: email, subject: cont.assunto, htmlBody: cont.html }); canais.push('email'); } catch { /* sem permissão/inválido */ }
+  }
+  const tel = String(pessoa['telefone'] || pessoa['contato'] || '').trim();
+  if (cfg.whatsapp && tel) {
+    if (_enviarWhatsappPara(tel, cont.assunto, cont.texto)) canais.push('whatsapp');
+  }
+  return canais;
+}
+
+// ─── RPCs da régua ─────────────────────────────────────────────────────────────
+
+function cobrancaLembretesConfigGet(): ServerResult {
+  try {
+    const cfg = _reguaConfig();
+    const w = getAutomationConfig().whatsapp;
+    const whatsappDisponivel = !!(w && ((w.provider === 'twilio' && w.twilioSid && w.twilioToken) || (w.provider !== 'twilio' && w.metaToken && w.metaPhoneNumberId)));
+    return { ok: true, data: { ...cfg, whatsappDisponivel } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ler config da régua' };
+  }
+}
+
+function cobrancaLembretesConfigSalvar(payload: Record<string, unknown>): ServerResult {
+  try {
+    const atual = _reguaConfig();
+    const p = payload || {};
+    const novo: ReguaConfig = {
+      ativo: p['ativo'] !== undefined ? !!p['ativo'] : atual.ativo,
+      email: p['email'] !== undefined ? !!p['email'] : atual.email,
+      whatsapp: p['whatsapp'] !== undefined ? !!p['whatsapp'] : atual.whatsapp,
+      diasAntes: p['diasAntes'] !== undefined ? Math.max(0, Math.min(30, Number(p['diasAntes']))) : atual.diasAntes,
+      diasApos: p['diasApos'] !== undefined ? Math.max(0, Math.min(60, Number(p['diasApos']))) : atual.diasApos,
+      hora: p['hora'] !== undefined ? Math.max(0, Math.min(23, Number(p['hora']))) : atual.hora,
+    };
+    PropertiesService.getScriptProperties().setProperty('PSP_DUNNING', JSON.stringify(novo));
+    _configurarReguaTrigger(novo.ativo, novo.hora);
+    return cobrancaLembretesConfigGet();
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar config da régua' };
+  }
+}
+
+function _configurarReguaTrigger(ativo: boolean, hora: number): void {
+  try {
+    ScriptApp.getProjectTriggers().forEach((tr) => { if (tr.getHandlerFunction() === 'reguaCobrancaDiaria') ScriptApp.deleteTrigger(tr); });
+    if (ativo) ScriptApp.newTrigger('reguaCobrancaDiaria').timeBased().atHour(Math.max(0, Math.min(23, Number(hora || 9)))).everyDays(1).create();
+  } catch (_e) { /* sem permissão pra triggers */ }
+}
+
+// Handler global do trigger diário (sem args).
+function reguaCobrancaDiaria(): void {
+  try { executarReguaCobranca(false); } catch (_e) { /* trigger silencioso */ }
+}
+
+// Núcleo da régua. manual=true ignora o flag "ativo" (usado pelo botão "rodar agora").
+function executarReguaCobranca(manual?: boolean): ServerResult {
+  try {
+    const cfg = _reguaConfig();
+    if (!manual && !cfg.ativo) return { ok: true, data: { pulado: true, enviados: 0 } };
+    if (!cfg.email && !cfg.whatsapp) return { ok: true, data: { enviados: 0, motivo: 'Nenhum canal habilitado.' } };
+
+    const rows = (dbGetAll('EmpresaCobrancas') as Array<Record<string, unknown>>)
+      .filter((c) => { const s = String(c['status']); return s === 'emitida' || s === 'vencida'; });
+    const pessoas: Record<string, Record<string, unknown>> = {};
+    (dbGetAll('Pessoas') as Array<Record<string, unknown>>).forEach((p) => { pessoas[String(p['id'])] = p; });
+
+    let enviados = 0; let semContato = 0;
+    const detalhes: Array<{ id: string; stage: string; canais: string[] }> = [];
+    for (const cob of rows) {
+      const venc = String(cob['vencimento'] || '');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(venc)) continue;
+      const diff = _diasAteVencimento(venc);
+      if (isNaN(diff)) continue;
+      let stage = '';
+      if (cfg.diasAntes > 0 && diff > 0 && diff <= cfg.diasAntes) stage = 'antes';
+      else if (diff <= 0 && diff > -cfg.diasApos) stage = 'venc';
+      else if (cfg.diasApos > 0 && diff <= -cfg.diasApos) stage = 'apos';
+      if (!stage) continue;
+      if (_lembreteJaEnviado(String(cob['id']), stage)) continue;
+      const pessoa = pessoas[String(cob['pessoaId'])];
+      if (!pessoa) continue;
+      const canais = _enviarLembreteCobranca(cob, pessoa, stage, { email: cfg.email, whatsapp: cfg.whatsapp });
+      if (canais.length > 0) { _registrarLembreteEvento(String(cob['id']), stage, canais); enviados++; detalhes.push({ id: String(cob['id']), stage, canais }); }
+      else semContato++;
+    }
+    return { ok: true, data: { enviados, semContato, avaliadas: rows.length, detalhes } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao rodar a régua' };
+  }
+}
+
+// Botão "rodar agora" (ignora o flag ativo).
+function cobrancaLembretesRodarAgora(): ServerResult {
+  return executarReguaCobranca(true);
+}
+
+// Envio manual de um lembrete único pra uma cobrança (botão na linha).
+function cobrancaEnviarLembrete(id: string, stage?: string): ServerResult {
+  try {
+    const cob = dbGetById('EmpresaCobrancas', String(id));
+    if (!cob) return { ok: false, error: 'Cobrança não encontrada' };
+    const st = String(cob['status']);
+    if (st === 'paga' || st === 'cancelada') return { ok: false, error: 'Cobrança paga/cancelada — sem lembrete.' };
+    if (st === 'pendente') return { ok: false, error: 'Cobrança ainda não emitida no provedor.' };
+    const pessoa = dbGetById('Pessoas', String(cob['pessoaId']));
+    if (!pessoa) return { ok: false, error: 'Cliente não encontrado.' };
+    const cfg = _reguaConfig();
+    let estagio = stage || '';
+    if (!estagio) {
+      const diff = _diasAteVencimento(String(cob['vencimento'] || ''));
+      estagio = diff > 0 ? 'antes' : diff === 0 ? 'venc' : 'apos';
+    }
+    const canais = _enviarLembreteCobranca(cob, pessoa, estagio, { email: true, whatsapp: cfg.whatsapp });
+    if (canais.length === 0) return { ok: false, error: 'Cliente sem e-mail/telefone (ou WhatsApp não configurado).' };
+    _registrarLembreteEvento(String(id), estagio, canais);
+    return { ok: true, data: { canais, estagio } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao enviar lembrete' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SERVIÇO DE PDF (v1.19) — geração server-side confiável no GAS
 //   Em vez de window.print() (instável dentro do iframe do Apps Script), o PDF é
 //   gerado no servidor: monta-se um HTML, converte-se com

@@ -36,6 +36,34 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.160.0] — 2026-06-24
+
+### Adicionado — Régua de cobrança (lembretes de inadimplência)
+
+Lembretes automáticos ao **cliente** por **e-mail** e/ou **WhatsApp**, em 3 estágios:
+
+- **Antes do vencimento** (N dias antes — configurável), **no vencimento** e
+  **em atraso** (N dias depois). Cada estágio é enviado **uma única vez** por
+  cobrança (idempotência via `CobrancaEventos`).
+- A mensagem já vai com **valor, vencimento, PIX copia-e-cola, linha digitável e
+  link de pagamento** — o que existir na cobrança.
+- **WhatsApp** reaproveita as credenciais (Meta Cloud API ou Twilio) já
+  configuradas em **Automações**; o e-mail usa o endereço cadastrado do cliente.
+- **Trigger diário** no horário escolhido + botão **"Rodar agora"**. Também dá pra
+  disparar um lembrete avulso por linha (ícone de sino).
+
+### Detalhes técnicos — 1.160.0
+
+- `server.ts`: config `PSP_DUNNING`; RPCs `cobrancaLembretesConfigGet/Salvar`,
+  `cobrancaLembretesRodarAgora`, `cobrancaEnviarLembrete`; núcleo
+  `executarReguaCobranca` + handler de trigger `reguaCobrancaDiaria`. Helper
+  `_enviarWhatsappPara` (envio por destinatário) reusando os senders Meta/Twilio.
+- Só dispara pra cobranças `emitida`/`vencida`; idempotente por estágio.
+- Front: `FinCobrancas` ganhou modal **"Lembretes"** (ativar, canais, dias e
+  horário, "rodar agora") e ação de lembrete por linha.
+
+---
+
 ## [1.159.0] — 2026-06-24
 
 ### Adicionado — Financeiro empresarial: fechando o ciclo (caixa A receber ↔ A pagar)
