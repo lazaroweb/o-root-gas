@@ -36,6 +36,20 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.154.1] — 2026-06-23
+
+### Alterado — Design vira pilar prioritário nos kits
+
+A pedido: design é o que evita "cara de app feito por IA". Os briefings da Lume
+agora exigem isso explicitamente:
+
+- **GAS Completo:** o pilar de Frontend virou "Frontend & DESIGN (prioritário)" —
+  a Lume é obrigada a escolher a MELHOR skill de design/UI da base (a de mais
+  estrelas, focada em craft visual), buscando interface premium, minimalista e com
+  identidade própria, evitando layout template / gradiente clichê / tudo centralizado.
+- **Squad GAS** e **Squad dos Sonhos:** ambos passam a incluir obrigatoriamente um
+  agent especialista em DESIGN/UI/UX de alto nível.
+
 ## [1.154.0] — 2026-06-23
 
 ### Adicionado — Squads de agents + export por IDE (Cursor / Claude Code / Portável)
