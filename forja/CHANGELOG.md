@@ -36,6 +36,27 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.154.0] — 2026-06-23
+
+### Adicionado — Squads de agents + export por IDE (Cursor / Claude Code / Portável)
+
+**"Agentes dos sonhos":** dois novos templates de kit focados em times de agents:
+
+- **Squad GAS — Agentes dos Sonhos** (~10 agents + ~4 skills): time com papéis
+  distintos (tech-lead, arquiteto, revisor, QA, segurança, frontend React/TS,
+  backend/dados em Sheets+RPC), todos respeitando as restrições do Apps Script.
+- **Squad dos Sonhos (Agentes)** (~12 agents + ~4 skills): time genérico que cobre
+  o ciclo completo (arquitetura, review, testes, segurança, front, back, debug, docs).
+
+A Lume é instruída a priorizar agents com papéis complementares e evitar redundância.
+
+**Export agora pergunta o IDE além do sistema:** ao exportar um kit, um modal deixa
+escolher a ferramenta — **Cursor** (`~/.cursor/`), **Claude Code** (`~/.claude/`) ou
+**Portável** (`~/.agents/`, lido pelos dois) — e o sistema (macOS/Linux, Windows ou
+ambos). O instalador (`install.sh` / `install.ps1`) e o README se ajustam à pasta
+escolhida. O layout de skills (`skills/<slug>/SKILL.md`) e agents (`agents/<nome>.md`)
+é idêntico entre os IDEs, então o conteúdo não muda — só o diretório de instalação.
+
 ## [1.153.4] — 2026-06-23
 
 ### Alterado — Kit GAS virou "kit dos sonhos" completo da stack

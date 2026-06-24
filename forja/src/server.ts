@@ -18023,6 +18023,30 @@ const KIT_TEMPLATES: KitTemplate[] = [
       + 'ou servidores de longa duração.',
   },
   {
+    id: 'squad-gas', nome: 'Squad GAS — Agentes dos Sonhos', accent: 'sage', alvoSkills: 4, alvoAgents: 10,
+    descricao: 'O time de agents dos sonhos pra SUA stack: papéis distintos que colaboram no GAS.',
+    objetivo: 'Montar o SQUAD dos sonhos para a stack Google Apps Script (GAS) — um TIME de agents de IA '
+      + 'que colaboram pra desenvolver na Forja. Priorize PRINCIPALMENTE agents (bem acima de skills), '
+      + 'com papéis DISTINTOS e complementares (evite redundância — nada de 3 agents que fazem a mesma coisa): '
+      + 'um orquestrador/tech-lead, um arquiteto, um revisor de código, um de QA/testes, um de '
+      + 'segurança/AppSec, um especialista em frontend React/TypeScript e um de backend/dados adaptado a '
+      + 'Sheets + google.script.run (RPC). Todo agent escolhido deve respeitar as restrições do Apps Script: '
+      + 'runtime V8 SEM npm, ~6 minutos por execução, Sheets como banco (full-scan, cotas) + Properties/Cache, '
+      + 'frontend HtmlService + google.script.run (NÃO REST), HTTP só por UrlFetchApp, deploy via clasp. '
+      + 'Inclua só POUCAS skills de apoio que potencializem o time. Priorize agents de mais estrelas e com '
+      + 'papéis claros. EVITE itens que dependam de npm, containers ou bancos relacionais.',
+  },
+  {
+    id: 'squad', nome: 'Squad dos Sonhos (Agentes)', accent: 'peach', alvoSkills: 4, alvoAgents: 12,
+    descricao: 'Um time de agents de IA que colaboram pra cobrir todo o ciclo de desenvolvimento.',
+    objetivo: 'Montar o SQUAD dos sonhos: um TIME de agents de IA que colaboram entre si pra cobrir um ciclo '
+      + 'de desenvolvimento completo, independente de stack. Selecione PRINCIPALMENTE agents (priorize agents '
+      + 'bem acima de skills), com papéis DISTINTOS e complementares (evite redundância): um orquestrador/'
+      + 'tech-lead, e especialistas em arquitetura, revisão de código, testes/QA, segurança/AppSec, frontend, '
+      + 'backend/API, depuração e documentação. Inclua apenas algumas poucas skills de apoio que potencializem '
+      + 'o time. Priorize os agents de mais estrelas e com papéis claros e bem definidos.',
+  },
+  {
     id: 'fullstack-web', nome: 'Full-stack Web', accent: 'blue', alvoSkills: 14, alvoAgents: 6,
     descricao: 'Front + back + banco + deploy de aplicações web modernas.',
     objetivo: 'Desenvolvimento full-stack web moderno: frontend (UI, componentes, React/JS), '

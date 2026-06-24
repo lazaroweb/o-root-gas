@@ -3,9 +3,9 @@
 // Dev...) que a Lume preenche com as melhores skills+agents da base (por
 // estrelas + aderência). Cada kit é exportável como .zip misto.
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Empty, Spin, Tag, Tooltip, Drawer, message, Skeleton, Modal } from 'antd';
+import { Button, Empty, Spin, Tag, Tooltip, Drawer, message, Skeleton, Modal, Segmented } from 'antd';
 import {
-  Boxes, Sparkles, Bot, BookMarked, Package, RefreshCw, Eye, Layers, Wand2, Apple, Monitor,
+  Boxes, Sparkles, Bot, BookMarked, Package, RefreshCw, Eye, Layers, Wand2, Apple, Monitor, MousePointer2,
 } from 'lucide-react';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -58,6 +58,15 @@ interface KitFull {
 }
 
 type AlvoSO = 'unix' | 'win' | 'ambos';
+type AlvoIDE = 'claude' | 'cursor' | 'portable';
+
+// Cada IDE só muda a PASTA base — o layout (skills/<slug>/SKILL.md e agents/<nome>.md)
+// é idêntico. O Cursor ainda lê .claude/ e .agents/ por compatibilidade.
+const IDES: Record<AlvoIDE, { dir: string; label: string }> = {
+  claude: { dir: '.claude', label: 'Claude Code' },
+  cursor: { dir: '.cursor', label: 'Cursor' },
+  portable: { dir: '.agents', label: 'Portável (.agents)' },
+};
 
 function slugify(s: string): string {
   return (s || 'item').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -65,31 +74,32 @@ function slugify(s: string): string {
 }
 
 // install.sh interativo do kit MISTO (skills em pastas + agents como .md soltos).
-// Pergunta global (~/.claude) vs projeto (./.claude) e copia ambos.
-function gerarInstallShKit(qtdSkills: number, qtdAgents: number): string {
+// Pergunta global (~/<dir>) vs projeto (./<dir>) e copia ambos. `dir`/`ide` vêm
+// da ferramenta escolhida (.claude / .cursor / .agents).
+function gerarInstallShKit(qtdSkills: number, qtdAgents: number, dir: string, ide: string): string {
   return `#!/usr/bin/env bash
 set -euo pipefail
 
 cat <<'BANNER'
 
-  ╔═══════════════════════════════════════════════════════════╗
-  ║  Forja — instalar KIT no Claude Code (skills + agents)     ║
-  ╚═══════════════════════════════════════════════════════════╝
+  +-----------------------------------------------------------+
+  |  Forja - instalar KIT no ${ide} (skills + agents)
+  +-----------------------------------------------------------+
 
   ${qtdSkills} skill(s) e ${qtdAgents} agent(s) neste kit.
 
   Onde voce quer instalar?
 
-    1) Global  ->  ~/.claude/    (vale em todos os projetos)
-    2) Projeto ->  ./.claude/    (so este projeto, vai no git)
+    1) Global  ->  ~/${dir}/    (vale em todos os projetos)
+    2) Projeto ->  ./${dir}/    (so este projeto, vai no git)
 
 BANNER
 
 read -p "  Escolha [1/2]: " escolha
 
 case "\${escolha:-}" in
-  1) BASE="\$HOME/.claude" ;;
-  2) BASE="\$(pwd)/.claude" ;;
+  1) BASE="\$HOME/${dir}" ;;
+  2) BASE="\$(pwd)/${dir}" ;;
   *) echo "  Escolha invalida ('1' ou '2'). Saindo."; exit 1 ;;
 esac
 
@@ -123,33 +133,33 @@ echo
 echo "  OK - \$skills_count skills e \$agents_count agents instalados em:"
 echo "       \$BASE"
 echo
-echo "  Reabra o Claude Code pra detectar as novidades."
+echo "  Reabra o ${ide} pra detectar as novidades."
 `;
 }
 
 // install.ps1 — versão Windows (PowerShell) do instalador, equivalente ao .sh.
-// Mesma lógica: pergunta global (~/.claude) vs projeto (./.claude) e copia ambos.
-function gerarInstallPs1Kit(qtdSkills: number, qtdAgents: number): string {
+// Mesma lógica: pergunta global (~/<dir>) vs projeto (./<dir>) e copia ambos.
+function gerarInstallPs1Kit(qtdSkills: number, qtdAgents: number, dir: string, ide: string): string {
   return `#Requires -Version 5
 \$ErrorActionPreference = 'Stop'
 
 Write-Host ''
 Write-Host '  ==========================================================='
-Write-Host '   Forja - instalar KIT no Claude Code (skills + agents)'
+Write-Host '   Forja - instalar KIT no ${ide} (skills + agents)'
 Write-Host '  ==========================================================='
 Write-Host ''
 Write-Host '  ${qtdSkills} skill(s) e ${qtdAgents} agent(s) neste kit.'
 Write-Host ''
 Write-Host '  Onde voce quer instalar?'
 Write-Host ''
-Write-Host '    1) Global  ->  ~/.claude/   (vale em todos os projetos)'
-Write-Host '    2) Projeto ->  ./.claude/   (so este projeto, vai no git)'
+Write-Host '    1) Global  ->  ~/${dir}/   (vale em todos os projetos)'
+Write-Host '    2) Projeto ->  ./${dir}/   (so este projeto, vai no git)'
 Write-Host ''
 \$escolha = Read-Host '  Escolha [1/2]'
 
 switch (\$escolha) {
-  '1' { \$base = Join-Path \$HOME '.claude' }
-  '2' { \$base = Join-Path (Get-Location) '.claude' }
+  '1' { \$base = Join-Path \$HOME '${dir}' }
+  '2' { \$base = Join-Path (Get-Location) '${dir}' }
   default { Write-Host "  Escolha invalida ('1' ou '2'). Saindo."; exit 1 }
 }
 
@@ -187,7 +197,7 @@ Write-Host ''
 Write-Host "  OK - \$skillsCount skills e \$agentsCount agents instalados em:"
 Write-Host "       \$base"
 Write-Host ''
-Write-Host '  Reabra o Claude Code pra detectar as novidades.'
+Write-Host '  Reabra o ${ide} pra detectar as novidades.'
 `;
 }
 
@@ -200,7 +210,11 @@ export default function KitsHubPanel(): React.ReactElement {
   const [aberto, setAberto] = useState<KitFull | null>(null);
   const [carregandoAberto, setCarregandoAberto] = useState(false);
   const [exportando, setExportando] = useState(false);
-  const [escolhendoOS, setEscolhendoOS] = useState<KitFull | null>(null); // kit aguardando escolha de SO
+  const [escolhendoOS, setEscolhendoOS] = useState<KitFull | null>(null); // kit aguardando escolha de alvo
+  const [ideSel, setIdeSel] = useState<AlvoIDE>('cursor');
+  const [osSel, setOsSel] = useState<AlvoSO>(
+    () => (typeof navigator !== 'undefined' && /win/i.test(navigator.userAgent) ? 'win' : 'unix'),
+  );
 
   const carregar = async () => {
     setLoading(true);
@@ -251,7 +265,7 @@ export default function KitsHubPanel(): React.ReactElement {
     } finally { setCarregandoAberto(false); }
   };
 
-  const exportarKit = async (kit: KitFull, alvo: AlvoSO) => {
+  const exportarKit = async (kit: KitFull, alvo: AlvoSO, ide: AlvoIDE) => {
     setExportando(true);
     try {
       const r = await callServer<ServerResult>('kitExportar', kit.id);
@@ -261,9 +275,10 @@ export default function KitsHubPanel(): React.ReactElement {
         skills: Array<{ nome: string; descricao: string; conteudo: string }>;
         agents: Array<{ nome: string; descricao: string; conteudo: string }>;
       };
+      const { dir, label } = IDES[ide];
       const incluiSh = alvo === 'unix' || alvo === 'ambos';
       const incluiPs1 = alvo === 'win' || alvo === 'ambos';
-      const linhasInstalar: string[] = ['## Instalar no Claude Code', ''];
+      const linhasInstalar: string[] = [`## Instalar no ${label}`, ''];
       if (incluiSh) {
         linhasInstalar.push(
           '**macOS / Linux:** rode `bash install.sh`.',
@@ -277,8 +292,8 @@ export default function KitsHubPanel(): React.ReactElement {
         );
       }
       linhasInstalar.push(
-        'O instalador pergunta se você quer instalar global (`~/.claude/`) ou só',
-        'neste projeto (`./.claude/`). Skills vão pra `skills/` e agents pra `agents/`.',
+        `O instalador pergunta se você quer instalar global (\`~/${dir}/\`) ou só`,
+        `neste projeto (\`./${dir}/\`). Skills vão pra \`skills/\` e agents pra \`agents/\`.`,
       );
       const entries: ZipEntry[] = [];
       const linhasReadme: string[] = [
@@ -310,14 +325,14 @@ export default function KitsHubPanel(): React.ReactElement {
         const slug = nomeUnico(slugify(a.nome), usadosA);
         entries.push({ path: `agents/${slug}.md`, content: a.conteudo });
       }
-      if (incluiSh) entries.push({ path: 'install.sh', content: gerarInstallShKit(d.skills.length, d.agents.length) });
-      if (incluiPs1) entries.push({ path: 'install.ps1', content: gerarInstallPs1Kit(d.skills.length, d.agents.length) });
+      if (incluiSh) entries.push({ path: 'install.sh', content: gerarInstallShKit(d.skills.length, d.agents.length, dir, label) });
+      if (incluiPs1) entries.push({ path: 'install.ps1', content: gerarInstallPs1Kit(d.skills.length, d.agents.length, dir, label) });
       const blob = criarZipBlob(entries);
-      baixarBlob(blob, `${slugify(d.nome)}-kit.zip`);
+      baixarBlob(blob, `${slugify(d.nome)}-${ide}-kit.zip`);
       const dica = incluiPs1 && !incluiSh
         ? 'rode "install.ps1" no PowerShell pra instalar.'
         : 'rode "bash install.sh" pra instalar.';
-      message.success(`Kit exportado (.zip) — ${dica}`);
+      message.success(`Kit exportado pro ${label} (.zip) — ${dica}`);
       setEscolhendoOS(null);
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Erro ao exportar');
@@ -488,59 +503,73 @@ export default function KitsHubPanel(): React.ReactElement {
         )}
       </Drawer>
 
-      {/* Modal: escolha do SO antes de gerar o instalador */}
+      {/* Modal: escolha de IDE + SO antes de gerar o instalador */}
       <Modal
         open={!!escolhendoOS}
         onCancel={() => !exportando && setEscolhendoOS(null)}
-        footer={null}
-        width={460}
+        width={500}
         title={
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             <Package size={17} color={t.accents.peach} />
-            <span style={{ fontFamily: FONTS.display, fontWeight: 600 }}>Pra qual sistema é o instalador?</span>
+            <span style={{ fontFamily: FONTS.display, fontWeight: 600 }}>Exportar kit</span>
           </span>
         }
+        footer={[
+          <Button key="cancel" onClick={() => setEscolhendoOS(null)} disabled={exportando}>Cancelar</Button>,
+          <Button
+            key="ok" type="primary" icon={<Package size={14} />} loading={exportando}
+            onClick={() => escolhendoOS && void exportarKit(escolhendoOS, osSel, ideSel)}
+          >
+            Gerar .zip
+          </Button>,
+        ]}
       >
         <p style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, lineHeight: 1.6, marginTop: 0 }}>
-          O .zip leva os arquivos do kit + um script que instala tudo no Claude Code.
-          O script é diferente por sistema — escolha o seu (ou os dois, pra compartilhar).
+          O .zip leva os arquivos do kit + um instalador. As skills e agents são iguais
+          em qualquer IDE — só muda a pasta de instalação e o script por sistema.
         </p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 6 }}>
-          {([
-            { alvo: 'unix' as AlvoSO, icon: <Apple size={18} />, titulo: 'macOS / Linux', sub: 'gera install.sh (bash)' },
-            { alvo: 'win' as AlvoSO, icon: <Monitor size={18} />, titulo: 'Windows', sub: 'gera install.ps1 (PowerShell)' },
-            { alvo: 'ambos' as AlvoSO, icon: <Layers size={18} />, titulo: 'Ambos', sub: 'inclui os dois scripts no .zip' },
-          ]).map((opt) => (
-            <button
-              key={opt.alvo}
-              disabled={exportando}
-              onClick={() => escolhendoOS && void exportarKit(escolhendoOS, opt.alvo)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left',
-                background: t.surface, border: `1.5px solid ${t.border}`, borderRadius: 12,
-                padding: '12px 14px', cursor: exportando ? 'wait' : 'pointer', width: '100%',
-                opacity: exportando ? 0.6 : 1, transition: 'border-color 0.15s, background 0.15s',
-              }}
-              onMouseEnter={(e) => { if (!exportando) e.currentTarget.style.borderColor = t.accents.peach; }}
-              onMouseLeave={(e) => { e.currentTarget.style.borderColor = t.border; }}
-            >
-              <span style={{
-                width: 36, height: 36, borderRadius: 9, flexShrink: 0,
-                background: `${t.accents.peach}1a`, color: t.accents.peach,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
-                {opt.icon}
-              </span>
-              <span style={{ flex: 1, minWidth: 0 }}>
-                <span style={{ display: 'block', fontFamily: FONTS.display, fontSize: 14, fontWeight: 600, color: t.text }}>
-                  {opt.titulo}
-                </span>
-                <span style={{ display: 'block', fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary }}>
-                  {opt.sub}
-                </span>
-              </span>
-            </button>
-          ))}
+
+        <div style={{ fontFamily: FONTS.ui, fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: t.textTertiary, marginBottom: 8 }}>
+          Pra qual IDE / ferramenta?
+        </div>
+        <Segmented
+          block
+          value={ideSel}
+          onChange={(v) => setIdeSel(v as AlvoIDE)}
+          options={[
+            { value: 'cursor', label: (<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><MousePointer2 size={13} /> Cursor</span>) },
+            { value: 'claude', label: (<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Bot size={13} /> Claude Code</span>) },
+            { value: 'portable', label: (<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Boxes size={13} /> Portável</span>) },
+          ]}
+        />
+        <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, marginTop: 6, marginBottom: 18 }}>
+          Instala em <code>~/{IDES[ideSel].dir}/</code>.{' '}
+          {ideSel === 'portable'
+            ? 'Pasta padrão aberta — Cursor e Claude Code leem dela.'
+            : ideSel === 'cursor'
+              ? 'O Cursor também lê .claude/ e .agents/ por compatibilidade.'
+              : 'Formato nativo do Claude Code (também lido pelo Cursor).'}
+        </div>
+
+        <div style={{ fontFamily: FONTS.ui, fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: t.textTertiary, marginBottom: 8 }}>
+          Pra qual sistema?
+        </div>
+        <Segmented
+          block
+          value={osSel}
+          onChange={(v) => setOsSel(v as AlvoSO)}
+          options={[
+            { value: 'unix', label: (<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Apple size={13} /> macOS / Linux</span>) },
+            { value: 'win', label: (<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Monitor size={13} /> Windows</span>) },
+            { value: 'ambos', label: (<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Layers size={13} /> Ambos</span>) },
+          ]}
+        />
+        <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, marginTop: 6 }}>
+          {osSel === 'unix'
+            ? 'Gera install.sh (bash).'
+            : osSel === 'win'
+              ? 'Gera install.ps1 (PowerShell).'
+              : 'Inclui os dois scripts no .zip — bom pra compartilhar com o time.'}
         </div>
       </Modal>
     </div>
