@@ -36,6 +36,22 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.153.3] — 2026-06-23
+
+### Adicionado — Exportar kit pergunta o sistema antes de gerar
+
+Antes a exportação de kit sempre gerava só `install.sh` (bash), que no Windows
+não roda sem WSL/Git Bash. Agora, ao clicar em "Exportar .zip", abre um passo de
+escolha do sistema:
+
+- **macOS / Linux** → inclui `install.sh` (bash).
+- **Windows** → inclui `install.ps1` (PowerShell, lógica equivalente: pergunta
+  global `~/.claude/` vs projeto `./.claude/` e copia skills + agents).
+- **Ambos** → leva os dois scripts no .zip (bom pra compartilhar com o time).
+
+O `README.md` do kit passou a documentar o comando certo por sistema
+(`bash install.sh` e/ou `powershell -ExecutionPolicy Bypass -File install.ps1`).
+
 ## [1.153.2] — 2026-06-23
 
 ### Adicionado — Kit template "Google Apps Script" (a stack da Forja)

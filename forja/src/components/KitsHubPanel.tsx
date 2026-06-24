@@ -3,9 +3,9 @@
 // Dev...) que a Lume preenche com as melhores skills+agents da base (por
 // estrelas + aderência). Cada kit é exportável como .zip misto.
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Empty, Spin, Tag, Tooltip, Drawer, message, Skeleton } from 'antd';
+import { Button, Empty, Spin, Tag, Tooltip, Drawer, message, Skeleton, Modal } from 'antd';
 import {
-  Boxes, Sparkles, Bot, BookMarked, Package, RefreshCw, Eye, Layers, Wand2,
+  Boxes, Sparkles, Bot, BookMarked, Package, RefreshCw, Eye, Layers, Wand2, Apple, Monitor,
 } from 'lucide-react';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -56,6 +56,8 @@ interface KitFull {
   skills: KitMembro[];
   agents: KitMembro[];
 }
+
+type AlvoSO = 'unix' | 'win' | 'ambos';
 
 function slugify(s: string): string {
   return (s || 'item').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -125,6 +127,70 @@ echo "  Reabra o Claude Code pra detectar as novidades."
 `;
 }
 
+// install.ps1 — versão Windows (PowerShell) do instalador, equivalente ao .sh.
+// Mesma lógica: pergunta global (~/.claude) vs projeto (./.claude) e copia ambos.
+function gerarInstallPs1Kit(qtdSkills: number, qtdAgents: number): string {
+  return `#Requires -Version 5
+\$ErrorActionPreference = 'Stop'
+
+Write-Host ''
+Write-Host '  ==========================================================='
+Write-Host '   Forja - instalar KIT no Claude Code (skills + agents)'
+Write-Host '  ==========================================================='
+Write-Host ''
+Write-Host '  ${qtdSkills} skill(s) e ${qtdAgents} agent(s) neste kit.'
+Write-Host ''
+Write-Host '  Onde voce quer instalar?'
+Write-Host ''
+Write-Host '    1) Global  ->  ~/.claude/   (vale em todos os projetos)'
+Write-Host '    2) Projeto ->  ./.claude/   (so este projeto, vai no git)'
+Write-Host ''
+\$escolha = Read-Host '  Escolha [1/2]'
+
+switch (\$escolha) {
+  '1' { \$base = Join-Path \$HOME '.claude' }
+  '2' { \$base = Join-Path (Get-Location) '.claude' }
+  default { Write-Host "  Escolha invalida ('1' ou '2'). Saindo."; exit 1 }
+}
+
+\$scriptDir = Split-Path -Parent \$MyInvocation.MyCommand.Path
+
+\$skillsCount = 0
+\$skillsSrc = Join-Path \$scriptDir 'skills'
+if (Test-Path \$skillsSrc) {
+  \$dest = Join-Path \$base 'skills'
+  New-Item -ItemType Directory -Force -Path \$dest | Out-Null
+  Get-ChildItem -Path \$skillsSrc -Directory | ForEach-Object {
+    if (Test-Path (Join-Path \$_.FullName 'SKILL.md')) {
+      \$target = Join-Path \$dest \$_.Name
+      if (Test-Path \$target) { Remove-Item -Recurse -Force \$target }
+      Copy-Item -Recurse -Path \$_.FullName -Destination \$target
+      Write-Host "  skill  - \$(\$_.Name)"
+      \$skillsCount++
+    }
+  }
+}
+
+\$agentsCount = 0
+\$agentsSrc = Join-Path \$scriptDir 'agents'
+if (Test-Path \$agentsSrc) {
+  \$dest = Join-Path \$base 'agents'
+  New-Item -ItemType Directory -Force -Path \$dest | Out-Null
+  Get-ChildItem -Path \$agentsSrc -Filter '*.md' -File | ForEach-Object {
+    Copy-Item -Path \$_.FullName -Destination (Join-Path \$dest \$_.Name) -Force
+    Write-Host "  agent  - \$(\$_.Name)"
+    \$agentsCount++
+  }
+}
+
+Write-Host ''
+Write-Host "  OK - \$skillsCount skills e \$agentsCount agents instalados em:"
+Write-Host "       \$base"
+Write-Host ''
+Write-Host '  Reabra o Claude Code pra detectar as novidades.'
+`;
+}
+
 export default function KitsHubPanel(): React.ReactElement {
   const t = useTokens();
   const [templates, setTemplates] = useState<KitTemplate[]>([]);
@@ -134,6 +200,7 @@ export default function KitsHubPanel(): React.ReactElement {
   const [aberto, setAberto] = useState<KitFull | null>(null);
   const [carregandoAberto, setCarregandoAberto] = useState(false);
   const [exportando, setExportando] = useState(false);
+  const [escolhendoOS, setEscolhendoOS] = useState<KitFull | null>(null); // kit aguardando escolha de SO
 
   const carregar = async () => {
     setLoading(true);
@@ -184,7 +251,7 @@ export default function KitsHubPanel(): React.ReactElement {
     } finally { setCarregandoAberto(false); }
   };
 
-  const exportarKit = async (kit: KitFull) => {
+  const exportarKit = async (kit: KitFull, alvo: AlvoSO) => {
     setExportando(true);
     try {
       const r = await callServer<ServerResult>('kitExportar', kit.id);
@@ -194,6 +261,25 @@ export default function KitsHubPanel(): React.ReactElement {
         skills: Array<{ nome: string; descricao: string; conteudo: string }>;
         agents: Array<{ nome: string; descricao: string; conteudo: string }>;
       };
+      const incluiSh = alvo === 'unix' || alvo === 'ambos';
+      const incluiPs1 = alvo === 'win' || alvo === 'ambos';
+      const linhasInstalar: string[] = ['## Instalar no Claude Code', ''];
+      if (incluiSh) {
+        linhasInstalar.push(
+          '**macOS / Linux:** rode `bash install.sh`.',
+          '',
+        );
+      }
+      if (incluiPs1) {
+        linhasInstalar.push(
+          '**Windows (PowerShell):** rode `powershell -ExecutionPolicy Bypass -File install.ps1`.',
+          '',
+        );
+      }
+      linhasInstalar.push(
+        'O instalador pergunta se você quer instalar global (`~/.claude/`) ou só',
+        'neste projeto (`./.claude/`). Skills vão pra `skills/` e agents pra `agents/`.',
+      );
       const entries: ZipEntry[] = [];
       const linhasReadme: string[] = [
         `# ${d.nome}`, '',
@@ -204,11 +290,7 @@ export default function KitsHubPanel(): React.ReactElement {
         `## Agents (${d.agents.length})`, '',
         ...d.agents.map((a) => `- ${a.nome}  \`agents/${slugify(a.nome)}.md\``), '',
         '---', '',
-        '## Instalar no Claude Code',
-        '',
-        'Rode `bash install.sh` — o script pergunta se você quer instalar global',
-        '(`~/.claude/`) ou só neste projeto (`./.claude/`). Skills vão pra',
-        '`skills/` e agents pra `agents/`.',
+        ...linhasInstalar,
         '',
         '_Gerado pela Forja — Kit montado pela Lume._',
       ];
@@ -228,10 +310,15 @@ export default function KitsHubPanel(): React.ReactElement {
         const slug = nomeUnico(slugify(a.nome), usadosA);
         entries.push({ path: `agents/${slug}.md`, content: a.conteudo });
       }
-      entries.push({ path: 'install.sh', content: gerarInstallShKit(d.skills.length, d.agents.length) });
+      if (incluiSh) entries.push({ path: 'install.sh', content: gerarInstallShKit(d.skills.length, d.agents.length) });
+      if (incluiPs1) entries.push({ path: 'install.ps1', content: gerarInstallPs1Kit(d.skills.length, d.agents.length) });
       const blob = criarZipBlob(entries);
       baixarBlob(blob, `${slugify(d.nome)}-kit.zip`);
-      message.success('Kit exportado (.zip) — rode "bash install.sh" pra instalar.');
+      const dica = incluiPs1 && !incluiSh
+        ? 'rode "install.ps1" no PowerShell pra instalar.'
+        : 'rode "bash install.sh" pra instalar.';
+      message.success(`Kit exportado (.zip) — ${dica}`);
+      setEscolhendoOS(null);
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Erro ao exportar');
     } finally { setExportando(false); }
@@ -374,7 +461,7 @@ export default function KitsHubPanel(): React.ReactElement {
           </span>
         }
         extra={aberto && (
-          <Button type="primary" icon={<Package size={14} />} loading={exportando} onClick={() => exportarKit(aberto)}>
+          <Button type="primary" icon={<Package size={14} />} loading={exportando} onClick={() => setEscolhendoOS(aberto)}>
             Exportar .zip
           </Button>
         )}
@@ -400,6 +487,62 @@ export default function KitsHubPanel(): React.ReactElement {
           </>
         )}
       </Drawer>
+
+      {/* Modal: escolha do SO antes de gerar o instalador */}
+      <Modal
+        open={!!escolhendoOS}
+        onCancel={() => !exportando && setEscolhendoOS(null)}
+        footer={null}
+        width={460}
+        title={
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <Package size={17} color={t.accents.peach} />
+            <span style={{ fontFamily: FONTS.display, fontWeight: 600 }}>Pra qual sistema é o instalador?</span>
+          </span>
+        }
+      >
+        <p style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, lineHeight: 1.6, marginTop: 0 }}>
+          O .zip leva os arquivos do kit + um script que instala tudo no Claude Code.
+          O script é diferente por sistema — escolha o seu (ou os dois, pra compartilhar).
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 6 }}>
+          {([
+            { alvo: 'unix' as AlvoSO, icon: <Apple size={18} />, titulo: 'macOS / Linux', sub: 'gera install.sh (bash)' },
+            { alvo: 'win' as AlvoSO, icon: <Monitor size={18} />, titulo: 'Windows', sub: 'gera install.ps1 (PowerShell)' },
+            { alvo: 'ambos' as AlvoSO, icon: <Layers size={18} />, titulo: 'Ambos', sub: 'inclui os dois scripts no .zip' },
+          ]).map((opt) => (
+            <button
+              key={opt.alvo}
+              disabled={exportando}
+              onClick={() => escolhendoOS && void exportarKit(escolhendoOS, opt.alvo)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left',
+                background: t.surface, border: `1.5px solid ${t.border}`, borderRadius: 12,
+                padding: '12px 14px', cursor: exportando ? 'wait' : 'pointer', width: '100%',
+                opacity: exportando ? 0.6 : 1, transition: 'border-color 0.15s, background 0.15s',
+              }}
+              onMouseEnter={(e) => { if (!exportando) e.currentTarget.style.borderColor = t.accents.peach; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = t.border; }}
+            >
+              <span style={{
+                width: 36, height: 36, borderRadius: 9, flexShrink: 0,
+                background: `${t.accents.peach}1a`, color: t.accents.peach,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                {opt.icon}
+              </span>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ display: 'block', fontFamily: FONTS.display, fontSize: 14, fontWeight: 600, color: t.text }}>
+                  {opt.titulo}
+                </span>
+                <span style={{ display: 'block', fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary }}>
+                  {opt.sub}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+      </Modal>
     </div>
   );
 }
