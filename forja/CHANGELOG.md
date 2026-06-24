@@ -36,6 +36,39 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.159.0] — 2026-06-24
+
+### Adicionado — Financeiro empresarial: fechando o ciclo (caixa A receber ↔ A pagar)
+
+Revisão do financeiro identificou 3 buracos que quebravam o ciclo de caixa do módulo
+de cobrança. Esta versão fecha os três:
+
+- **Cobrança avulsa paga agora entra no caixa.** Antes, uma cobrança só virava
+  `Recebimento` (entrando no "Recebido no mês") se estivesse vinculada a uma
+  assinatura. Cobrança **avulsa** paga ficava marcada como "paga" mas invisível pro
+  faturamento. Agora a baixa (webhook **ou** manual) gera um recebimento independente.
+- **Baixa de "A pagar" (custos/contratos).** Novo ledger `PagamentosCusto` (espelho
+  de `Recebimentos`). Em **A pagar** cada custo ganhou **"Registrar pagamento"**
+  (valor + data), que grava o realizado e **rola a próxima cobrança** pro ciclo
+  seguinte — simetria com o lado A receber.
+- **Status "vencida" automático.** Cobranças em aberto (emitida/pendente) com
+  vencimento no passado passam a **vencida** automaticamente (avaliado a cada
+  listagem, sem depender de trigger).
+- **Baixa manual de cobrança.** Botão **"Marcar como paga"** na estação de Cobranças
+  — útil em sandbox ou quando o pagamento foi confirmado por fora do PSP.
+
+### Detalhes técnicos — 1.159.0
+
+- `server.ts`: nova tabela `PagamentosCusto`; `SCHEMA_VERSION` → `v1.77-pagamentos-custo`.
+- Novas RPCs: `registrarPagamentoCusto`, `getPagamentosCusto`, `deletarPagamentoCusto`,
+  `cobrancaMarcarPaga`. Novo helper `_marcarCobrancasVencidas` chamado em `cobrancasList`.
+- `_cobrancaBaixaPorWebhook` agora cria `Recebimento` avulso quando a cobrança não
+  tem `receitaId`.
+- Front: `FinCustos` (modal "Registrar pagamento") e `FinCobrancas` (modal/ação
+  "Marcar como paga").
+
+---
+
 ## [1.158.0] — 2026-06-24
 
 ### Adicionado — Cobranças: suporte a Mercado Pago (além do Asaas)

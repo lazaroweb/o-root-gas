@@ -15,7 +15,7 @@ import {
 import dayjs, { Dayjs } from 'dayjs';
 import {
   Plus, Trash2, Copy, QrCode, FileText, RefreshCw, Settings, Barcode,
-  CircleDollarSign, Clock, CheckCircle2, XCircle, Filter, Link2,
+  CircleDollarSign, Clock, CheckCircle2, XCircle, Filter, Link2, Check,
 } from 'lucide-react';
 import { Panel, formatBRL } from '../components/ui';
 import { useTokens } from '../themeContext';
@@ -46,6 +46,7 @@ export default function FinCobrancas({ sistemas }: { sistemas: Sistema[] }): Rea
   const [emitirOpen, setEmitirOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [detalhe, setDetalhe] = useState<EmpresaCobranca | null>(null);
+  const [marcarPaga, setMarcarPaga] = useState<EmpresaCobranca | null>(null);
   const [statusFiltro, setStatusFiltro] = useState<string>('todos');
   const [busy, setBusy] = useState<string>('');
 
@@ -196,6 +197,9 @@ export default function FinCobrancas({ sistemas }: { sistemas: Sistema[] }): Rea
                   )}
                   {c.status !== 'paga' && c.status !== 'cancelada' && (
                     <>
+                      <Tooltip title="Marcar como paga (baixa manual)">
+                        <Button type="text" size="small" icon={<Check size={16} />} style={{ color: t.accents.sage }} onClick={() => setMarcarPaga(c)} />
+                      </Tooltip>
                       <Tooltip title="Re-sincronizar dados">
                         <Button type="text" size="small" icon={<RefreshCw size={14} />} loading={busy === c.id} style={{ color: t.textTertiary }} onClick={() => reSync(c.id)} />
                       </Tooltip>
@@ -228,7 +232,55 @@ export default function FinCobrancas({ sistemas }: { sistemas: Sistema[] }): Rea
       />
 
       <ModalDetalhe cobranca={detalhe} onClose={() => setDetalhe(null)} onCopiar={copiar} />
+
+      <ModalMarcarPaga cobranca={marcarPaga} onClose={() => setMarcarPaga(null)} onSaved={() => { setMarcarPaga(null); load(); }} />
     </div>
+  );
+}
+
+// ─── Modal: marcar como paga (baixa manual) ──────────────────────────────────
+
+function ModalMarcarPaga({ cobranca, onClose, onSaved }: {
+  cobranca: EmpresaCobranca | null; onClose: () => void; onSaved: () => void;
+}): React.ReactElement {
+  const t = useTokens();
+  const { message } = AntApp.useApp();
+  const [form] = Form.useForm();
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (cobranca) form.setFieldsValue({ valor: Number(cobranca.valor || 0), data: dayjs() });
+  }, [cobranca, form]);
+
+  const salvar = async (v: Record<string, unknown>) => {
+    if (!cobranca) return;
+    setSaving(true);
+    try {
+      const data = (v.data as Dayjs | null)?.format('YYYY-MM-DD') || dayjs().format('YYYY-MM-DD');
+      const res = await callServer<ServerResponse<unknown>>('cobrancaMarcarPaga', cobranca.id, { valor: v.valor, data });
+      if (res.ok) { message.success('Baixa registrada · entrou no caixa'); onSaved(); }
+      else message.error(res.error || 'Erro');
+    } catch { message.error('Erro ao dar baixa'); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Modal title="Marcar como paga" open={!!cobranca} onCancel={onClose} onOk={() => form.submit()} confirmLoading={saving} destroyOnClose okText="Confirmar baixa">
+      <div style={{ fontSize: 13, color: t.textSecondary, marginBottom: 14 }}>{cobranca?.pessoaNome} · {cobranca?.descricao}</div>
+      <Form form={form} layout="vertical" onFinish={salvar} requiredMark={false}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <Form.Item name="valor" label="Valor pago (R$)" rules={[{ required: true, message: 'Informe o valor' }]}>
+            <InputNumber min={0} style={{ width: '100%' }} decimalSeparator="," />
+          </Form.Item>
+          <Form.Item name="data" label="Data do pagamento" rules={[{ required: true, message: 'Informe a data' }]}>
+            <DatePicker style={{ width: '100%' }} format="DD/MM/YYYY" />
+          </Form.Item>
+        </div>
+        <div style={{ fontSize: 11.5, color: t.textTertiary }}>
+          A baixa gera um recebimento (entra no "Recebido no mês"). Se a cobrança estiver vinculada a uma assinatura, a próxima cobrança é rolada.
+        </div>
+      </Form>
+    </Modal>
   );
 }
 

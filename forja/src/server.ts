@@ -109,6 +109,10 @@ const SCHEMA: SheetSchema[] = [
   // a próxima cobrança da assinatura é rolada pro próximo ciclo. `competencia`
   // (YYYY-MM) referencia o mês do recebimento.
   { name: 'Recebimentos', columns: ['id', 'receitaId', 'sistemaId', 'pessoaId', 'competencia', 'valor', 'data', 'recorrencia', 'notas', 'criadoEm'] },
+  // PagamentosCusto (v1.159.0): ledger de pagamentos de custos recorrentes
+  // (contratos). Espelho de Recebimentos pro lado "A pagar" — registra o realizado
+  // e, ao registrar, a próxima cobrança do custo é rolada pro ciclo seguinte.
+  { name: 'PagamentosCusto', columns: ['id', 'custoId', 'sistemaId', 'fornecedor', 'competencia', 'valor', 'data', 'recorrencia', 'notas', 'criadoEm'] },
   // EmpresaCobrancas (v1.157.0): cobranças A RECEBER emitidas via PSP (boleto +
   // PIX). Distinta de FinPessoalCobrancas (família). `metodo`: boleto|pix|ambos.
   // `status`: pendente|emitida|paga|vencida|cancelada. `provedorCobrancaId` é o id
@@ -369,7 +373,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.76-cobranca-ar';
+const SCHEMA_VERSION = 'v1.77-pagamentos-custo';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -3860,6 +3864,61 @@ function deletarRecebimento(id: string): ServerResult {
   }
 }
 
+// ─── A pagar: ledger de pagamentos de custos (espelho de Recebimentos) ─────────
+
+function getPagamentosCusto(competencia?: string): ServerResult {
+  try {
+    let rows = dbGetAll('PagamentosCusto') as Array<Record<string, unknown>>;
+    if (competencia) rows = rows.filter((r) => String(r['competencia']) === competencia);
+    rows.sort((a, b) => String(b['data']).localeCompare(String(a['data'])));
+    return { ok: true, data: rows };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar pagamentos' };
+  }
+}
+
+// Registra o pagamento de um custo recorrente e rola a próxima cobrança pro ciclo
+// seguinte (a partir da próxima cobrança atual, ou da data do pagamento).
+function registrarPagamentoCusto(custoId: string, payload?: Record<string, unknown>): ServerResult {
+  try {
+    const custo = dbGetById('Custos', String(custoId));
+    if (!custo) return { ok: false, error: 'Custo não encontrado' };
+    const p = payload || {};
+    const data = String(p['data'] || new Date().toISOString().substring(0, 10));
+    const valor = p['valor'] !== undefined && p['valor'] !== null && p['valor'] !== ''
+      ? Math.abs(Number(p['valor'])) : Number(custo['valor'] || 0);
+    const recorrencia = String(custo['recorrencia'] || 'mensal');
+
+    const criado = dbCreate('PagamentosCusto', {
+      custoId: String(custoId),
+      sistemaId: String(custo['sistemaId'] || ''),
+      fornecedor: String(custo['fornecedor'] || ''),
+      competencia: _competenciaDe(data),
+      valor,
+      data,
+      recorrencia,
+      notas: String(p['notas'] || ''),
+      criadoEm: new Date().toISOString(),
+    });
+
+    const baseRolagem = String(custo['proximaCobranca'] || '') || data;
+    const proxima = _avancarCiclo(baseRolagem, recorrencia);
+    if (proxima && proxima !== baseRolagem) dbUpdate('Custos', String(custoId), { proximaCobranca: proxima });
+
+    return { ok: true, data: { pagamento: criado, proximaCobranca: proxima || custo['proximaCobranca'] } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao registrar pagamento' };
+  }
+}
+
+function deletarPagamentoCusto(id: string): ServerResult {
+  try {
+    return dbDelete('PagamentosCusto', id) ? { ok: true } : { ok: false, error: 'Pagamento não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar pagamento' };
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // COBRANÇA A RECEBER (v1.157.0+) — boleto + PIX via PSP, com baixa automática
 //   Integração com PSP por TOKEN — escolhido porque o UrlFetchApp do GAS NÃO faz
@@ -4304,8 +4363,25 @@ function cobrancaEmitirDaReceita(receitaId: string): ServerResult {
   }
 }
 
+// Marca como 'vencida' cobranças em aberto (emitida/pendente) cujo vencimento já
+// passou. Roda preguiçosamente na listagem — sem depender de trigger.
+function _marcarCobrancasVencidas(): number {
+  const hoje = new Date().toISOString().substring(0, 10);
+  const rows = dbGetAll('EmpresaCobrancas') as Array<Record<string, unknown>>;
+  let n = 0;
+  for (const c of rows) {
+    const st = String(c['status'] || '');
+    if ((st === 'emitida' || st === 'pendente') && /^\d{4}-\d{2}-\d{2}$/.test(String(c['vencimento'] || '')) && String(c['vencimento']) < hoje) {
+      dbUpdate('EmpresaCobrancas', String(c['id']), { status: 'vencida', atualizadoEm: new Date().toISOString() });
+      n++;
+    }
+  }
+  return n;
+}
+
 function cobrancasList(filtros?: Record<string, unknown>): ServerResult {
   try {
+    _marcarCobrancasVencidas();
     let rows = dbGetAll('EmpresaCobrancas') as Array<Record<string, unknown>>;
     const f = filtros || {};
     if (f.status) rows = rows.filter((r) => String(r.status) === String(f.status));
@@ -4363,6 +4439,25 @@ function cobrancaReenviar(id: string): ServerResult {
   }
 }
 
+// Baixa manual de uma cobrança (sem esperar o webhook) — útil em sandbox ou
+// quando o pagamento foi confirmado por fora. Reusa a mesma lógica do webhook:
+// marca 'paga', registra Recebimento (assinatura ou avulso) e rola a assinatura.
+function cobrancaMarcarPaga(id: string, payload?: Record<string, unknown>): ServerResult {
+  try {
+    const row = dbGetById('EmpresaCobrancas', String(id));
+    if (!row) return { ok: false, error: 'Cobrança não encontrada' };
+    if (String(row.status) === 'paga') return { ok: false, error: 'Cobrança já está paga.' };
+    if (String(row.status) === 'cancelada') return { ok: false, error: 'Cobrança cancelada — não dá pra dar baixa.' };
+    const p = payload || {};
+    const valor = p['valor'] !== undefined && p['valor'] !== null && p['valor'] !== '' ? Math.abs(Number(p['valor'])) : Number(row.valor || 0);
+    const data = String(p['data'] || new Date().toISOString().substring(0, 10)).substring(0, 10);
+    _cobrancaBaixaPorWebhook({ id: String(row.provedorCobrancaId || ''), value: valor, paymentDate: data, externalReference: String(row.id) });
+    return { ok: true, data: dbGetById('EmpresaCobrancas', String(id)) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao dar baixa' };
+  }
+}
+
 // ─── Baixa automática (chamada pelo webhook doPost) ───────────────────────────
 // Recebe um pagamento normalizado { id, value, paymentDate, externalReference }.
 // Casa a cobrança por externalReference (= id da linha) ou por provedorCobrancaId,
@@ -4384,11 +4479,26 @@ function _cobrancaBaixaPorWebhook(payment: { id?: string; value?: number; paymen
   let recebimentoId = '';
   const receitaId = String(cob.receitaId || '');
   if (receitaId) {
+    // Vinculada a assinatura: registra recebimento + rola a próxima cobrança.
     const rec = registrarRecebimento(receitaId, { valor: valorPago, data: dataPg, notas: `Baixa automática (cobrança ${String(cob.id)})` });
     if (rec.ok && rec.data) {
       const d = rec.data as { recebimento?: Record<string, unknown> };
       recebimentoId = String(d.recebimento?.id || '');
     }
+  } else {
+    // Avulsa (sem assinatura): cria um Recebimento independente pra entrar no caixa.
+    const criado = dbCreate('Recebimentos', {
+      receitaId: '',
+      sistemaId: String(cob.sistemaId || ''),
+      pessoaId: String(cob.pessoaId || ''),
+      competencia: _competenciaDe(dataPg),
+      valor: valorPago,
+      data: dataPg,
+      recorrencia: 'avulsa',
+      notas: `Cobrança avulsa ${String(cob.id)}${cob.descricao ? ` · ${String(cob.descricao)}` : ''}`,
+      criadoEm: new Date().toISOString(),
+    });
+    recebimentoId = String(criado.id || '');
   }
   dbUpdate('EmpresaCobrancas', String(cob.id), {
     status: 'paga', valorPago, pagaEm: dataPg, recebimentoId, atualizadoEm: agora,
