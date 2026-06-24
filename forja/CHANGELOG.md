@@ -36,6 +36,25 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.153.4] — 2026-06-23
+
+### Alterado — Kit GAS virou "kit dos sonhos" completo da stack
+
+Antes o template GAS era estreito (~12 skills, foco só no que é específico de
+Apps Script). Agora ele é o kit COMPLETO da stack:
+
+- Renomeado para **"Google Apps Script — Completo"**, alvo subiu pra ~28 skills /
+  ~10 agents.
+- O briefing da Lume agora exige **cobertura balanceada de 6 pilares**: Fundação
+  (planejamento, git, testes, revisão, docs), Segurança (AppSec, segredos,
+  validação, OAuth), Frontend (React/TS, UI/UX), Dados & API (adaptado a Sheets +
+  google.script.run), Específico de GAS (clasp, SpreadsheetApp, cotas) e
+  Produtividade — pedindo pelo menos alguns itens de cada, priorizando os de mais
+  estrelas, dentro das restrições do Apps Script (sem npm, ~6min, sem containers).
+
+Os demais templates (Fundação, Segurança, Full-stack, etc.) continuam disponíveis
+como peças modulares pra desenvolvimento fora do GAS.
+
 ## [1.153.3] — 2026-06-23
 
 ### Adicionado — Exportar kit pergunta o sistema antes de gerar
