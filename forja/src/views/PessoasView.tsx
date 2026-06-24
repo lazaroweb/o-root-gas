@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Button, Table, Modal, Form, Input, Select, Tag, Spin, Collapse, App as AntApp, Tooltip } from 'antd';
-import { Plus, Pencil, FileText, User, Building2, BarChart3, Handshake, AlertTriangle, CheckCircle2, Clock } from 'lucide-react';
+import { Plus, Pencil, FileText, User, Building2, BarChart3, Handshake, AlertTriangle, CheckCircle2, Clock, MapPin } from 'lucide-react';
 import { PageHeader } from '../components/ui';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -326,6 +326,29 @@ export default function PessoasView({ embedded = false }: { embedded?: boolean }
                   </Form.Item>
                   <Form.Item name="instagram" label="Instagram">
                     <Input placeholder="@perfil" />
+                  </Form.Item>
+                </div>
+              ),
+            },
+            {
+              key: 'fiscal',
+              label: sectionHeader(<MapPin size={16} />, 'Fiscal / Endereço', 'exigido pra emitir boleto'),
+              children: (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  <Form.Item name="cpf" label="CPF" tooltip="Necessário pra boleto registrado quando não houver CNPJ.">
+                    <Input placeholder="000.000.000-00" />
+                  </Form.Item>
+                  <Form.Item name="cep" label="CEP">
+                    <Input placeholder="00000-000" />
+                  </Form.Item>
+                  <Form.Item name="logradouro" label="Logradouro" style={{ gridColumn: '1 / -1' }}>
+                    <Input placeholder="Rua / Avenida" />
+                  </Form.Item>
+                  <Form.Item name="numeroEndereco" label="Número">
+                    <Input placeholder="123" />
+                  </Form.Item>
+                  <Form.Item name="bairro" label="Bairro">
+                    <Input placeholder="Centro" />
                   </Form.Item>
                 </div>
               ),

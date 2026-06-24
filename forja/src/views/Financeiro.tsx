@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Tabs } from 'antd';
-import { LayoutDashboard, ArrowUpRight, ArrowDownRight, Wallet, Building2, Receipt } from 'lucide-react';
+import { LayoutDashboard, ArrowUpRight, ArrowDownRight, Wallet, Building2, Receipt, FileText } from 'lucide-react';
 import { PageHeader } from '../components/ui';
 import SubNav, { type SubNavItem } from '../components/SubNav';
 import FinResumo from './FinResumo';
 import FinReceitas from './FinReceitas';
+import FinCobrancas from './FinCobrancas';
 import FinCustos from './FinCustos';
 import FinEmpresaDespesas from './FinEmpresaDespesas';
 // v1.3: tab Pessoal — mini sistema financeiro pessoal (despesas, cartões, Pix,
@@ -19,13 +20,14 @@ function tabLabel(icon: React.ReactNode, texto: string): React.ReactElement {
   return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>{icon} {texto}</span>;
 }
 
-type EmpresaView = 'resumo' | 'receber' | 'despesas' | 'pagar';
+type EmpresaView = 'resumo' | 'receber' | 'cobrancas' | 'despesas' | 'pagar';
 
 function FinEmpresa({ sistemas }: { sistemas: Sistema[] }): React.ReactElement {
   const [view, setView] = useState<EmpresaView>('resumo');
   const NAV: SubNavItem<EmpresaView>[] = [
     { key: 'resumo', icon: LayoutDashboard, label: 'Visão geral', accent: 'peach', desc: 'Saúde financeira do negócio: receita, custo e lucro por app.' },
     { key: 'receber', icon: ArrowUpRight, label: 'A receber', accent: 'sage', desc: 'Assinaturas e cobranças a receber dos clientes.' },
+    { key: 'cobrancas', icon: FileText, label: 'Cobranças', accent: 'blue', desc: 'Emita boleto e PIX com baixa automática por webhook.' },
     { key: 'despesas', icon: Receipt, label: 'Despesas', accent: 'clay', desc: 'Livro-caixa mensal: contas, boletos e recibos — com importação por PDF/foto.' },
     { key: 'pagar', icon: ArrowDownRight, label: 'A pagar', accent: 'rose', desc: 'Custos recorrentes (contratos): fornecedor, valor e próxima cobrança.' },
   ];
@@ -33,6 +35,7 @@ function FinEmpresa({ sistemas }: { sistemas: Sistema[] }): React.ReactElement {
     <SubNav items={NAV} value={view} onChange={setView} ariaLabel="Áreas do Financeiro da Empresa">
       {view === 'resumo' && <FinResumo />}
       {view === 'receber' && <FinReceitas sistemas={sistemas} />}
+      {view === 'cobrancas' && <FinCobrancas sistemas={sistemas} />}
       {view === 'despesas' && <FinEmpresaDespesas sistemas={sistemas} />}
       {view === 'pagar' && <FinCustos sistemas={sistemas} />}
     </SubNav>

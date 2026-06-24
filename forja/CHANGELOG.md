@@ -36,6 +36,66 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.158.0] — 2026-06-24
+
+### Adicionado — Cobranças: suporte a Mercado Pago (além do Asaas)
+
+A estação de Cobranças agora tem **seletor de provedor**: Asaas **ou Mercado Pago**.
+
+- **Mercado Pago** (autenticação por Bearer token, sem mTLS → roda no GAS): PIX e
+  boleto como pagamento direto (PIX com copia-e-cola + QR; boleto com linha
+  digitável + PDF); a opção **"Boleto + PIX"** gera um **link de checkout** onde o
+  cliente escolhe o meio. Baixa automática por webhook (`type: payment` →
+  consulta `/v1/payments/{id}` → `approved`).
+- **Seletor de PSP na tela de Config**, cada provedor com sua própria chave salva;
+  a URL de webhook se adapta ao provedor escolhido.
+- O modal de detalhe agora mostra **"Abrir página de pagamento"** quando a cobrança
+  é um checkout hospedado (Mercado Pago "ambos").
+
+### Nota sobre Nubank e C6 Bank
+
+Não dá pra integrar **direto**: as APIs de cobrança deles seguem o padrão bancário
+com **certificado mTLS**, que o `UrlFetchApp` do GAS não suporta. O caminho é
+emitir/conciliar pelo Asaas ou Mercado Pago e usar Nubank/C6 como conta destino.
+
+### Detalhes técnicos
+
+Adapter `_psp*` agora despacha por provedor (`_asaasEmitir`/`_mpEmitir`,
+`_pspCancelar`, `_pspResync`). `cobrancaEmitir` cria a linha primeiro e usa o id
+como `external_reference`, então o webhook concilia por ele em qualquer provedor.
+`doPost` detecta o provedor pelo formato do payload. Chaves separadas em
+`PropertiesService` (`PSP_ASAAS_KEY`, `PSP_MP_KEY`).
+
+## [1.157.0] — 2026-06-24
+
+### Adicionado — Módulo de Cobrança (A Receber): boleto + PIX com baixa automática
+
+Nova aba **"Cobranças"** no Financeiro da Empresa pra emitir boleto e PIX aos
+clientes e dar **baixa automática** quando o pagamento é confirmado, fechando o
+ciclo da assinatura existente (registra Recebimento + rola a próxima cobrança).
+
+- **Emitir cobrança:** escolha cliente, valor, vencimento e método (boleto, PIX ou
+  ambos). Pode pré-preencher a partir de uma assinatura do cliente. Após emitir,
+  aparecem a **linha digitável** do boleto (e PDF) e/ou o **PIX copia-e-cola + QR**
+  com botões de copiar.
+- **Baixa automática por webhook:** o PSP avisa o pagamento e a baixa acontece
+  sozinha — sem conferência manual.
+- **Atalho na aba "A receber":** botão "Emitir cobrança" nas próximas cobranças
+  (emite direto da assinatura via `cobrancaEmitirDaReceita`).
+- **Config do PSP:** tela pra chave/ambiente (sandbox/produção) e a **URL de
+  webhook** pronta pra colar no painel do provedor (já com token de segurança).
+- **Cadastro de Pessoas** ganhou seção **Fiscal / Endereço** (CPF, CEP, logradouro,
+  número, bairro) — exigida por boleto registrado.
+
+PSP: **Asaas** (token puro, sem mTLS — única via compatível com o `UrlFetchApp` do
+GAS). O código fica atrás de um adapter (`_psp*`) pra trocar de provedor depois.
+
+Backend: novas tabelas `EmpresaCobrancas` e `CobrancaEventos` (idempotência),
+extensão de `Pessoas`, `SCHEMA_VERSION` → `v1.76-cobranca-ar`; novas RPCs
+`cobrancaConfigGet/Salvar`, `cobrancaEmitir`, `cobrancaEmitirDaReceita`,
+`cobrancasList/Get/Cancelar/Reenviar`; novo `doPost` (webhook, mesma URL `/exec`,
+auth por token de query). Segredos só em `PropertiesService`.
+
 ## [1.156.0] — 2026-06-24
 
 ### Adicionado — Segmentos: importar pack → seção própria → kit do segmento

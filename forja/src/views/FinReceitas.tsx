@@ -116,6 +116,17 @@ export default function FinReceitas({ sistemas }: { sistemas: Sistema[] }): Reac
 
   const abrirReceber = (r: Receita) => setReceber({ id: r.id, valor: Number(r.valor || 0), rotulo: `${nomeApp(r.sistemaId)}${nomeCliente(r.pessoaId) ? ` · ${nomeCliente(r.pessoaId)}` : ''}` });
 
+  const [emitindo, setEmitindo] = useState<string>('');
+  const emitirCobranca = async (receitaId: string) => {
+    setEmitindo(receitaId);
+    try {
+      const res = await callServer<ServerResponse<unknown>>('cobrancaEmitirDaReceita', receitaId);
+      if (res.ok) message.success('Cobrança emitida — veja em "Cobranças" pra enviar boleto/PIX.');
+      else message.error(res.error || 'Erro ao emitir cobrança');
+    } catch { message.error('Erro ao emitir cobrança'); }
+    finally { setEmitindo(''); }
+  };
+
   const gerarDoc = async (receitaId: string, tipo: 'recibo' | 'fatura', recebimentoId?: string) => {
     const chave = `${tipo}-${receitaId}`;
     setGerando(chave);
@@ -237,6 +248,14 @@ export default function FinReceitas({ sistemas }: { sistemas: Sistema[] }): Reac
                         {atrasada ? `atrasada ${Math.abs(p.dias)}d` : p.dias === 0 ? 'hoje' : `em ${p.dias}d`}
                       </div>
                     </div>
+                    <Tooltip title="Emitir cobrança (boleto/PIX)">
+                      <Button
+                        type="text" size="small" icon={<FileText size={15} />}
+                        loading={emitindo === p.id}
+                        style={{ color: t.accents.blue }}
+                        onClick={() => emitirCobranca(p.id)}
+                      />
+                    </Tooltip>
                     <Tooltip title="Registrar recebimento">
                       <Button
                         type="text" size="small" icon={<Check size={16} />}

@@ -484,6 +484,12 @@ export interface Pessoa {
   statusComercial?: string;
   origemContato?: string;
   proximaAcao?: string;
+  // Fiscal/endereço (exigidos por boleto registrado)
+  cpf?: string;
+  cep?: string;
+  logradouro?: string;
+  numeroEndereco?: string;
+  bairro?: string;
   // Campos derivados (calculados em getPessoas, somente leitura)
   saude?: 'em_dia' | 'atencao' | 'inadimplente' | 'sem_historico';
   pendenciasQtd?: number;
@@ -589,6 +595,51 @@ export interface Receita {
   inicio: string;
   proximaCobranca: string;
   canceladaEm?: string;
+}
+
+// ─── Cobrança a receber (boleto + PIX via PSP) — v1.157.0 ──────────────────────
+export type CobrancaMetodo = 'boleto' | 'pix' | 'ambos';
+export type CobrancaStatus = 'pendente' | 'emitida' | 'paga' | 'vencida' | 'cancelada';
+
+export interface EmpresaCobranca {
+  id: string;
+  receitaId?: string;
+  sistemaId?: string;
+  pessoaId: string;
+  pessoaNome?: string;
+  descricao: string;
+  valor: number;
+  vencimento: string;
+  metodo: CobrancaMetodo;
+  status: CobrancaStatus;
+  provedor?: string;
+  provedorClienteId?: string;
+  provedorCobrancaId?: string;
+  linhaDigitavel?: string;
+  codigoBarras?: string;
+  urlBoleto?: string;
+  pixCopiaCola?: string;
+  pixQrCodeImg?: string;
+  urlFatura?: string;
+  competencia?: string;
+  recebimentoId?: string;
+  valorPago?: number;
+  pagaEm?: string;
+  criadoEm?: string;
+  atualizadoEm?: string;
+}
+
+export type PspProvider = 'asaas' | 'mercadopago';
+
+export interface CobrancaConfig {
+  provider: PspProvider;
+  env: 'sandbox' | 'producao';
+  configurado: boolean;
+  chaveMascarada: string;
+  asaasConfigurado: boolean;
+  mpConfigurado: boolean;
+  temWebhookToken: boolean;
+  webhookUrl: string;
 }
 
 // ─── Receita recorrente (SaaS) — painel "A receber" enriquecido (v1.16) ────────

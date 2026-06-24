@@ -80,6 +80,8 @@ const SCHEMA: SheetSchema[] = [
     'faturamentoFaixa', 'funcionariosFaixa', 'tempoOperacaoAnos',
     // Financeiro/Comercial
     'ticketPrevisto', 'statusComercial', 'origemContato', 'proximaAcao',
+    // Fiscal/endereço (v1.157.0) — exigidos por boleto registrado (pagador)
+    'cpf', 'cep', 'logradouro', 'numeroEndereco', 'bairro',
   ] },
   { name: 'Custos', columns: ['id', 'sistemaId', 'fornecedor', 'valor', 'recorrencia', 'proximaCobranca', 'categoria'] },
   // FinEmpresaDespesas (v1.15): livro-caixa MENSAL de despesas avulsas da empresa
@@ -107,6 +109,15 @@ const SCHEMA: SheetSchema[] = [
   // a próxima cobrança da assinatura é rolada pro próximo ciclo. `competencia`
   // (YYYY-MM) referencia o mês do recebimento.
   { name: 'Recebimentos', columns: ['id', 'receitaId', 'sistemaId', 'pessoaId', 'competencia', 'valor', 'data', 'recorrencia', 'notas', 'criadoEm'] },
+  // EmpresaCobrancas (v1.157.0): cobranças A RECEBER emitidas via PSP (boleto +
+  // PIX). Distinta de FinPessoalCobrancas (família). `metodo`: boleto|pix|ambos.
+  // `status`: pendente|emitida|paga|vencida|cancelada. `provedorCobrancaId` é o id
+  // da cobrança no PSP (chave pra casar o webhook). Ao ser paga, gera um
+  // Recebimento (recebimentoId) e rola a Receita vinculada (receitaId, opcional).
+  { name: 'EmpresaCobrancas', columns: ['id', 'receitaId', 'sistemaId', 'pessoaId', 'descricao', 'valor', 'vencimento', 'metodo', 'status', 'provedor', 'provedorClienteId', 'provedorCobrancaId', 'linhaDigitavel', 'codigoBarras', 'urlBoleto', 'pixCopiaCola', 'pixQrCodeImg', 'urlFatura', 'competencia', 'recebimentoId', 'valorPago', 'pagaEm', 'criadoEm', 'atualizadoEm', 'jsonProvedor'] },
+  // CobrancaEventos (v1.157.0): log de eventos de webhook do PSP. `eventoId` é o
+  // id único do evento no provedor — usado pra idempotência (não dar baixa 2x).
+  { name: 'CobrancaEventos', columns: ['id', 'provedor', 'eventoId', 'cobrancaId', 'tipo', 'payloadJson', 'recebidoEm'] },
   // v1.4.1: `origem` marca geração (ex: 'forja-self' pra dogfooding) e
   // `referencia` permite destacar um item como referência fixa no topo da
   // lista. Append-only — schema migra sem desalinhar dados antigos.
@@ -358,7 +369,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.75-estrelas-kits';
+const SCHEMA_VERSION = 'v1.76-cobranca-ar';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -3847,6 +3858,541 @@ function deletarRecebimento(id: string): ServerResult {
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deletar recebimento' };
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COBRANÇA A RECEBER (v1.157.0+) — boleto + PIX via PSP, com baixa automática
+//   Integração com PSP por TOKEN — escolhido porque o UrlFetchApp do GAS NÃO faz
+//   mTLS (certificado de cliente), o que inviabiliza APIs diretas de bancos e de
+//   PSPs que exigem cert (Cora, PIX da Efí, Nubank, C6 Bank). Provedores por token
+//   suportados (v1.158.0): **Asaas** (header `access_token`) e **Mercado Pago**
+//   (Bearer token). O adapter `_psp*` despacha por provedor, isolando o resto.
+//   Segredos ficam em PropertiesService (nunca em Sheet). Webhook chega no doPost
+//   (mesma URL /exec) — validado por token de query (doPost não expõe headers).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface PspConfig {
+  provider: 'asaas' | 'mercadopago';
+  apiKey: string;        // chave do provedor ativo (resolvida)
+  asaasKey: string;
+  mpKey: string;
+  env: 'sandbox' | 'producao';
+  webhookToken: string;
+}
+
+function _pspConfig(): PspConfig {
+  const sp = PropertiesService.getScriptProperties();
+  const env = sp.getProperty('PSP_ENV') === 'producao' ? 'producao' : 'sandbox';
+  const provider = sp.getProperty('PSP_PROVIDER') === 'mercadopago' ? 'mercadopago' : 'asaas';
+  const asaasKey = sp.getProperty('PSP_ASAAS_KEY') || '';
+  const mpKey = sp.getProperty('PSP_MP_KEY') || '';
+  return {
+    provider,
+    apiKey: provider === 'mercadopago' ? mpKey : asaasKey,
+    asaasKey,
+    mpKey,
+    env,
+    webhookToken: sp.getProperty('PSP_WEBHOOK_TOKEN') || '',
+  };
+}
+
+// ─── Adapter ASAAS ─────────────────────────────────────────────────────────────
+
+function _asaasBase(env: 'sandbox' | 'producao'): string {
+  return env === 'producao' ? 'https://api.asaas.com/v3' : 'https://sandbox.asaas.com/api/v3';
+}
+
+function _asaasFetch(method: 'get' | 'post' | 'delete', path: string, bodyObj?: Record<string, unknown>): { code: number; json: Record<string, unknown> } {
+  const cfg = _pspConfig();
+  if (!cfg.asaasKey) throw new Error('Configure a chave do Asaas antes de emitir cobranças.');
+  const opts: GoogleAppsScript.URL_Fetch.URLFetchRequestOptions = {
+    method,
+    muteHttpExceptions: true,
+    contentType: 'application/json',
+    headers: { access_token: cfg.asaasKey },
+  };
+  if (bodyObj !== undefined) opts.payload = JSON.stringify(bodyObj);
+  const res = UrlFetchApp.fetch(_asaasBase(cfg.env) + path, opts);
+  const code = res.getResponseCode();
+  let json: Record<string, unknown> = {};
+  try { json = JSON.parse(res.getContentText() || '{}'); } catch (_e) { json = {}; }
+  return { code, json };
+}
+
+function _asaasErro(json: Record<string, unknown>, fallback: string): string {
+  const errs = json && (json.errors as Array<{ description?: string }> | undefined);
+  if (Array.isArray(errs) && errs.length && errs[0].description) return String(errs[0].description);
+  return fallback;
+}
+
+// Garante um cliente no Asaas pra uma Pessoa. Reusa por externalReference=pessoaId.
+function _asaasGarantirCliente(pessoa: Record<string, unknown>): string {
+  const pessoaId = String(pessoa.id || '');
+  const doc = String(pessoa.cnpj || pessoa.cpf || '').replace(/\D/g, '');
+  if (!doc) throw new Error('O cliente precisa de CPF ou CNPJ pra emitir cobrança (cadastre em Pessoas).');
+  const busca = _asaasFetch('get', `/customers?externalReference=${encodeURIComponent(pessoaId)}&limit=1`);
+  const lista = (busca.json.data as Array<Record<string, unknown>> | undefined) || [];
+  if (lista.length && lista[0].id) return String(lista[0].id);
+  const payload: Record<string, unknown> = {
+    name: String(pessoa.empresa || pessoa.nome || 'Cliente'),
+    cpfCnpj: doc,
+    email: String(pessoa.email || ''),
+    mobilePhone: String(pessoa.telefone || '').replace(/\D/g, ''),
+    postalCode: String(pessoa.cep || '').replace(/\D/g, ''),
+    address: String(pessoa.logradouro || ''),
+    addressNumber: String(pessoa.numeroEndereco || ''),
+    province: String(pessoa.bairro || ''),
+    externalReference: pessoaId,
+  };
+  const res = _asaasFetch('post', '/customers', payload);
+  if (res.code >= 300 || !res.json.id) throw new Error(_asaasErro(res.json, 'Falha ao criar cliente no Asaas.'));
+  return String(res.json.id);
+}
+
+function _asaasBillingType(metodo: string): string {
+  if (metodo === 'boleto') return 'BOLETO';
+  if (metodo === 'pix') return 'PIX';
+  return 'UNDEFINED'; // 'ambos' — o pagador escolhe boleto ou PIX
+}
+
+function _asaasEmitir(pessoa: Record<string, unknown>, dados: { valor: number; vencimento: string; descricao: string; metodo: string; externalReference: string }): Record<string, unknown> {
+  const clienteId = _asaasGarantirCliente(pessoa);
+  const res = _asaasFetch('post', '/payments', {
+    customer: clienteId,
+    billingType: _asaasBillingType(dados.metodo),
+    value: Number(dados.valor),
+    dueDate: dados.vencimento,
+    description: dados.descricao,
+    externalReference: dados.externalReference,
+  });
+  if (res.code >= 300 || !res.json.id) throw new Error(_asaasErro(res.json, 'Falha ao criar cobrança no Asaas.'));
+  const pay = res.json;
+  const out: Record<string, unknown> = {
+    provedor: 'asaas',
+    provedorClienteId: clienteId,
+    provedorCobrancaId: String(pay.id || ''),
+    urlBoleto: String(pay.bankSlipUrl || ''),
+    urlFatura: String(pay.invoiceUrl || ''),
+    linhaDigitavel: '', codigoBarras: '', pixCopiaCola: '', pixQrCodeImg: '',
+    jsonProvedor: JSON.stringify(pay).slice(0, 4000),
+  };
+  if (dados.metodo === 'boleto' || dados.metodo === 'ambos') {
+    try {
+      const ld = _asaasFetch('get', `/payments/${String(pay.id)}/identificationField`);
+      if (ld.code < 300) { out.linhaDigitavel = String(ld.json.identificationField || ''); out.codigoBarras = String(ld.json.barCode || ''); }
+    } catch (_e) { /* boleto pode levar alguns segundos; resync depois */ }
+  }
+  if (dados.metodo === 'pix' || dados.metodo === 'ambos') {
+    try {
+      const qr = _asaasFetch('get', `/payments/${String(pay.id)}/pixQrCode`);
+      if (qr.code < 300) { out.pixCopiaCola = String(qr.json.payload || ''); out.pixQrCodeImg = String(qr.json.encodedImage || ''); }
+    } catch (_e) { /* idem */ }
+  }
+  return out;
+}
+
+// ─── Adapter MERCADO PAGO ─────────────────────────────────────────────────────
+// Bearer token (sem mTLS). Sandbox/produção é definido pelo próprio token
+// (TEST-... vs APP_USR-...), não pela URL. pix/boleto são pagamentos diretos
+// (/v1/payments); 'ambos' vira uma preference de checkout (/checkout/preferences)
+// onde o pagador escolhe o meio.
+
+const _MP_BASE = 'https://api.mercadopago.com';
+
+function _mpFetch(method: 'get' | 'post' | 'put', path: string, bodyObj?: Record<string, unknown>, idempotencyKey?: string): { code: number; json: Record<string, unknown> } {
+  const cfg = _pspConfig();
+  if (!cfg.mpKey) throw new Error('Configure a chave do Mercado Pago antes de emitir cobranças.');
+  const headers: Record<string, string> = { Authorization: `Bearer ${cfg.mpKey}` };
+  if (idempotencyKey) headers['X-Idempotency-Key'] = idempotencyKey;
+  const opts: GoogleAppsScript.URL_Fetch.URLFetchRequestOptions = {
+    method,
+    muteHttpExceptions: true,
+    contentType: 'application/json',
+    headers,
+  };
+  if (bodyObj !== undefined) opts.payload = JSON.stringify(bodyObj);
+  const res = UrlFetchApp.fetch(_MP_BASE + path, opts);
+  const code = res.getResponseCode();
+  let json: Record<string, unknown> = {};
+  try { json = JSON.parse(res.getContentText() || '{}'); } catch (_e) { json = {}; }
+  return { code, json };
+}
+
+function _mpErro(json: Record<string, unknown>, fallback: string): string {
+  if (json && json.message) return String(json.message);
+  const causes = json && (json.cause as Array<{ description?: string }> | undefined);
+  if (Array.isArray(causes) && causes.length && causes[0].description) return String(causes[0].description);
+  return fallback;
+}
+
+function _mpPayer(pessoa: Record<string, unknown>): Record<string, unknown> {
+  const doc = String(pessoa.cnpj || pessoa.cpf || '').replace(/\D/g, '');
+  const nome = String(pessoa.empresa || pessoa.nome || 'Cliente').trim();
+  const partes = nome.split(/\s+/);
+  const payer: Record<string, unknown> = {
+    email: String(pessoa.email || '') || 'sem-email@example.com',
+    first_name: partes[0] || 'Cliente',
+    last_name: partes.slice(1).join(' ') || partes[0] || 'Cliente',
+  };
+  if (doc) payer.identification = { type: doc.length > 11 ? 'CNPJ' : 'CPF', number: doc };
+  return payer;
+}
+
+function _mpEmitir(pessoa: Record<string, unknown>, dados: { valor: number; vencimento: string; descricao: string; metodo: string; externalReference: string }): Record<string, unknown> {
+  const cfg = _pspConfig();
+  const out: Record<string, unknown> = {
+    provedor: 'mercadopago',
+    provedorClienteId: '',
+    provedorCobrancaId: '',
+    urlBoleto: '', urlFatura: '', linhaDigitavel: '', codigoBarras: '', pixCopiaCola: '', pixQrCodeImg: '',
+    jsonProvedor: '',
+  };
+  const expira = `${dados.vencimento}T23:59:59.000-03:00`;
+
+  // 'ambos' -> preference (checkout hospedado, pagador escolhe pix/boleto)
+  if (dados.metodo === 'ambos') {
+    const pref = {
+      items: [{ title: dados.descricao, quantity: 1, unit_price: Number(dados.valor), currency_id: 'BRL' }],
+      payer: { name: String(pessoa.empresa || pessoa.nome || 'Cliente'), email: String(pessoa.email || '') },
+      external_reference: dados.externalReference,
+      payment_methods: { excluded_payment_types: [{ id: 'credit_card' }, { id: 'debit_card' }] },
+      date_of_expiration: expira,
+    };
+    const res = _mpFetch('post', '/checkout/preferences', pref, dados.externalReference);
+    if (res.code >= 300 || !res.json.id) throw new Error(_mpErro(res.json, 'Falha ao criar preferência no Mercado Pago.'));
+    out.provedorCobrancaId = String(res.json.id || '');
+    out.urlFatura = String((cfg.env === 'producao' ? res.json.init_point : res.json.sandbox_init_point) || res.json.init_point || '');
+    out.jsonProvedor = JSON.stringify(res.json).slice(0, 4000);
+    return out;
+  }
+
+  // pix / boleto -> pagamento direto
+  const metodoId = dados.metodo === 'boleto' ? 'bolbradesco' : 'pix';
+  const payer = _mpPayer(pessoa);
+  if (dados.metodo === 'boleto') {
+    // boleto exige endereço do pagador
+    (payer as Record<string, unknown>).address = {
+      zip_code: String(pessoa.cep || '').replace(/\D/g, ''),
+      street_name: String(pessoa.logradouro || ''),
+      street_number: String(pessoa.numeroEndereco || ''),
+      neighborhood: String(pessoa.bairro || ''),
+      city: String(pessoa.cidade || ''),
+      federal_unit: String(pessoa.uf || ''),
+    };
+  }
+  const body: Record<string, unknown> = {
+    transaction_amount: Number(dados.valor),
+    description: dados.descricao,
+    payment_method_id: metodoId,
+    date_of_expiration: expira,
+    external_reference: dados.externalReference,
+    payer,
+  };
+  const res = _mpFetch('post', '/v1/payments', body, dados.externalReference);
+  if (res.code >= 300 || !res.json.id) throw new Error(_mpErro(res.json, 'Falha ao criar cobrança no Mercado Pago.'));
+  const pay = res.json;
+  out.provedorCobrancaId = String(pay.id || '');
+  out.jsonProvedor = JSON.stringify(pay).slice(0, 4000);
+  const poi = (pay.point_of_interaction as Record<string, unknown> | undefined);
+  const td = poi && (poi.transaction_data as Record<string, unknown> | undefined);
+  const detalhes = (pay.transaction_details as Record<string, unknown> | undefined);
+  if (dados.metodo === 'pix') {
+    if (td) { out.pixCopiaCola = String(td.qr_code || ''); out.pixQrCodeImg = String(td.qr_code_base64 || ''); }
+    if (detalhes) out.urlFatura = String(detalhes.external_resource_url || '');
+  } else {
+    if (detalhes) out.urlBoleto = String(detalhes.external_resource_url || '');
+    const bc = (pay.barcode as Record<string, unknown> | undefined);
+    if (bc) { out.linhaDigitavel = String(bc.content || ''); out.codigoBarras = String(bc.content || ''); }
+  }
+  return out;
+}
+
+// ─── Dispatch por provedor ────────────────────────────────────────────────────
+
+function _pspEmitir(provider: string, pessoa: Record<string, unknown>, dados: { valor: number; vencimento: string; descricao: string; metodo: string; externalReference: string }): Record<string, unknown> {
+  if (provider === 'mercadopago') return _mpEmitir(pessoa, dados);
+  return _asaasEmitir(pessoa, dados);
+}
+
+function _pspCancelar(provider: string, provId: string): { ok: boolean; erro?: string } {
+  if (!provId) return { ok: true };
+  if (provider === 'mercadopago') {
+    // Pagamento direto: cancela. Preference não tem cancelamento direto — segue ok.
+    const res = _mpFetch('put', `/v1/payments/${provId}`, { status: 'cancelled' });
+    if (res.code >= 300) {
+      const msg = _mpErro(res.json, '');
+      // Se for preference (id não-numérico) ou já não-cancelável, não trava o cancelamento local.
+      if (/^\d+$/.test(provId)) return { ok: false, erro: msg || 'Falha ao cancelar no Mercado Pago.' };
+    }
+    return { ok: true };
+  }
+  const res = _asaasFetch('delete', `/payments/${provId}`);
+  if (res.code >= 300) return { ok: false, erro: _asaasErro(res.json, 'Falha ao cancelar no Asaas.') };
+  return { ok: true };
+}
+
+function _pspResync(provider: string, provId: string, metodo: string): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  if (!provId) return patch;
+  if (provider === 'mercadopago') {
+    if (!/^\d+$/.test(provId)) return patch; // preference: nada a re-sincronizar
+    const res = _mpFetch('get', `/v1/payments/${provId}`);
+    if (res.code >= 300) return patch;
+    const pay = res.json;
+    const poi = (pay.point_of_interaction as Record<string, unknown> | undefined);
+    const td = poi && (poi.transaction_data as Record<string, unknown> | undefined);
+    const detalhes = (pay.transaction_details as Record<string, unknown> | undefined);
+    if (metodo === 'pix' && td) { patch.pixCopiaCola = String(td.qr_code || ''); patch.pixQrCodeImg = String(td.qr_code_base64 || ''); }
+    if (metodo === 'boleto') {
+      if (detalhes) patch.urlBoleto = String(detalhes.external_resource_url || '');
+      const bc = (pay.barcode as Record<string, unknown> | undefined);
+      if (bc) { patch.linhaDigitavel = String(bc.content || ''); patch.codigoBarras = String(bc.content || ''); }
+    }
+    return patch;
+  }
+  if (metodo === 'boleto' || metodo === 'ambos') {
+    const ld = _asaasFetch('get', `/payments/${provId}/identificationField`);
+    if (ld.code < 300) { patch.linhaDigitavel = String(ld.json.identificationField || ''); patch.codigoBarras = String(ld.json.barCode || ''); }
+  }
+  if (metodo === 'pix' || metodo === 'ambos') {
+    const qr = _asaasFetch('get', `/payments/${provId}/pixQrCode`);
+    if (qr.code < 300) { patch.pixCopiaCola = String(qr.json.payload || ''); patch.pixQrCodeImg = String(qr.json.encodedImage || ''); }
+  }
+  return patch;
+}
+
+// ─── Config do PSP (RPCs) ──────────────────────────────────────────────────────
+
+function _mascararChave(k: string): string {
+  if (!k) return '';
+  if (k.length <= 8) return '••••';
+  return `${k.slice(0, 4)}••••${k.slice(-4)}`;
+}
+
+function _webhookUrl(token: string): string {
+  let base = '';
+  try { base = ScriptApp.getService().getUrl() || ''; } catch (_e) { base = ''; }
+  if (!base) return '';
+  return `${base}?token=${encodeURIComponent(token)}`;
+}
+
+function cobrancaConfigGet(): ServerResult {
+  try {
+    const cfg = _pspConfig();
+    return {
+      ok: true,
+      data: {
+        provider: cfg.provider,
+        env: cfg.env,
+        configurado: !!cfg.apiKey,
+        chaveMascarada: _mascararChave(cfg.apiKey),
+        asaasConfigurado: !!cfg.asaasKey,
+        mpConfigurado: !!cfg.mpKey,
+        temWebhookToken: !!cfg.webhookToken,
+        webhookUrl: cfg.webhookToken ? _webhookUrl(cfg.webhookToken) : '',
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ler config' };
+  }
+}
+
+function cobrancaConfigSalvar(payload: Record<string, unknown>): ServerResult {
+  try {
+    const sp = PropertiesService.getScriptProperties();
+    const p = payload || {};
+    const provider = String(p.provider) === 'mercadopago' ? 'mercadopago' : 'asaas';
+    sp.setProperty('PSP_PROVIDER', provider);
+    if (p.env !== undefined) sp.setProperty('PSP_ENV', String(p.env) === 'producao' ? 'producao' : 'sandbox');
+    // Só sobrescreve a chave se vier uma nova não-mascarada — grava na chave do provedor selecionado.
+    const novaChave = String(p.apiKey || '').trim();
+    if (novaChave && novaChave.indexOf('••') < 0) {
+      sp.setProperty(provider === 'mercadopago' ? 'PSP_MP_KEY' : 'PSP_ASAAS_KEY', novaChave);
+    }
+    // Garante um webhook token (gera se não existir).
+    let token = sp.getProperty('PSP_WEBHOOK_TOKEN') || '';
+    if (!token) { token = Utilities.getUuid().replace(/-/g, ''); sp.setProperty('PSP_WEBHOOK_TOKEN', token); }
+    return cobrancaConfigGet();
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar config' };
+  }
+}
+
+// ─── Emissão e gestão de cobranças (RPCs) ──────────────────────────────────────
+
+function cobrancaEmitir(payload: Record<string, unknown>): ServerResult {
+  try {
+    const p = payload || {};
+    const pessoaId = String(p.pessoaId || '');
+    if (!pessoaId) return { ok: false, error: 'Escolha o cliente da cobrança.' };
+    const pessoa = dbGetById('Pessoas', pessoaId);
+    if (!pessoa) return { ok: false, error: 'Cliente não encontrado.' };
+    const valor = Math.abs(Number(p.valor || 0));
+    if (!valor) return { ok: false, error: 'Informe um valor maior que zero.' };
+    const vencimento = String(p.vencimento || '').substring(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(vencimento)) return { ok: false, error: 'Informe um vencimento válido (data).' };
+    const metodo = ['boleto', 'pix', 'ambos'].indexOf(String(p.metodo)) >= 0 ? String(p.metodo) : 'ambos';
+    const descricao = String(p.descricao || '').trim() || 'Cobrança';
+    const cfg = _pspConfig();
+    if (!cfg.apiKey) return { ok: false, error: `Configure a chave do ${cfg.provider === 'mercadopago' ? 'Mercado Pago' : 'Asaas'} antes de emitir.` };
+
+    const agora = new Date().toISOString();
+    // Cria a linha primeiro (status 'pendente') pra ter um id estável que vira o
+    // external_reference no provedor — assim o webhook sempre casa por ele.
+    const row = dbCreate('EmpresaCobrancas', {
+      receitaId: String(p.receitaId || ''),
+      sistemaId: String(p.sistemaId || ''),
+      pessoaId,
+      descricao,
+      valor,
+      vencimento,
+      metodo,
+      status: 'pendente',
+      provedor: cfg.provider,
+      provedorClienteId: '', provedorCobrancaId: '',
+      linhaDigitavel: '', codigoBarras: '', urlBoleto: '', pixCopiaCola: '', pixQrCodeImg: '', urlFatura: '',
+      competencia: _competenciaDe(vencimento || agora),
+      recebimentoId: '', valorPago: '', pagaEm: '',
+      criadoEm: agora, atualizadoEm: agora, jsonProvedor: '',
+    });
+    const rowId = String(row.id);
+
+    try {
+      const psp = _pspEmitir(cfg.provider, pessoa, { valor, vencimento, descricao, metodo, externalReference: rowId });
+      const atualizado = dbUpdate('EmpresaCobrancas', rowId, {
+        status: 'emitida',
+        provedor: String(psp.provedor || cfg.provider),
+        provedorClienteId: String(psp.provedorClienteId || ''),
+        provedorCobrancaId: String(psp.provedorCobrancaId || ''),
+        linhaDigitavel: String(psp.linhaDigitavel || ''),
+        codigoBarras: String(psp.codigoBarras || ''),
+        urlBoleto: String(psp.urlBoleto || ''),
+        pixCopiaCola: String(psp.pixCopiaCola || ''),
+        pixQrCodeImg: String(psp.pixQrCodeImg || ''),
+        urlFatura: String(psp.urlFatura || ''),
+        jsonProvedor: String(psp.jsonProvedor || ''),
+        atualizadoEm: new Date().toISOString(),
+      });
+      return { ok: true, data: atualizado };
+    } catch (err: unknown) {
+      // Falhou no provedor: remove a linha pendente pra não deixar órfã.
+      dbDelete('EmpresaCobrancas', rowId);
+      return { ok: false, error: err instanceof Error ? err.message : 'Erro ao emitir no provedor' };
+    }
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao emitir cobrança' };
+  }
+}
+
+function cobrancaEmitirDaReceita(receitaId: string): ServerResult {
+  try {
+    const receita = dbGetById('Receitas', String(receitaId));
+    if (!receita) return { ok: false, error: 'Assinatura não encontrada.' };
+    if (!String(receita.pessoaId || '')) return { ok: false, error: 'A assinatura não tem cliente vinculado — vincule uma Pessoa antes.' };
+    const vencimento = String(receita.proximaCobranca || '').substring(0, 10) || new Date().toISOString().substring(0, 10);
+    return cobrancaEmitir({
+      pessoaId: receita.pessoaId,
+      receitaId: String(receitaId),
+      sistemaId: receita.sistemaId,
+      descricao: `${receita.plano || 'Assinatura'}`,
+      valor: receita.valor,
+      vencimento,
+      metodo: 'ambos',
+    });
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao emitir cobrança da assinatura' };
+  }
+}
+
+function cobrancasList(filtros?: Record<string, unknown>): ServerResult {
+  try {
+    let rows = dbGetAll('EmpresaCobrancas') as Array<Record<string, unknown>>;
+    const f = filtros || {};
+    if (f.status) rows = rows.filter((r) => String(r.status) === String(f.status));
+    if (f.competencia) rows = rows.filter((r) => String(r.competencia) === String(f.competencia));
+    if (f.pessoaId) rows = rows.filter((r) => String(r.pessoaId) === String(f.pessoaId));
+    // Enriquece com nome do cliente.
+    const pessoas = dbGetAll('Pessoas') as Array<Record<string, unknown>>;
+    const nomePorId: Record<string, string> = {};
+    for (const pe of pessoas) nomePorId[String(pe.id)] = String(pe.empresa || pe.nome || '');
+    rows = rows.map((r) => ({ ...r, pessoaNome: nomePorId[String(r.pessoaId)] || '' }));
+    rows.sort((a, b) => String(b.criadoEm).localeCompare(String(a.criadoEm)));
+    return { ok: true, data: rows };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar cobranças' };
+  }
+}
+
+function cobrancaGet(id: string): ServerResult {
+  try {
+    const row = dbGetById('EmpresaCobrancas', String(id));
+    return row ? { ok: true, data: row } : { ok: false, error: 'Cobrança não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar cobrança' };
+  }
+}
+
+function cobrancaCancelar(id: string): ServerResult {
+  try {
+    const row = dbGetById('EmpresaCobrancas', String(id));
+    if (!row) return { ok: false, error: 'Cobrança não encontrada' };
+    if (String(row.status) === 'paga') return { ok: false, error: 'Cobrança já paga — não dá pra cancelar.' };
+    const r = _pspCancelar(String(row.provedor || 'asaas'), String(row.provedorCobrancaId || ''));
+    if (!r.ok) return { ok: false, error: r.erro || 'Falha ao cancelar no provedor.' };
+    dbUpdate('EmpresaCobrancas', String(id), { status: 'cancelada', atualizadoEm: new Date().toISOString() });
+    return { ok: true };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao cancelar cobrança' };
+  }
+}
+
+// Re-sincroniza dados de boleto/PIX a partir do provedor (caso não tenham sido
+// capturados no instante da emissão — boleto às vezes leva alguns segundos).
+function cobrancaReenviar(id: string): ServerResult {
+  try {
+    const row = dbGetById('EmpresaCobrancas', String(id));
+    if (!row) return { ok: false, error: 'Cobrança não encontrada' };
+    const provId = String(row.provedorCobrancaId || '');
+    if (!provId) return { ok: false, error: 'Cobrança sem id no provedor.' };
+    const patch = _pspResync(String(row.provedor || 'asaas'), provId, String(row.metodo || 'ambos'));
+    patch.atualizadoEm = new Date().toISOString();
+    const atualizado = dbUpdate('EmpresaCobrancas', String(id), patch);
+    return { ok: true, data: atualizado };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao re-sincronizar' };
+  }
+}
+
+// ─── Baixa automática (chamada pelo webhook doPost) ───────────────────────────
+// Recebe um pagamento normalizado { id, value, paymentDate, externalReference }.
+// Casa a cobrança por externalReference (= id da linha) ou por provedorCobrancaId,
+// marca 'paga' e — se houver assinatura vinculada — registra Recebimento e rola a
+// próxima cobrança. Idempotente (não baixa duas vezes).
+function _cobrancaBaixaPorWebhook(payment: { id?: string; value?: number; paymentDate?: string; externalReference?: string }): void {
+  const provId = String(payment.id || '');
+  const extRef = String(payment.externalReference || '');
+  if (!provId && !extRef) return;
+  const todas = dbGetAll('EmpresaCobrancas') as Array<Record<string, unknown>>;
+  let cob = extRef ? todas.find((c) => String(c.id) === extRef) : undefined;
+  if (!cob && provId) cob = todas.find((c) => String(c.provedorCobrancaId) === provId);
+  if (!cob) return;
+  if (String(cob.status) === 'paga') return; // já baixada
+  const agora = new Date().toISOString();
+  const valorPago = Number(payment.value || cob.valor || 0);
+  const dataPg = String(payment.paymentDate || agora.substring(0, 10)).substring(0, 10);
+
+  let recebimentoId = '';
+  const receitaId = String(cob.receitaId || '');
+  if (receitaId) {
+    const rec = registrarRecebimento(receitaId, { valor: valorPago, data: dataPg, notas: `Baixa automática (cobrança ${String(cob.id)})` });
+    if (rec.ok && rec.data) {
+      const d = rec.data as { recebimento?: Record<string, unknown> };
+      recebimentoId = String(d.recebimento?.id || '');
+    }
+  }
+  dbUpdate('EmpresaCobrancas', String(cob.id), {
+    status: 'paga', valorPago, pagaEm: dataPg, recebimentoId, atualizadoEm: agora,
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -21251,4 +21797,78 @@ function doGet(): GoogleAppsScript.HTML.HtmlOutput {
   return HtmlService.createHtmlOutputFromFile('App')
     .setTitle('FORJA')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+// Webhook dos PSPs — baixa automática (v1.157.0; multi-provedor v1.158.0).
+//   Mesma URL /exec. Autenticação por TOKEN de query (?token=...) porque o
+//   doGet/doPost do GAS NÃO expõe headers da requisição. Cadastre a URL com o
+//   token (cobrancaConfigGet().webhookUrl) no painel do provedor.
+//   Detecta o provedor pelo formato do payload:
+//     - Asaas: { event: 'PAYMENT_RECEIVED'|'PAYMENT_CONFIRMED', payment: {...} }
+//     - Mercado Pago: { type: 'payment', data: { id } } -> busca /v1/payments/{id}
+//   Idempotência via CobrancaEventos.eventoId (evita baixa dupla em re-entregas).
+function doPost(e: GoogleAppsScript.Events.DoPost): GoogleAppsScript.Content.TextOutput {
+  const out = (obj: Record<string, unknown>): GoogleAppsScript.Content.TextOutput =>
+    ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+  try {
+    const cfg = _pspConfig();
+    const token = (e && e.parameter && e.parameter.token) ? String(e.parameter.token) : '';
+    if (!cfg.webhookToken || token !== cfg.webhookToken) return out({ ok: false, error: 'unauthorized' });
+
+    const raw = e && e.postData && e.postData.contents ? e.postData.contents : '{}';
+    let body: Record<string, unknown> = {};
+    try { body = JSON.parse(raw); } catch (_e) { body = {}; }
+
+    // ── Mercado Pago ──
+    const tipo = String(body.type || body.topic || '');
+    const ehMP = tipo === 'payment' || tipo === 'merchant_order' || !!body.data;
+    if (ehMP && !body.event) {
+      const dataObj = (body.data as Record<string, unknown> | undefined) || {};
+      const payId = String(dataObj.id || (e && e.parameter && e.parameter['data.id']) || '');
+      if (tipo && tipo !== 'payment') return out({ ok: true, ignored: tipo }); // só processamos pagamentos
+      if (!payId) return out({ ok: true, ignored: 'no-id' });
+      const eventoId = `mp:payment:${payId}`;
+      const eventos = dbGetAll('CobrancaEventos') as Array<Record<string, unknown>>;
+      // Idempotência por status: só pulamos se já demos baixa (registramos com sufixo :paid).
+      if (eventos.some((ev) => String(ev.eventoId) === `${eventoId}:paid`)) return out({ ok: true, dedup: true });
+      const res = _mpFetch('get', `/v1/payments/${payId}`);
+      const pay = res.json;
+      const status = String(pay.status || '');
+      dbCreate('CobrancaEventos', {
+        provedor: 'mercadopago', eventoId: status === 'approved' ? `${eventoId}:paid` : `${eventoId}:${status}`,
+        cobrancaId: payId, tipo: `payment.${status}`, payloadJson: JSON.stringify(pay).slice(0, 4000), recebidoEm: new Date().toISOString(),
+      });
+      if (status === 'approved') {
+        _cobrancaBaixaPorWebhook({
+          id: payId,
+          value: Number(pay.transaction_amount || 0),
+          paymentDate: String(pay.date_approved || '').substring(0, 10),
+          externalReference: String(pay.external_reference || ''),
+        });
+      }
+      return out({ ok: true });
+    }
+
+    // ── Asaas ──
+    const event = String(body.event || '');
+    const payment = (body.payment as Record<string, unknown>) || {};
+    const eventoId = String(body.id || `${event}:${String(payment.id || '')}:${String(payment.status || '')}`);
+    const eventos = dbGetAll('CobrancaEventos') as Array<Record<string, unknown>>;
+    if (eventos.some((ev) => String(ev.eventoId) === eventoId)) return out({ ok: true, dedup: true });
+    dbCreate('CobrancaEventos', {
+      provedor: 'asaas', eventoId, cobrancaId: String(payment.id || ''), tipo: event,
+      payloadJson: raw.slice(0, 4000), recebidoEm: new Date().toISOString(),
+    });
+    if (event === 'PAYMENT_RECEIVED' || event === 'PAYMENT_CONFIRMED') {
+      _cobrancaBaixaPorWebhook({
+        id: String(payment.id || ''),
+        value: Number(payment.value || 0),
+        paymentDate: String(payment.paymentDate || payment.confirmedDate || '').substring(0, 10),
+        externalReference: String(payment.externalReference || ''),
+      });
+    }
+    return out({ ok: true });
+  } catch (err: unknown) {
+    return out({ ok: false, error: err instanceof Error ? err.message : 'erro' });
+  }
 }
