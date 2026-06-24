@@ -36,6 +36,26 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.155.0] — 2026-06-23
+
+### Adicionado — Coleções por domínio de negócio (sob demanda pela Lume)
+
+Além dos kits de engenharia, a estação Kits agora tem uma seção **"Coleções por
+domínio"** pra verticais de produto (contabilidade, CRM, restaurante, pousada,
+condomínio…):
+
+- **Sob demanda:** clique em "Nova coleção", descreva o projeto/domínio e a Lume
+  monta a coleção de skills + agents ideal — combinando fundação técnica + o que é
+  específico da vertical + a melhor skill de design.
+- **Exemplos prontos:** chips de domínios comuns (Contabilidade, CRM, Restaurante,
+  Pousada, Condomínio) que montam a coleção num clique.
+- Cada coleção pode ser vista, re-montada, exportada (com a escolha de IDE/SO) e
+  removida. Reaproveita 100% do motor de kits.
+
+Backend: `_montarKitCore` extraído de `kitMontarComLume`; novas RPCs
+`dominiosSeedList` e `kitMontarDominio` (coleções salvas com `templateId`
+`dominio:<slug>`, sem migração de schema).
+
 ## [1.154.1] — 2026-06-23
 
 ### Alterado — Design vira pilar prioritário nos kits

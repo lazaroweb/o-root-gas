@@ -18130,74 +18130,155 @@ function _parseKitSelecao(resp: string): { skills: number[]; agents: number[]; j
   } catch { return { skills: [], agents: [], justificativa: '' }; }
 }
 
+// Núcleo de montagem reutilizado por kits-template e por coleções de domínio.
+// Faz o upsert por templateId (cada template/domínio tem no máximo 1 kit salvo).
+function _montarKitCore(opts: {
+  templateId: string; nome: string; descricao: string; objetivo: string;
+  alvoSkills: number; alvoAgents: number;
+}): ServerResult {
+  const poolSkills = _poolCandidatos('Skills', 120);
+  const poolAgents = _poolCandidatos('Agents', 60);
+  if (poolSkills.length === 0 && poolAgents.length === 0) {
+    throw new Error('Sua base de skills/agents está vazia — importe antes de montar kits.');
+  }
+
+  const compacto = (l: Record<string, unknown>, i: number) => ({
+    i,
+    nome: String(l.nome || ''),
+    tema: String(l.tipoIA || l.categoria || ''),
+    estrelas: Number(l.estrelas || 0),
+    desc: String(l.descricaoPt || l.descricao || l.diretrizFinal || '').slice(0, 140),
+  });
+  const catSkills = poolSkills.map(compacto);
+  const catAgents = poolAgents.map(compacto);
+
+  const sys = 'Você é a Lume, curadora de kits de desenvolvimento. A partir de um OBJETIVO e de '
+    + 'catálogos de skills e agents (cada um com índice `i`, nome, tema, estrelas 0-5 e descrição), '
+    + `selecione os MELHORES pra esse objetivo. Alvo: ~${opts.alvoSkills} skills e ~${opts.alvoAgents} agents `
+    + '(pode variar um pouco). Priorize itens com mais estrelas e alta aderência ao objetivo; evite '
+    + 'redundância. Responda SOMENTE com um objeto JSON, sem texto extra, no formato '
+    + '{"skills":[indices],"agents":[indices],"justificativa":"2-3 frases explicando a curadoria"}.';
+  const userMsg = JSON.stringify({
+    objetivo: `${opts.nome} — ${opts.objetivo}`,
+    skills: catSkills,
+    agents: catAgents,
+  });
+  const resp = forjaCallLLM(
+    [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
+    1500, undefined, 'kit',
+  );
+  const sel = _parseKitSelecao(resp);
+
+  const skillIds = sel.skills.map((i) => String(poolSkills[i]?.id || '')).filter(Boolean);
+  const agentIds = sel.agents.map((i) => String(poolAgents[i]?.id || '')).filter(Boolean);
+  if (skillIds.length === 0 && agentIds.length === 0) {
+    throw new Error('A Lume não retornou uma seleção válida. Tente novamente.');
+  }
+
+  const agora = new Date().toISOString();
+  const kits = dbGetAll('Kits') as Array<Record<string, unknown>>;
+  const existente = kits.find((k) => String(k.templateId || '') === opts.templateId);
+  const dados = {
+    templateId: opts.templateId,
+    nome: opts.nome,
+    descricao: opts.descricao,
+    skillIds: skillIds.join(','),
+    agentIds: agentIds.join(','),
+    justificativa: sel.justificativa,
+    montadoPorLume: 'true',
+    atualizadoEm: agora,
+  };
+  let kitId: string;
+  if (existente) {
+    kitId = String(existente.id || '');
+    dbUpdate('Kits', kitId, dados);
+  } else {
+    const novo = dbCreate('Kits', { ...dados, criadoEm: agora });
+    kitId = String(novo.id || '');
+  }
+  return { ok: true, data: { id: kitId, templateId: opts.templateId, skills: skillIds.length, agents: agentIds.length, justificativa: sel.justificativa } };
+}
+
 function kitMontarComLume(templateId: string): ServerResult {
   try {
     const tpl = KIT_TEMPLATES.find((k) => k.id === templateId);
     if (!tpl) throw new Error('Template de kit desconhecido.');
-
-    const poolSkills = _poolCandidatos('Skills', 120);
-    const poolAgents = _poolCandidatos('Agents', 60);
-    if (poolSkills.length === 0 && poolAgents.length === 0) {
-      throw new Error('Sua base de skills/agents está vazia — importe antes de montar kits.');
-    }
-
-    const compacto = (l: Record<string, unknown>, i: number) => ({
-      i,
-      nome: String(l.nome || ''),
-      tema: String(l.tipoIA || l.categoria || ''),
-      estrelas: Number(l.estrelas || 0),
-      desc: String(l.descricaoPt || l.descricao || l.diretrizFinal || '').slice(0, 140),
+    return _montarKitCore({
+      templateId, nome: tpl.nome, descricao: tpl.descricao, objetivo: tpl.objetivo,
+      alvoSkills: tpl.alvoSkills, alvoAgents: tpl.alvoAgents,
     });
-    const catSkills = poolSkills.map(compacto);
-    const catAgents = poolAgents.map(compacto);
-
-    const sys = 'Você é a Lume, curadora de kits de desenvolvimento. A partir de um OBJETIVO e de '
-      + 'catálogos de skills e agents (cada um com índice `i`, nome, tema, estrelas 0-5 e descrição), '
-      + `selecione os MELHORES pra esse objetivo. Alvo: ~${tpl.alvoSkills} skills e ~${tpl.alvoAgents} agents `
-      + '(pode variar um pouco). Priorize itens com mais estrelas e alta aderência ao objetivo; evite '
-      + 'redundância. Responda SOMENTE com um objeto JSON, sem texto extra, no formato '
-      + '{"skills":[indices],"agents":[indices],"justificativa":"2-3 frases explicando a curadoria"}.';
-    const userMsg = JSON.stringify({
-      objetivo: `${tpl.nome} — ${tpl.objetivo}`,
-      skills: catSkills,
-      agents: catAgents,
-    });
-    const resp = forjaCallLLM(
-      [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
-      1500, undefined, 'kit',
-    );
-    const sel = _parseKitSelecao(resp);
-
-    const skillIds = sel.skills.map((i) => String(poolSkills[i]?.id || '')).filter(Boolean);
-    const agentIds = sel.agents.map((i) => String(poolAgents[i]?.id || '')).filter(Boolean);
-    if (skillIds.length === 0 && agentIds.length === 0) {
-      throw new Error('A Lume não retornou uma seleção válida. Tente novamente.');
-    }
-
-    const agora = new Date().toISOString();
-    const kits = dbGetAll('Kits') as Array<Record<string, unknown>>;
-    const existente = kits.find((k) => String(k.templateId || '') === templateId);
-    const dados = {
-      templateId,
-      nome: tpl.nome,
-      descricao: tpl.descricao,
-      skillIds: skillIds.join(','),
-      agentIds: agentIds.join(','),
-      justificativa: sel.justificativa,
-      montadoPorLume: 'true',
-      atualizadoEm: agora,
-    };
-    let kitId: string;
-    if (existente) {
-      kitId = String(existente.id || '');
-      dbUpdate('Kits', kitId, dados);
-    } else {
-      const novo = dbCreate('Kits', { ...dados, criadoEm: agora });
-      kitId = String(novo.id || '');
-    }
-    return { ok: true, data: { id: kitId, templateId, skills: skillIds.length, agents: agentIds.length, justificativa: sel.justificativa } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao montar kit' };
+  }
+}
+
+// ─── Coleções por domínio de negócio (v1.155.0) ─────────────────────────────
+// Mesmo motor dos kits, mas o "objetivo" é uma vertical (contabilidade, CRM,
+// restaurante...). Geradas sob demanda; templateId = "dominio:<slug>" pra
+// separar das peças de engenharia. Os seeds abaixo são só atalhos de exemplo.
+const DOMINIOS_SEED: Array<{ nome: string; descricao: string; objetivo: string }> = [
+  {
+    nome: 'Contabilidade / Financeiro',
+    descricao: 'Lançamentos, plano de contas, conciliação, relatórios fiscais e DRE.',
+    objetivo: 'Sistema de contabilidade/financeiro: plano de contas, lançamentos de débito/crédito, '
+      + 'conciliação bancária, fechamento, relatórios (DRE, balancete), regras fiscais e auditoria. '
+      + 'Priorize skills/agents de modelagem de dados financeiros, precisão numérica/decimais, '
+      + 'validação contábil, relatórios e segurança de dados sensíveis.',
+  },
+  {
+    nome: 'CRM / Vendas',
+    descricao: 'Leads, funil, contatos, atividades, pipeline e pós-venda.',
+    objetivo: 'Sistema de CRM/vendas: gestão de leads e contatos, funil/pipeline, atividades e follow-ups, '
+      + 'propostas, métricas de conversão e pós-venda. Priorize skills/agents de modelagem de relacionamento '
+      + 'cliente, automação de fluxo, dashboards de vendas e integração de comunicação.',
+  },
+  {
+    nome: 'Restaurante / Food Service',
+    descricao: 'Cardápio, comandas, pedidos, mesas, estoque e fluxo de cozinha.',
+    objetivo: 'Sistema para restaurante/food service: cardápio, comandas/pedidos, controle de mesas, '
+      + 'fila da cozinha (KDS), estoque de insumos, ficha técnica e fechamento de caixa. Priorize '
+      + 'skills/agents de modelagem de pedidos, fluxo operacional em tempo quase-real, estoque e impressão.',
+  },
+  {
+    nome: 'Pousada / Hotelaria',
+    descricao: 'Reservas, check-in/out, tarifário, ocupação e hóspedes.',
+    objetivo: 'Sistema para pousada/hotelaria: reservas, calendário de ocupação, check-in/check-out, '
+      + 'tarifário/diárias, cadastro de hóspedes, faturamento e relatórios de ocupação. Priorize '
+      + 'skills/agents de modelagem de disponibilidade/datas, regras de tarifa e gestão de reservas.',
+  },
+  {
+    nome: 'Condomínio',
+    descricao: 'Unidades, taxas, boletos, reservas de áreas, comunicados e ocorrências.',
+    objetivo: 'Sistema para gestão de condomínio: cadastro de unidades/moradores, taxas e boletos, '
+      + 'reserva de áreas comuns, comunicados, ocorrências/chamados, prestação de contas e assembleias. '
+      + 'Priorize skills/agents de cobrança recorrente, agendamento de espaços e comunicação com moradores.',
+  },
+];
+
+function dominiosSeedList(): ServerResult {
+  return { ok: true, data: DOMINIOS_SEED };
+}
+
+function kitMontarDominio(nome: string, objetivo: string, alvoSkills?: number, alvoAgents?: number): ServerResult {
+  try {
+    const nomeLimpo = String(nome || '').trim().slice(0, 80);
+    const objLimpo = String(objetivo || '').trim().slice(0, 1200);
+    if (!nomeLimpo) throw new Error('Dê um nome ao domínio/projeto da coleção.');
+    if (objLimpo.length < 8) throw new Error('Descreva um pouco melhor o domínio/projeto pra Lume curar bem.');
+    const slug = _slugFonte(nomeLimpo) || `col-${Date.now()}`;
+    return _montarKitCore({
+      templateId: `dominio:${slug}`,
+      nome: nomeLimpo,
+      descricao: objLimpo.slice(0, 200),
+      objetivo: `Coleção por domínio de negócio "${nomeLimpo}". ${objLimpo} `
+        + 'Selecione as skills e agents da base mais úteis pra construir um produto desse domínio, '
+        + 'combinando fundação técnica com o que for específico da vertical. '
+        + 'Inclua também a melhor skill de design/UI (premium, com identidade própria, anti "cara de IA").',
+      alvoSkills: Math.max(4, Math.min(40, Number(alvoSkills) || 16)),
+      alvoAgents: Math.max(2, Math.min(20, Number(alvoAgents) || 6)),
+    });
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao montar coleção' };
   }
 }
 

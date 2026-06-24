@@ -3,9 +3,10 @@
 // Dev...) que a Lume preenche com as melhores skills+agents da base (por
 // estrelas + aderência). Cada kit é exportável como .zip misto.
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Empty, Spin, Tag, Tooltip, Drawer, message, Skeleton, Modal, Segmented } from 'antd';
+import { Button, Empty, Spin, Tag, Tooltip, Drawer, message, Skeleton, Modal, Segmented, Input } from 'antd';
 import {
   Boxes, Sparkles, Bot, BookMarked, Package, RefreshCw, Eye, Layers, Wand2, Apple, Monitor, MousePointer2,
+  Briefcase, Plus, Trash2,
 } from 'lucide-react';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -34,6 +35,12 @@ interface KitResumo {
   justificativa: string;
   montadoPorLume: boolean;
   atualizadoEm: string;
+}
+
+interface DominioSeed {
+  nome: string;
+  descricao: string;
+  objetivo: string;
 }
 
 interface KitMembro {
@@ -215,16 +222,22 @@ export default function KitsHubPanel(): React.ReactElement {
   const [osSel, setOsSel] = useState<AlvoSO>(
     () => (typeof navigator !== 'undefined' && /win/i.test(navigator.userAgent) ? 'win' : 'unix'),
   );
+  const [seeds, setSeeds] = useState<DominioSeed[]>([]);
+  const [novaColAberta, setNovaColAberta] = useState(false);
+  const [colNome, setColNome] = useState('');
+  const [colObjetivo, setColObjetivo] = useState('');
 
   const carregar = async () => {
     setLoading(true);
     try {
-      const [rt, rk] = await Promise.all([
+      const [rt, rk, rd] = await Promise.all([
         callServer<ServerResult>('kitTemplatesList'),
         callServer<ServerResult>('kitsList'),
+        callServer<ServerResult>('dominiosSeedList'),
       ]);
       if (rt.ok && rt.data) setTemplates(rt.data as KitTemplate[]);
       if (rk.ok && rk.data) setKits(rk.data as KitResumo[]);
+      if (rd.ok && rd.data) setSeeds(rd.data as DominioSeed[]);
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Erro ao carregar kits');
     } finally { setLoading(false); }
@@ -237,6 +250,12 @@ export default function KitsHubPanel(): React.ReactElement {
     for (const k of kits) if (k.templateId) m[k.templateId] = k;
     return m;
   }, [kits]);
+
+  // Coleções por domínio = kits cujo templateId começa com "dominio:".
+  const colecoes = useMemo(
+    () => kits.filter((k) => String(k.templateId || '').startsWith('dominio:')),
+    [kits],
+  );
 
   const montar = async (templateId: string) => {
     setMontando(templateId);
@@ -254,6 +273,36 @@ export default function KitsHubPanel(): React.ReactElement {
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Erro ao montar kit');
     } finally { hide(); setMontando(null); }
+  };
+
+  const montarDominio = async (nome: string, objetivo: string) => {
+    const chave = `dominio:${nome}`;
+    setMontando(chave);
+    const hide = message.loading(`A Lume está montando a coleção "${nome}"…`, 0);
+    try {
+      const r = await callServer<ServerResult>('kitMontarDominio', nome, objetivo);
+      if (r.ok) {
+        const d = r.data as { id: string; skills: number; agents: number };
+        message.success(`Coleção "${nome}": ${d.skills} skills + ${d.agents} agents.`);
+        setNovaColAberta(false); setColNome(''); setColObjetivo('');
+        await carregar();
+        void abrir(d.id);
+      } else {
+        message.error(r.error || 'Não consegui montar a coleção');
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro ao montar coleção');
+    } finally { hide(); setMontando(null); }
+  };
+
+  const removerColecao = async (kit: KitResumo) => {
+    try {
+      const r = await callServer<ServerResult>('kitRemover', kit.id);
+      if (r.ok) { message.success(`Coleção "${kit.nome}" removida.`); await carregar(); }
+      else message.error(r.error || 'Não consegui remover');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Erro ao remover');
+    }
   };
 
   const abrir = async (id: string) => {
@@ -463,6 +512,154 @@ export default function KitsHubPanel(): React.ReactElement {
           })}
         </div>
       )}
+
+      {/* ── Coleções por domínio de negócio ── */}
+      <div style={{ marginTop: 34 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+          <Briefcase size={17} color={t.accents.blue} />
+          <span style={{ fontFamily: FONTS.display, fontSize: 16, fontWeight: 600, color: t.text }}>
+            Coleções por domínio
+          </span>
+          <Button
+            type="primary" size="small" icon={<Plus size={14} />}
+            onClick={() => setNovaColAberta(true)}
+            style={{ marginLeft: 'auto', background: t.accents.blue, borderColor: t.accents.blue }}
+          >
+            Nova coleção
+          </Button>
+        </div>
+        <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, lineHeight: 1.6, marginBottom: 16 }}>
+          Vai construir um produto de uma vertical (contabilidade, CRM, restaurante, pousada, condomínio…)?
+          Descreva o projeto que a <strong>Lume monta a coleção</strong> de skills + agents ideal pra ele —
+          combinando fundação técnica com o que é específico do domínio. Use um exemplo abaixo ou crie o seu.
+        </div>
+
+        {/* Coleções já montadas */}
+        {colecoes.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14, marginBottom: 16 }}>
+            {colecoes.map((kit) => {
+              const emMontagem = montando === `dominio:${kit.nome}`;
+              return (
+                <div key={kit.id} style={{
+                  background: t.surface, border: `1.5px solid ${t.accents.blue}55`,
+                  borderRadius: 14, padding: 16, display: 'flex', flexDirection: 'column', gap: 10,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{
+                      width: 36, height: 36, borderRadius: 10, background: `${t.accents.blue}1a`,
+                      color: t.accents.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                    }}>
+                      <Briefcase size={18} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: FONTS.display, fontSize: 15, fontWeight: 600, color: t.text }}>
+                        {kit.nome}
+                      </div>
+                      <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary }}>
+                        coleção por domínio
+                      </div>
+                    </div>
+                  </div>
+                  <p style={{ margin: 0, fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, lineHeight: 1.5, flex: 1 }}>
+                    {kit.descricao}
+                  </p>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <Tag color="purple" style={{ fontFamily: FONTS.ui, fontSize: 11 }}>
+                      <BookMarked size={10} style={{ marginRight: 3, verticalAlign: -1 }} />{kit.skills} skills
+                    </Tag>
+                    <Tag color="blue" style={{ fontFamily: FONTS.ui, fontSize: 11 }}>
+                      <Bot size={10} style={{ marginRight: 3, verticalAlign: -1 }} />{kit.agents} agents
+                    </Tag>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <Button size="small" icon={<Eye size={13} />} onClick={() => abrir(kit.id)} style={{ flex: 1 }}>
+                      Ver
+                    </Button>
+                    <Tooltip title="Re-monta a coleção com a Lume.">
+                      <Button
+                        size="small" icon={<RefreshCw size={13} />} loading={emMontagem}
+                        onClick={() => montarDominio(kit.nome, kit.descricao)}
+                      />
+                    </Tooltip>
+                    <Tooltip title="Remover coleção.">
+                      <Button size="small" danger icon={<Trash2 size={13} />} onClick={() => removerColecao(kit)} />
+                    </Tooltip>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Sugestões (seeds) */}
+        <div style={{ fontFamily: FONTS.ui, fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: t.textTertiary, marginBottom: 10 }}>
+          Exemplos pra começar
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {seeds.map((s) => {
+            const emMontagem = montando === `dominio:${s.nome}`;
+            const jaTem = colecoes.some((c) => c.nome === s.nome);
+            return (
+              <Tooltip key={s.nome} title={s.descricao}>
+                <Button
+                  size="small" icon={<Sparkles size={13} />} loading={emMontagem}
+                  onClick={() => montarDominio(s.nome, s.objetivo)}
+                  style={jaTem ? { borderColor: `${t.accents.blue}88`, color: t.accents.blue } : undefined}
+                >
+                  {s.nome}{jaTem ? ' ✓' : ''}
+                </Button>
+              </Tooltip>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Modal: nova coleção por domínio */}
+      <Modal
+        open={novaColAberta}
+        onCancel={() => !montando && setNovaColAberta(false)}
+        width={520}
+        title={
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <Briefcase size={17} color={t.accents.blue} />
+            <span style={{ fontFamily: FONTS.display, fontWeight: 600 }}>Nova coleção por domínio</span>
+          </span>
+        }
+        okText="Montar com a Lume"
+        okButtonProps={{
+          icon: <Sparkles size={14} />,
+          loading: !!montando && String(montando).startsWith('dominio:'),
+          disabled: !colNome.trim() || colObjetivo.trim().length < 8,
+          style: { background: t.accents.blue, borderColor: t.accents.blue },
+        }}
+        onOk={() => void montarDominio(colNome.trim(), colObjetivo.trim())}
+      >
+        <div style={{ marginTop: 6 }}>
+          <div style={{ fontFamily: FONTS.ui, fontSize: 12, fontWeight: 600, color: t.text, marginBottom: 6 }}>
+            Nome do domínio / projeto
+          </div>
+          <Input
+            placeholder="Ex.: Sistema de pousada"
+            value={colNome}
+            maxLength={80}
+            onChange={(e) => setColNome(e.target.value)}
+          />
+          <div style={{ fontFamily: FONTS.ui, fontSize: 12, fontWeight: 600, color: t.text, margin: '14px 0 6px' }}>
+            Descreva o projeto pra Lume
+          </div>
+          <Input.TextArea
+            placeholder="Ex.: Reservas com calendário de ocupação, check-in/out, tarifário por diária, cadastro de hóspedes e relatórios de ocupação."
+            value={colObjetivo}
+            maxLength={1200}
+            autoSize={{ minRows: 4, maxRows: 8 }}
+            onChange={(e) => setColObjetivo(e.target.value)}
+          />
+          <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, marginTop: 8, lineHeight: 1.5 }}>
+            Quanto mais específico (entidades, regras, telas), melhor a curadoria. A Lume vai puxar a base
+            técnica + o que for específico da vertical + a melhor skill de design.
+          </div>
+        </div>
+      </Modal>
 
       {/* Drawer: detalhe do kit */}
       <Drawer
