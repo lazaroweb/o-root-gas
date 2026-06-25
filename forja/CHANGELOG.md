@@ -36,6 +36,28 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.172.0] — 2026-06-25
+
+### Adicionado — Reautorizar o Drive + Árvore do Drive por empresa
+
+- **Reautorização do Drive sem sair do app**: ao entrar em Documentos, checamos se
+  falta o consentimento do escopo novo (`auth/drive`). Se faltar, aparece um aviso
+  com botão **"Autorizar Google Drive"** (abre o consentimento) e **"Já autorizei"**
+  pra revalidar. Resolve o erro de upload sem precisar mexer no editor do Apps Script.
+- **Árvore do Drive**: botão **"Ver árvore do Drive"** abre um modal com a estrutura
+  de pastas/arquivos da empresa (ou de todas, no Consolidado). Cada item tem **abrir**,
+  **baixar** e **apagar** (vai pra lixeira do Drive). Botão "Abrir pasta no Drive".
+
+### Detalhes técnicos — 1.172.0
+
+- `server.ts`: `getDriveAuthStatus` (usa `ScriptApp.getAuthorizationInfo`/`getAuthorizationUrl`);
+  `getDriveTreeEmpresa` (varre a pasta da empresa, com limites de profundidade/itens);
+  `excluirDriveItem` (só apaga itens dentro da raiz "Forja — Documentos", limpa metadados).
+- UI: `views/FinDocumentos.tsx` — alerta de reautorização, modal de árvore (Ant `Tree`)
+  com ações por item.
+
+---
+
 ## [1.171.1] — 2026-06-25
 
 ### Melhorado — Contexto da empresa explícito nos Documentos

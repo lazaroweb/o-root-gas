@@ -6230,6 +6230,121 @@ function excluirDocumentoEmpresa(id: string): ServerResult {
   }
 }
 
+// ── Autorização do Drive ──────────────────────────────────────────────────────
+// O app roda como USER_ACCESSING; quando um escopo novo é adicionado (auth/drive),
+// o navegador ainda guarda o consentimento antigo e o upload falha. Aqui devolvemos
+// se falta autorizar e a URL de consentimento pra reautorizar sem sair do app.
+function getDriveAuthStatus(): ServerResult {
+  try {
+    const info = ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL);
+    const required = info.getAuthorizationStatus() === ScriptApp.AuthorizationStatus.REQUIRED;
+    return { ok: true, data: { authorized: !required, authUrl: required ? info.getAuthorizationUrl() : '' } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao checar autorização' };
+  }
+}
+
+// ── Árvore do Drive por empresa ───────────────────────────────────────────────
+const _DRIVE_TREE_MAX_DEPTH = 6;
+const _DRIVE_TREE_MAX_NODES = 1500;
+
+interface _DriveNode {
+  id: string; name: string; isFolder: boolean; url: string;
+  mime?: string; size?: number; downloadUrl?: string; children?: _DriveNode[];
+}
+
+function _driveDownloadUrl(fileId: string): string {
+  return 'https://drive.google.com/uc?export=download&id=' + fileId;
+}
+
+function _driveTreeOf(folder: GoogleAppsScript.Drive.Folder, depth: number, counter: { n: number }): _DriveNode {
+  const node: _DriveNode = { id: folder.getId(), name: folder.getName(), isFolder: true, url: folder.getUrl(), children: [] };
+  if (depth <= 0 || counter.n >= _DRIVE_TREE_MAX_NODES) return node;
+  const subs = folder.getFolders();
+  while (subs.hasNext() && counter.n < _DRIVE_TREE_MAX_NODES) {
+    counter.n++;
+    node.children!.push(_driveTreeOf(subs.next(), depth - 1, counter));
+  }
+  const files = folder.getFiles();
+  while (files.hasNext() && counter.n < _DRIVE_TREE_MAX_NODES) {
+    counter.n++;
+    const f = files.next();
+    node.children!.push({
+      id: f.getId(), name: f.getName(), isFolder: false, url: f.getUrl(),
+      mime: f.getMimeType(), size: f.getSize(), downloadUrl: _driveDownloadUrl(f.getId()),
+    });
+  }
+  // pastas primeiro, depois arquivos, ambos por nome
+  node.children!.sort((a, b) => (a.isFolder === b.isFolder ? a.name.localeCompare(b.name) : (a.isFolder ? -1 : 1)));
+  return node;
+}
+
+function getDriveTreeEmpresa(empresaId?: string): ServerResult {
+  try {
+    initDatabase();
+    const alvo = empresaId ? String(empresaId) : _empresaFiltroId();
+    const counter = { n: 0 };
+    if (!alvo) {
+      // Consolidado: mostra a raiz "Forja — Documentos" com a pasta de cada empresa.
+      const root = _docsRootFolder();
+      return { ok: true, data: { tree: _driveTreeOf(root, _DRIVE_TREE_MAX_DEPTH, counter), consolidado: true, folderUrl: root.getUrl() } };
+    }
+    const folder = _docsFolderEmpresa(alvo);
+    const emp = dbGetById('Empresas', alvo);
+    const nome = emp ? String(emp['nomeFantasia'] || emp['razaoSocial'] || alvo) : alvo;
+    return { ok: true, data: { tree: _driveTreeOf(folder, _DRIVE_TREE_MAX_DEPTH, counter), consolidado: false, folderUrl: folder.getUrl(), empresaNome: nome } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ler o Drive' };
+  }
+}
+
+// Confere se um item do Drive está dentro da raiz "Forja — Documentos" (segurança:
+// só deixamos apagar o que é nosso, nunca um arquivo qualquer do Drive do usuário).
+function _itemDentroDaRaizForja(item: GoogleAppsScript.Drive.File | GoogleAppsScript.Drive.Folder): boolean {
+  const rootId = PropertiesService.getScriptProperties().getProperty('DOCS_FOLDER_ROOT');
+  if (!rootId) return false;
+  const seen: Record<string, boolean> = {};
+  const fila: GoogleAppsScript.Drive.Folder[] = [];
+  const parents0 = item.getParents();
+  while (parents0.hasNext()) fila.push(parents0.next());
+  let guard = 0;
+  while (fila.length && guard < 200) {
+    guard++;
+    const p = fila.shift()!;
+    const pid = p.getId();
+    if (pid === rootId) return true;
+    if (seen[pid]) continue;
+    seen[pid] = true;
+    const pp = p.getParents();
+    while (pp.hasNext()) fila.push(pp.next());
+  }
+  return false;
+}
+
+// Manda um item (arquivo ou pasta) da árvore pra lixeira do Drive. Limpa também o
+// registro em EmpresaDocumentos, se houver.
+function excluirDriveItem(itemId: string, isFolder?: boolean): ServerResult {
+  try {
+    const id = String(itemId || '');
+    if (!id) return { ok: false, error: 'Item inválido' };
+    if (isFolder) {
+      const f = DriveApp.getFolderById(id);
+      if (!_itemDentroDaRaizForja(f)) return { ok: false, error: 'Só dá pra apagar itens dentro da pasta Forja — Documentos.' };
+      f.setTrashed(true);
+    } else {
+      const f = DriveApp.getFileById(id);
+      if (!_itemDentroDaRaizForja(f)) return { ok: false, error: 'Só dá pra apagar itens dentro da pasta Forja — Documentos.' };
+      f.setTrashed(true);
+      // remove metadados ligados a este arquivo
+      const rows = dbGetAll('EmpresaDocumentos') as Array<Record<string, unknown>>;
+      for (const r of rows) if (String(r['driveFileId']) === id) dbDelete('EmpresaDocumentos', String(r['id']));
+    }
+    return { ok: true };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao apagar item' };
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SERVIÇO DE PDF (v1.19) — geração server-side confiável no GAS
 //   Em vez de window.print() (instável dentro do iframe do Apps Script), o PDF é

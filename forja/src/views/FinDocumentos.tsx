@@ -3,8 +3,8 @@
 // por empresa) e aqui listamos os metadados, com categoria, validade e ação de
 // abrir/baixar. Escopado pela empresa selecionada no topo.
 import React, { useState, useEffect, useCallback } from 'react';
-import { Button, Table, Tag, Select, DatePicker, Input, Modal, Form, Upload, Popconfirm, Empty, Tooltip, Alert, App as AntApp } from 'antd';
-import { Plus, Trash2, ExternalLink, FileText, UploadCloud, AlertTriangle, Pencil, Building2, Layers } from 'lucide-react';
+import { Button, Table, Tag, Select, DatePicker, Input, Modal, Form, Upload, Popconfirm, Empty, Tooltip, Alert, Tree, Spin, App as AntApp } from 'antd';
+import { Plus, Trash2, ExternalLink, FileText, UploadCloud, AlertTriangle, Pencil, Building2, Layers, FolderTree, Folder, Download, ShieldAlert, RefreshCw } from 'lucide-react';
 import dayjs from 'dayjs';
 import { Panel } from '../components/ui';
 import { useTokens } from '../themeContext';
@@ -15,6 +15,11 @@ import type { ServerResponse } from '../types';
 interface Documento {
   id: string; empresaId: string; nome: string; categoria: string; mime: string;
   tamanho: number; driveFileId: string; url: string; validade: string; notas: string; criadoEm: string; empresaNome?: string;
+}
+
+interface DriveNode {
+  id: string; name: string; isFolder: boolean; url: string;
+  mime?: string; size?: number; downloadUrl?: string; children?: DriveNode[];
 }
 
 function formatBytes(n: number): string {
@@ -48,6 +53,13 @@ export default function FinDocumentos(): React.ReactElement {
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
+  // Autorização do Drive (escopo novo exige reconsentimento)
+  const [driveAuth, setDriveAuth] = useState<{ checked: boolean; ok: boolean; url: string }>({ checked: false, ok: true, url: '' });
+  // Árvore do Drive
+  const [treeOpen, setTreeOpen] = useState(false);
+  const [treeLoading, setTreeLoading] = useState(false);
+  const [treeData, setTreeData] = useState<DriveNode | null>(null);
+  const [treeFolderUrl, setTreeFolderUrl] = useState('');
 
   const load = useCallback(() => {
     setLoading(true);
@@ -66,7 +78,50 @@ export default function FinDocumentos(): React.ReactElement {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  const checkAuth = useCallback(() => {
+    callServer<ServerResponse<{ authorized: boolean; authUrl: string }>>('getDriveAuthStatus')
+      .then((res) => {
+        if (res.ok && res.data) {
+          const d = res.data as { authorized: boolean; authUrl: string };
+          setDriveAuth({ checked: true, ok: !!d.authorized, url: d.authUrl || '' });
+        } else setDriveAuth({ checked: true, ok: true, url: '' });
+      })
+      .catch(() => setDriveAuth({ checked: true, ok: true, url: '' }));
+  }, []);
+
+  useEffect(() => { load(); checkAuth(); }, [load, checkAuth]);
+
+  const abrirArvore = () => {
+    setTreeOpen(true);
+    setTreeLoading(true);
+    setTreeData(null);
+    callServer<ServerResponse<{ tree: DriveNode; folderUrl: string }>>('getDriveTreeEmpresa')
+      .then((res) => {
+        if (res.ok && res.data) {
+          const d = res.data as { tree: DriveNode; folderUrl: string };
+          setTreeData(d.tree || null);
+          setTreeFolderUrl(d.folderUrl || '');
+        } else message.error(res.error || 'Erro ao ler o Drive');
+      })
+      .catch(() => message.error('Erro ao ler o Drive'))
+      .finally(() => setTreeLoading(false));
+  };
+
+  const recarregarArvore = () => {
+    setTreeLoading(true);
+    callServer<ServerResponse<{ tree: DriveNode; folderUrl: string }>>('getDriveTreeEmpresa')
+      .then((res) => { if (res.ok && res.data) { const d = res.data as { tree: DriveNode; folderUrl: string }; setTreeData(d.tree || null); setTreeFolderUrl(d.folderUrl || ''); } })
+      .finally(() => setTreeLoading(false));
+  };
+
+  const removerItemDrive = (node: DriveNode) => {
+    callServer<ServerResponse<unknown>>('excluirDriveItem', node.id, node.isFolder)
+      .then((r) => {
+        if (r.ok) { message.success('Removido do Drive'); recarregarArvore(); load(); }
+        else message.error(r.error || 'Erro ao apagar');
+      })
+      .catch(() => message.error('Erro ao apagar'));
+  };
 
   const abrirUpload = () => { setEditId(null); setArquivo(null); form.resetFields(); form.setFieldsValue({ categoria: 'Outros' }); setUpOpen(true); };
   const abrirEdit = (d: Documento) => {
@@ -140,14 +195,56 @@ export default function FinDocumentos(): React.ReactElement {
     },
   ];
 
+  // Converte a árvore do servidor pra treeData do Ant, com ações no título.
+  const toAntNode = (n: DriveNode): Record<string, unknown> => ({
+    key: n.id,
+    isLeaf: !n.isFolder,
+    title: (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+        {n.isFolder ? <Folder size={14} style={{ color: t.accents.clay, flexShrink: 0 }} /> : <FileText size={14} style={{ color: t.textTertiary, flexShrink: 0 }} />}
+        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: t.text }}>{n.name}</span>
+        {!n.isFolder && n.size ? <span style={{ color: t.textTertiary, fontSize: 11, fontFamily: FONTS.mono }}>{formatBytes(n.size)}</span> : null}
+        <span className="forja-tree-actions" style={{ display: 'inline-flex', gap: 2 }}>
+          <Tooltip title="Abrir no Drive"><Button type="text" size="small" icon={<ExternalLink size={13} />} href={n.url} target="_blank" /></Tooltip>
+          {!n.isFolder && n.downloadUrl ? <Tooltip title="Baixar"><Button type="text" size="small" icon={<Download size={13} />} href={n.downloadUrl} target="_blank" /></Tooltip> : null}
+          <Popconfirm
+            title={n.isFolder ? 'Apagar a pasta e tudo dentro?' : 'Apagar este arquivo?'}
+            description="Vai pra lixeira do Drive."
+            okText="Apagar" cancelText="Cancelar" okButtonProps={{ danger: true }}
+            onConfirm={() => removerItemDrive(n)}
+          >
+            <Tooltip title="Apagar"><Button type="text" size="small" danger icon={<Trash2 size={13} />} /></Tooltip>
+          </Popconfirm>
+        </span>
+      </div>
+    ),
+    children: n.children && n.children.length ? n.children.map(toAntNode) : undefined,
+  });
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Reautorização do Drive: escopo novo (auth/drive) exige reconsentimento. */}
+      {driveAuth.checked && !driveAuth.ok && (
+        <Alert
+          type="error" showIcon icon={<ShieldAlert size={16} />}
+          message="O Google Drive precisa ser reautorizado"
+          description="Adicionamos permissão de escrita no Drive (pra guardar os documentos). Como o app roda com a sua conta, você precisa reautorizar uma vez — senão o upload falha."
+          action={
+            <div style={{ display: 'flex', gap: 8 }}>
+              {driveAuth.url && <Button type="primary" href={driveAuth.url} target="_blank" onClick={() => message.info('Após autorizar na aba aberta, volte e clique em "Já autorizei".')}>Autorizar Google Drive</Button>}
+              <Button icon={<RefreshCw size={14} />} onClick={checkAuth}>Já autorizei</Button>
+            </div>
+          }
+        />
+      )}
+
       {/* Barra de contexto: deixa explícito de QUAL empresa são estes documentos. */}
       {consolidado ? (
         <Alert
           type="warning" showIcon icon={<Layers size={16} />}
           message="Você está no Consolidado (todas as empresas)"
           description="A lista abaixo mostra os documentos de todas as empresas. Para anexar um documento, selecione uma empresa específica no seletor do topo."
+          action={<Button icon={<FolderTree size={14} />} onClick={abrirArvore}>Ver árvore do Drive</Button>}
         />
       ) : (
         <div style={{
@@ -162,6 +259,7 @@ export default function FinDocumentos(): React.ReactElement {
           </span>
           <span style={{ color: t.textTertiary, fontSize: 12.5 }}>· troque a empresa no seletor do topo</span>
           <div style={{ flex: 1 }} />
+          <Button icon={<FolderTree size={15} />} onClick={abrirArvore}>Ver árvore do Drive</Button>
           <Button type="primary" icon={<Plus size={15} />} onClick={abrirUpload}>Adicionar documento</Button>
         </div>
       )}
@@ -233,6 +331,38 @@ export default function FinDocumentos(): React.ReactElement {
             <Input.TextArea rows={2} placeholder="Observações" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <FolderTree size={16} /> Árvore do Drive {consolidado ? '— todas as empresas' : (empresaNome ? `— ${empresaNome}` : '')}
+          </div>
+        }
+        open={treeOpen}
+        onCancel={() => setTreeOpen(false)}
+        width={640}
+        footer={[
+          <Button key="reload" icon={<RefreshCw size={14} />} onClick={recarregarArvore} disabled={treeLoading}>Recarregar</Button>,
+          treeFolderUrl ? <Button key="open" icon={<ExternalLink size={14} />} href={treeFolderUrl} target="_blank">Abrir pasta no Drive</Button> : null,
+          <Button key="close" type="primary" onClick={() => setTreeOpen(false)}>Fechar</Button>,
+        ]}
+      >
+        <style>{`.forja-tree-actions{opacity:0;transition:opacity .15s} .forja-drive-tree .ant-tree-treenode:hover .forja-tree-actions{opacity:1} .forja-drive-tree .ant-tree-node-content-wrapper{width:100%}`}</style>
+        {treeLoading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><Spin /></div>
+        ) : treeData ? (
+          <div className="forja-drive-tree" style={{ maxHeight: '60vh', overflow: 'auto' }}>
+            <Tree
+              showLine
+              blockNode
+              defaultExpandedKeys={[treeData.id, ...((treeData.children || []).map((c) => c.id))]}
+              treeData={[toAntNode(treeData)] as never}
+            />
+          </div>
+        ) : (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Pasta vazia — adicione documentos primeiro." />
+        )}
       </Modal>
     </div>
   );
