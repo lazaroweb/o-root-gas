@@ -73,7 +73,7 @@ export default function FinEmpresas({ open, onClose, onChange, abrirNovo }: {
 
   return (
     <>
-      <Modal title="Empresas" open={open} onCancel={onClose} footer={null} width={760} destroyOnClose>
+      <Modal title="Empresas" open={open} onCancel={onClose} footer={null} width={920} style={{ top: 40 }} destroyOnClose>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
           <Button type="primary" icon={<Plus size={15} />} onClick={() => abrir()}>Nova empresa</Button>
         </div>
@@ -83,22 +83,22 @@ export default function FinEmpresas({ open, onClose, onChange, abrirNovo }: {
           loading={loading}
           pagination={false}
           size="middle"
-          scroll={{ x: 'max-content' }}
+          tableLayout="fixed"
           columns={[
             {
-              title: 'Empresa', dataIndex: 'nomeFantasia',
+              title: 'Empresa', dataIndex: 'nomeFantasia', ellipsis: true,
               render: (_: string, e: Empresa) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ width: 10, height: 10, borderRadius: 3, background: e.cor || '#8b5cf6', display: 'inline-block' }} />
-                  <span style={{ color: t.text, fontWeight: 500 }}>{e.nomeFantasia || e.razaoSocial}</span>
-                  {e.padrao && <Tag color="gold" style={{ marginInlineStart: 4 }}>Padrão</Tag>}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 3, background: e.cor || '#8b5cf6', display: 'inline-block', flexShrink: 0 }} />
+                  <span style={{ color: t.text, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.nomeFantasia || e.razaoSocial}</span>
+                  {e.padrao && <Tag color="gold" style={{ marginInlineStart: 4, flexShrink: 0 }}>Padrão</Tag>}
                 </div>
               ),
             },
-            { title: 'CNPJ', dataIndex: 'cnpj', render: (v: string) => <span style={{ color: t.textSecondary }}>{v || '—'}</span> },
-            { title: 'Regime', dataIndex: 'regime', render: (v: string, e: Empresa) => <span style={{ color: t.textSecondary }}>{v}{e.anexo ? ` · Anexo ${e.anexo}` : ''}</span> },
+            { title: 'CNPJ', dataIndex: 'cnpj', width: 180, ellipsis: true, render: (v: string) => <span style={{ color: t.textSecondary }}>{v || '—'}</span> },
+            { title: 'Regime', dataIndex: 'regime', width: 200, ellipsis: true, render: (v: string, e: Empresa) => <span style={{ color: t.textSecondary }}>{v}{e.anexo ? ` · Anexo ${e.anexo}` : ''}</span> },
             {
-              title: 'Ações', key: 'acoes', align: 'right', width: 150,
+              title: 'Ações', key: 'acoes', align: 'right', width: 160,
               render: (_: unknown, e: Empresa) => (
                 <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                   {!e.padrao && (

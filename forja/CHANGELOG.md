@@ -36,6 +36,16 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.170.1] — 2026-06-25
+
+### Corrigido — Modal de empresas com scroll horizontal
+
+O modal "Gerenciar empresas" forçava rolar pra esquerda/direita depois que a tag
+"Padrão" entrou. Agora é mais largo (920px), com layout de tabela fixo, colunas
+dimensionadas e truncamento por reticências — cabe tudo sem scroll lateral.
+
+---
+
 ## [1.170.0] — 2026-06-25
 
 ### Melhorado — Descoberta do cadastro de empresas
