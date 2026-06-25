@@ -83,13 +83,13 @@ const SCHEMA: SheetSchema[] = [
     // Fiscal/endereço (v1.157.0) — exigidos por boleto registrado (pagador)
     'cpf', 'cep', 'logradouro', 'numeroEndereco', 'bairro',
   ] },
-  { name: 'Custos', columns: ['id', 'sistemaId', 'fornecedor', 'valor', 'recorrencia', 'proximaCobranca', 'categoria'] },
+  { name: 'Custos', columns: ['id', 'sistemaId', 'fornecedor', 'valor', 'recorrencia', 'proximaCobranca', 'categoria', 'empresaId'] },
   // FinEmpresaDespesas (v1.15): livro-caixa MENSAL de despesas avulsas da empresa
   // (contas, recibos, notas) — separado dos `Custos` recorrentes. `competencia`
   // YYYY-MM (mês de referência, derivado da data). `status` 'pago'|'pendente'|
   // 'agendado'. `sistemaId` vincula opcionalmente a um app. `origem` 'manual'|
   // 'import' e `documento` guarda o nome do PDF importado pra rastreabilidade.
-  { name: 'FinEmpresaDespesas', columns: ['id', 'data', 'competencia', 'fornecedor', 'descricao', 'categoria', 'valor', 'sistemaId', 'status', 'formaPagamento', 'origem', 'documento', 'notas', 'criadoEm', 'atualizadoEm'] },
+  { name: 'FinEmpresaDespesas', columns: ['id', 'data', 'competencia', 'fornecedor', 'descricao', 'categoria', 'valor', 'sistemaId', 'status', 'formaPagamento', 'origem', 'documento', 'notas', 'criadoEm', 'atualizadoEm', 'empresaId'] },
   { name: 'Pulsos', columns: ['id', 'sistemaId', 'urlCheck', 'ultimoStatus', 'latenciaMs', 'verificadoEm'] },
   { name: 'Timeline', columns: ['id', 'sistemaId', 'data', 'tipo', 'texto'] },
   { name: 'Alertas', columns: ['id', 'tipo', 'severidade', 'titulo', 'mensagem', 'sistemaId', 'criadoEm', 'lidoEm', 'dedupeKey', 'link'] },
@@ -99,7 +99,7 @@ const SCHEMA: SheetSchema[] = [
   // `canceladaEm` (v1.16): data (YYYY-MM-DD) em que a assinatura foi cancelada —
   // append-only, preenchida automaticamente quando o status vira 'cancelada'.
   // Permite calcular churn do mês.
-  { name: 'Receitas', columns: ['id', 'sistemaId', 'pessoaId', 'plano', 'valor', 'recorrencia', 'status', 'inicio', 'proximaCobranca', 'canceladaEm'] },
+  { name: 'Receitas', columns: ['id', 'sistemaId', 'pessoaId', 'plano', 'valor', 'recorrencia', 'status', 'inicio', 'proximaCobranca', 'canceladaEm', 'empresaId'] },
   // PlanosApp (v1.16): catálogo de planos de assinatura por app. Core do negócio
   // = vender plano mensal de cada app. `valor`/`recorrencia` viram default ao
   // criar uma assinatura (escolhe app → plano → preço entra sozinho).
@@ -108,17 +108,17 @@ const SCHEMA: SheetSchema[] = [
   // ciclo da cobrança — registra o realizado (vs. previsto/MRR) e, ao registrar,
   // a próxima cobrança da assinatura é rolada pro próximo ciclo. `competencia`
   // (YYYY-MM) referencia o mês do recebimento.
-  { name: 'Recebimentos', columns: ['id', 'receitaId', 'sistemaId', 'pessoaId', 'competencia', 'valor', 'data', 'recorrencia', 'notas', 'criadoEm'] },
+  { name: 'Recebimentos', columns: ['id', 'receitaId', 'sistemaId', 'pessoaId', 'competencia', 'valor', 'data', 'recorrencia', 'notas', 'criadoEm', 'empresaId'] },
   // PagamentosCusto (v1.159.0): ledger de pagamentos de custos recorrentes
   // (contratos). Espelho de Recebimentos pro lado "A pagar" — registra o realizado
   // e, ao registrar, a próxima cobrança do custo é rolada pro ciclo seguinte.
-  { name: 'PagamentosCusto', columns: ['id', 'custoId', 'sistemaId', 'fornecedor', 'competencia', 'valor', 'data', 'recorrencia', 'notas', 'criadoEm'] },
+  { name: 'PagamentosCusto', columns: ['id', 'custoId', 'sistemaId', 'fornecedor', 'competencia', 'valor', 'data', 'recorrencia', 'notas', 'criadoEm', 'empresaId'] },
   // EmpresaCobrancas (v1.157.0): cobranças A RECEBER emitidas via PSP (boleto +
   // PIX). Distinta de FinPessoalCobrancas (família). `metodo`: boleto|pix|ambos.
   // `status`: pendente|emitida|paga|vencida|cancelada. `provedorCobrancaId` é o id
   // da cobrança no PSP (chave pra casar o webhook). Ao ser paga, gera um
   // Recebimento (recebimentoId) e rola a Receita vinculada (receitaId, opcional).
-  { name: 'EmpresaCobrancas', columns: ['id', 'receitaId', 'sistemaId', 'pessoaId', 'descricao', 'valor', 'vencimento', 'metodo', 'status', 'provedor', 'provedorClienteId', 'provedorCobrancaId', 'linhaDigitavel', 'codigoBarras', 'urlBoleto', 'pixCopiaCola', 'pixQrCodeImg', 'urlFatura', 'competencia', 'recebimentoId', 'valorPago', 'pagaEm', 'criadoEm', 'atualizadoEm', 'jsonProvedor'] },
+  { name: 'EmpresaCobrancas', columns: ['id', 'receitaId', 'sistemaId', 'pessoaId', 'descricao', 'valor', 'vencimento', 'metodo', 'status', 'provedor', 'provedorClienteId', 'provedorCobrancaId', 'linhaDigitavel', 'codigoBarras', 'urlBoleto', 'pixCopiaCola', 'pixQrCodeImg', 'urlFatura', 'competencia', 'recebimentoId', 'valorPago', 'pagaEm', 'criadoEm', 'atualizadoEm', 'jsonProvedor', 'empresaId'] },
   // CobrancaEventos (v1.157.0): log de eventos de webhook do PSP. `eventoId` é o
   // id único do evento no provedor — usado pra idempotência (não dar baixa 2x).
   { name: 'CobrancaEventos', columns: ['id', 'provedor', 'eventoId', 'cobrancaId', 'tipo', 'payloadJson', 'recebidoEm'] },
@@ -126,15 +126,21 @@ const SCHEMA: SheetSchema[] = [
   // conciliação bancária. `fitid` é o id único do banco (dedupe). `tipo`:
   // credito|debito. `status`: pendente|conciliada|ignorada. `vinculoTipo`:
   // cobranca|despesa|custo|recebimento (o que foi baixado ao conciliar).
-  { name: 'ConciliacaoTransacoes', columns: ['id', 'fitid', 'data', 'descricao', 'valor', 'tipo', 'status', 'vinculoTipo', 'vinculoId', 'banco', 'conciliadoEm', 'criadoEm'] },
+  { name: 'ConciliacaoTransacoes', columns: ['id', 'fitid', 'data', 'descricao', 'valor', 'tipo', 'status', 'vinculoTipo', 'vinculoId', 'banco', 'conciliadoEm', 'criadoEm', 'empresaId'] },
   // NotasFiscais (v1.163.0): NFS-e (nota de serviço) emitida via PSP (Asaas).
   // `status` espelha o Asaas: SCHEDULED|SYNCHRONIZED|AUTHORIZED|PROCESSING_CANCELLATION|
   // CANCELED|CANCELLATION_DENIED|ERROR. `provedorNotaId` é o id da nota no Asaas.
-  { name: 'NotasFiscais', columns: ['id', 'cobrancaId', 'pessoaId', 'provedor', 'provedorNotaId', 'status', 'numero', 'urlPdf', 'urlXml', 'valor', 'criadoEm', 'atualizadoEm', 'jsonProvedor'] },
+  { name: 'NotasFiscais', columns: ['id', 'cobrancaId', 'pessoaId', 'provedor', 'provedorNotaId', 'status', 'numero', 'urlPdf', 'urlXml', 'valor', 'criadoEm', 'atualizadoEm', 'jsonProvedor', 'empresaId'] },
   // Impostos (v1.164.0): guias de imposto (DAS/Simples) por competência. Base =
   // receita bruta realizada (Recebimentos do mês) × alíquota. `status`: pendente|pago.
   // `despesaId` liga ao lançamento no livro-caixa criado ao registrar o pagamento.
-  { name: 'Impostos', columns: ['id', 'competencia', 'regime', 'baseCalculo', 'aliquota', 'valor', 'vencimento', 'status', 'dataPagamento', 'despesaId', 'notas', 'criadoEm', 'atualizadoEm'] },
+  { name: 'Impostos', columns: ['id', 'competencia', 'regime', 'baseCalculo', 'aliquota', 'valor', 'vencimento', 'status', 'dataPagamento', 'despesaId', 'notas', 'criadoEm', 'atualizadoEm', 'empresaId'] },
+  // Empresas (v1.166.0): cadastro das empresas (CNPJs) que você gerencia. Toda a
+  // jornada financeira/contábil é carimbada com `empresaId`. `padrao` marca a
+  // empresa default (recebe o histórico na migração e novos lançamentos quando a
+  // visão ativa é "Consolidado"). `anexo` (Simples) e `rbt12` alimentam o cálculo
+  // da alíquota efetiva dos impostos. `cor` identifica visualmente nos seletores.
+  { name: 'Empresas', columns: ['id', 'razaoSocial', 'nomeFantasia', 'cnpj', 'regime', 'anexo', 'rbt12', 'inscricaoMunicipal', 'inscricaoEstadual', 'cep', 'logradouro', 'numero', 'bairro', 'cidade', 'uf', 'email', 'telefone', 'cor', 'padrao', 'ativo', 'criadoEm', 'atualizadoEm'] },
   // v1.4.1: `origem` marca geração (ex: 'forja-self' pra dogfooding) e
   // `referencia` permite destacar um item como referência fixa no topo da
   // lista. Append-only — schema migra sem desalinhar dados antigos.
@@ -386,7 +392,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.80-impostos';
+const SCHEMA_VERSION = 'v1.81-empresas';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -466,6 +472,16 @@ function _executarMigracoes(): void {
       try { _migrarForjaSelfRepoUrl(); } catch { /* segue baile */ }
       props.setProperty('MIGRATION_V148_FORJA_REPO', 'done');
     }
+    // v1.166.0 — multi-empresa: cria a empresa padrão e carimba empresaId em todo
+    // o histórico financeiro existente (Receitas, Cobranças, Despesas, etc.).
+    if (props.getProperty('MIGRATION_V166_EMPRESAS') !== 'done') {
+      try {
+        _empresasInvalidarCache();
+        const padrao = _garantirEmpresaPadrao();
+        _migrarEmpresaIdHistorico(String(padrao['id']));
+      } catch { /* segue baile */ }
+      props.setProperty('MIGRATION_V166_EMPRESAS', 'done');
+    }
   } catch { /* PropertiesService pode falhar em contextos limitados */ }
 }
 
@@ -489,6 +505,227 @@ function _migrarForjaSelfRepoUrl(): void {
 
 function generateId(): string {
   return Utilities.getUuid();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EMPRESAS (v1.166.0) — multi-empresa: cada CNPJ é uma empresa e toda a jornada
+// financeira/contábil é carimbada com `empresaId`. A "empresa ativa" (Script
+// Property EMPRESA_ATIVA) define o escopo das telas: um id → só aquela empresa;
+// '__todas__' → Consolidado (sem filtro); vazio → empresa padrão (single-company).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let _empresasCache: Array<Record<string, unknown>> | null = null;
+function _empresasAll(): Array<Record<string, unknown>> {
+  if (_empresasCache) return _empresasCache;
+  _empresasCache = dbGetAll('Empresas') as Array<Record<string, unknown>>;
+  return _empresasCache;
+}
+function _empresasInvalidarCache(): void { _empresasCache = null; }
+
+function _ehPadrao(e: Record<string, unknown>): boolean {
+  return e['padrao'] === true || String(e['padrao']) === 'true';
+}
+
+function _empresaDefaultId(): string {
+  const todas = _empresasAll();
+  if (!todas.length) return '';
+  const padrao = todas.find(_ehPadrao);
+  return String((padrao || todas[0])['id'] || '');
+}
+
+// Garante ao menos uma empresa padrão (criada na primeira execução pós-deploy).
+function _garantirEmpresaPadrao(): Record<string, unknown> {
+  const todas = _empresasAll();
+  const existente = todas.find(_ehPadrao) || todas[0];
+  if (existente) return existente;
+  const nova = dbCreate('Empresas', {
+    razaoSocial: 'Minha Empresa', nomeFantasia: 'Minha Empresa', cnpj: '',
+    regime: 'Simples Nacional', anexo: '', rbt12: 0,
+    cor: '#8b5cf6', padrao: true, ativo: true,
+    criadoEm: new Date().toISOString(), atualizadoEm: new Date().toISOString(),
+  });
+  _empresasInvalidarCache();
+  return nova;
+}
+
+// Valor cru da empresa ativa: '' | '__todas__' | <id>.
+function _empresaAtivaRaw(): string {
+  try { return String(PropertiesService.getScriptProperties().getProperty('EMPRESA_ATIVA') || ''); }
+  catch { return ''; }
+}
+
+// Id concreto pra carimbar novos lançamentos — nunca vazio se houver empresa.
+function _empresaParaCriarId(): string {
+  const raw = _empresaAtivaRaw();
+  if (raw && raw !== '__todas__') return raw;
+  return _empresaDefaultId();
+}
+
+// Id usado pra FILTRAR leituras. '' = sem filtro (Consolidado).
+function _empresaFiltroId(): string {
+  const raw = _empresaAtivaRaw();
+  if (raw === '__todas__') return '';
+  if (raw) return raw;
+  return _empresaDefaultId();
+}
+
+// Filtra linhas pela empresa ativa. No modo padrão, linhas legadas (empresaId
+// vazio) caem na empresa default — defensivo pra dados anteriores à migração.
+function _filtraEmpresa<T extends Record<string, unknown>>(rows: T[]): T[] {
+  const fid = _empresaFiltroId();
+  if (!fid) return rows;
+  const def = _empresaDefaultId();
+  return rows.filter((r) => {
+    const e = String(r['empresaId'] || '');
+    if (e === fid) return true;
+    if (e === '' && fid === def) return true;
+    return false;
+  });
+}
+
+// Backfill: carimba empresaId = default em todo o histórico financeiro sem empresa.
+// 1 leitura + 1 escrita por tabela (coluna isolada) — barato mesmo com volume.
+function _migrarEmpresaIdHistorico(defaultId: string): void {
+  const tabelas = ['Receitas', 'Recebimentos', 'EmpresaCobrancas', 'Custos', 'FinEmpresaDespesas', 'Impostos', 'ConciliacaoTransacoes', 'NotasFiscais', 'PagamentosCusto'];
+  const ss = getSpreadsheet();
+  for (const nome of tabelas) {
+    const schema = SCHEMA.find((s) => s.name === nome);
+    if (!schema) continue;
+    const col = schema.columns.indexOf('empresaId');
+    if (col < 0) continue;
+    const sheet = ss.getSheetByName(nome);
+    if (!sheet) continue;
+    const lastRow = sheet.getLastRow();
+    if (lastRow <= 1) continue;
+    const range = sheet.getRange(2, col + 1, lastRow - 1, 1);
+    const vals = range.getValues();
+    let mudou = false;
+    for (let i = 0; i < vals.length; i++) {
+      if (vals[i][0] === '' || vals[i][0] === null || vals[i][0] === undefined) { vals[i][0] = defaultId; mudou = true; }
+    }
+    if (mudou) range.setValues(vals);
+  }
+}
+
+// ─── RPCs de Empresas ──────────────────────────────────────────────────────────
+
+function getEmpresas(): ServerResult {
+  try {
+    initDatabase();
+    _garantirEmpresaPadrao();
+    _empresasInvalidarCache();
+    const lista = _empresasAll().map((e) => {
+      const o = _sanitizarLinha(e);
+      o['padrao'] = _ehPadrao(e);
+      o['ativo'] = e['ativo'] === true || String(e['ativo']) === 'true' || e['ativo'] === '' ;
+      return o;
+    });
+    return {
+      ok: true,
+      data: {
+        empresas: lista,
+        ativa: _empresaAtivaRaw() || _empresaDefaultId(),
+        consolidado: _empresaAtivaRaw() === '__todas__',
+        defaultId: _empresaDefaultId(),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar empresas' };
+  }
+}
+
+function getEmpresaAtiva(): ServerResult {
+  return {
+    ok: true,
+    data: {
+      raw: _empresaAtivaRaw(),
+      empresaId: _empresaFiltroId(),
+      consolidado: _empresaAtivaRaw() === '__todas__',
+      defaultId: _empresaDefaultId(),
+    },
+  };
+}
+
+function setEmpresaAtiva(id: string): ServerResult {
+  try {
+    const val = String(id || '');
+    PropertiesService.getScriptProperties().setProperty('EMPRESA_ATIVA', val);
+    return { ok: true, data: { ativa: val } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao trocar empresa' };
+  }
+}
+
+function salvarEmpresa(payload: Record<string, unknown>): ServerResult {
+  try {
+    initDatabase();
+    const p = payload || {};
+    const id = p['id'] ? String(p['id']) : '';
+    const agora = new Date().toISOString();
+    const querPadrao = p['padrao'] === true || String(p['padrao']) === 'true';
+    const reg: Record<string, unknown> = {
+      razaoSocial: String(p['razaoSocial'] || '').trim(),
+      nomeFantasia: String(p['nomeFantasia'] || p['razaoSocial'] || '').trim(),
+      cnpj: String(p['cnpj'] || '').trim(),
+      regime: String(p['regime'] || 'Simples Nacional'),
+      anexo: String(p['anexo'] || ''),
+      rbt12: Number(p['rbt12'] || 0),
+      inscricaoMunicipal: String(p['inscricaoMunicipal'] || ''),
+      inscricaoEstadual: String(p['inscricaoEstadual'] || ''),
+      cep: String(p['cep'] || ''),
+      logradouro: String(p['logradouro'] || ''),
+      numero: String(p['numero'] || ''),
+      bairro: String(p['bairro'] || ''),
+      cidade: String(p['cidade'] || ''),
+      uf: String(p['uf'] || ''),
+      email: String(p['email'] || ''),
+      telefone: String(p['telefone'] || ''),
+      cor: String(p['cor'] || '#8b5cf6'),
+      ativo: p['ativo'] === undefined ? true : (p['ativo'] === true || String(p['ativo']) === 'true'),
+      atualizadoEm: agora,
+    };
+    if (!reg['razaoSocial'] && !reg['nomeFantasia']) return { ok: false, error: 'Informe ao menos a razão social ou nome.' };
+
+    const todas = _empresasAll();
+    const ehPrimeira = todas.length === 0;
+    reg['padrao'] = querPadrao || ehPrimeira;
+
+    let salvo: Record<string, unknown> | null;
+    if (id) {
+      salvo = dbUpdate('Empresas', id, reg);
+      if (!salvo) return { ok: false, error: 'Empresa não encontrada' };
+    } else {
+      reg['criadoEm'] = agora;
+      salvo = dbCreate('Empresas', reg);
+    }
+    // Garante padrão único.
+    if (reg['padrao']) {
+      for (const e of dbGetAll('Empresas') as Array<Record<string, unknown>>) {
+        if (String(e['id']) !== String(salvo['id']) && _ehPadrao(e)) {
+          dbUpdate('Empresas', String(e['id']), { padrao: false });
+        }
+      }
+    }
+    _empresasInvalidarCache();
+    return { ok: true, data: salvo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar empresa' };
+  }
+}
+
+function deletarEmpresa(id: string): ServerResult {
+  try {
+    initDatabase();
+    const alvo = dbGetById('Empresas', String(id));
+    if (!alvo) return { ok: false, error: 'Empresa não encontrada' };
+    if (_ehPadrao(alvo)) return { ok: false, error: 'Não dá pra excluir a empresa padrão. Defina outra como padrão antes.' };
+    const ok = dbDelete('Empresas', String(id));
+    if (ok && _empresaAtivaRaw() === String(id)) PropertiesService.getScriptProperties().setProperty('EMPRESA_ATIVA', '');
+    _empresasInvalidarCache();
+    return ok ? { ok: true } : { ok: false, error: 'Erro ao excluir' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao excluir empresa' };
+  }
 }
 
 function sheetToObjects(sheetName: string): Record<string, unknown>[] {
@@ -520,6 +757,15 @@ function dbGetById(sheetName: string, id: string): Record<string, unknown> | nul
 function dbCreate(sheetName: string, data: Record<string, unknown>): Record<string, unknown> {
   const schema = SCHEMA.find(s => s.name === sheetName);
   if (!schema) throw new Error(`Sheet ${sheetName} not in schema`);
+  // Multi-empresa: toda tabela com coluna `empresaId` recebe automaticamente a
+  // empresa ativa quando o chamador não informa uma. Centraliza o carimbo num
+  // único ponto em vez de espalhar por cada create financeiro.
+  if (schema.columns.indexOf('empresaId') >= 0) {
+    const v = data['empresaId'];
+    if (v === undefined || v === null || v === '') {
+      data = Object.assign({}, data, { empresaId: _empresaParaCriarId() });
+    }
+  }
   const sheet = getOrCreateSheet(sheetName, schema.columns);
   const id = generateId();
   const row = schema.columns.map(col => {
@@ -539,10 +785,16 @@ function dbBatchCreate(sheetName: string, itens: Array<Record<string, unknown>>)
   if (!itens || itens.length === 0) return [];
   const schema = SCHEMA.find(s => s.name === sheetName);
   if (!schema) throw new Error(`Sheet ${sheetName} not in schema`);
+  const carimbaEmpresa = schema.columns.indexOf('empresaId') >= 0;
+  const empresaPadrao = carimbaEmpresa ? _empresaParaCriarId() : '';
   const sheet = getOrCreateSheet(sheetName, schema.columns);
   const linhas: unknown[][] = [];
   const objs: Array<Record<string, unknown>> = [];
-  for (const data of itens) {
+  for (let data of itens) {
+    if (carimbaEmpresa) {
+      const v = data['empresaId'];
+      if (v === undefined || v === null || v === '') data = Object.assign({}, data, { empresaId: empresaPadrao });
+    }
     const id = generateId();
     const row = schema.columns.map(col => {
       if (col === 'id') return id;
@@ -3287,7 +3539,7 @@ function getDashboardData(): ServerResult {
 
 function getCustos(): ServerResult {
   try {
-    const custos = dbGetAll('Custos').map((c) => {
+    const custos = _filtraEmpresa(dbGetAll('Custos')).map((c) => {
       const s = c['sistemaId'] ? dbGetById('Sistemas', String(c['sistemaId'])) : null;
       return { ...c, sistemaNome: s ? String(s['nome']) : '' };
     });
@@ -3326,9 +3578,9 @@ function deleteCusto(id: string): ServerResult {
 function getFinanceiro(): ServerResult {
   try {
     const sistemas = dbGetAll('Sistemas');
-    const custos = dbGetAll('Custos');
-    const receitas = dbGetAll('Receitas');
-    const despesas = dbGetAll('FinEmpresaDespesas');
+    const custos = _filtraEmpresa(dbGetAll('Custos'));
+    const receitas = _filtraEmpresa(dbGetAll('Receitas'));
+    const despesas = _filtraEmpresa(dbGetAll('FinEmpresaDespesas'));
     const receitasAtivas = receitas.filter(r => String(r['status'] || 'ativa').toLowerCase() !== 'cancelada');
 
     const custoMensal = custos.reduce((s, c) => s + toMonthly(Number(c['valor'] || 0), String(c['recorrencia'] || 'mensal')), 0);
@@ -3471,7 +3723,7 @@ function getProjecaoCaixa(meses?: number, saldoInicial?: number): ServerResult {
     // 1) Cobranças em aberto (emitida/vencida) — receita concreta, por vencimento.
     //    Guarda (receitaId|mês) pra não duplicar com a projeção de assinatura.
     const cobertoPorCobranca: Record<string, boolean> = {};
-    const cobrancas = (dbGetAll('EmpresaCobrancas') as Array<Record<string, unknown>>)
+    const cobrancas = _filtraEmpresa(dbGetAll('EmpresaCobrancas') as Array<Record<string, unknown>>)
       .filter((c) => { const s = String(c['status']); return s === 'emitida' || s === 'vencida'; });
     for (const c of cobrancas) {
       const i = idxDe(String(c['vencimento'] || ''));
@@ -3484,7 +3736,7 @@ function getProjecaoCaixa(meses?: number, saldoInicial?: number): ServerResult {
 
     // 2) Assinaturas ativas — projeta renovações a partir da próxima cobrança,
     //    pulando o mês que já tem cobrança emitida pra aquela assinatura.
-    const receitas = (dbGetAll('Receitas') as Array<Record<string, unknown>>)
+    const receitas = _filtraEmpresa(dbGetAll('Receitas') as Array<Record<string, unknown>>)
       .filter((r) => String(r['status'] || 'ativa').toLowerCase() === 'ativa');
     for (const r of receitas) {
       const base = String(r['proximaCobranca'] || '');
@@ -3500,7 +3752,7 @@ function getProjecaoCaixa(meses?: number, saldoInicial?: number): ServerResult {
     }
 
     // 3) Custos recorrentes (contratos) — projeta saídas a partir da próxima cobrança.
-    const custos = dbGetAll('Custos') as Array<Record<string, unknown>>;
+    const custos = _filtraEmpresa(dbGetAll('Custos') as Array<Record<string, unknown>>);
     for (const c of custos) {
       const base = String(c['proximaCobranca'] || '');
       const valor = Number(c['valor'] || 0);
@@ -3518,7 +3770,7 @@ function getProjecaoCaixa(meses?: number, saldoInicial?: number): ServerResult {
     }
 
     // 4) Despesas pendentes (livro-caixa) — saída por competência/data.
-    const despesas = (dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>)
+    const despesas = _filtraEmpresa(dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>)
       .filter((d) => String(d['status'] || '') !== 'pago');
     for (const d of despesas) {
       const ref = String(d['data'] || '') || (String(d['competencia'] || '') + '-15');
@@ -3737,7 +3989,7 @@ function deleteStack(id: string): ServerResult {
 
 function getReceitas(): ServerResult {
   try {
-    return { ok: true, data: dbGetAll('Receitas') };
+    return { ok: true, data: _filtraEmpresa(dbGetAll('Receitas')) };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar receitas' };
   }
@@ -3973,7 +4225,7 @@ function _avancarCiclo(dataISO: string, recorrencia: string): string {
 
 function getRecebimentos(competencia?: string): ServerResult {
   try {
-    let rows = dbGetAll('Recebimentos') as Array<Record<string, unknown>>;
+    let rows = _filtraEmpresa(dbGetAll('Recebimentos') as Array<Record<string, unknown>>);
     if (competencia) rows = rows.filter((r) => String(r['competencia']) === competencia);
     rows.sort((a, b) => String(b['data']).localeCompare(String(a['data'])));
     return { ok: true, data: rows };
@@ -4003,6 +4255,8 @@ function registrarRecebimento(receitaId: string, payload?: Record<string, unknow
       data,
       recorrencia,
       notas: String(p['notas'] || ''),
+      // Herda a empresa da assinatura (não a ativa) — webhook não tem sessão de UI.
+      empresaId: String(receita['empresaId'] || ''),
       criadoEm: new Date().toISOString(),
     });
 
@@ -4031,7 +4285,7 @@ function deletarRecebimento(id: string): ServerResult {
 
 function getPagamentosCusto(competencia?: string): ServerResult {
   try {
-    let rows = dbGetAll('PagamentosCusto') as Array<Record<string, unknown>>;
+    let rows = _filtraEmpresa(dbGetAll('PagamentosCusto') as Array<Record<string, unknown>>);
     if (competencia) rows = rows.filter((r) => String(r['competencia']) === competencia);
     rows.sort((a, b) => String(b['data']).localeCompare(String(a['data'])));
     return { ok: true, data: rows };
@@ -4061,6 +4315,7 @@ function registrarPagamentoCusto(custoId: string, payload?: Record<string, unkno
       data,
       recorrencia,
       notas: String(p['notas'] || ''),
+      empresaId: String(custo['empresaId'] || ''),
       criadoEm: new Date().toISOString(),
     });
 
@@ -4545,7 +4800,7 @@ function _marcarCobrancasVencidas(): number {
 function cobrancasList(filtros?: Record<string, unknown>): ServerResult {
   try {
     _marcarCobrancasVencidas();
-    let rows = dbGetAll('EmpresaCobrancas') as Array<Record<string, unknown>>;
+    let rows = _filtraEmpresa(dbGetAll('EmpresaCobrancas') as Array<Record<string, unknown>>);
     const f = filtros || {};
     if (f.status) rows = rows.filter((r) => String(r.status) === String(f.status));
     if (f.competencia) rows = rows.filter((r) => String(r.competencia) === String(f.competencia));
@@ -4659,6 +4914,8 @@ function _cobrancaBaixaPorWebhook(payment: { id?: string; value?: number; paymen
       data: dataPg,
       recorrencia: 'avulsa',
       notas: `Cobrança avulsa ${String(cob.id)}${cob.descricao ? ` · ${String(cob.descricao)}` : ''}`,
+      // Herda a empresa da cobrança (webhook roda sem sessão de UI).
+      empresaId: String(cob.empresaId || ''),
       criadoEm: new Date().toISOString(),
     });
     recebimentoId = String(criado.id || '');
@@ -5013,7 +5270,7 @@ function _conciliacaoSugerir(tx: { data: string; valor: number; tipo: string }):
 
 function conciliacaoList(status?: string): ServerResult {
   try {
-    let rows = dbGetAll('ConciliacaoTransacoes') as Array<Record<string, unknown>>;
+    let rows = _filtraEmpresa(dbGetAll('ConciliacaoTransacoes') as Array<Record<string, unknown>>);
     if (status && status !== 'todos') rows = rows.filter((r) => String(r['status']) === status);
     rows.sort((a, b) => String(b['data']).localeCompare(String(a['data'])));
     const enriquecidas = rows.map((r) => {
@@ -5228,6 +5485,7 @@ function nfseEmitir(cobrancaId: string): ServerResult {
       pessoaId: String(cob.pessoaId || ''),
       provedor: 'asaas',
       valor: Number(cob.valor || 0),
+      empresaId: String(cob.empresaId || ''),
       criadoEm: agora, atualizadoEm: agora,
       ...mapped,
     });
@@ -5239,7 +5497,7 @@ function nfseEmitir(cobrancaId: string): ServerResult {
 
 function nfseList(cobrancaId?: string): ServerResult {
   try {
-    let rows = dbGetAll('NotasFiscais') as Array<Record<string, unknown>>;
+    let rows = _filtraEmpresa(dbGetAll('NotasFiscais') as Array<Record<string, unknown>>);
     if (cobrancaId) rows = rows.filter((n) => String(n.cobrancaId) === String(cobrancaId));
     rows.sort((a, b) => String(b.criadoEm).localeCompare(String(a.criadoEm)));
     return { ok: true, data: rows };
@@ -5320,9 +5578,10 @@ function impostosConfigSalvar(payload: Record<string, unknown>): ServerResult {
   }
 }
 
-// Receita bruta realizada de uma competência (soma dos Recebimentos).
+// Receita bruta realizada de uma competência (soma dos Recebimentos) — escopada
+// pela empresa ativa.
 function _receitaBrutaComp(comp: string): number {
-  return (dbGetAll('Recebimentos') as Array<Record<string, unknown>>)
+  return _filtraEmpresa(dbGetAll('Recebimentos') as Array<Record<string, unknown>>)
     .filter((r) => String(r['competencia']) === comp)
     .reduce((s, r) => s + Number(r['valor'] || 0), 0);
 }
@@ -5342,7 +5601,7 @@ function getImpostosResumo(meses?: number): ServerResult {
     const nomes = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
     const hoje = new Date();
     const anoAtual = hoje.getFullYear();
-    const guias = dbGetAll('Impostos') as Array<Record<string, unknown>>;
+    const guias = _filtraEmpresa(dbGetAll('Impostos') as Array<Record<string, unknown>>);
     const guiaDe = (comp: string) => guias.find((g) => String(g['competencia']) === comp);
 
     const linhas: Array<Record<string, unknown>> = [];
@@ -5401,7 +5660,7 @@ function impostoGerarGuia(competencia: string): ServerResult {
     const valor = Math.round(base * cfg.aliquota) / 100;
     const venc = _impVencimento(comp, cfg.diaVencimento);
     const agora = new Date().toISOString();
-    const existente = (dbGetAll('Impostos') as Array<Record<string, unknown>>).find((g) => String(g['competencia']) === comp);
+    const existente = _filtraEmpresa(dbGetAll('Impostos') as Array<Record<string, unknown>>).find((g) => String(g['competencia']) === comp);
     if (existente) {
       if (String(existente['status']) === 'pago') return { ok: false, error: 'Guia já paga — não dá pra regerar.' };
       const upd = dbUpdate('Impostos', String(existente['id']), {
@@ -5438,6 +5697,7 @@ function impostoRegistrarPagamento(id: string, payload?: Record<string, unknown>
         descricao: `${String(g['regime'] || 'Imposto')} · competência ${String(g['competencia'])}`,
         categoria: 'Impostos', valor, sistemaId: '', status: 'pago', formaPagamento: '',
         origem: 'imposto', documento: '', notas: 'Lançado pela guia de imposto.',
+        empresaId: String(g['empresaId'] || ''),
         criadoEm: new Date().toISOString(), atualizadoEm: new Date().toISOString(),
       });
       despesaId = String(desp.id || '');
@@ -7862,7 +8122,7 @@ function _competenciaDe(data: string): string {
 
 function getDespesasEmpresa(competencia?: string): ServerResult {
   try {
-    let rows = dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>;
+    let rows = _filtraEmpresa(dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>);
     if (competencia) rows = rows.filter((r) => String(r['competencia']) === competencia);
     rows.sort((a, b) => String(b['data'] || '').localeCompare(String(a['data'] || '')));
     return { ok: true, data: rows };

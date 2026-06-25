@@ -36,6 +36,37 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.166.0] — 2026-06-25
+
+### Adicionado — Multi-empresa (fundação): cadastre e gerencie várias empresas
+
+O Financeiro › Empresa agora é **multi-empresa**. Você cadastra cada CNPJ e toda a
+jornada financeira/contábil passa a ser escopada por empresa:
+
+- **Cadastro de empresas** (botão de engrenagem ao lado do seletor): razão social,
+  nome fantasia, CNPJ, regime, anexo do Simples, RBT12, inscrições, endereço,
+  e-mail/telefone e cor. Uma empresa é a **padrão**.
+- **Seletor no topo**: escolha a empresa ativa (X / Y) ou **Consolidado** (soma
+  todas). Tudo — visão geral, a receber, cobranças, a pagar, projeção, despesas,
+  conciliação e impostos — passa a refletir a empresa selecionada.
+- **Migração automática**: na primeira execução pós-deploy, cria a empresa padrão
+  ("Minha Empresa") e carimba todo o histórico existente nela, sem perder nada.
+
+### Detalhes técnicos — 1.166.0
+
+- `server.ts`: tabela `Empresas`; coluna `empresaId` em Receitas, Recebimentos,
+  EmpresaCobrancas, Custos, FinEmpresaDespesas, Impostos, ConciliacaoTransacoes,
+  NotasFiscais e PagamentosCusto. `SCHEMA_VERSION` → `v1.81-empresas`.
+- Carimbo de `empresaId` centralizado em `dbCreate`/`dbBatchCreate` (empresa ativa);
+  registros derivados (recebimento de webhook, pagamento de custo, despesa de
+  imposto, NFS-e) herdam a empresa do registro de origem.
+- Filtro por empresa ativa (`_filtraEmpresa`) em todos os reads financeiros;
+  "Consolidado" desliga o filtro. RPCs `getEmpresas`, `getEmpresaAtiva`,
+  `setEmpresaAtiva`, `salvarEmpresa`, `deletarEmpresa`.
+- UI: `views/FinEmpresas.tsx` (cadastro) + seletor no topo de `Financeiro.tsx`.
+
+---
+
 ## [1.165.0] — 2026-06-25
 
 ### Alterado — Empresa: estações agrupadas em Financeiro × Contabilidade

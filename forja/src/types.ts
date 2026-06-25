@@ -16,6 +16,33 @@ export interface ServerResponse<T> {
   error?: string;
 }
 
+// ─── Empresas (multi-empresa) ────────────────────────────────────────────────
+
+export interface Empresa {
+  id: string;
+  razaoSocial: string;
+  nomeFantasia: string;
+  cnpj: string;
+  regime: string;
+  anexo: string;
+  rbt12: number;
+  inscricaoMunicipal: string;
+  inscricaoEstadual: string;
+  cep: string;
+  logradouro: string;
+  numero: string;
+  bairro: string;
+  cidade: string;
+  uf: string;
+  email: string;
+  telefone: string;
+  cor: string;
+  padrao: boolean;
+  ativo: boolean;
+  criadoEm?: string;
+  atualizadoEm?: string;
+}
+
 // ─── Controle de acesso (RBAC) ───────────────────────────────────────────────
 
 export type PapelAcesso = 'admin' | 'operacional' | 'leitor';

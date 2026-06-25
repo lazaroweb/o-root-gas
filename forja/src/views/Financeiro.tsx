@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { Tabs } from 'antd';
-import { LayoutDashboard, ArrowUpRight, ArrowDownRight, Wallet, Building2, Receipt, FileText, LineChart, Landmark, Scale } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Tabs, Select, Button, Tooltip } from 'antd';
+import { LayoutDashboard, ArrowUpRight, ArrowDownRight, Wallet, Building2, Receipt, FileText, LineChart, Landmark, Scale, Settings2, Layers } from 'lucide-react';
 import { PageHeader } from '../components/ui';
 import SubNav, { type SubNavItem } from '../components/SubNav';
+import FinEmpresas from './FinEmpresas';
+import type { Empresa } from '../types';
 import FinResumo from './FinResumo';
 import FinReceitas from './FinReceitas';
 import FinCobrancas from './FinCobrancas';
@@ -54,8 +56,45 @@ function FinEmpresa({ sistemas }: { sistemas: Sistema[] }): React.ReactElement {
   );
 }
 
+// Seletor de empresa (multi-empresa): escolhe a empresa ativa que escopa todas as
+// telas da aba Empresa, ou "Consolidado" pra somar todas. '__todas__' = consolidado.
+function SeletorEmpresa({ empresas, ativa, onChange, onGerir }: {
+  empresas: Empresa[]; ativa: string; onChange: (id: string) => void; onGerir: () => void;
+}): React.ReactElement {
+  const options = [
+    { value: '__todas__', label: (<span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}><Layers size={14} /> Consolidado</span>) },
+    ...empresas.map((e) => ({
+      value: e.id,
+      label: (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+          <span style={{ width: 9, height: 9, borderRadius: 3, background: e.cor || '#8b5cf6', display: 'inline-block' }} />
+          {e.nomeFantasia || e.razaoSocial}
+        </span>
+      ),
+    })),
+  ];
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <Select
+        value={ativa}
+        onChange={onChange}
+        options={options}
+        style={{ minWidth: 220 }}
+        popupMatchSelectWidth={false}
+      />
+      <Tooltip title="Gerenciar empresas">
+        <Button icon={<Settings2 size={16} />} onClick={onGerir} />
+      </Tooltip>
+    </div>
+  );
+}
+
 export default function Financeiro(): React.ReactElement {
   const [sistemas, setSistemas] = useState<Sistema[]>([]);
+  const [empresas, setEmpresas] = useState<Empresa[]>([]);
+  const [ativa, setAtiva] = useState<string>('');
+  const [tab, setTab] = useState<string>('empresa');
+  const [gerirOpen, setGerirOpen] = useState(false);
 
   useEffect(() => {
     callServer<ServerResponse<Sistema[]>>('getSistemas')
@@ -63,15 +102,40 @@ export default function Financeiro(): React.ReactElement {
       .catch(() => setSistemas([]));
   }, []);
 
+  const loadEmpresas = useCallback(() => {
+    callServer<ServerResponse<{ empresas: Empresa[]; ativa: string; consolidado: boolean }>>('getEmpresas')
+      .then(res => {
+        if (res.ok && res.data) {
+          const d = res.data as { empresas: Empresa[]; ativa: string; consolidado: boolean };
+          setEmpresas(d.empresas || []);
+          setAtiva(d.consolidado ? '__todas__' : (d.ativa || (d.empresas[0]?.id ?? '')));
+        }
+      })
+      .catch(() => { /* preview */ });
+  }, []);
+  useEffect(loadEmpresas, [loadEmpresas]);
+
+  const trocarEmpresa = (id: string) => {
+    setAtiva(id);
+    callServer('setEmpresaAtiva', id).catch(() => { /* segue */ });
+  };
+
   const items = [
-    { key: 'empresa', label: tabLabel(<Building2 size={16} />, 'Empresa'), children: <FinEmpresa sistemas={sistemas} /> },
+    { key: 'empresa', label: tabLabel(<Building2 size={16} />, 'Empresa'), children: <FinEmpresa key={`emp-${ativa}`} sistemas={sistemas} /> },
     { key: 'pessoal', label: tabLabel(<Wallet size={16} />, 'Pessoal'), children: <FinPessoal /> },
   ];
 
   return (
     <div className="forja-view" style={{ padding: '36px 40px', maxWidth: 1160, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
-      <PageHeader title="Financeiro" subtitle="Empresa e Pessoal lado a lado — receitas, custos, lucro de cada app e suas finanças pessoais." />
-      <Tabs defaultActiveKey="empresa" items={items} size="large" />
+      <PageHeader
+        title="Financeiro"
+        subtitle="Empresa e Pessoal lado a lado — receitas, custos, lucro de cada app e suas finanças pessoais."
+        extra={tab === 'empresa' ? (
+          <SeletorEmpresa empresas={empresas} ativa={ativa} onChange={trocarEmpresa} onGerir={() => setGerirOpen(true)} />
+        ) : undefined}
+      />
+      <Tabs activeKey={tab} onChange={setTab} items={items} size="large" />
+      <FinEmpresas open={gerirOpen} onClose={() => setGerirOpen(false)} onChange={loadEmpresas} />
     </div>
   );
 }
