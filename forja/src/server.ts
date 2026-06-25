@@ -270,7 +270,9 @@ const SCHEMA: SheetSchema[] = [
   // v1.3.1: + parcelaGrupoId (FK pra agrupar parcelas), recorrenciaOrigemId (FK
   // pro lançamento que gerou a recorrência), recorrenciaAtiva ('sim'|'nao' —
   // controla se o agendador continua replicando ou se o usuário pausou).
-  { name: 'FinPessoalLancamentos', columns: ['id', 'data', 'descricao', 'valor', 'tipo', 'categoria', 'metodo', 'cartaoId', 'status', 'vencimento', 'parcelas', 'parcelaAtual', 'recorrencia', 'tags', 'notas', 'parcelaGrupoId', 'recorrenciaOrigemId', 'recorrenciaAtiva', 'criadoEm', 'atualizadoEm'] },
+  // v1.84: + recorrenciaFim (YYYY-MM-DD opcional — última data em que a recorrência
+  // vale; vazio = repete até cancelar). Controla materialização e projeção futura.
+  { name: 'FinPessoalLancamentos', columns: ['id', 'data', 'descricao', 'valor', 'tipo', 'categoria', 'metodo', 'cartaoId', 'status', 'vencimento', 'parcelas', 'parcelaAtual', 'recorrencia', 'tags', 'notas', 'parcelaGrupoId', 'recorrenciaOrigemId', 'recorrenciaAtiva', 'criadoEm', 'atualizadoEm', 'recorrenciaFim'] },
   // FinPessoalCartoes: cartões de crédito cadastrados pra calcular fatura aberta.
   // `diaFechamento` e `diaVencimento`: 1-31 (a UI lida com meses curtos).
   // `cor`: hex pra UI (ex: '#8b5cf6'). `ativo`: 'sim'|'nao'.
@@ -405,7 +407,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.83-documentos';
+const SCHEMA_VERSION = 'v1.84-recorrencia-fim';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -7109,6 +7111,7 @@ function salvarLancamentoPessoal(payload: Record<string, unknown>): ServerResult
       parcelaGrupoId: String(payload['parcelaGrupoId'] || ''),
       recorrenciaOrigemId: String(payload['recorrenciaOrigemId'] || ''),
       recorrenciaAtiva: String(payload['recorrenciaAtiva'] || (recorrencia !== 'unica' ? 'sim' : 'nao')),
+      recorrenciaFim: String(payload['recorrenciaFim'] || '').substring(0, 10),
       atualizadoEm: new Date().toISOString(),
     };
 
@@ -9456,6 +9459,47 @@ function gerarPdfCobrancasMembro(membroId: string, apenasPendentes?: boolean): S
 // afins), despesas por cartão + outros, saldo do mês e saldo acumulado. Inclui
 // projeção das recorrências (entradas/despesas) nos meses futuros ainda não
 // materializados — assim dá pra "bater o olho" no ano todo e ver o saldo.
+// Recorrências projetadas pra um mês `comp` (YYYY-MM): origens ativas que caem
+// nesse mês mas ainda NÃO têm instância materializada (mês futuro). Devolve
+// "lançamentos sintéticos" marcados com projecao:true. Respeita `recorrenciaFim`
+// (prazo definido) e nunca duplica o mês da própria origem (que já é real).
+function _recorrenciasProjetadasDoMes(comp: string, todos?: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const linhas = todos || (dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>);
+  const recorrentes = linhas.filter((l) =>
+    String(l['recorrencia'] || 'unica') !== 'unica' &&
+    String(l['recorrenciaAtiva'] || 'sim') === 'sim' &&
+    !String(l['recorrenciaOrigemId'] || ''));
+  const out: Array<Record<string, unknown>> = [];
+  for (const r of recorrentes) {
+    const dataOrig = String(r['data'] || '');
+    if (!dataOrig) continue;
+    const compOrig = _toYYYYMM(dataOrig);
+    if (comp <= compOrig) continue; // o mês da origem já existe como lançamento real
+    const fim = String(r['recorrenciaFim'] || '').substring(0, 10);
+    if (fim && comp > _toYYYYMM(fim)) continue; // recorrência com prazo já encerrada
+    const periodicidade = String(r['recorrencia']);
+    if (periodicidade === 'anual' && dataOrig.substring(5, 7) !== comp.substring(5, 7)) continue;
+    // Já materializada nesse mês? (clone gerado) — evita dupla contagem.
+    const jaTem = linhas.some((l) =>
+      String(l['recorrenciaOrigemId']) === String(r['id']) && _toYYYYMM(l['data']) === comp);
+    if (jaTem) continue;
+    const dia = dataOrig.substring(8, 10) || '01';
+    out.push({
+      id: `proj_${String(r['id'])}_${comp}`,
+      data: `${comp}-${dia}`,
+      descricao: String(r['descricao'] || ''),
+      valor: Math.abs(Number(r['valor'] || 0)) * (periodicidade === 'semanal' ? 4.33 : 1),
+      tipo: String(r['tipo'] || 'despesa'),
+      categoria: String(r['categoria'] || 'outros'),
+      metodo: String(r['metodo'] || 'pix'),
+      cartaoId: String(r['cartaoId'] || ''),
+      status: 'projetado',
+      projecao: true,
+    });
+  }
+  return out;
+}
+
 function getPainelAnual(ano?: number): ServerResult {
   try {
     const agora = new Date();
@@ -9467,12 +9511,6 @@ function getPainelAnual(ano?: number): ServerResult {
 
     const meses: Array<Record<string, unknown>> = [];
     const hojeComp = `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
-
-    // Recorrências ativas (pra projetar meses futuros sem lançamento materializado)
-    const recorrentes = todos.filter((l) =>
-      String(l['recorrencia'] || 'unica') !== 'unica' &&
-      String(l['recorrenciaAtiva'] || 'sim') === 'sim' &&
-      !String(l['recorrenciaOrigemId'] || ''));
 
     let acumulado = 0;
     for (let m = 1; m <= 12; m++) {
@@ -9498,30 +9536,14 @@ function getPainelAnual(ano?: number): ServerResult {
 
       // Projeção de recorrências em meses futuros (sem instância materializada).
       if (ehFuturo) {
-        for (const r of recorrentes) {
-          const periodicidade = String(r['recorrencia']);
-          const dataOrig = String(r['data'] || '');
-          if (!dataOrig) continue;
-          // Só projeta mensal/anual de forma simples (semanal aproxima por mês).
-          const compOrig = _toYYYYMM(dataOrig);
-          if (comp < compOrig) continue;
-          let cai = false;
-          if (periodicidade === 'anual') cai = dataOrig.substring(5, 7) === String(m).padStart(2, '0');
-          else cai = true; // mensal/semanal: todo mês
-          if (!cai) continue;
-          // Já existe instância materializada nesse mês? (evita dupla contagem)
-          const jaTem = todos.some((l) =>
-            String(l['recorrenciaOrigemId']) === String(r['id']) && _toYYYYMM(l['data']) === comp);
-          if (jaTem) continue;
-          const v = Math.abs(Number(r['valor'] || 0)) * (periodicidade === 'semanal' ? 4.33 : 1);
-          if (String(r['tipo']) === 'entrada') totalEntradas += v;
-          else {
-            totalDespesas += v;
-            if (String(r['metodo']) === 'cartao' && r['cartaoId'] && cartoesMap[String(r['cartaoId'])]) {
-              const nome = String(cartoesMap[String(r['cartaoId'])]['apelido'] || cartoesMap[String(r['cartaoId'])]['nome'] || 'Cartão');
-              porCartao[nome] = (porCartao[nome] || 0) + v;
-            } else outros += v;
-          }
+        for (const p of _recorrenciasProjetadasDoMes(comp, todos)) {
+          const v = Number(p['valor'] || 0);
+          if (String(p['tipo']) === 'entrada') { totalEntradas += v; continue; }
+          totalDespesas += v;
+          if (String(p['metodo']) === 'cartao' && p['cartaoId'] && cartoesMap[String(p['cartaoId'])]) {
+            const nome = String(cartoesMap[String(p['cartaoId'])]['apelido'] || cartoesMap[String(p['cartaoId'])]['nome'] || 'Cartão');
+            porCartao[nome] = (porCartao[nome] || 0) + v;
+          } else outros += v;
         }
       }
 
@@ -9562,11 +9584,24 @@ function getPainelAnual(ano?: number): ServerResult {
 // Composição de UM mês (competência): despesas agrupadas por cartão (+ outros),
 // com os itens de cada grupo, e as entradas. Fonte única do modal de detalhe do
 // painel e do PDF do mês — assim os dois NUNCA divergem.
-function _composicaoMes(comp: string): Record<string, unknown> {
+function _composicaoMes(comp: string, projetar?: boolean): Record<string, unknown> {
   const cartoesMap = _cartoesMap();
   const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
   const despesas = todos.filter((l) => String(l['tipo']) === 'despesa' && _competenciaLancamento(l, cartoesMap) === comp);
   const entradas = todos.filter((l) => String(l['tipo']) === 'entrada' && _toYYYYMM(l['data']) === comp);
+
+  // Mês futuro: injeta as recorrências projetadas como itens (salário, gastos
+  // fixos) pra elas APARECEREM no detalhe — não só no total do painel.
+  if (projetar) {
+    const agora = new Date();
+    const hojeComp = `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
+    if (comp > hojeComp) {
+      for (const p of _recorrenciasProjetadasDoMes(comp, todos)) {
+        if (String(p['tipo']) === 'entrada') entradas.push(p);
+        else despesas.push(p);
+      }
+    }
+  }
 
   const grupos: Record<string, { key: string; nome: string; bandeira: string; cor: string; total: number; itens: Array<Record<string, unknown>> }> = {};
   for (const l of despesas) {
@@ -9603,7 +9638,8 @@ function getComposicaoMes(comp: string): ServerResult {
   try {
     const c = String(comp || '').substring(0, 7);
     if (!/^\d{4}-\d{2}$/.test(c)) return { ok: false, error: 'Mês inválido.' };
-    return { ok: true, data: _composicaoMes(c) };
+    // Projeta recorrências no detalhe (mês futuro) — o PDF segue só com dados reais.
+    return { ok: true, data: _composicaoMes(c, true) };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao detalhar o mês' };
   }
@@ -10041,6 +10077,7 @@ function gerarRecorrenciasPendentes(): ServerResult {
       // até alcançar/passar a data de hoje (gera todos os intermediários
       // perdidos pra não deixar buracos).
       const ultimaData = [...datasExistentes].sort().pop() || dataOrig;
+      const fim = String(origem['recorrenciaFim'] || '').substring(0, 10);
       let proxima = ultimaData;
       let safety = 0; // anti loop infinito (max 100 períodos)
       while (safety++ < 100) {
@@ -10051,6 +10088,8 @@ function gerarRecorrenciasPendentes(): ServerResult {
           : _addMonths(proxima, 1); // mensal default
         const dProx = new Date(proxima + 'T00:00:00');
         if (dProx > hoje) break;
+        // Recorrência com prazo definido: para de gerar depois do fim.
+        if (fim && proxima > fim) break;
         if (datasExistentes.has(proxima)) continue;
 
         // Cria clone com mesma estrutura do original, mas data nova

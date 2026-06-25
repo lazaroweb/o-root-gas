@@ -36,6 +36,33 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.173.0] — 2026-06-25
+
+### Adicionado — Duração da recorrência + projeção visível nos meses futuros
+
+Resolve duas dúvidas do cadastro de salário/receita recorrente:
+
+- **Tempo de recorrência**: novo campo "Repetir por quanto tempo" — **Sempre
+  (até cancelar)** (padrão), **Até uma data** ou **Por um nº de vezes**. Vale tanto
+  pra receita/salário quanto pra despesa recorrente. Guardado em `recorrenciaFim`;
+  o motor para de gerar/projetar depois do prazo.
+- **Aparece nos meses à frente**: ao abrir o detalhe de um mês futuro no Painel
+  anual, salário e recorrências agora aparecem como **itens projetados** (etiqueta
+  "projetado"), não só no total. Viram lançamentos reais quando o mês chega.
+
+### Detalhes técnicos — 1.173.0
+
+- `server.ts`: coluna `recorrenciaFim` em `FinPessoalLancamentos` (SCHEMA
+  `v1.84-recorrencia-fim`); `salvarLancamentoPessoal` persiste o fim;
+  `gerarRecorrenciasPendentes` e `getPainelAnual` respeitam o prazo; novo helper
+  `_recorrenciasProjetadasDoMes` usado pela projeção; `getComposicaoMes` projeta
+  recorrências em meses futuros (PDF segue só com dados reais).
+- UI: `views/FinPessoal.tsx` — campo de duração nos modais de receita e de
+  lançamento; etiqueta "projetado" no detalhe do mês; texto do alerta atualizado.
+- `types.ts`: `recorrenciaFim` e `projecao` em `LancamentoPessoal`.
+
+---
+
 ## [1.172.0] — 2026-06-25
 
 ### Adicionado — Reautorizar o Drive + Árvore do Drive por empresa

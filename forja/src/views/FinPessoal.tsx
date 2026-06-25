@@ -1101,7 +1101,7 @@ function DetalheMesPainel({ mesAberto, comp }: { mesAberto: PainelMesData; comp:
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {mesAberto.futuro && (
         <Alert type="info" showIcon style={{ fontSize: 12 }}
-          message="Mês futuro — o painel projeta salário e recorrências; aqui aparecem só os lançamentos já existentes (parcelas etc.)." />
+          message="Mês futuro — salário e recorrências aparecem como projeção (etiqueta “projetado”), junto com lançamentos já existentes (parcelas etc.). Viram lançamentos reais quando o mês chegar." />
       )}
       <div style={{ display: 'flex', gap: 10 }}>
         <Stat label="Receita" valor={comp?.totalEntradas || 0} cor={t.accents.sage} />
@@ -1157,9 +1157,12 @@ function DetalheMesPainel({ mesAberto, comp }: { mesAberto: PainelMesData; comp:
               </div>
               <div style={{ display: 'flex', flexDirection: 'column' }}>
                 {g.itens.map((it) => (
-                  <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', borderTop: `1px solid ${t.borderSoft}` }}>
+                  <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', borderTop: `1px solid ${t.borderSoft}`, opacity: it.projecao ? 0.72 : 1 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.descricao}</div>
+                      <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {it.descricao}
+                        {it.projecao && <Tag bordered={false} style={{ marginLeft: 6, fontSize: 9.5, lineHeight: '15px', padding: '0 5px', background: t.surfaceMuted, color: t.textTertiary }}>projetado</Tag>}
+                      </div>
                       <div style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary, marginTop: 1 }}>
                         {it.data ? dayjs(String(it.data)).format('DD/MM') : ''} · {labelCategoria(String(it.categoria || 'outros'))}
                         {it.status === 'pendente' ? ' · a pagar' : ''}
@@ -1182,9 +1185,12 @@ function DetalheMesPainel({ mesAberto, comp }: { mesAberto: PainelMesData; comp:
               </div>
               <div style={{ display: 'flex', flexDirection: 'column' }}>
                 {comp.entradas.map((it) => (
-                  <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', borderTop: `1px solid ${t.borderSoft}` }}>
+                  <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', borderTop: `1px solid ${t.borderSoft}`, opacity: it.projecao ? 0.72 : 1 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.descricao}</div>
+                      <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {it.descricao}
+                        {it.projecao && <Tag bordered={false} style={{ marginLeft: 6, fontSize: 9.5, lineHeight: '15px', padding: '0 5px', background: t.surfaceMuted, color: t.textTertiary }}>projetado</Tag>}
+                      </div>
                       <div style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary, marginTop: 1 }}>{it.data ? dayjs(String(it.data)).format('DD/MM') : ''}</div>
                     </div>
                     <span style={{ fontFamily: FONTS.ui, fontSize: 13, fontWeight: 600, color: t.accents.sage, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(it.valor)}</span>
@@ -3031,6 +3037,7 @@ function ModalLancamento({ open, onClose, lancamento, cartoes, categoriasUsadas,
   // Para preview do feedback "vai criar N parcelas" / "vai recorrer X"
   const [parcelas, setParcelas] = useState<number>(1);
   const [recorrencia, setRecorrencia] = useState<string>('unica');
+  const [duracao, setDuracao] = useState<'sempre' | 'ate' | 'vezes'>('sempre');
 
   useEffect(() => {
     if (open) {
@@ -3045,6 +3052,11 @@ function ModalLancamento({ open, onClose, lancamento, cartoes, categoriasUsadas,
         setStatus(lancamento.status);
         setParcelas(lancamento.parcelas || 1);
         setRecorrencia(lancamento.recorrencia || 'unica');
+        setDuracao(lancamento.recorrenciaFim ? 'ate' : 'sempre');
+        form.setFieldsValue({
+          duracao: lancamento.recorrenciaFim ? 'ate' : 'sempre',
+          recFimData: lancamento.recorrenciaFim ? dayjs(lancamento.recorrenciaFim) : null,
+        });
       } else {
         form.resetFields();
         form.setFieldsValue({
@@ -3056,12 +3068,14 @@ function ModalLancamento({ open, onClose, lancamento, cartoes, categoriasUsadas,
           parcelas: 1,
           parcelaAtual: 1,
           recorrencia: 'unica',
+          duracao: 'sempre',
         });
         setMetodo('pix');
         setTipo('despesa');
         setStatus('pago');
         setParcelas(1);
         setRecorrencia('unica');
+        setDuracao('sempre');
       }
     }
   }, [open, lancamento, form]);
@@ -3082,11 +3096,22 @@ function ModalLancamento({ open, onClose, lancamento, cartoes, categoriasUsadas,
   const salvar = async (v: Record<string, unknown>) => {
     setSaving(true);
     try {
+      const dataISO = (v.data as Dayjs).format('YYYY-MM-DD');
+      const rec = String(v['recorrencia'] || 'unica');
+      let recorrenciaFim = '';
+      if (rec !== 'unica') {
+        if (v['duracao'] === 'ate' && v['recFimData']) recorrenciaFim = (v['recFimData'] as Dayjs).format('YYYY-MM-DD');
+        else if (v['duracao'] === 'vezes' && v['recVezes']) recorrenciaFim = calcRecorrenciaFim(dataISO, rec, Number(v['recVezes']));
+      }
+      // Tira os campos auxiliares de UI (não-serializáveis / fora do schema).
+      const { duracao: _d, recFimData: _f, recVezes: _n, ...limpo } = v;
+      void _d; void _f; void _n;
       const payload = {
-        ...v,
+        ...limpo,
         id: lancamento?.id,
-        data: (v.data as Dayjs).format('YYYY-MM-DD'),
+        data: dataISO,
         vencimento: v.vencimento ? (v.vencimento as Dayjs).format('YYYY-MM-DD') : '',
+        recorrenciaFim,
       };
       const res = await callServer<ServerResponse<unknown>>('salvarLancamentoPessoal', payload);
       if (res.ok) {
@@ -3214,6 +3239,32 @@ function ModalLancamento({ open, onClose, lancamento, cartoes, categoriasUsadas,
               <Select.Option value="anual">Anual (todo ano)</Select.Option>
             </Select>
           </Form.Item>
+        )}
+
+        {/* Duração da recorrência (pra despesa) */}
+        {tipo === 'despesa' && !lancamento && recorrencia !== 'unica' && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <Form.Item name="duracao" label="Repetir por quanto tempo" tooltip="Por padrão repete pra sempre. Você pode limitar por uma data final ou por um número de vezes.">
+              <Select
+                onChange={(v) => setDuracao(v)}
+                options={[
+                  { value: 'sempre', label: 'Sempre (até cancelar)' },
+                  { value: 'ate', label: 'Até uma data' },
+                  { value: 'vezes', label: 'Por um nº de vezes' },
+                ]}
+              />
+            </Form.Item>
+            {duracao === 'ate' && (
+              <Form.Item name="recFimData" label="Repetir até" rules={[{ required: true, message: 'Escolha a data final' }]}>
+                <DatePicker style={{ width: '100%' }} format="DD/MM/YYYY" />
+              </Form.Item>
+            )}
+            {duracao === 'vezes' && (
+              <Form.Item name="recVezes" label="Quantas vezes" rules={[{ required: true, message: 'Informe o nº de vezes' }]}>
+                <InputNumber style={{ width: '100%' }} min={1} max={600} placeholder="Ex: 12" />
+              </Form.Item>
+            )}
+          </div>
         )}
 
         {/* Feedback dinâmico do impacto */}
@@ -3408,6 +3459,18 @@ function ModalFatura({ open, onClose, cartoes, onSaved }: {
   );
 }
 
+// Calcula a data final (YYYY-MM-DD) de uma recorrência limitada a N ocorrências,
+// a partir da data inicial e da periodicidade. n=1 → fim = própria data inicial.
+function calcRecorrenciaFim(dataISO: string, rec: string, vezes: number): string {
+  if (!dataISO || !vezes || vezes < 1) return '';
+  const d = dayjs(dataISO);
+  const passos = vezes - 1;
+  const fim = rec === 'semanal' ? d.add(passos, 'week')
+    : rec === 'anual' ? d.add(passos, 'year')
+    : d.add(passos, 'month');
+  return fim.format('YYYY-MM-DD');
+}
+
 // ─── Modal: cadastrar receita / salário recorrente ────────────────────────────
 // Cria uma ENTRADA recorrente (tipo entrada + recorrencia). O motor de
 // recorrências materializa todo mês até você cancelar. Alimenta saldo, Norte e
@@ -3423,6 +3486,7 @@ function ModalReceita({ open, preset, onClose, onSaved }: {
   const [form] = Form.useForm();
   const [saving, setSaving] = useState(false);
   const [recorrencia, setRecorrencia] = useState<string>('mensal');
+  const [duracao, setDuracao] = useState<'sempre' | 'ate' | 'vezes'>('sempre');
 
   useEffect(() => {
     if (open) {
@@ -3433,14 +3497,23 @@ function ModalReceita({ open, preset, onClose, onSaved }: {
         data: dayjs().date(5),
         metodo: 'transferencia',
         recorrencia: 'mensal',
+        duracao: 'sempre',
       });
       setRecorrencia('mensal');
+      setDuracao('sempre');
     }
   }, [open, preset, form]);
 
   const salvar = async (v: Record<string, unknown>) => {
     setSaving(true);
     try {
+      const rec = String(v['recorrencia'] || 'mensal');
+      const dataISO = (v['data'] as Dayjs).format('YYYY-MM-DD');
+      let recorrenciaFim = '';
+      if (rec !== 'unica') {
+        if (v['duracao'] === 'ate' && v['recFimData']) recorrenciaFim = (v['recFimData'] as Dayjs).format('YYYY-MM-DD');
+        else if (v['duracao'] === 'vezes' && v['recVezes']) recorrenciaFim = calcRecorrenciaFim(dataISO, rec, Number(v['recVezes']));
+      }
       const payload = {
         tipo: 'entrada',
         descricao: String(v['descricao'] || '').trim(),
@@ -3448,8 +3521,9 @@ function ModalReceita({ open, preset, onClose, onSaved }: {
         categoria: String(v['categoria'] || 'renda').trim() || 'renda',
         metodo: String(v['metodo'] || 'transferencia'),
         status: 'pago',
-        data: (v['data'] as Dayjs).format('YYYY-MM-DD'),
-        recorrencia: String(v['recorrencia'] || 'mensal'),
+        data: dataISO,
+        recorrencia: rec,
+        recorrenciaFim,
       };
       const res = await callServer<ServerResponse<unknown>>('salvarLancamentoPessoal', payload);
       if (res.ok) {
@@ -3511,6 +3585,31 @@ function ModalReceita({ open, preset, onClose, onSaved }: {
           </Form.Item>
         </div>
 
+        {recorrencia !== 'unica' && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="duracao" label="Repetir por quanto tempo" tooltip="Por padrão repete pra sempre. Você pode limitar por uma data final ou por um número de vezes.">
+              <Select
+                onChange={(v) => setDuracao(v)}
+                options={[
+                  { value: 'sempre', label: 'Sempre (até eu cancelar)' },
+                  { value: 'ate', label: 'Até uma data' },
+                  { value: 'vezes', label: 'Por um nº de vezes' },
+                ]}
+              />
+            </Form.Item>
+            {duracao === 'ate' && (
+              <Form.Item name="recFimData" label="Repetir até" rules={[{ required: true, message: 'Escolha a data final' }]}>
+                <DatePicker style={{ width: '100%' }} format="DD/MM/YYYY" />
+              </Form.Item>
+            )}
+            {duracao === 'vezes' && (
+              <Form.Item name="recVezes" label="Quantas vezes" rules={[{ required: true, message: 'Informe o nº de vezes' }]}>
+                <InputNumber style={{ width: '100%' }} min={1} max={600} placeholder="Ex: 12" />
+              </Form.Item>
+            )}
+          </div>
+        )}
+
         <Form.Item name="categoria" label="Categoria">
           <Input placeholder="Ex: salario, renda, investimentos…" />
         </Form.Item>
@@ -3520,7 +3619,13 @@ function ModalReceita({ open, preset, onClose, onSaved }: {
             type="success"
             showIcon
             icon={<RotateCcw size={14} />}
-            message={`Vai entrar automaticamente todo ${labelPeriodo} até você cancelar (na aba Receitas ou Recorrências).`}
+            message={
+              duracao === 'sempre'
+                ? `Vai entrar automaticamente todo ${labelPeriodo} até você cancelar (na aba Receitas ou Recorrências).`
+                : duracao === 'ate'
+                ? `Vai entrar todo ${labelPeriodo} até a data escolhida — depois para sozinho.`
+                : `Vai entrar por um número fixo de vezes — depois para sozinho.`
+            }
             style={{ fontSize: 12 }}
           />
         )}

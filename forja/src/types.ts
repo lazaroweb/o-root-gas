@@ -832,6 +832,8 @@ export interface LancamentoPessoal {
   parcelaGrupoId?: string;
   recorrenciaOrigemId?: string; // se preenchido, esse lançamento é um clone gerado
   recorrenciaAtiva?: 'sim' | 'nao'; // se 'nao', agendador para de gerar clones
+  recorrenciaFim?: string; // YYYY-MM-DD opcional — última data em que a recorrência vale (vazio = sem fim)
+  projecao?: boolean; // true = item projetado (mês futuro), não existe como lançamento real
   criadoEm?: string;
   atualizadoEm?: string;
 }
