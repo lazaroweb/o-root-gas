@@ -36,6 +36,18 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.175.1] — 2026-06-25
+
+### Melhorado — Escolher pasta direto no "Adicionar documento"
+
+- O campo **Categoria / pasta** do modal agora lista as **pastas existentes**
+  num dropdown (com ícone e contagem de docs), então dá pra mandar pra qualquer
+  seção sem precisar entrar nela antes. Continua aceitando digitar uma pasta nova.
+- Aberto pelo botão geral, o campo vem **vazio** (convida a escolher na lista);
+  aberto de dentro de uma pasta, vem **pré-selecionado** naquela pasta.
+
+---
+
 ## [1.175.0] — 2026-06-25
 
 ### Adicionado — Documentos organizados em pastas por categoria

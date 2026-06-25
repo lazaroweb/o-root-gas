@@ -125,7 +125,12 @@ export default function FinDocumentos(): React.ReactElement {
       .catch(() => message.error('Erro ao apagar'));
   };
 
-  const abrirUpload = (catInicial?: string) => { setEditId(null); setArquivo(null); form.resetFields(); form.setFieldsValue({ categoria: catInicial || pasta || 'Outros' }); setUpOpen(true); };
+  const abrirUpload = (catInicial?: string) => {
+    setEditId(null); setArquivo(null); form.resetFields();
+    // undefined = botão geral (deixa vazio pra escolher na lista); '' = nova pasta.
+    form.setFieldsValue({ categoria: catInicial !== undefined ? catInicial : (pasta || '') });
+    setUpOpen(true);
+  };
 
   const reorganizar = () => {
     setReorganizando(true);
@@ -424,10 +429,20 @@ export default function FinDocumentos(): React.ReactElement {
             <Input placeholder="Ex.: Contrato social 2024" />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="categoria" label="Categoria / pasta" rules={[{ required: true, message: 'Escolha ou digite uma pasta' }]} tooltip="Escolha uma pasta existente ou digite o nome de uma nova.">
+            <Form.Item name="categoria" label="Categoria / pasta" rules={[{ required: true, message: 'Escolha ou digite uma pasta' }]} tooltip="Escolha uma pasta existente na lista ou digite o nome de uma nova.">
               <AutoComplete
-                placeholder="Ex.: Certidões"
-                options={Array.from(new Set([...(categorias.length ? categorias : ['Outros']), ...docs.map((d) => d.categoria || 'Outros')])).map((c) => ({ value: c }))}
+                placeholder="Escolha uma pasta ou digite uma nova"
+                allowClear
+                options={pastas.map((f) => ({
+                  value: f.nome,
+                  label: (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Folder size={14} style={{ color: f.count ? t.accents.clay : t.textTertiary, flexShrink: 0 }} />
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.nome}</span>
+                      <span style={{ color: t.textTertiary, fontSize: 11, fontFamily: FONTS.mono }}>{f.count || ''}</span>
+                    </div>
+                  ),
+                }))}
                 filterOption={(input, option) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())}
               />
             </Form.Item>
