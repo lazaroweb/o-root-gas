@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.175.4] — 2026-06-25
+
+### Adicionado — Proteção contra documento duplicado
+
+- Ao arrastar vários arquivos, os repetidos são **ignorados**: tanto duplicados
+  dentro do próprio lote quanto arquivos que **já existem na pasta** (mesmo nome
+  + mesmo tamanho). Mostra aviso com a contagem e os nomes ignorados.
+- Rede de proteção também no servidor (`uploadDocumentoEmpresa` recusa um doc
+  idêntico — mesma empresa, categoria, nome e tamanho), pra cobrir uploads
+  concorrentes ou lista desatualizada.
+
+---
+
 ## [1.175.3] — 2026-06-25
 
 ### Corrigido — Respiro entre nome e papel no pill de perfil

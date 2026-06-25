@@ -6225,6 +6225,13 @@ function uploadDocumentoEmpresa(payload: Record<string, unknown>): ServerResult 
     const bytes = Utilities.base64Decode(b64);
     if (bytes.length > 25 * 1024 * 1024) return { ok: false, error: 'Arquivo muito grande (máx. 25 MB).' };
     const categoria = String(p['categoria'] || 'Outros').trim() || 'Outros';
+    // Rede de proteção contra duplicado: mesmo empresa + categoria + nome + tamanho.
+    const jaExiste = (dbGetAll('EmpresaDocumentos') as Array<Record<string, unknown>>).some((d) =>
+      String(d['empresaId']) === empresaId &&
+      String(d['categoria'] || '').trim().toLowerCase() === categoria.toLowerCase() &&
+      String(d['nome'] || '').trim().toLowerCase() === nome.toLowerCase() &&
+      Number(d['tamanho'] || 0) === bytes.length);
+    if (jaExiste) return { ok: false, error: 'Documento idêntico já existe nesta pasta.' };
     const blob = Utilities.newBlob(bytes, mime, nome);
     // Vai direto pra subpasta da categoria (Drive organizado por tipo).
     const file = _docsFolderCategoria(empresaId, categoria).createFile(blob);

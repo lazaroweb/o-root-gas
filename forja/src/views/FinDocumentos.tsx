@@ -173,11 +173,27 @@ export default function FinDocumentos(): React.ReactElement {
         else message.error(res.error || 'Erro');
       } else {
         if (!arquivos.length) { message.error('Escolha pelo menos um arquivo.'); setSaving(false); return; }
-        const multi = arquivos.length > 1;
+        // Proteção contra duplicados: ignora arquivos que já existem na pasta
+        // escolhida (mesmo nome + mesmo tamanho). Mantém a 1ª ocorrência.
+        const catEscolhida = String(v['categoria'] || '').trim().toLowerCase();
+        const jaNaPasta = docs.filter((d) => (d.categoria || 'Outros').trim().toLowerCase() === catEscolhida);
+        const chave = (nome: string, size: number) => `${nome.trim().toLowerCase()}::${size}`;
+        const existentes = new Set(jaNaPasta.map((d) => chave(String(d.nome || ''), Number(d.tamanho || 0))));
+        const enviar: File[] = [];
+        const dupes: string[] = [];
+        for (const f of arquivos) {
+          const k = chave(f.name, f.size);
+          if (existentes.has(k)) { dupes.push(f.name); continue; }
+          existentes.add(k); // pega duplicados dentro do próprio lote também
+          enviar.push(f);
+        }
+        if (dupes.length) message.warning(`${dupes.length} já existia(m) nesta pasta e foi(ram) ignorado(s): ${dupes.slice(0, 3).join(' · ')}${dupes.length > 3 ? '…' : ''}`);
+        if (!enviar.length) { message.info('Nada novo pra enviar — todos já estavam na pasta.'); setSaving(false); return; }
+        const multi = enviar.length > 1;
         let okN = 0; const falhas: string[] = [];
-        for (let i = 0; i < arquivos.length; i++) {
-          const f = arquivos[i];
-          setProgresso(`Enviando ${i + 1} de ${arquivos.length}: ${f.name}`);
+        for (let i = 0; i < enviar.length; i++) {
+          const f = enviar[i];
+          setProgresso(`Enviando ${i + 1} de ${enviar.length}: ${f.name}`);
           try {
             const base64 = await fileToBase64(f);
             // Vários arquivos → cada um mantém o nome do próprio arquivo; validade/notas
