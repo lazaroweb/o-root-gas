@@ -36,6 +36,33 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.174.0] — 2026-06-25
+
+### Adicionado — Cofre de segredos por empresa
+
+Nova estação **Cofre** (Financeiro › Empresa) pra guardar segredos com segurança:
+senha do **certificado digital**, **gov.br/e-CAC**, tokens, senhas de banco.
+
+- **Onde fica**: o valor secreto vive só na **área protegida do app** (Script
+  Properties) — nunca na planilha, nunca no Drive, nunca em log. A planilha guarda
+  só metadados (nome, categoria, validade, 2 últimos caracteres pra conferência).
+- **Mascarado por padrão**: mostra `••••••` + 2 últimos; revela/copia sob demanda.
+- **Validade com alerta** (ex.: A1 vence em ~1 ano).
+- **Escopado por empresa**, com aviso no modo Consolidado.
+- O arquivo **.pfx** do certificado **não** é guardado no app — você sobe direto
+  no Asaas (quem assina a NFS-e é ele) e mantém o original no seu gerenciador de
+  senhas.
+
+### Detalhes técnicos — 1.174.0
+
+- `server.ts`: tabela `EmpresaSegredos` (SCHEMA `v1.85-cofre-segredos`, só
+  metadados); valor em `PropertiesService` sob `COFRE_<id>`. RPCs `getSegredos`,
+  `salvarSegredo`, `revelarSegredo` (único caminho que devolve o valor, valida a
+  empresa), `excluirSegredo`.
+- UI: `views/FinCofre.tsx` + item "Cofre" no `Financeiro.tsx`.
+
+---
+
 ## [1.173.0] — 2026-06-25
 
 ### Adicionado — Duração da recorrência + projeção visível nos meses futuros

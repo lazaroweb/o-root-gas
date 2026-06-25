@@ -154,6 +154,13 @@ const SCHEMA: SheetSchema[] = [
   // metadados + `driveFileId`/`url`. `validade` (YYYY-MM-DD) opcional pra alertar
   // vencimento de certidões/certificados.
   { name: 'EmpresaDocumentos', columns: ['id', 'empresaId', 'nome', 'categoria', 'mime', 'tamanho', 'driveFileId', 'url', 'validade', 'notas', 'criadoEm', 'atualizadoEm'] },
+  // EmpresaSegredos (v1.85): cofre de SEGREDOS por empresa (senha do certificado
+  // digital, gov.br/e-CAC, tokens). IMPORTANTE: o valor secreto NUNCA fica nesta
+  // planilha — só os metadados. O valor vai pro Script Properties (`COFRE_<id>`),
+  // que não é navegável no Drive nem compartilhável. `ultimos` = 2 últimos
+  // caracteres (dica de conferência). `validade` (YYYY-MM-DD) alerta vencimento
+  // (ex: A1 vence em ~1 ano).
+  { name: 'EmpresaSegredos', columns: ['id', 'empresaId', 'nome', 'categoria', 'validade', 'notas', 'ultimos', 'criadoEm', 'atualizadoEm'] },
   // v1.4.1: `origem` marca geração (ex: 'forja-self' pra dogfooding) e
   // `referencia` permite destacar um item como referência fixa no topo da
   // lista. Append-only — schema migra sem desalinhar dados antigos.
@@ -407,7 +414,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.84-recorrencia-fim';
+const SCHEMA_VERSION = 'v1.85-cofre-segredos';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -6229,6 +6236,125 @@ function excluirDocumentoEmpresa(id: string): ServerResult {
     return dbDelete('EmpresaDocumentos', String(id)) ? { ok: true } : { ok: false, error: 'Erro ao excluir' };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao excluir documento' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COFRE DE SEGREDOS (v1.85) — senha do certificado digital, gov.br/e-CAC, tokens.
+//   Princípio: o VALOR secreto nunca toca a planilha nem aparece em log. Ele vive
+//   só no Script Properties (`COFRE_<id>`), que não é navegável no Drive nem
+//   compartilhável — só o próprio script lê. A planilha guarda apenas metadados
+//   (nome, categoria, validade, 2 últimos chars pra conferência).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const SEGREDO_CATEGORIAS = ['Senha do certificado digital', 'Gov.br / e-CAC', 'Senha de banco', 'Token / API', 'Senha de e-mail', 'Outros'];
+
+function _cofreKey(id: string): string {
+  return 'COFRE_' + String(id);
+}
+
+function getSegredos(): ServerResult {
+  try {
+    initDatabase();
+    const nomeEmp: Record<string, string> = {};
+    for (const e of _empresasAll()) nomeEmp[String(e['id'])] = String(e['nomeFantasia'] || e['razaoSocial'] || '');
+    const rows = _filtraEmpresa(dbGetAll('EmpresaSegredos') as Array<Record<string, unknown>>)
+      .map((s) => Object.assign({}, s, { empresaNome: nomeEmp[String(s['empresaId'])] || '' }))
+      .sort((a, b) => String(a['nome']).localeCompare(String(b['nome'])));
+    const filtroId = _empresaFiltroId();
+    const ativa = filtroId ? (dbGetById('Empresas', filtroId) || {}) : {};
+    return {
+      ok: true,
+      data: {
+        segredos: rows,
+        categorias: SEGREDO_CATEGORIAS,
+        consolidado: !filtroId,
+        empresaAtivaId: filtroId,
+        empresaAtivaNome: String((ativa as Record<string, unknown>)['nomeFantasia'] || (ativa as Record<string, unknown>)['razaoSocial'] || ''),
+        empresaAtivaCor: String((ativa as Record<string, unknown>)['cor'] || '#8b5cf6'),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar segredos' };
+  }
+}
+
+// Cria/atualiza um segredo. Se `valor` vier preenchido, grava no Script Properties;
+// se vier vazio num update, mantém o valor anterior (só edita metadados).
+function salvarSegredo(payload: Record<string, unknown>): ServerResult {
+  try {
+    initDatabase();
+    const p = payload || {};
+    const id = p['id'] ? String(p['id']) : '';
+    const valor = p['valor'] !== undefined && p['valor'] !== null ? String(p['valor']) : '';
+    const meta: Record<string, unknown> = {
+      nome: String(p['nome'] || '').trim(),
+      categoria: String(p['categoria'] || 'Outros'),
+      validade: String(p['validade'] || '').substring(0, 10),
+      notas: String(p['notas'] || ''),
+      atualizadoEm: new Date().toISOString(),
+    };
+    if (!meta['nome']) return { ok: false, error: 'Dê um nome pro segredo.' };
+    const sp = PropertiesService.getScriptProperties();
+
+    if (id) {
+      const atual = dbGetById('EmpresaSegredos', id);
+      if (!atual) return { ok: false, error: 'Segredo não encontrado' };
+      if (valor) {
+        sp.setProperty(_cofreKey(id), valor);
+        meta['ultimos'] = valor.length >= 2 ? valor.slice(-2) : '';
+      }
+      const upd = dbUpdate('EmpresaSegredos', id, meta);
+      return upd ? { ok: true, data: _segredoSemValor(upd) } : { ok: false, error: 'Erro ao atualizar' };
+    }
+
+    // Novo: precisa de valor.
+    if (!valor) return { ok: false, error: 'Informe o valor do segredo.' };
+    const empresaId = _empresaParaCriarId();
+    if (!empresaId) return { ok: false, error: 'Cadastre uma empresa primeiro.' };
+    const agora = new Date().toISOString();
+    meta['empresaId'] = empresaId;
+    meta['ultimos'] = valor.length >= 2 ? valor.slice(-2) : '';
+    meta['criadoEm'] = agora;
+    const row = dbCreate('EmpresaSegredos', meta) as Record<string, unknown>;
+    sp.setProperty(_cofreKey(String(row['id'])), valor);
+    return { ok: true, data: _segredoSemValor(row) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar segredo' };
+  }
+}
+
+function _segredoSemValor(row: Record<string, unknown>): Record<string, unknown> {
+  const out = Object.assign({}, row);
+  delete out['valor'];
+  return out;
+}
+
+// Revela o valor de UM segredo (pra copiar). Único caminho que devolve o valor —
+// chamado sob demanda quando o usuário clica "mostrar/copiar". App é single-user
+// (access MYSELF), atrás da conta Google do dono.
+function revelarSegredo(id: string): ServerResult {
+  try {
+    const seg = dbGetById('EmpresaSegredos', String(id));
+    if (!seg) return { ok: false, error: 'Segredo não encontrado' };
+    // Garante que o segredo é da empresa ativa (ou consolidado) — evita vazar
+    // entre empresas se alguém passar um id de outra.
+    if (!_filtraEmpresa([seg]).length) return { ok: false, error: 'Segredo de outra empresa.' };
+    const valor = PropertiesService.getScriptProperties().getProperty(_cofreKey(String(id)));
+    return { ok: true, data: { valor: valor || '' } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao revelar segredo' };
+  }
+}
+
+function excluirSegredo(id: string): ServerResult {
+  try {
+    const seg = dbGetById('EmpresaSegredos', String(id));
+    if (!seg) return { ok: false, error: 'Segredo não encontrado' };
+    try { PropertiesService.getScriptProperties().deleteProperty(_cofreKey(String(id))); } catch { /* já removido */ }
+    return dbDelete('EmpresaSegredos', String(id)) ? { ok: true } : { ok: false, error: 'Erro ao excluir' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao excluir segredo' };
   }
 }
 
