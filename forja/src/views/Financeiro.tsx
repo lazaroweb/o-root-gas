@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Tabs, Select, Button, Tooltip } from 'antd';
-import { LayoutDashboard, ArrowUpRight, ArrowDownRight, Wallet, Building2, Receipt, FileText, LineChart, Landmark, Scale, Settings2, Layers, Plus } from 'lucide-react';
+import { LayoutDashboard, ArrowUpRight, ArrowDownRight, Wallet, Building2, Receipt, FileText, LineChart, Landmark, Scale, Settings2, Layers, Plus, FolderArchive } from 'lucide-react';
 import { PageHeader } from '../components/ui';
 import { useTokens } from '../themeContext';
 import SubNav, { type SubNavItem } from '../components/SubNav';
@@ -14,6 +14,7 @@ import FinEmpresaDespesas from './FinEmpresaDespesas';
 import FinProjecao from './FinProjecao';
 import FinConciliacao from './FinConciliacao';
 import FinImpostos from './FinImpostos';
+import FinDocumentos from './FinDocumentos';
 // v1.3: tab Pessoal — mini sistema financeiro pessoal (despesas, cartões, Pix,
 // contas a pagar). Totalmente separado das receitas/custos do negócio.
 // v1.13: separação macro Empresa × Pessoal — cada lado com suas próprias abas,
@@ -26,7 +27,7 @@ function tabLabel(icon: React.ReactNode, texto: string): React.ReactElement {
   return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>{icon} {texto}</span>;
 }
 
-type EmpresaView = 'resumo' | 'receber' | 'cobrancas' | 'despesas' | 'pagar' | 'projecao' | 'conciliacao' | 'impostos';
+type EmpresaView = 'resumo' | 'receber' | 'cobrancas' | 'despesas' | 'pagar' | 'projecao' | 'conciliacao' | 'impostos' | 'documentos';
 
 function FinEmpresa({ sistemas }: { sistemas: Sistema[] }): React.ReactElement {
   const [view, setView] = useState<EmpresaView>('resumo');
@@ -42,6 +43,7 @@ function FinEmpresa({ sistemas }: { sistemas: Sistema[] }): React.ReactElement {
     { key: 'despesas', icon: Receipt, label: 'Despesas', accent: 'clay', group: 'Contabilidade', desc: 'Livro-caixa mensal: contas, boletos e recibos — com importação por PDF/foto.' },
     { key: 'conciliacao', icon: Landmark, label: 'Conciliação', accent: 'blue', group: 'Contabilidade', desc: 'Importe o extrato (OFX) e case cada transação com o sistema, dando baixa.' },
     { key: 'impostos', icon: Scale, label: 'Impostos', accent: 'clay', group: 'Contabilidade', desc: 'Provisão e acompanhamento do DAS/Simples: base, alíquota, guia e reserva.' },
+    { key: 'documentos', icon: FolderArchive, label: 'Documentos', accent: 'sage', group: 'Documentos', desc: 'Cofre dos documentos da empresa: contrato social, CNPJ, certificados e certidões.' },
   ];
   return (
     <SubNav items={NAV} value={view} onChange={setView} ariaLabel="Áreas do Financeiro da Empresa">
@@ -53,6 +55,7 @@ function FinEmpresa({ sistemas }: { sistemas: Sistema[] }): React.ReactElement {
       {view === 'projecao' && <FinProjecao />}
       {view === 'conciliacao' && <FinConciliacao />}
       {view === 'impostos' && <FinImpostos />}
+      {view === 'documentos' && <FinDocumentos />}
     </SubNav>
   );
 }

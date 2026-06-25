@@ -149,6 +149,11 @@ const SCHEMA: SheetSchema[] = [
   // `origemDespesaId` dá idempotência ao importar pró-labore/lucros do financeiro.
   { name: 'IRRendimentos', columns: ['id', 'ano', 'competencia', 'data', 'tipo', 'descricao', 'origemEmpresaId', 'valor', 'tributavel', 'irrfRetido', 'origemDespesaId', 'criadoEm'] },
   { name: 'IRDeducoes', columns: ['id', 'ano', 'competencia', 'tipo', 'descricao', 'valor', 'criadoEm'] },
+  // EmpresaDocumentos (v1.171.0): cofre de documentos por empresa. O arquivo fica no
+  // Google Drive (pasta "Forja — Documentos/<empresa>"); aqui guardamos só os
+  // metadados + `driveFileId`/`url`. `validade` (YYYY-MM-DD) opcional pra alertar
+  // vencimento de certidões/certificados.
+  { name: 'EmpresaDocumentos', columns: ['id', 'empresaId', 'nome', 'categoria', 'mime', 'tamanho', 'driveFileId', 'url', 'validade', 'notas', 'criadoEm', 'atualizadoEm'] },
   // v1.4.1: `origem` marca geração (ex: 'forja-self' pra dogfooding) e
   // `referencia` permite destacar um item como referência fixa no topo da
   // lista. Append-only — schema migra sem desalinhar dados antigos.
@@ -400,7 +405,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.82-irpf';
+const SCHEMA_VERSION = 'v1.83-documentos';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -6102,6 +6107,111 @@ function getIRResumo(ano?: number): ServerResult {
     };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao montar resumo do IR' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DOCUMENTOS DA EMPRESA (v1.171.0) — cofre de arquivos por empresa
+//   Guarda contrato social, cartão CNPJ, certificados, certidões etc. O binário vai
+//   pro Google Drive (pasta "Forja — Documentos/<empresa>"); a planilha guarda só os
+//   metadados + o id/URL do Drive. Escopado por empresa (empresaId carimbado).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const DOC_CATEGORIAS = ['Contrato social', 'Cartão CNPJ', 'Inscrições', 'Certificado digital', 'Certidões', 'Alvará/Licenças', 'Contábil', 'Fiscal', 'Bancário', 'Contratos', 'Outros'];
+
+function _docsRootFolder(): GoogleAppsScript.Drive.Folder {
+  const sp = PropertiesService.getScriptProperties();
+  const id = sp.getProperty('DOCS_FOLDER_ROOT');
+  if (id) { try { return DriveApp.getFolderById(id); } catch { /* recria abaixo */ } }
+  const f = DriveApp.createFolder('Forja — Documentos');
+  sp.setProperty('DOCS_FOLDER_ROOT', f.getId());
+  return f;
+}
+
+function _docsFolderEmpresa(empresaId: string): GoogleAppsScript.Drive.Folder {
+  const sp = PropertiesService.getScriptProperties();
+  const key = 'DOCS_FOLDER__' + empresaId;
+  const id = sp.getProperty(key);
+  if (id) { try { return DriveApp.getFolderById(id); } catch { /* recria abaixo */ } }
+  const emp = dbGetById('Empresas', empresaId);
+  const nome = emp ? String(emp['nomeFantasia'] || emp['razaoSocial'] || empresaId) : empresaId;
+  const f = _docsRootFolder().createFolder(nome);
+  sp.setProperty(key, f.getId());
+  return f;
+}
+
+function getDocumentosEmpresa(): ServerResult {
+  try {
+    initDatabase();
+    const rows = _filtraEmpresa(dbGetAll('EmpresaDocumentos') as Array<Record<string, unknown>>)
+      .sort((a, b) => String(b['criadoEm']).localeCompare(String(a['criadoEm'])));
+    return { ok: true, data: { documentos: rows, categorias: DOC_CATEGORIAS } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar documentos' };
+  }
+}
+
+// Sobe um arquivo (base64) pro Drive da empresa ativa e registra os metadados.
+function uploadDocumentoEmpresa(payload: Record<string, unknown>): ServerResult {
+  try {
+    initDatabase();
+    const p = payload || {};
+    const empresaId = _empresaParaCriarId();
+    if (!empresaId) return { ok: false, error: 'Cadastre uma empresa primeiro.' };
+    const nome = String(p['nome'] || 'documento').trim() || 'documento';
+    const mime = String(p['mime'] || 'application/octet-stream');
+    const b64raw = String(p['base64'] || '');
+    const b64 = b64raw.indexOf(',') >= 0 ? b64raw.substring(b64raw.indexOf(',') + 1) : b64raw; // tira data: prefix
+    if (!b64) return { ok: false, error: 'Arquivo vazio ou inválido.' };
+    const bytes = Utilities.base64Decode(b64);
+    if (bytes.length > 25 * 1024 * 1024) return { ok: false, error: 'Arquivo muito grande (máx. 25 MB).' };
+    const blob = Utilities.newBlob(bytes, mime, nome);
+    const file = _docsFolderEmpresa(empresaId).createFile(blob);
+    const agora = new Date().toISOString();
+    const row = dbCreate('EmpresaDocumentos', {
+      empresaId,
+      nome,
+      categoria: String(p['categoria'] || 'Outros'),
+      mime,
+      tamanho: bytes.length,
+      driveFileId: file.getId(),
+      url: file.getUrl(),
+      validade: String(p['validade'] || '').substring(0, 10),
+      notas: String(p['notas'] || ''),
+      criadoEm: agora, atualizadoEm: agora,
+    });
+    return { ok: true, data: row };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao subir documento' };
+  }
+}
+
+// Atualiza só metadados (categoria/validade/notas/nome) — sem trocar o arquivo.
+function atualizarDocumentoEmpresa(id: string, payload: Record<string, unknown>): ServerResult {
+  try {
+    const d = dbGetById('EmpresaDocumentos', String(id));
+    if (!d) return { ok: false, error: 'Documento não encontrado' };
+    const p = payload || {};
+    const patch: Record<string, unknown> = { atualizadoEm: new Date().toISOString() };
+    if (p['nome'] !== undefined) patch['nome'] = String(p['nome'] || '').trim();
+    if (p['categoria'] !== undefined) patch['categoria'] = String(p['categoria'] || 'Outros');
+    if (p['validade'] !== undefined) patch['validade'] = String(p['validade'] || '').substring(0, 10);
+    if (p['notas'] !== undefined) patch['notas'] = String(p['notas'] || '');
+    const upd = dbUpdate('EmpresaDocumentos', String(id), patch);
+    return upd ? { ok: true, data: upd } : { ok: false, error: 'Erro ao atualizar' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atualizar documento' };
+  }
+}
+
+function excluirDocumentoEmpresa(id: string): ServerResult {
+  try {
+    const d = dbGetById('EmpresaDocumentos', String(id));
+    if (!d) return { ok: false, error: 'Documento não encontrado' };
+    try { if (d['driveFileId']) DriveApp.getFileById(String(d['driveFileId'])).setTrashed(true); } catch { /* arquivo já removido */ }
+    return dbDelete('EmpresaDocumentos', String(id)) ? { ok: true } : { ok: false, error: 'Erro ao excluir' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao excluir documento' };
   }
 }
 

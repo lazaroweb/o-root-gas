@@ -36,6 +36,31 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.171.0] — 2026-06-25
+
+### Adicionado — Documentos da empresa (cofre no Drive)
+
+Nova estação **Documentos** no Financeiro › Empresa pra guardar os papéis de cada
+empresa: contrato social, cartão CNPJ, certificado digital, certidões, alvarás etc.
+
+- **Upload** (arrasta ou clica) com categoria, **validade** opcional (alerta quando
+  perto de vencer) e notas. Abre/baixa direto do Drive.
+- Os arquivos ficam no **seu Google Drive**, na pasta "Forja — Documentos", em
+  subpasta por empresa. A planilha guarda só os metadados + link do Drive.
+- **Escopado por empresa**: cada CNPJ vê só os seus documentos.
+
+> ⚠️ Requer **reautorizar o app** após o deploy (novo escopo de escrita no Drive).
+
+### Detalhes técnicos — 1.171.0
+
+- `server.ts`: tabela `EmpresaDocumentos` (SCHEMA `v1.83-documentos`); helpers de
+  pasta no Drive por empresa; RPCs `getDocumentosEmpresa`, `uploadDocumentoEmpresa`,
+  `atualizarDocumentoEmpresa`, `excluirDocumentoEmpresa`.
+- `appsscript.json`: escopo `auth/drive` (escrita).
+- UI: `views/FinDocumentos.tsx` + item "Documentos" no `Financeiro.tsx`.
+
+---
+
 ## [1.170.1] — 2026-06-25
 
 ### Corrigido — Modal de empresas com scroll horizontal
