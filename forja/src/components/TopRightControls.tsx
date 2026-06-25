@@ -117,12 +117,12 @@ function ProfilePill({ usuario, naoLidos, isAdmin, onGuide, onAlerts, onConfig }
             }}>{naoLidos > 99 ? '99+' : naoLidos}</span>
           )}
         </span>
-        <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', lineHeight: 1.15 }}>
-          <span style={{ fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: 600, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: 600, color: t.text, lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {nome}
           </span>
           {papelLabel && (
-            <span style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <span style={{ fontFamily: FONTS.ui, fontSize: 10.5, lineHeight: 1.1, color: t.textTertiary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {papelLabel}
             </span>
           )}

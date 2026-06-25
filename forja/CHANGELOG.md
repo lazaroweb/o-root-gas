@@ -36,6 +36,15 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.175.3] — 2026-06-25
+
+### Corrigido — Respiro entre nome e papel no pill de perfil
+
+- No pill de conta (canto superior direito), o papel ("Admin") estava colado no
+  nome. Adicionado um espaçamento entre os dois.
+
+---
+
 ## [1.175.2] — 2026-06-25
 
 ### Adicionado — Upload de vários documentos de uma vez
