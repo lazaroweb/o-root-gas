@@ -44,6 +44,7 @@ import FinAssinaturas from './FinAssinaturas';
 import FinInteligencia from './FinInteligencia';
 import FinPerfil from './FinPerfil';
 import FinFamilia from './FinFamilia';
+import FinIR from './FinIR';
 import type {
   LancamentoPessoal, CartaoPessoal, ResumoFinPessoal, FaturaAberta, LancamentosCartao,
   MetodoPagamento, StatusLancamento, TipoLancamento, ServerResponse,
@@ -254,7 +255,7 @@ export default function FinPessoal(): React.ReactElement {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   });
-  const [view, setView] = useState<'visao' | 'painel' | 'inteligencia' | 'perfil' | 'lancamentos' | 'receitas' | 'familia' | 'cartoes' | 'pagar' | 'orcamentos' | 'recorrencias' | 'assinaturas' | 'categorias' | 'plano'>('visao');
+  const [view, setView] = useState<'visao' | 'painel' | 'inteligencia' | 'perfil' | 'lancamentos' | 'receitas' | 'familia' | 'cartoes' | 'pagar' | 'orcamentos' | 'recorrencias' | 'assinaturas' | 'categorias' | 'plano' | 'imposto-renda'>('visao');
 
   // Estado compartilhado entre as sub-views
   const [resumo, setResumo] = useState<ResumoFinPessoal | null>(null);
@@ -502,6 +503,7 @@ export default function FinPessoal(): React.ReactElement {
     { key: 'orcamentos', icon: Target, label: 'Orçamentos', count: orcamentosProgresso?.itens.length || 0, accent: 'sage', group: 'Organização', desc: 'Tetos de gasto por categoria e progresso do mês.' },
     { key: 'plano', icon: BookOpen, label: 'Plano de contas', count: planoContas.length, accent: 'sage', ia: true, group: 'Organização', desc: 'Centros de custo gerados pela IA pra classificar gastos.' },
     { key: 'categorias', icon: LayersIcon, label: 'Categorias', count: categorias.length, accent: 'peach', group: 'Organização', desc: 'Categorias de gasto e seus totais no mês.' },
+    { key: 'imposto-renda', icon: Coins, label: 'Imposto de Renda', accent: 'clay', group: 'Impostos', desc: 'IRPF: rendimentos, deduções, carnê-leão mensal e ajuste anual da declaração.' },
   ];
 
   return (
@@ -731,6 +733,9 @@ export default function FinPessoal(): React.ReactElement {
           categorias={categorias}
           onRecarregar={recarregar}
         />
+      )}
+      {view === 'imposto-renda' && (
+        <FinIR />
       )}
       </SubNav>
 

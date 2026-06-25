@@ -36,6 +36,34 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.168.0] — 2026-06-25
+
+### Adicionado — Meu Imposto de Renda (IRPF) na aba Pessoal
+
+Nova estação **Imposto de Renda** no Financeiro › Pessoal pra acompanhar o IRPF:
+
+- **Rendimentos do ano**: pró-labore, distribuição de lucros (isento), aluguel,
+  autônomo e outros — com marcação automática de tributável/isento e IRRF retido.
+- **Deduções**: INSS, dependentes, saúde, educação, previdência (PGBL), pensão.
+- **Carnê-leão mês a mês (DARF 0190)**: incide sobre rendimentos tributáveis
+  recebidos de PF/exterior (aluguel/autônomo), abatidas as deduções do mês, pela
+  tabela progressiva mensal.
+- **Ajuste anual da declaração**: imposto devido (tabela anual) × retido na fonte ×
+  carnê-leão pago = **a pagar ou a restituir**.
+- **Importar das empresas**: puxa pró-labore e lucros lançados no livro-caixa das
+  empresas como rendimentos (idempotente).
+
+### Detalhes técnicos — 1.168.0
+
+- `server.ts`: tabelas `IRRendimentos` e `IRDeducoes` (`origemEmpresaId` referencia
+  a pagadora sem entrar no escopo multi-empresa). `SCHEMA_VERSION` → `v1.82-irpf`.
+  Tabelas progressivas mensal/anual + carnê-leão. RPCs `getIRResumo`,
+  `getIRRendimentos`/`salvar`/`deletar`, `getIRDeducoes`/`salvar`/`deletar`,
+  `irImportarProLabore`.
+- UI: `views/FinIR.tsx` + item "Imposto de Renda" no `FinPessoal.tsx`.
+
+---
+
 ## [1.167.0] — 2026-06-25
 
 ### Adicionado — Impostos por empresa + alíquota efetiva automática (RBT12)

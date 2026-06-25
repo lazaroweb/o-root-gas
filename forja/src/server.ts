@@ -141,6 +141,14 @@ const SCHEMA: SheetSchema[] = [
   // visão ativa é "Consolidado"). `anexo` (Simples) e `rbt12` alimentam o cálculo
   // da alíquota efetiva dos impostos. `cor` identifica visualmente nos seletores.
   { name: 'Empresas', columns: ['id', 'razaoSocial', 'nomeFantasia', 'cnpj', 'regime', 'anexo', 'rbt12', 'inscricaoMunicipal', 'inscricaoEstadual', 'cep', 'logradouro', 'numero', 'bairro', 'cidade', 'uf', 'email', 'telefone', 'cor', 'padrao', 'ativo', 'criadoEm', 'atualizadoEm'] },
+  // IRPF (v1.168.0) — "Meu Imposto de Renda" (pessoa física). Rendimentos do ano
+  // (pró-labore, distribuição de lucros, aluguel, autônomo etc.) e deduções
+  // (INSS, dependentes, saúde, previdência). `origemEmpresaId` referencia a empresa
+  // pagadora (não é eixo de escopo — por isso NÃO se chama empresaId). `tributavel`
+  // separa o que entra na base; `irrfRetido` é o IR já retido na fonte (pró-labore);
+  // `origemDespesaId` dá idempotência ao importar pró-labore/lucros do financeiro.
+  { name: 'IRRendimentos', columns: ['id', 'ano', 'competencia', 'data', 'tipo', 'descricao', 'origemEmpresaId', 'valor', 'tributavel', 'irrfRetido', 'origemDespesaId', 'criadoEm'] },
+  { name: 'IRDeducoes', columns: ['id', 'ano', 'competencia', 'tipo', 'descricao', 'valor', 'criadoEm'] },
   // v1.4.1: `origem` marca geração (ex: 'forja-self' pra dogfooding) e
   // `referencia` permite destacar um item como referência fixa no topo da
   // lista. Append-only — schema migra sem desalinhar dados antigos.
@@ -392,7 +400,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.81-empresas';
+const SCHEMA_VERSION = 'v1.82-irpf';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -5821,6 +5829,248 @@ function impostoExcluirGuia(id: string): ServerResult {
     return dbDelete('Impostos', String(id)) ? { ok: true } : { ok: false, error: 'Guia não encontrada' };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao excluir guia' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MEU IMPOSTO DE RENDA (v1.168.0) — IRPF da pessoa física
+//   Rendimentos do ano (pró-labore, lucros, aluguel, autônomo) + deduções (INSS,
+//   dependentes, saúde, previdência). Calcula o carnê-leão mensal (DARF 0190) sobre
+//   rendimentos tributáveis recebidos de PF/exterior (sem retenção na fonte) e
+//   projeta o ajuste anual da declaração (devido × retido × carnê-leão pago).
+//   Integra com o financeiro: importa pró-labore/lucros lançados nas empresas.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Tipos de rendimento: define tributabilidade e se entra no carnê-leão mensal.
+//   tributavel → entra na base anual; carneLeao → gera DARF mensal (recebido de PF).
+const _IR_TIPOS: Record<string, { label: string; tributavel: boolean; carneLeao: boolean }> = {
+  'pro-labore': { label: 'Pró-labore', tributavel: true, carneLeao: false },         // retido na fonte pela empresa
+  'distribuicao-lucros': { label: 'Distribuição de lucros', tributavel: false, carneLeao: false }, // isento
+  'aluguel': { label: 'Aluguel (de PF)', tributavel: true, carneLeao: true },
+  'autonomo-pf': { label: 'Autônomo (recebido de PF)', tributavel: true, carneLeao: true },
+  'outros-tributaveis': { label: 'Outros tributáveis (carnê-leão)', tributavel: true, carneLeao: true },
+  'outros-isentos': { label: 'Outros isentos', tributavel: false, carneLeao: false },
+};
+
+// Tabela progressiva MENSAL do IRPF (vigência 2024+): [teto, alíquota%, parcela a deduzir].
+const _IR_TABELA_MENSAL: Array<[number, number, number]> = [
+  [2259.20, 0, 0], [2826.65, 7.5, 169.44], [3751.05, 15, 381.44], [4664.68, 22.5, 662.77], [Infinity, 27.5, 896.00],
+];
+// Tabela ANUAL (12× a mensal) pro ajuste da declaração.
+const _IR_TABELA_ANUAL: Array<[number, number, number]> = [
+  [27110.40, 0, 0], [33919.80, 7.5, 2033.28], [45012.60, 15, 4576.68], [55976.16, 22.5, 7953.24], [Infinity, 27.5, 10752.00],
+];
+
+function _irImposto(base: number, tabela: Array<[number, number, number]>): number {
+  const b = Number(base || 0);
+  if (b <= 0) return 0;
+  for (const [teto, aliq, pd] of tabela) {
+    if (b <= teto) return Math.max(0, Math.round((b * (aliq / 100) - pd) * 100) / 100);
+  }
+  return 0;
+}
+
+function _irAnoDe(v?: number): number {
+  const a = Number(v || 0);
+  return a >= 2000 && a <= 2100 ? a : new Date().getFullYear();
+}
+
+function getIRRendimentos(ano?: number): ServerResult {
+  try {
+    const a = _irAnoDe(ano);
+    const rows = (dbGetAll('IRRendimentos') as Array<Record<string, unknown>>)
+      .filter((r) => Number(r['ano']) === a)
+      .sort((x, y) => String(y['data'] || y['competencia']).localeCompare(String(x['data'] || x['competencia'])));
+    return { ok: true, data: rows };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar rendimentos' };
+  }
+}
+
+function salvarIRRendimento(payload: Record<string, unknown>): ServerResult {
+  try {
+    const p = payload || {};
+    const id = p['id'] ? String(p['id']) : '';
+    const data = String(p['data'] || new Date().toISOString().substring(0, 10)).substring(0, 10);
+    const competencia = String(p['competencia'] || _competenciaDe(data));
+    const tipo = String(p['tipo'] || 'outros-tributaveis');
+    const meta = _IR_TIPOS[tipo] || _IR_TIPOS['outros-tributaveis'];
+    const reg: Record<string, unknown> = {
+      ano: Number(String(competencia).substring(0, 4)),
+      competencia, data, tipo,
+      descricao: String(p['descricao'] || '').trim(),
+      origemEmpresaId: String(p['origemEmpresaId'] || ''),
+      valor: Math.abs(Number(p['valor'] || 0)),
+      tributavel: p['tributavel'] !== undefined ? (p['tributavel'] === true || String(p['tributavel']) === 'true') : meta.tributavel,
+      irrfRetido: Math.abs(Number(p['irrfRetido'] || 0)),
+      origemDespesaId: String(p['origemDespesaId'] || ''),
+    };
+    if (Number(reg['valor']) <= 0) return { ok: false, error: 'Informe um valor válido.' };
+    if (id) {
+      const upd = dbUpdate('IRRendimentos', id, reg);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Rendimento não encontrado' };
+    }
+    reg['criadoEm'] = new Date().toISOString();
+    return { ok: true, data: dbCreate('IRRendimentos', reg) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar rendimento' };
+  }
+}
+
+function deletarIRRendimento(id: string): ServerResult {
+  try {
+    return dbDelete('IRRendimentos', String(id)) ? { ok: true } : { ok: false, error: 'Rendimento não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao excluir rendimento' };
+  }
+}
+
+function getIRDeducoes(ano?: number): ServerResult {
+  try {
+    const a = _irAnoDe(ano);
+    const rows = (dbGetAll('IRDeducoes') as Array<Record<string, unknown>>)
+      .filter((r) => Number(r['ano']) === a)
+      .sort((x, y) => String(y['competencia']).localeCompare(String(x['competencia'])));
+    return { ok: true, data: rows };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar deduções' };
+  }
+}
+
+function salvarIRDeducao(payload: Record<string, unknown>): ServerResult {
+  try {
+    const p = payload || {};
+    const id = p['id'] ? String(p['id']) : '';
+    const competencia = String(p['competencia'] || _competenciaDe(new Date().toISOString().substring(0, 10)));
+    const reg: Record<string, unknown> = {
+      ano: Number(String(competencia).substring(0, 4)),
+      competencia,
+      tipo: String(p['tipo'] || 'outras'),
+      descricao: String(p['descricao'] || '').trim(),
+      valor: Math.abs(Number(p['valor'] || 0)),
+    };
+    if (Number(reg['valor']) <= 0) return { ok: false, error: 'Informe um valor válido.' };
+    if (id) {
+      const upd = dbUpdate('IRDeducoes', id, reg);
+      return upd ? { ok: true, data: upd } : { ok: false, error: 'Dedução não encontrada' };
+    }
+    reg['criadoEm'] = new Date().toISOString();
+    return { ok: true, data: dbCreate('IRDeducoes', reg) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar dedução' };
+  }
+}
+
+function deletarIRDeducao(id: string): ServerResult {
+  try {
+    return dbDelete('IRDeducoes', String(id)) ? { ok: true } : { ok: false, error: 'Dedução não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao excluir dedução' };
+  }
+}
+
+// Importa pró-labore e distribuição de lucros lançados nas empresas (livro-caixa)
+// como rendimentos do IRPF. Idempotente por origemDespesaId.
+function irImportarProLabore(ano?: number): ServerResult {
+  try {
+    const a = _irAnoDe(ano);
+    const jaImportados: Record<string, boolean> = {};
+    for (const r of dbGetAll('IRRendimentos') as Array<Record<string, unknown>>) {
+      const o = String(r['origemDespesaId'] || '');
+      if (o) jaImportados[o] = true;
+    }
+    const empresas = dbGetAll('Empresas') as Array<Record<string, unknown>>;
+    const nomeEmp: Record<string, string> = {};
+    for (const e of empresas) nomeEmp[String(e['id'])] = String(e['nomeFantasia'] || e['razaoSocial'] || '');
+    let importados = 0;
+    for (const d of dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>) {
+      const comp = String(d['competencia'] || '');
+      if (comp.substring(0, 4) !== String(a)) continue;
+      const cat = String(d['categoria'] || '').toLowerCase();
+      const ehProLabore = /pr[oó]\s*[- ]?labore|prolabore/.test(cat);
+      const ehLucro = /lucro|dividendo/.test(cat);
+      if (!ehProLabore && !ehLucro) continue;
+      const did = String(d['id']);
+      if (jaImportados[did]) continue;
+      const tipo = ehProLabore ? 'pro-labore' : 'distribuicao-lucros';
+      const meta = _IR_TIPOS[tipo];
+      const empId = String(d['empresaId'] || '');
+      dbCreate('IRRendimentos', {
+        ano: a, competencia: comp, data: String(d['data'] || `${comp}-15`).substring(0, 10),
+        tipo, descricao: `${meta.label}${nomeEmp[empId] ? ` · ${nomeEmp[empId]}` : ''}`,
+        origemEmpresaId: empId, valor: Math.abs(Number(d['valor'] || 0)),
+        tributavel: meta.tributavel, irrfRetido: 0, origemDespesaId: did,
+        criadoEm: new Date().toISOString(),
+      });
+      importados++;
+    }
+    return { ok: true, data: { importados, ano: a } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao importar pró-labore' };
+  }
+}
+
+function getIRResumo(ano?: number): ServerResult {
+  try {
+    const a = _irAnoDe(ano);
+    const rends = (dbGetAll('IRRendimentos') as Array<Record<string, unknown>>).filter((r) => Number(r['ano']) === a);
+    const deds = (dbGetAll('IRDeducoes') as Array<Record<string, unknown>>).filter((r) => Number(r['ano']) === a);
+
+    const ehTributavel = (r: Record<string, unknown>) => r['tributavel'] === true || String(r['tributavel']) === 'true';
+    const ehCarneLeao = (r: Record<string, unknown>) => { const m = _IR_TIPOS[String(r['tipo'])]; return m ? m.carneLeao : false; };
+
+    const dedPorComp: Record<string, number> = {};
+    for (const d of deds) { const c = String(d['competencia']); dedPorComp[c] = (dedPorComp[c] || 0) + Number(d['valor'] || 0); }
+
+    const nomes = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const meses: Array<Record<string, unknown>> = [];
+    let carneLeaoAno = 0;
+    for (let m = 1; m <= 12; m++) {
+      const comp = `${a}-${String(m).padStart(2, '0')}`;
+      const doMes = rends.filter((r) => String(r['competencia']) === comp);
+      const carne = doMes.filter(ehCarneLeao).reduce((s, r) => s + Number(r['valor'] || 0), 0);
+      const tribut = doMes.filter(ehTributavel).reduce((s, r) => s + Number(r['valor'] || 0), 0);
+      const ded = dedPorComp[comp] || 0;
+      const baseCarne = Math.max(0, carne - ded);
+      const impostoCarne = _irImposto(baseCarne, _IR_TABELA_MENSAL);
+      carneLeaoAno += impostoCarne;
+      meses.push({
+        competencia: comp, label: nomes[m - 1],
+        tributavel: Math.round(tribut), carneLeao: Math.round(carne), deducoes: Math.round(ded),
+        baseCarne: Math.round(baseCarne), darf: impostoCarne,
+      });
+    }
+
+    const totalTributavel = rends.filter(ehTributavel).reduce((s, r) => s + Number(r['valor'] || 0), 0);
+    const totalIsento = rends.filter((r) => !ehTributavel(r)).reduce((s, r) => s + Number(r['valor'] || 0), 0);
+    const totalRetido = rends.reduce((s, r) => s + Number(r['irrfRetido'] || 0), 0);
+    const totalDeducoes = deds.reduce((s, r) => s + Number(r['valor'] || 0), 0);
+    const baseAnual = Math.max(0, totalTributavel - totalDeducoes);
+    const impostoDevido = _irImposto(baseAnual, _IR_TABELA_ANUAL);
+    const jaPago = totalRetido + carneLeaoAno;
+    const ajuste = Math.round((impostoDevido - jaPago) * 100) / 100; // >0 a pagar, <0 restituir
+
+    return {
+      ok: true,
+      data: {
+        ano: a, meses,
+        totais: {
+          totalTributavel: Math.round(totalTributavel),
+          totalIsento: Math.round(totalIsento),
+          totalRetido: Math.round(totalRetido),
+          totalDeducoes: Math.round(totalDeducoes),
+          baseAnual: Math.round(baseAnual),
+          impostoDevido: Math.round(impostoDevido),
+          carneLeaoAno: Math.round(carneLeaoAno),
+          jaPago: Math.round(jaPago),
+          ajuste: Math.round(ajuste),
+          aPagar: ajuste > 0 ? Math.round(ajuste) : 0,
+          restituir: ajuste < 0 ? Math.round(-ajuste) : 0,
+        },
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao montar resumo do IR' };
   }
 }
 
