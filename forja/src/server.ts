@@ -6149,6 +6149,41 @@ function _docsFolderEmpresa(empresaId: string): GoogleAppsScript.Drive.Folder {
   return f;
 }
 
+// Slug estável pra chave de Script Property (categoria → ascii minúsculo).
+function _slugCat(s: string): string {
+  return String(s || 'outros').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'outros';
+}
+
+// Subpasta da CATEGORIA dentro da pasta da empresa (ex.: ".../Acme/Certidões").
+// Assim o Drive fica organizado por tipo e o que tem volume não polui a raiz.
+function _docsFolderCategoria(empresaId: string, categoria: string): GoogleAppsScript.Drive.Folder {
+  const cat = String(categoria || 'Outros').trim() || 'Outros';
+  const sp = PropertiesService.getScriptProperties();
+  const key = 'DOCS_FOLDER__' + empresaId + '__cat__' + _slugCat(cat);
+  const id = sp.getProperty(key);
+  if (id) { try { return DriveApp.getFolderById(id); } catch { /* recria abaixo */ } }
+  const pai = _docsFolderEmpresa(empresaId);
+  // Reaproveita pasta existente com o mesmo nome (evita duplicar em re-deploys).
+  const existentes = pai.getFoldersByName(cat);
+  const f = existentes.hasNext() ? existentes.next() : pai.createFolder(cat);
+  sp.setProperty(key, f.getId());
+  return f;
+}
+
+// Move um arquivo do Drive pra subpasta da categoria (remove dos pais atuais).
+function _moverArquivoParaCategoria(fileId: string, empresaId: string, categoria: string): void {
+  try {
+    const file = DriveApp.getFileById(fileId);
+    const destino = _docsFolderCategoria(empresaId, categoria);
+    destino.addFile(file);
+    const pais = file.getParents();
+    while (pais.hasNext()) {
+      const p = pais.next();
+      if (p.getId() !== destino.getId()) p.removeFile(file);
+    }
+  } catch { /* arquivo pode ter sido removido manualmente */ }
+}
+
 function getDocumentosEmpresa(): ServerResult {
   try {
     initDatabase();
@@ -6189,13 +6224,15 @@ function uploadDocumentoEmpresa(payload: Record<string, unknown>): ServerResult 
     if (!b64) return { ok: false, error: 'Arquivo vazio ou inválido.' };
     const bytes = Utilities.base64Decode(b64);
     if (bytes.length > 25 * 1024 * 1024) return { ok: false, error: 'Arquivo muito grande (máx. 25 MB).' };
+    const categoria = String(p['categoria'] || 'Outros').trim() || 'Outros';
     const blob = Utilities.newBlob(bytes, mime, nome);
-    const file = _docsFolderEmpresa(empresaId).createFile(blob);
+    // Vai direto pra subpasta da categoria (Drive organizado por tipo).
+    const file = _docsFolderCategoria(empresaId, categoria).createFile(blob);
     const agora = new Date().toISOString();
     const row = dbCreate('EmpresaDocumentos', {
       empresaId,
       nome,
-      categoria: String(p['categoria'] || 'Outros'),
+      categoria,
       mime,
       tamanho: bytes.length,
       driveFileId: file.getId(),
@@ -6218,10 +6255,15 @@ function atualizarDocumentoEmpresa(id: string, payload: Record<string, unknown>)
     const p = payload || {};
     const patch: Record<string, unknown> = { atualizadoEm: new Date().toISOString() };
     if (p['nome'] !== undefined) patch['nome'] = String(p['nome'] || '').trim();
-    if (p['categoria'] !== undefined) patch['categoria'] = String(p['categoria'] || 'Outros');
+    let catNova = '';
+    if (p['categoria'] !== undefined) { catNova = String(p['categoria'] || 'Outros').trim() || 'Outros'; patch['categoria'] = catNova; }
     if (p['validade'] !== undefined) patch['validade'] = String(p['validade'] || '').substring(0, 10);
     if (p['notas'] !== undefined) patch['notas'] = String(p['notas'] || '');
     const upd = dbUpdate('EmpresaDocumentos', String(id), patch);
+    // Categoria mudou → move o arquivo pra subpasta da nova categoria no Drive.
+    if (upd && catNova && catNova !== String(d['categoria'] || '') && d['driveFileId'] && d['empresaId']) {
+      _moverArquivoParaCategoria(String(d['driveFileId']), String(d['empresaId']), catNova);
+    }
     return upd ? { ok: true, data: upd } : { ok: false, error: 'Erro ao atualizar' };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atualizar documento' };
@@ -6236,6 +6278,25 @@ function excluirDocumentoEmpresa(id: string): ServerResult {
     return dbDelete('EmpresaDocumentos', String(id)) ? { ok: true } : { ok: false, error: 'Erro ao excluir' };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao excluir documento' };
+  }
+}
+
+// Reorganiza os documentos já existentes (que estavam soltos na raiz da empresa)
+// movendo cada um pra subpasta da sua categoria. Idempotente.
+function reorganizarDocumentosEmpresa(): ServerResult {
+  try {
+    initDatabase();
+    const rows = _filtraEmpresa(dbGetAll('EmpresaDocumentos') as Array<Record<string, unknown>>);
+    let movidos = 0;
+    for (const d of rows) {
+      if (d['driveFileId'] && d['empresaId']) {
+        _moverArquivoParaCategoria(String(d['driveFileId']), String(d['empresaId']), String(d['categoria'] || 'Outros'));
+        movidos++;
+      }
+    }
+    return { ok: true, data: { movidos } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao reorganizar documentos' };
   }
 }
 

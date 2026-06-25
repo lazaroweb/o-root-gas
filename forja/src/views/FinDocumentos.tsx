@@ -2,9 +2,9 @@
 // CNPJ, certificados, certidões etc. O arquivo é guardado no Google Drive (pasta
 // por empresa) e aqui listamos os metadados, com categoria, validade e ação de
 // abrir/baixar. Escopado pela empresa selecionada no topo.
-import React, { useState, useEffect, useCallback } from 'react';
-import { Button, Table, Tag, Select, DatePicker, Input, Modal, Form, Upload, Popconfirm, Empty, Tooltip, Alert, Tree, Spin, App as AntApp } from 'antd';
-import { Plus, Trash2, ExternalLink, FileText, UploadCloud, AlertTriangle, Pencil, Building2, Layers, FolderTree, Folder, Download, ShieldAlert, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Button, Table, Tag, AutoComplete, DatePicker, Input, Modal, Form, Upload, Popconfirm, Empty, Tooltip, Alert, Tree, Spin, App as AntApp } from 'antd';
+import { Plus, Trash2, ExternalLink, FileText, UploadCloud, AlertTriangle, Pencil, Building2, Layers, FolderTree, Folder, FolderOpen, Download, ShieldAlert, RefreshCw, ArrowLeft, Sparkles } from 'lucide-react';
 import dayjs from 'dayjs';
 import { Panel } from '../components/ui';
 import { useTokens } from '../themeContext';
@@ -48,6 +48,8 @@ export default function FinDocumentos(): React.ReactElement {
   const [empresaCor, setEmpresaCor] = useState('#8b5cf6');
   const [consolidado, setConsolidado] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [pasta, setPasta] = useState<string | null>(null); // null = grade de pastas
+  const [reorganizando, setReorganizando] = useState(false);
   const [upOpen, setUpOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [arquivo, setArquivo] = useState<File | null>(null);
@@ -123,7 +125,31 @@ export default function FinDocumentos(): React.ReactElement {
       .catch(() => message.error('Erro ao apagar'));
   };
 
-  const abrirUpload = () => { setEditId(null); setArquivo(null); form.resetFields(); form.setFieldsValue({ categoria: 'Outros' }); setUpOpen(true); };
+  const abrirUpload = (catInicial?: string) => { setEditId(null); setArquivo(null); form.resetFields(); form.setFieldsValue({ categoria: catInicial || pasta || 'Outros' }); setUpOpen(true); };
+
+  const reorganizar = () => {
+    setReorganizando(true);
+    callServer<ServerResponse<{ movidos: number }>>('reorganizarDocumentosEmpresa')
+      .then((r) => {
+        if (r.ok) { const n = (r.data as { movidos: number } | undefined)?.movidos || 0; message.success(`Organizado em pastas no Drive (${n} arquivo(s))`); if (treeOpen) recarregarArvore(); }
+        else message.error(r.error || 'Erro ao reorganizar');
+      })
+      .catch(() => message.error('Erro ao reorganizar'))
+      .finally(() => setReorganizando(false));
+  };
+
+  // Pastas = categorias padrão + as que já têm documento, com contagem e tamanho.
+  const pastas = useMemo(() => {
+    const nomes = Array.from(new Set([...(categorias || []), ...docs.map((d) => d.categoria || 'Outros')]));
+    return nomes
+      .map((nome) => {
+        const ds = docs.filter((d) => (d.categoria || 'Outros') === nome);
+        return { nome, count: ds.length, size: ds.reduce((s, d) => s + Number(d.tamanho || 0), 0) };
+      })
+      .sort((a, b) => b.count - a.count || a.nome.localeCompare(b.nome));
+  }, [categorias, docs]);
+
+  const docsDaPasta = useMemo(() => (pasta ? docs.filter((d) => (d.categoria || 'Outros') === pasta) : docs), [docs, pasta]);
   const abrirEdit = (d: Documento) => {
     setEditId(d.id); setArquivo(null);
     form.resetFields();
@@ -195,6 +221,9 @@ export default function FinDocumentos(): React.ReactElement {
     },
   ];
 
+  // Dentro de uma pasta a categoria é redundante — escondemos a coluna.
+  const colsDentroDaPasta = colsBase.filter((c) => (c as { dataIndex?: string }).dataIndex !== 'categoria');
+
   // Converte a árvore do servidor pra treeData do Ant, com ações no título.
   const toAntNode = (n: DriveNode): Record<string, unknown> => ({
     key: n.id,
@@ -259,25 +288,100 @@ export default function FinDocumentos(): React.ReactElement {
           </span>
           <span style={{ color: t.textTertiary, fontSize: 12.5 }}>· troque a empresa no seletor do topo</span>
           <div style={{ flex: 1 }} />
-          <Button icon={<FolderTree size={15} />} onClick={abrirArvore}>Ver árvore do Drive</Button>
-          <Button type="primary" icon={<Plus size={15} />} onClick={abrirUpload}>Adicionar documento</Button>
+          <Tooltip title="Organiza os arquivos já enviados em subpastas por categoria no seu Drive">
+            <Button icon={<Sparkles size={15} />} loading={reorganizando} onClick={reorganizar}>Organizar no Drive</Button>
+          </Tooltip>
+          <Button icon={<FolderTree size={15} />} onClick={abrirArvore}>Ver árvore</Button>
+          <Button type="primary" icon={<Plus size={15} />} onClick={() => abrirUpload()}>Adicionar documento</Button>
         </div>
       )}
 
-      <Panel title={`Documentos (${docs.length})`} padding={8}>
-        <Table
-          rowKey="id"
-          dataSource={docs}
-          loading={loading}
-          pagination={false}
-          tableLayout="fixed"
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Nenhum documento ainda — adicione o contrato social, cartão CNPJ…" /> }}
-          columns={colsBase}
-        />
-      </Panel>
+      {/* Consolidado: lista plana de todas as empresas. Single: navegação por pastas. */}
+      {consolidado ? (
+        <Panel title={`Documentos (${docs.length})`} padding={8}>
+          <Table
+            rowKey="id"
+            dataSource={docs}
+            loading={loading}
+            pagination={false}
+            tableLayout="fixed"
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Nenhum documento ainda — adicione o contrato social, cartão CNPJ…" /> }}
+            columns={colsBase}
+          />
+        </Panel>
+      ) : pasta === null ? (
+        <Panel title="Pastas" padding={16}>
+          {loading ? (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><Spin /></div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 12 }}>
+              {pastas.map((f) => (
+                <button
+                  key={f.nome}
+                  type="button"
+                  onClick={() => setPasta(f.nome)}
+                  style={{
+                    textAlign: 'left', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 10,
+                    background: t.surfaceMuted, border: `1px solid ${t.border}`, borderRadius: 14, padding: '16px 16px',
+                    opacity: f.count ? 1 : 0.62, transition: 'border-color .15s, transform .1s',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.borderColor = empresaCor; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = t.border; }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    {f.count ? <Folder size={26} style={{ color: t.accents.clay }} /> : <Folder size={26} style={{ color: t.textTertiary }} />}
+                    <span style={{
+                      fontFamily: FONTS.mono, fontSize: 12, color: t.textSecondary,
+                      background: t.surface, border: `1px solid ${t.border}`, borderRadius: 8, padding: '1px 8px',
+                    }}>{f.count}</span>
+                  </div>
+                  <div style={{ fontWeight: 600, color: t.text, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.nome}</div>
+                  <div style={{ color: t.textTertiary, fontSize: 12 }}>{f.count ? `${f.count} doc${f.count > 1 ? 's' : ''} · ${formatBytes(f.size)}` : 'Vazia'}</div>
+                </button>
+              ))}
+              {/* Nova pasta: cria ao enviar o 1º arquivo com uma categoria nova. */}
+              <button
+                type="button"
+                onClick={() => abrirUpload('')}
+                style={{
+                  cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  background: 'transparent', border: `1.5px dashed ${t.border}`, borderRadius: 14, padding: '16px', color: t.textTertiary, minHeight: 116,
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = empresaCor; e.currentTarget.style.color = t.textSecondary; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor = t.border; e.currentTarget.style.color = t.textTertiary; }}
+              >
+                <Plus size={22} />
+                <span style={{ fontSize: 13, fontWeight: 500 }}>Nova pasta</span>
+              </button>
+            </div>
+          )}
+        </Panel>
+      ) : (
+        <Panel padding={8}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px 10px', flexWrap: 'wrap' }}>
+            <Button type="text" size="small" icon={<ArrowLeft size={15} />} onClick={() => setPasta(null)} style={{ color: t.textSecondary }}>Pastas</Button>
+            <span style={{ color: t.textTertiary }}>/</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontWeight: 600, color: t.text }}>
+              <FolderOpen size={16} style={{ color: t.accents.clay }} /> {pasta}
+            </span>
+            <span style={{ color: t.textTertiary, fontSize: 12.5 }}>· {docsDaPasta.length} doc{docsDaPasta.length === 1 ? '' : 's'}</span>
+            <div style={{ flex: 1 }} />
+            <Button type="primary" size="small" icon={<Plus size={14} />} onClick={() => abrirUpload(pasta)}>Adicionar nesta pasta</Button>
+          </div>
+          <Table
+            rowKey="id"
+            dataSource={docsDaPasta}
+            loading={loading}
+            pagination={false}
+            tableLayout="fixed"
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`Nenhum documento em "${pasta}" ainda.`} /> }}
+            columns={colsDentroDaPasta}
+          />
+        </Panel>
+      )}
 
       <div style={{ color: t.textTertiary, fontSize: 11.5, lineHeight: 1.5 }}>
-        Os arquivos ficam no seu Google Drive, na pasta "Forja — Documentos", organizados por empresa. Tamanho máximo por arquivo: 25 MB.
+        Os arquivos ficam no seu Google Drive, na pasta "Forja — Documentos", organizados por empresa e por categoria (uma subpasta por tipo). Tamanho máximo por arquivo: 25 MB.
       </div>
 
       <Modal
@@ -320,8 +424,12 @@ export default function FinDocumentos(): React.ReactElement {
             <Input placeholder="Ex.: Contrato social 2024" />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Form.Item name="categoria" label="Categoria" rules={[{ required: true }]}>
-              <Select options={(categorias.length ? categorias : ['Outros']).map((c) => ({ value: c, label: c }))} />
+            <Form.Item name="categoria" label="Categoria / pasta" rules={[{ required: true, message: 'Escolha ou digite uma pasta' }]} tooltip="Escolha uma pasta existente ou digite o nome de uma nova.">
+              <AutoComplete
+                placeholder="Ex.: Certidões"
+                options={Array.from(new Set([...(categorias.length ? categorias : ['Outros']), ...docs.map((d) => d.categoria || 'Outros')])).map((c) => ({ value: c }))}
+                filterOption={(input, option) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())}
+              />
             </Form.Item>
             <Form.Item name="validade" label="Validade (opcional)" tooltip="Pra certidões/certificados — alerta quando perto de vencer.">
               <DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} />

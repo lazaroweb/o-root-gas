@@ -36,6 +36,36 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.175.0] — 2026-06-25
+
+### Adicionado — Documentos organizados em pastas por categoria
+
+A estação **Documentos** deixou de ser uma lista única e virou navegação por
+**pastas** (uma por categoria: Certidões, Contábil, Fiscal, Contratos…).
+
+- **Grade de pastas**: cada pasta mostra contagem e tamanho total; clicar abre a
+  lista só daquele tipo (ex.: "quero lançar só certidões" → abra a pasta
+  Certidões e adicione ali). Pastas vazias aparecem esmaecidas como destino.
+- **Nova pasta**: digite um nome novo no campo Categoria ao enviar — a pasta é
+  criada automaticamente (no app e no Drive) com o 1º arquivo.
+- **Drive espelha a estrutura**: cada arquivo vai pra uma **subpasta da categoria**
+  dentro da pasta da empresa (`Forja — Documentos/<empresa>/<categoria>`), então o
+  que tem volume não polui a raiz. Trocar a categoria de um doc **move** o arquivo.
+- **Organizar no Drive**: botão que reorganiza de uma vez os documentos antigos
+  (que estavam soltos na raiz) para as subpastas certas. Idempotente.
+- Campo Categoria virou **autocomplete** (escolhe existente ou cria nova).
+- O modo **Consolidado** segue como lista plana de todas as empresas.
+
+### Detalhes técnicos — 1.175.0
+
+- `server.ts`: `_docsFolderCategoria` / `_moverArquivoParaCategoria` (subpasta por
+  categoria, cache em Script Property); `uploadDocumentoEmpresa` cria na subpasta;
+  `atualizarDocumentoEmpresa` move o arquivo quando a categoria muda; nova RPC
+  `reorganizarDocumentosEmpresa`.
+- UI: `views/FinDocumentos.tsx` com grade de pastas, breadcrumb e autocomplete.
+
+---
+
 ## [1.174.0] — 2026-06-25
 
 ### Adicionado — Cofre de segredos por empresa
