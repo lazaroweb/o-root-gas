@@ -11111,6 +11111,109 @@ function importarPadroesForja(): ServerResult {
   }
 }
 
+// Importa padrões de OUTRO projeto a partir de um JSON (gerado por um agente
+// na IDE do projeto-alvo, ou exportado de outra instância da Forja). Aceita:
+//   • array "flat" de cards: [{ secao, titulo, valor, referencia?, tags? }]
+//   • array "agrupado" (igual ao export): [{ secao|label|key, cards: [...] }]
+// Mapeia `secao` pelas seções existentes (por key ou label); cria a seção se
+// não existir. Idempotente: pula cards já presentes (mesma seção+título+projeto).
+// `projeto` no payload sobrescreve o de todos os itens (caso de uso principal:
+// "importar tudo isso para o projeto App X").
+function importarCodexJson(payload: Record<string, unknown>): ServerResult {
+  try {
+    initDatabase();
+    _seedCodexSecoes();
+
+    // Parse: aceita string (com ou sem cercas ```) ou array já parseado.
+    let bruto: unknown = payload['itens'] != null ? payload['itens'] : payload['json'];
+    if (typeof bruto === 'string') {
+      let txt = bruto.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+      bruto = JSON.parse(txt);
+    }
+    if (!Array.isArray(bruto)) {
+      return { ok: false, error: 'JSON inválido: era esperado um array de padrões.' };
+    }
+
+    // Achata o formato agrupado (com `cards`) num array flat de cards.
+    const flat: Array<Record<string, unknown>> = [];
+    for (const node of bruto as Array<Record<string, unknown>>) {
+      if (node && Array.isArray((node as Record<string, unknown>)['cards'])) {
+        const secaoNome = node['secao'] || node['label'] || node['key'];
+        for (const c of (node['cards'] as Array<Record<string, unknown>>)) {
+          flat.push({ ...c, secao: c['secao'] || secaoNome });
+        }
+      } else if (node && typeof node === 'object') {
+        flat.push(node);
+      }
+    }
+
+    const projetoOverride = String(payload['projeto'] || '').trim();
+    const slug = (x: unknown): string => String(x || '').toLowerCase().trim()
+      .replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+
+    const secoes = dbGetAll('CodexSecoes') as Array<Record<string, unknown>>;
+    const porKey: Record<string, string> = {};
+    const porLabel: Record<string, string> = {};
+    for (const s of secoes) {
+      porKey[String(s['key']).toLowerCase()] = String(s['id']);
+      porLabel[String(s['label']).toLowerCase()] = String(s['id']);
+    }
+
+    let secoesCriadas = 0;
+    const resolverSecao = (nome: unknown): string => {
+      const n = String(nome || '').trim();
+      if (!n) return '';
+      const k = slug(n);
+      if (k && porKey[k]) return porKey[k];
+      if (porLabel[n.toLowerCase()]) return porLabel[n.toLowerCase()];
+      const nova = dbCreate('CodexSecoes', {
+        key: k || ('sec-' + Utilities.getUuid().slice(0, 8)),
+        label: n, icone: 'tag', descricao: '', ordem: 50,
+        criadoEm: new Date().toISOString(),
+      }) as Record<string, unknown>;
+      porKey[k] = String(nova['id']);
+      porLabel[n.toLowerCase()] = String(nova['id']);
+      secoesCriadas++;
+      return String(nova['id']);
+    };
+
+    const existentes = dbGetAll('CodexCards') as Array<Record<string, unknown>>;
+    const chave = (sid: string, titulo: unknown, proj: unknown): string =>
+      `${sid}::${String(titulo).toLowerCase()}::${String(proj).toLowerCase()}`;
+    const jaTem = new Set(existentes.map((c) =>
+      chave(String(c['secaoId']), c['titulo'], String(c['projeto'] || _CODEX_PROJETO_PADRAO))));
+
+    let inseridos = 0;
+    let pulados = 0;
+    let ordem = 100;
+    const agora = new Date().toISOString();
+    for (const it of flat) {
+      const titulo = String(it['titulo'] || it['title'] || '').trim();
+      const valor = String(it['valor'] || it['value'] || it['conteudo'] || '').trim();
+      const secaoNome = it['secao'] || it['secaoKey'] || it['section'] || it['categoria'];
+      if (!titulo || !valor || !secaoNome) { pulados++; continue; }
+      const secaoId = resolverSecao(secaoNome);
+      if (!secaoId) { pulados++; continue; }
+      const projeto = projetoOverride || String(it['projeto'] || '').trim() || 'Importado';
+      const ch = chave(secaoId, titulo, projeto);
+      if (jaTem.has(ch)) { pulados++; continue; }
+      dbCreate('CodexCards', {
+        secaoId, titulo, valor,
+        referencia: String(it['referencia'] || it['ref'] || ''),
+        tags: String(it['tags'] || ''),
+        incluirEmIa: String(it['incluirEmIa'] || 'sim') === 'nao' ? 'nao' : 'sim',
+        projeto, ordem: ordem++, criadoEm: agora, atualizadoEm: agora,
+      });
+      jaTem.add(ch);
+      inseridos++;
+    }
+
+    return { ok: true, data: { inseridos, pulados, secoesCriadas, total: flat.length } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao importar JSON' };
+  }
+}
+
 // Constrói um trecho de prompt com os cards do Códex marcados pra IA.
 // Devolve string vazia se não houver cards ativos — assim é seguro chamar
 // sempre, sem `if`. Formato compacto pensado pra economizar tokens.

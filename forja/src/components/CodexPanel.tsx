@@ -7,6 +7,7 @@ import {
   Plus, Search, Edit3, Trash2, Sparkles, Download, Copy, Link as LinkIcon,
   Palette, Layers, Code2, CheckCircle2, Rocket, GitBranch, Compass,
   BookOpen, Tag as TagIcon, Settings2, FileDown, Upload, FolderGit2, CopyPlus,
+  FolderInput, Wand2, ClipboardPaste,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useTokens } from '../themeContext';
@@ -39,6 +40,23 @@ function getSecaoIcon(nome?: string): LucideIcon {
 const PROJETO_PADRAO = 'Forja';
 const projetoDoCard = (c: CodexCard): string => (c.projeto || '').trim() || PROJETO_PADRAO;
 
+// Prompt padrão pra extrair padrões de OUTRO projeto na IDE (Cursor, etc.).
+// O usuário copia, roda no repo-alvo, e cola o JSON de volta na Forja.
+const PROMPT_IMPORTAR_PROJETO = `Você é um extrator de padrões de desenvolvimento. Analise ESTE projeto (código-fonte, package.json, configs, README, lockfiles) e extraia os padrões REAIS e reutilizáveis dele para alimentar o "Códex" de outro app.
+
+Responda APENAS com um JSON válido — sem texto antes/depois, sem cercas de código. Formato: um array de objetos:
+
+[
+  { "secao": "design", "titulo": "Tipografia", "valor": "...", "referencia": "", "tags": "fonte,tipografia" }
+]
+
+Regras:
+- "secao": use uma destas chaves quando fizer sentido — design, stack, codigo, qualidade, deploy, git, produto, prompts. Se nenhuma servir, crie um nome curto.
+- "titulo": curto (1-3 palavras). "valor": específico e factual, baseado no que EXISTE no repositório — nada de achismo.
+- Cubra o que for real: design (tipografia, paleta, ícones, spacing, radius), stack (frontend, backend, banco, libs principais), código (style/lint, naming, estrutura), qualidade (testes, cobertura), deploy (hosting, CI/CD), git (padrão de commits), produto (tom de voz), prompts (se houver).
+- Prefira poucos cards certos a muitos chutados. Ignore o que não conseguir confirmar.
+- NUNCA inclua segredos, tokens, chaves de API ou conteúdo de .env.`;
+
 // Ícones disponíveis pro picker de seção. 8 padrão + opções extras úteis.
 const SECAO_ICONES_PICKER = Object.keys(SECAO_ICONES);
 
@@ -66,6 +84,7 @@ export default function CodexPanel(): React.ReactElement {
   const [preview, setPreview] = useState<CodexPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [importando, setImportando] = useState(false);
+  const [importarOpen, setImportarOpen] = useState(false);
 
   const carregar = useCallback((opts?: { manterAtiva?: boolean }) => {
     setLoading(true);
@@ -365,6 +384,17 @@ export default function CodexPanel(): React.ReactElement {
               Importar Forja
             </Button>
           </Tooltip>
+          <Tooltip title="Trazer padrões de OUTRO projeto: copie um prompt, rode na IDE do projeto e cole o JSON aqui.">
+            <Button
+              size="small"
+              icon={<FolderInput size={13} />}
+              onClick={() => setImportarOpen(true)}
+              block
+              style={{ fontSize: 12, textAlign: 'left', justifyContent: 'flex-start' }}
+            >
+              Importar projeto
+            </Button>
+          </Tooltip>
           <Tooltip title={`Preview do contexto que vai pra IA quando o toggle "Códex" estiver ativo. ${stats.naIa}/${stats.total} cards inclusos.`}>
             <Button
               size="small"
@@ -562,6 +592,12 @@ export default function CodexPanel(): React.ReactElement {
         loading={previewLoading}
         preview={preview}
         onClose={() => setPreviewOpen(false)}
+      />
+      <ModalImportar
+        open={importarOpen}
+        projetosExistentes={projetos}
+        onClose={() => setImportarOpen(false)}
+        onImported={() => { setImportarOpen(false); carregar({ manterAtiva: true }); }}
       />
     </div>
   );
@@ -948,6 +984,155 @@ function ModalSecao({ open, secao, onClose, onSaved }: {
         </Form.Item>
       </Form>
     </Modal>
+  );
+}
+
+// ─── Drawer: Importar projeto (prompt → JSON) ────────────────────────────────
+
+function ModalImportar({ open, projetosExistentes, onClose, onImported }: {
+  open: boolean;
+  projetosExistentes: string[];
+  onClose: () => void;
+  onImported: () => void;
+}): React.ReactElement {
+  const t = useTokens();
+  const { message } = AntApp.useApp();
+  const [projeto, setProjeto] = useState('');
+  const [jsonText, setJsonText] = useState('');
+  const [importando, setImportando] = useState(false);
+  const [verPrompt, setVerPrompt] = useState(false);
+
+  useEffect(() => {
+    if (open) { setProjeto(''); setJsonText(''); setVerPrompt(false); }
+  }, [open]);
+
+  const copiarPrompt = () => {
+    navigator.clipboard.writeText(PROMPT_IMPORTAR_PROJETO);
+    message.success('Prompt copiado — cole na IDE do projeto-alvo');
+  };
+
+  const importar = async () => {
+    const proj = projeto.trim();
+    if (!proj) { message.warning('Dê um nome ao projeto de destino'); return; }
+    if (!jsonText.trim()) { message.warning('Cole o JSON gerado pela IDE'); return; }
+    setImportando(true);
+    try {
+      const r = await callServer<ServerResult>('importarCodexJson', { json: jsonText, projeto: proj });
+      if (r.ok) {
+        const d = r.data as { inseridos: number; pulados: number; secoesCriadas: number; total: number };
+        if (d.inseridos === 0) {
+          message.info(`Nada novo: ${d.pulados} card(s) já existiam ou eram inválidos.`);
+        } else {
+          message.success(
+            `${d.inseridos} padrão(ões) importado(s) em "${proj}"` +
+            (d.secoesCriadas ? `, ${d.secoesCriadas} seção(ões) nova(s)` : '') +
+            (d.pulados ? `, ${d.pulados} pulado(s)` : '') + '.'
+          );
+        }
+        setJsonText('');
+        onImported();
+      } else {
+        message.error(r.error || 'Erro ao importar. Confira se o JSON é válido.');
+      }
+    } finally {
+      setImportando(false);
+    }
+  };
+
+  const tituloPasso = (n: string, txt: string) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+      <span style={{
+        width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        background: t.accents.sage, color: '#fff',
+        fontFamily: FONTS.mono, fontSize: 11, fontWeight: 700,
+      }}>{n}</span>
+      <span style={{ fontFamily: FONTS.display, fontSize: 14.5, fontWeight: 500, color: t.text }}>{txt}</span>
+    </div>
+  );
+
+  return (
+    <Drawer
+      title={
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <FolderInput size={16} color={t.accents.sage} />
+          <span>Importar padrões de outro projeto</span>
+        </div>
+      }
+      placement="right"
+      width={640}
+      open={open}
+      onClose={onClose}
+    >
+      <div style={{
+        fontSize: 12.5, color: t.textSecondary, lineHeight: 1.55, marginBottom: 20,
+        padding: '10px 12px', background: t.surfaceMuted, borderRadius: 8,
+        border: `1px solid ${t.borderSoft}`,
+      }}>
+        Sem precisar conectar repositório: você copia um prompt, roda na IDE do projeto-alvo
+        (que já tem o código todo em contexto) e cola de volta o JSON. A Forja cria os cards
+        nas seções certas, sob o projeto que você escolher.
+      </div>
+
+      {/* Passo 1 — copiar prompt */}
+      <div style={{ marginBottom: 24 }}>
+        {tituloPasso('1', 'Copie o prompt e rode na IDE do projeto')}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+          <Button type="primary" icon={<Wand2 size={14} />} onClick={copiarPrompt}>
+            Copiar prompt
+          </Button>
+          <Button type="text" onClick={() => setVerPrompt((v) => !v)} style={{ fontSize: 12 }}>
+            {verPrompt ? 'Ocultar' : 'Ver prompt'}
+          </Button>
+        </div>
+        {verPrompt && (
+          <div style={{
+            fontFamily: FONTS.mono, fontSize: 11, lineHeight: 1.55,
+            background: t.surface, border: `1px solid ${t.borderSoft}`,
+            padding: 12, borderRadius: 8, whiteSpace: 'pre-wrap',
+            color: t.textSecondary, maxHeight: 220, overflowY: 'auto',
+          }}>
+            {PROMPT_IMPORTAR_PROJETO}
+          </div>
+        )}
+      </div>
+
+      {/* Passo 2 — colar resultado */}
+      <div>
+        {tituloPasso('2', 'Cole o JSON e escolha o projeto')}
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 12, color: t.textTertiary, marginBottom: 4 }}>Projeto de destino</div>
+          <AutoComplete
+            value={projeto}
+            onChange={setProjeto}
+            options={projetosExistentes.filter((p) => p !== PROJETO_PADRAO).map((p) => ({ value: p }))}
+            placeholder="Ex: App X, Site da Maria…"
+            style={{ width: '100%' }}
+            filterOption={(input, option) =>
+              String(option?.value || '').toLowerCase().includes(input.toLowerCase())}
+          >
+            <Input prefix={<FolderGit2 size={13} />} />
+          </AutoComplete>
+        </div>
+        <Input.TextArea
+          value={jsonText}
+          onChange={(e) => setJsonText(e.target.value)}
+          rows={9}
+          placeholder='Cole aqui o JSON, ex: [ { "secao": "design", "titulo": "Tipografia", "valor": "..." } ]'
+          style={{ fontFamily: FONTS.mono, fontSize: 12 }}
+        />
+        <Button
+          type="primary"
+          icon={<ClipboardPaste size={14} />}
+          onClick={importar}
+          loading={importando}
+          block
+          style={{ marginTop: 12 }}
+        >
+          Importar para o Códex
+        </Button>
+      </div>
+    </Drawer>
   );
 }
 
