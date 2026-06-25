@@ -36,6 +36,31 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.161.0] — 2026-06-24
+
+### Adicionado — Projeção de caixa (visão pra frente, mês a mês)
+
+Nova estação **Projeção** no Financeiro da Empresa. Responde "vou ter caixa nos
+próximos meses?" consolidando tudo que já existe:
+
+- **Entradas previstas** = cobranças em aberto (por vencimento) + assinaturas
+  ativas projetadas pela recorrência (sem duplicar o que já tem cobrança emitida).
+- **Saídas previstas** = custos recorrentes projetados + despesas pendentes.
+- **Saldo do mês e saldo acumulado** a partir de um **saldo inicial** configurável,
+  com **alerta de runway** (primeiro mês em que o caixa fica negativo) e o
+  **menor caixa** do período.
+- Janela de **6 ou 12 meses**, gráfico do saldo acumulado e tabela mês a mês
+  (entradas/saídas com detalhamento por origem no tooltip). Vencidos/atrasados
+  caem no mês atual.
+
+### Detalhes técnicos — 1.161.0
+
+- `server.ts`: RPC `getProjecaoCaixa(meses, saldoInicial)` + helper
+  `_ocorrenciasAteFim` (projeta ocorrências de itens recorrentes na janela).
+- Front: nova view `FinProjecao.tsx` e item **Projeção** no SubNav da Empresa.
+
+---
+
 ## [1.160.0] — 2026-06-24
 
 ### Adicionado — Régua de cobrança (lembretes de inadimplência)

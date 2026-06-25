@@ -3398,6 +3398,156 @@ function getFinanceiro(): ServerResult {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// PROJEÇÃO DE CAIXA (v1.161.0) — visão pra frente, mês a mês
+//   Consolida o que JÁ construímos:
+//     entradas = cobranças em aberto (por vencimento) + assinaturas projetadas
+//     saídas   = custos recorrentes projetados + despesas pendentes
+//   Resultado: saldo do mês + saldo acumulado (a partir de um saldo inicial),
+//   com alerta de runway (primeiro mês em que o caixa fica negativo).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Enumera as datas de ocorrência de um item recorrente, da base até o fim da
+// janela (inclusive). Item não-recorrente devolve só a própria data.
+function _ocorrenciasAteFim(baseISO: string, recorrencia: string, fimISO: string): string[] {
+  const out: string[] = [];
+  const base = String(baseISO || '').substring(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(base)) return out;
+  const r = String(recorrencia || 'mensal').toLowerCase();
+  const naoRecorrente = r.indexOf('avuls') >= 0 || r.indexOf('unic') >= 0;
+  let cur = base; let guard = 0;
+  while (cur <= fimISO && guard < 240) {
+    out.push(cur);
+    if (naoRecorrente) break;
+    const next = _avancarCiclo(cur, recorrencia);
+    if (next === cur) break;
+    cur = next; guard++;
+  }
+  return out;
+}
+
+function getProjecaoCaixa(meses?: number, saldoInicial?: number): ServerResult {
+  try {
+    const N = Math.max(3, Math.min(24, Number(meses || 6)));
+    const saldo0 = Number(saldoInicial || 0);
+    const nomes = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+    const primeiroMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    const ultimoDia = new Date(hoje.getFullYear(), hoje.getMonth() + N, 0);
+    const fimISO = ultimoDia.toISOString().substring(0, 10);
+    const primeiroMesISO = primeiroMes.toISOString().substring(0, 10);
+
+    interface Bucket { mes: string; label: string; entradas: number; saidas: number; cobrancas: number; assinaturas: number; custos: number; despesas: number; saldoMes: number; acumulado: number }
+    const buckets: Bucket[] = [];
+    for (let i = 0; i < N; i++) {
+      const ref = new Date(hoje.getFullYear(), hoje.getMonth() + i, 1);
+      buckets.push({
+        mes: `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}`,
+        label: `${nomes[ref.getMonth()]}/${String(ref.getFullYear()).slice(2)}`,
+        entradas: 0, saidas: 0, cobrancas: 0, assinaturas: 0, custos: 0, despesas: 0, saldoMes: 0, acumulado: 0,
+      });
+    }
+    const idxDe = (iso: string): number => {
+      const s = String(iso || '').substring(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return -1;
+      if (s < primeiroMesISO) return 0; // vencido/atrasado → cai no mês atual
+      const d = new Date(s + 'T00:00:00');
+      const i = (d.getFullYear() - hoje.getFullYear()) * 12 + (d.getMonth() - hoje.getMonth());
+      return i >= 0 && i < N ? i : -1;
+    };
+
+    // 1) Cobranças em aberto (emitida/vencida) — receita concreta, por vencimento.
+    //    Guarda (receitaId|mês) pra não duplicar com a projeção de assinatura.
+    const cobertoPorCobranca: Record<string, boolean> = {};
+    const cobrancas = (dbGetAll('EmpresaCobrancas') as Array<Record<string, unknown>>)
+      .filter((c) => { const s = String(c['status']); return s === 'emitida' || s === 'vencida'; });
+    for (const c of cobrancas) {
+      const i = idxDe(String(c['vencimento'] || ''));
+      if (i < 0) continue;
+      const v = Number(c['valor'] || 0);
+      buckets[i].cobrancas += v; buckets[i].entradas += v;
+      const rid = String(c['receitaId'] || '');
+      if (rid) cobertoPorCobranca[`${rid}|${buckets[i].mes}`] = true;
+    }
+
+    // 2) Assinaturas ativas — projeta renovações a partir da próxima cobrança,
+    //    pulando o mês que já tem cobrança emitida pra aquela assinatura.
+    const receitas = (dbGetAll('Receitas') as Array<Record<string, unknown>>)
+      .filter((r) => String(r['status'] || 'ativa').toLowerCase() === 'ativa');
+    for (const r of receitas) {
+      const base = String(r['proximaCobranca'] || '');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(base)) continue;
+      const valor = Number(r['valor'] || 0);
+      const rid = String(r['id']);
+      for (const occ of _ocorrenciasAteFim(base, String(r['recorrencia'] || 'mensal'), fimISO)) {
+        const i = idxDe(occ);
+        if (i < 0) continue;
+        if (cobertoPorCobranca[`${rid}|${buckets[i].mes}`]) continue; // já contado como cobrança
+        buckets[i].assinaturas += valor; buckets[i].entradas += valor;
+      }
+    }
+
+    // 3) Custos recorrentes (contratos) — projeta saídas a partir da próxima cobrança.
+    const custos = dbGetAll('Custos') as Array<Record<string, unknown>>;
+    for (const c of custos) {
+      const base = String(c['proximaCobranca'] || '');
+      const valor = Number(c['valor'] || 0);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(base)) {
+        for (const occ of _ocorrenciasAteFim(base, String(c['recorrencia'] || 'mensal'), fimISO)) {
+          const i = idxDe(occ);
+          if (i < 0) continue;
+          buckets[i].custos += valor; buckets[i].saidas += valor;
+        }
+      } else {
+        // Sem data de próxima cobrança: assume o valor mensal em todos os meses.
+        const mensal = toMonthly(valor, String(c['recorrencia'] || 'mensal'));
+        for (let i = 0; i < N; i++) { buckets[i].custos += mensal; buckets[i].saidas += mensal; }
+      }
+    }
+
+    // 4) Despesas pendentes (livro-caixa) — saída por competência/data.
+    const despesas = (dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>)
+      .filter((d) => String(d['status'] || '') !== 'pago');
+    for (const d of despesas) {
+      const ref = String(d['data'] || '') || (String(d['competencia'] || '') + '-15');
+      const i = idxDe(ref);
+      if (i < 0) continue;
+      const v = Number(d['valor'] || 0);
+      buckets[i].despesas += v; buckets[i].saidas += v;
+    }
+
+    // Saldo do mês + acumulado.
+    let acc = saldo0;
+    let menorAcumulado = Infinity; let mesNegativo = '';
+    for (const b of buckets) {
+      b.saldoMes = Math.round(b.entradas - b.saidas);
+      b.entradas = Math.round(b.entradas); b.saidas = Math.round(b.saidas);
+      b.cobrancas = Math.round(b.cobrancas); b.assinaturas = Math.round(b.assinaturas);
+      b.custos = Math.round(b.custos); b.despesas = Math.round(b.despesas);
+      acc += b.saldoMes; b.acumulado = Math.round(acc);
+      if (b.acumulado < menorAcumulado) menorAcumulado = b.acumulado;
+      if (!mesNegativo && b.acumulado < 0) mesNegativo = b.label;
+    }
+    const totalEntradas = buckets.reduce((s, b) => s + b.entradas, 0);
+    const totalSaidas = buckets.reduce((s, b) => s + b.saidas, 0);
+
+    return {
+      ok: true,
+      data: {
+        meses: buckets,
+        saldoInicial: Math.round(saldo0),
+        totalEntradas, totalSaidas,
+        saldoProjetado: buckets.length ? buckets[buckets.length - 1].acumulado : Math.round(saldo0),
+        menorAcumulado: menorAcumulado === Infinity ? Math.round(saldo0) : menorAcumulado,
+        mesNegativo,
+        janela: N,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao projetar caixa' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // VAULT — segredos em Script Properties (nunca retornados ao cliente)
 // ═══════════════════════════════════════════════════════════════════════════════
 
