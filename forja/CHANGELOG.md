@@ -36,6 +36,27 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.171.1] — 2026-06-25
+
+### Melhorado — Contexto da empresa explícito nos Documentos
+
+Ficou claro **de qual empresa** são os documentos (antes parecia "alto nível").
+
+- **Barra de contexto** no topo da estação: "Documentos de ● Empresa X · troque a
+  empresa no seletor do topo", com a cor/etiqueta da empresa ativa.
+- O **modal de adicionar** mostra "Será anexado a ● Empresa X" antes do upload.
+- Modo **Consolidado**: mostra um aviso (não dá pra saber a empresa-alvo), some o
+  botão de adicionar e a tabela ganha a coluna **Empresa** pra diferenciar a origem.
+
+### Detalhes técnicos — 1.171.1
+
+- `server.ts`: `getDocumentosEmpresa` agora devolve `consolidado`, `empresaAtivaNome`,
+  `empresaAtivaCor` e `empresaNome` por linha.
+- UI: `views/FinDocumentos.tsx` — barra de contexto, banner no modal, coluna Empresa
+  no consolidado.
+
+---
+
 ## [1.171.0] — 2026-06-25
 
 ### Adicionado — Documentos da empresa (cofre no Drive)

@@ -3,8 +3,8 @@
 // por empresa) e aqui listamos os metadados, com categoria, validade e ação de
 // abrir/baixar. Escopado pela empresa selecionada no topo.
 import React, { useState, useEffect, useCallback } from 'react';
-import { Button, Table, Tag, Select, DatePicker, Input, Modal, Form, Upload, Popconfirm, Empty, Tooltip, App as AntApp } from 'antd';
-import { Plus, Trash2, ExternalLink, FileText, UploadCloud, AlertTriangle, Pencil } from 'lucide-react';
+import { Button, Table, Tag, Select, DatePicker, Input, Modal, Form, Upload, Popconfirm, Empty, Tooltip, Alert, App as AntApp } from 'antd';
+import { Plus, Trash2, ExternalLink, FileText, UploadCloud, AlertTriangle, Pencil, Building2, Layers } from 'lucide-react';
 import dayjs from 'dayjs';
 import { Panel } from '../components/ui';
 import { useTokens } from '../themeContext';
@@ -14,7 +14,7 @@ import type { ServerResponse } from '../types';
 
 interface Documento {
   id: string; empresaId: string; nome: string; categoria: string; mime: string;
-  tamanho: number; driveFileId: string; url: string; validade: string; notas: string; criadoEm: string;
+  tamanho: number; driveFileId: string; url: string; validade: string; notas: string; criadoEm: string; empresaNome?: string;
 }
 
 function formatBytes(n: number): string {
@@ -39,6 +39,9 @@ export default function FinDocumentos(): React.ReactElement {
   const { message } = AntApp.useApp();
   const [docs, setDocs] = useState<Documento[]>([]);
   const [categorias, setCategorias] = useState<string[]>([]);
+  const [empresaNome, setEmpresaNome] = useState('');
+  const [empresaCor, setEmpresaCor] = useState('#8b5cf6');
+  const [consolidado, setConsolidado] = useState(false);
   const [loading, setLoading] = useState(true);
   const [upOpen, setUpOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -48,12 +51,15 @@ export default function FinDocumentos(): React.ReactElement {
 
   const load = useCallback(() => {
     setLoading(true);
-    callServer<ServerResponse<{ documentos: Documento[]; categorias: string[] }>>('getDocumentosEmpresa')
+    callServer<ServerResponse<{ documentos: Documento[]; categorias: string[]; consolidado: boolean; empresaAtivaNome: string; empresaAtivaCor: string }>>('getDocumentosEmpresa')
       .then((res) => {
         if (res.ok && res.data) {
-          const d = res.data as { documentos: Documento[]; categorias: string[] };
+          const d = res.data as { documentos: Documento[]; categorias: string[]; consolidado: boolean; empresaAtivaNome: string; empresaAtivaCor: string };
           setDocs(d.documentos || []);
           setCategorias(d.categorias || []);
+          setConsolidado(!!d.consolidado);
+          setEmpresaNome(d.empresaAtivaNome || '');
+          setEmpresaCor(d.empresaAtivaCor || '#8b5cf6');
         }
       })
       .catch(() => { /* preview */ })
@@ -96,15 +102,69 @@ export default function FinDocumentos(): React.ReactElement {
   const hoje = dayjs();
   const venceProx = (validade: string) => validade && dayjs(validade).isBefore(hoje.add(30, 'day'));
 
+  const colEmpresa = {
+    title: 'Empresa', dataIndex: 'empresaNome', width: 170, ellipsis: true,
+    render: (v: string) => <span style={{ color: t.textSecondary, fontSize: 12.5 }}>{v || '—'}</span>,
+  };
+  const colsBase = [
+    {
+      title: 'Documento', dataIndex: 'nome', ellipsis: true,
+      render: (v: string, d: Documento) => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <FileText size={15} style={{ color: t.textTertiary, flexShrink: 0 }} />
+          <a href={d.url} target="_blank" rel="noreferrer" style={{ color: t.text, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v}</a>
+        </div>
+      ),
+    },
+    { title: 'Categoria', dataIndex: 'categoria', width: 150, ellipsis: true, render: (v: string) => <Tag>{v}</Tag> },
+    ...(consolidado ? [colEmpresa] : []),
+    { title: 'Tamanho', dataIndex: 'tamanho', width: 96, align: 'right' as const, render: (v: number) => <span style={{ color: t.textSecondary, fontFamily: FONTS.mono, fontSize: 12 }}>{formatBytes(v)}</span> },
+    {
+      title: 'Validade', dataIndex: 'validade', width: 124,
+      render: (v: string) => v
+        ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: venceProx(v) ? t.accents.rose : t.textSecondary }}>{venceProx(v) && <AlertTriangle size={13} />}{dayjs(v).format('DD/MM/YYYY')}</span>
+        : <span style={{ color: t.textTertiary }}>—</span>,
+    },
+    { title: 'Enviado', dataIndex: 'criadoEm', width: 112, render: (v: string) => <span style={{ color: t.textTertiary, fontSize: 12 }}>{v ? dayjs(v).format('DD/MM/YYYY') : '—'}</span> },
+    {
+      title: 'Ações', key: 'acoes', align: 'right' as const, width: 134,
+      render: (_: unknown, d: Documento) => (
+        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+          <Tooltip title="Abrir no Drive"><Button size="small" icon={<ExternalLink size={14} />} href={d.url} target="_blank" /></Tooltip>
+          <Tooltip title="Editar"><Button size="small" icon={<Pencil size={14} />} onClick={() => abrirEdit(d)} /></Tooltip>
+          <Popconfirm title="Excluir documento?" description="Vai pra lixeira do Drive." okText="Excluir" cancelText="Cancelar" okButtonProps={{ danger: true }} onConfirm={() => remover(d)}>
+            <Button size="small" danger icon={<Trash2 size={14} />} />
+          </Popconfirm>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ color: t.textSecondary, fontSize: 13 }}>
-          Documentos da empresa selecionada — guardados no seu Google Drive.
+      {/* Barra de contexto: deixa explícito de QUAL empresa são estes documentos. */}
+      {consolidado ? (
+        <Alert
+          type="warning" showIcon icon={<Layers size={16} />}
+          message="Você está no Consolidado (todas as empresas)"
+          description="A lista abaixo mostra os documentos de todas as empresas. Para anexar um documento, selecione uma empresa específica no seletor do topo."
+        />
+      ) : (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+          background: t.surfaceMuted, border: `1px solid ${t.border}`, borderRadius: 12, padding: '10px 14px',
+        }}>
+          <Building2 size={16} style={{ color: t.textTertiary }} />
+          <span style={{ color: t.textSecondary, fontSize: 13 }}>Documentos de</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontWeight: 600, color: t.text }}>
+            <span style={{ width: 10, height: 10, borderRadius: 3, background: empresaCor, display: 'inline-block' }} />
+            {empresaNome || 'empresa selecionada'}
+          </span>
+          <span style={{ color: t.textTertiary, fontSize: 12.5 }}>· troque a empresa no seletor do topo</span>
+          <div style={{ flex: 1 }} />
+          <Button type="primary" icon={<Plus size={15} />} onClick={abrirUpload}>Adicionar documento</Button>
         </div>
-        <div style={{ flex: 1 }} />
-        <Button type="primary" icon={<Plus size={15} />} onClick={abrirUpload}>Adicionar documento</Button>
-      </div>
+      )}
 
       <Panel title={`Documentos (${docs.length})`} padding={8}>
         <Table
@@ -114,38 +174,7 @@ export default function FinDocumentos(): React.ReactElement {
           pagination={false}
           tableLayout="fixed"
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Nenhum documento ainda — adicione o contrato social, cartão CNPJ…" /> }}
-          columns={[
-            {
-              title: 'Documento', dataIndex: 'nome', ellipsis: true,
-              render: (v: string, d: Documento) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                  <FileText size={15} style={{ color: t.textTertiary, flexShrink: 0 }} />
-                  <a href={d.url} target="_blank" rel="noreferrer" style={{ color: t.text, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v}</a>
-                </div>
-              ),
-            },
-            { title: 'Categoria', dataIndex: 'categoria', width: 160, ellipsis: true, render: (v: string) => <Tag>{v}</Tag> },
-            { title: 'Tamanho', dataIndex: 'tamanho', width: 100, align: 'right', render: (v: number) => <span style={{ color: t.textSecondary, fontFamily: FONTS.mono, fontSize: 12 }}>{formatBytes(v)}</span> },
-            {
-              title: 'Validade', dataIndex: 'validade', width: 130,
-              render: (v: string) => v
-                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: venceProx(v) ? t.accents.rose : t.textSecondary }}>{venceProx(v) && <AlertTriangle size={13} />}{dayjs(v).format('DD/MM/YYYY')}</span>
-                : <span style={{ color: t.textTertiary }}>—</span>,
-            },
-            { title: 'Enviado', dataIndex: 'criadoEm', width: 120, render: (v: string) => <span style={{ color: t.textTertiary, fontSize: 12 }}>{v ? dayjs(v).format('DD/MM/YYYY') : '—'}</span> },
-            {
-              title: 'Ações', key: 'acoes', align: 'right', width: 140,
-              render: (_: unknown, d: Documento) => (
-                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                  <Tooltip title="Abrir no Drive"><Button size="small" icon={<ExternalLink size={14} />} href={d.url} target="_blank" /></Tooltip>
-                  <Tooltip title="Editar"><Button size="small" icon={<Pencil size={14} />} onClick={() => abrirEdit(d)} /></Tooltip>
-                  <Popconfirm title="Excluir documento?" description="Vai pra lixeira do Drive." okText="Excluir" cancelText="Cancelar" okButtonProps={{ danger: true }} onConfirm={() => remover(d)}>
-                    <Button size="small" danger icon={<Trash2 size={14} />} />
-                  </Popconfirm>
-                </div>
-              ),
-            },
-          ]}
+          columns={colsBase}
         />
       </Panel>
 
@@ -163,6 +192,19 @@ export default function FinDocumentos(): React.ReactElement {
         destroyOnClose
       >
         <Form form={form} layout="vertical" onFinish={salvar} style={{ marginTop: 8 }}>
+          {!editId && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14,
+              background: t.surfaceMuted, border: `1px solid ${t.border}`, borderRadius: 10, padding: '8px 12px',
+            }}>
+              <Building2 size={15} style={{ color: t.textTertiary }} />
+              <span style={{ color: t.textSecondary, fontSize: 12.5 }}>Será anexado a</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 600, color: t.text }}>
+                <span style={{ width: 9, height: 9, borderRadius: 3, background: empresaCor, display: 'inline-block' }} />
+                {empresaNome || 'empresa selecionada'}
+              </span>
+            </div>
+          )}
           {!editId && (
             <Form.Item label="Arquivo" required>
               <Upload.Dragger

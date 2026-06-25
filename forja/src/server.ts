@@ -6143,9 +6143,24 @@ function _docsFolderEmpresa(empresaId: string): GoogleAppsScript.Drive.Folder {
 function getDocumentosEmpresa(): ServerResult {
   try {
     initDatabase();
+    const nomeEmp: Record<string, string> = {};
+    for (const e of _empresasAll()) nomeEmp[String(e['id'])] = String(e['nomeFantasia'] || e['razaoSocial'] || '');
     const rows = _filtraEmpresa(dbGetAll('EmpresaDocumentos') as Array<Record<string, unknown>>)
+      .map((d) => Object.assign({}, d, { empresaNome: nomeEmp[String(d['empresaId'])] || '' }))
       .sort((a, b) => String(b['criadoEm']).localeCompare(String(a['criadoEm'])));
-    return { ok: true, data: { documentos: rows, categorias: DOC_CATEGORIAS } };
+    const filtroId = _empresaFiltroId();
+    const ativa = filtroId ? (dbGetById('Empresas', filtroId) || {}) : {};
+    return {
+      ok: true,
+      data: {
+        documentos: rows,
+        categorias: DOC_CATEGORIAS,
+        consolidado: !filtroId,
+        empresaAtivaId: filtroId,
+        empresaAtivaNome: String((ativa as Record<string, unknown>)['nomeFantasia'] || (ativa as Record<string, unknown>)['razaoSocial'] || ''),
+        empresaAtivaCor: String((ativa as Record<string, unknown>)['cor'] || '#8b5cf6'),
+      },
+    };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar documentos' };
   }
