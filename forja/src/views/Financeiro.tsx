@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Tabs, Select, Button, Tooltip } from 'antd';
-import { LayoutDashboard, ArrowUpRight, ArrowDownRight, Wallet, Building2, Receipt, FileText, LineChart, Landmark, Scale, Settings2, Layers } from 'lucide-react';
+import { LayoutDashboard, ArrowUpRight, ArrowDownRight, Wallet, Building2, Receipt, FileText, LineChart, Landmark, Scale, Settings2, Layers, Plus } from 'lucide-react';
 import { PageHeader } from '../components/ui';
+import { useTokens } from '../themeContext';
 import SubNav, { type SubNavItem } from '../components/SubNav';
 import FinEmpresas from './FinEmpresas';
 import type { Empresa } from '../types';
@@ -58,11 +59,15 @@ function FinEmpresa({ sistemas }: { sistemas: Sistema[] }): React.ReactElement {
 
 // Seletor de empresa (multi-empresa): escolhe a empresa ativa que escopa todas as
 // telas da aba Empresa, ou "Consolidado" pra somar todas. '__todas__' = consolidado.
-function SeletorEmpresa({ empresas, ativa, onChange, onGerir }: {
-  empresas: Empresa[]; ativa: string; onChange: (id: string) => void; onGerir: () => void;
+// O rodapé do dropdown traz as ações de criar/gerenciar empresas — é onde a pessoa
+// naturalmente procura por "minhas empresas", então é ali que descobre o multi-CNPJ.
+function SeletorEmpresa({ empresas, ativa, onChange, onGerir, onNova }: {
+  empresas: Empresa[]; ativa: string; onChange: (id: string) => void; onGerir: () => void; onNova: () => void;
 }): React.ReactElement {
+  const t = useTokens();
+  const umaSo = empresas.length <= 1;
   const options = [
-    { value: '__todas__', label: (<span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}><Layers size={14} /> Consolidado</span>) },
+    ...(empresas.length > 1 ? [{ value: '__todas__', label: (<span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}><Layers size={14} /> Consolidado</span>) }] : []),
     ...empresas.map((e) => ({
       value: e.id,
       label: (
@@ -79,12 +84,33 @@ function SeletorEmpresa({ empresas, ativa, onChange, onGerir }: {
         value={ativa}
         onChange={onChange}
         options={options}
-        style={{ minWidth: 220 }}
+        style={{ minWidth: 230 }}
         popupMatchSelectWidth={false}
+        prefix={<Building2 size={14} style={{ color: t.textTertiary }} />}
+        dropdownRender={(menu) => (
+          <>
+            {menu}
+            <div style={{ height: 1, background: t.border, margin: '6px 0' }} />
+            <div style={{ display: 'flex', flexDirection: 'column', padding: 4, gap: 2 }}>
+              <Button type="text" size="small" icon={<Plus size={14} />} onClick={onNova} style={{ justifyContent: 'flex-start', color: t.text }}>
+                Nova empresa
+              </Button>
+              <Button type="text" size="small" icon={<Settings2 size={14} />} onClick={onGerir} style={{ justifyContent: 'flex-start', color: t.text }}>
+                Gerenciar empresas
+              </Button>
+            </div>
+          </>
+        )}
       />
-      <Tooltip title="Gerenciar empresas">
-        <Button icon={<Settings2 size={16} />} onClick={onGerir} />
-      </Tooltip>
+      {umaSo ? (
+        <Tooltip title="Você pode cadastrar várias empresas (CNPJs) e ver cada uma — ou o consolidado.">
+          <Button type="dashed" icon={<Plus size={15} />} onClick={onNova}>Adicionar empresa</Button>
+        </Tooltip>
+      ) : (
+        <Tooltip title="Gerenciar empresas">
+          <Button icon={<Settings2 size={16} />} onClick={onGerir} />
+        </Tooltip>
+      )}
     </div>
   );
 }
@@ -95,6 +121,7 @@ export default function Financeiro(): React.ReactElement {
   const [ativa, setAtiva] = useState<string>('');
   const [tab, setTab] = useState<string>('empresa');
   const [gerirOpen, setGerirOpen] = useState(false);
+  const [gerirNovo, setGerirNovo] = useState(false);
 
   useEffect(() => {
     callServer<ServerResponse<Sistema[]>>('getSistemas')
@@ -131,11 +158,22 @@ export default function Financeiro(): React.ReactElement {
         title="Financeiro"
         subtitle="Empresa e Pessoal lado a lado — receitas, custos, lucro de cada app e suas finanças pessoais."
         extra={tab === 'empresa' ? (
-          <SeletorEmpresa empresas={empresas} ativa={ativa} onChange={trocarEmpresa} onGerir={() => setGerirOpen(true)} />
+          <SeletorEmpresa
+            empresas={empresas}
+            ativa={ativa}
+            onChange={trocarEmpresa}
+            onGerir={() => { setGerirNovo(false); setGerirOpen(true); }}
+            onNova={() => { setGerirNovo(true); setGerirOpen(true); }}
+          />
         ) : undefined}
       />
       <Tabs activeKey={tab} onChange={setTab} items={items} size="large" />
-      <FinEmpresas open={gerirOpen} onClose={() => setGerirOpen(false)} onChange={loadEmpresas} />
+      <FinEmpresas
+        open={gerirOpen}
+        abrirNovo={gerirNovo}
+        onClose={() => { setGerirOpen(false); setGerirNovo(false); }}
+        onChange={loadEmpresas}
+      />
     </div>
   );
 }

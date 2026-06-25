@@ -36,6 +36,26 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.170.0] — 2026-06-25
+
+### Melhorado — Descoberta do cadastro de empresas
+
+Ficou óbvio onde criar/gerenciar empresas (antes escondido só na engrenagem):
+
+- **Ações no dropdown do seletor**: ao abrir o seletor de empresa, o rodapé mostra
+  **"Nova empresa"** e **"Gerenciar empresas"** — onde a pessoa naturalmente procura.
+- **"Nova empresa" abre direto no formulário** (sem passar pela lista).
+- **Atalho quando há só uma empresa**: botão tracejado **"Adicionar empresa"** ao
+  lado do seletor, deixando claro que dá pra ter vários CNPJs.
+- Ícone de empresa no seletor; "Consolidado" só aparece quando há 2+ empresas.
+
+### Detalhes técnicos — 1.170.0
+
+- `Financeiro.tsx`: `dropdownRender` no seletor com ações; estado `gerirNovo`.
+- `FinEmpresas.tsx`: prop `abrirNovo` abre o formulário em branco ao montar.
+
+---
+
 ## [1.169.0] — 2026-06-25
 
 ### Adicionado — Credenciais de cobrança/NFS-e por empresa

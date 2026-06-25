@@ -19,8 +19,8 @@ const ANEXOS = [
   { value: 'V', label: 'Anexo V (Serviços)' },
 ];
 
-export default function FinEmpresas({ open, onClose, onChange }: {
-  open: boolean; onClose: () => void; onChange?: () => void;
+export default function FinEmpresas({ open, onClose, onChange, abrirNovo }: {
+  open: boolean; onClose: () => void; onChange?: () => void; abrirNovo?: boolean;
 }): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
@@ -39,13 +39,15 @@ export default function FinEmpresas({ open, onClose, onChange }: {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { if (open) load(); }, [open, load]);
-
-  const abrir = (e?: Empresa) => {
+  const abrir = useCallback((e?: Empresa) => {
     if (e) { setEditingId(e.id); form.setFieldsValue({ ...e }); }
     else { setEditingId(null); form.resetFields(); form.setFieldsValue({ regime: 'Simples Nacional', cor: '#8b5cf6', anexo: '' }); }
     setFormOpen(true);
-  };
+  }, [form]);
+
+  useEffect(() => { if (open) load(); }, [open, load]);
+  // Atalho "Nova empresa" vindo do seletor: abre já no formulário em branco.
+  useEffect(() => { if (open && abrirNovo) abrir(); }, [open, abrirNovo, abrir]);
 
   const salvar = async (v: Record<string, unknown>) => {
     setSaving(true);
