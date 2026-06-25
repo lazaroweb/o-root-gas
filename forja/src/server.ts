@@ -131,6 +131,10 @@ const SCHEMA: SheetSchema[] = [
   // `status` espelha o Asaas: SCHEDULED|SYNCHRONIZED|AUTHORIZED|PROCESSING_CANCELLATION|
   // CANCELED|CANCELLATION_DENIED|ERROR. `provedorNotaId` é o id da nota no Asaas.
   { name: 'NotasFiscais', columns: ['id', 'cobrancaId', 'pessoaId', 'provedor', 'provedorNotaId', 'status', 'numero', 'urlPdf', 'urlXml', 'valor', 'criadoEm', 'atualizadoEm', 'jsonProvedor'] },
+  // Impostos (v1.164.0): guias de imposto (DAS/Simples) por competência. Base =
+  // receita bruta realizada (Recebimentos do mês) × alíquota. `status`: pendente|pago.
+  // `despesaId` liga ao lançamento no livro-caixa criado ao registrar o pagamento.
+  { name: 'Impostos', columns: ['id', 'competencia', 'regime', 'baseCalculo', 'aliquota', 'valor', 'vencimento', 'status', 'dataPagamento', 'despesaId', 'notas', 'criadoEm', 'atualizadoEm'] },
   // v1.4.1: `origem` marca geração (ex: 'forja-self' pra dogfooding) e
   // `referencia` permite destacar um item como referência fixa no topo da
   // lista. Append-only — schema migra sem desalinhar dados antigos.
@@ -382,7 +386,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.79-nfse';
+const SCHEMA_VERSION = 'v1.80-impostos';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -5272,6 +5276,186 @@ function nfseCancelar(id: string): ServerResult {
     return { ok: true, data: atualizado };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao cancelar NFS-e' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// IMPOSTOS (v1.164.0) — provisão e acompanhamento do DAS / Simples Nacional
+//   Base de cálculo = receita bruta REALIZADA do mês (ledger Recebimentos) ×
+//   alíquota efetiva (que você informa, da sua faixa do Simples). Gera a guia por
+//   competência, mostra a reserva recomendada e, ao pagar, lança no livro-caixa.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface ImpostosConfig { regime: string; aliquota: number; diaVencimento: number }
+
+function _impostosConfig(): ImpostosConfig {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty('IMPOSTOS_CFG');
+    const p = raw ? JSON.parse(raw) : {};
+    return {
+      regime: String(p.regime || 'Simples Nacional'),
+      aliquota: Number(p.aliquota >= 0 ? p.aliquota : 6),
+      diaVencimento: Number(p.diaVencimento >= 1 ? p.diaVencimento : 20),
+    };
+  } catch { return { regime: 'Simples Nacional', aliquota: 6, diaVencimento: 20 }; }
+}
+
+function impostosConfigGet(): ServerResult {
+  return { ok: true, data: _impostosConfig() };
+}
+
+function impostosConfigSalvar(payload: Record<string, unknown>): ServerResult {
+  try {
+    const atual = _impostosConfig();
+    const p = payload || {};
+    const novo: ImpostosConfig = {
+      regime: p['regime'] !== undefined ? String(p['regime'] || 'Simples Nacional') : atual.regime,
+      aliquota: p['aliquota'] !== undefined ? Math.max(0, Math.min(100, Number(p['aliquota']))) : atual.aliquota,
+      diaVencimento: p['diaVencimento'] !== undefined ? Math.max(1, Math.min(28, Number(p['diaVencimento']))) : atual.diaVencimento,
+    };
+    PropertiesService.getScriptProperties().setProperty('IMPOSTOS_CFG', JSON.stringify(novo));
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar config de impostos' };
+  }
+}
+
+// Receita bruta realizada de uma competência (soma dos Recebimentos).
+function _receitaBrutaComp(comp: string): number {
+  return (dbGetAll('Recebimentos') as Array<Record<string, unknown>>)
+    .filter((r) => String(r['competencia']) === comp)
+    .reduce((s, r) => s + Number(r['valor'] || 0), 0);
+}
+
+function _impVencimento(comp: string, dia: number): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(comp || ''));
+  if (!m) return '';
+  // DAS vence no mês seguinte à competência.
+  const d = new Date(Number(m[1]), Number(m[2]), Math.min(28, Math.max(1, dia)));
+  return d.toISOString().substring(0, 10);
+}
+
+function getImpostosResumo(meses?: number): ServerResult {
+  try {
+    const N = Math.max(3, Math.min(24, Number(meses || 6)));
+    const cfg = _impostosConfig();
+    const nomes = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const hoje = new Date();
+    const anoAtual = hoje.getFullYear();
+    const guias = dbGetAll('Impostos') as Array<Record<string, unknown>>;
+    const guiaDe = (comp: string) => guias.find((g) => String(g['competencia']) === comp);
+
+    const linhas: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < N; i++) {
+      const ref = new Date(anoAtual, hoje.getMonth() - i, 1);
+      const comp = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}`;
+      const baseLive = _receitaBrutaComp(comp);
+      const g = guiaDe(comp);
+      if (g) {
+        linhas.push({
+          competencia: comp, label: `${nomes[ref.getMonth()]}/${String(ref.getFullYear()).slice(2)}`,
+          base: Number(g['baseCalculo'] || 0), aliquota: Number(g['aliquota'] || 0), valor: Number(g['valor'] || 0),
+          vencimento: String(g['vencimento'] || ''), status: String(g['status'] || 'pendente'),
+          dataPagamento: String(g['dataPagamento'] || ''), guiaId: String(g['id']), baseLive,
+        });
+      } else {
+        linhas.push({
+          competencia: comp, label: `${nomes[ref.getMonth()]}/${String(ref.getFullYear()).slice(2)}`,
+          base: Math.round(baseLive), aliquota: cfg.aliquota, valor: Math.round(baseLive * cfg.aliquota) / 100,
+          vencimento: _impVencimento(comp, cfg.diaVencimento), status: 'provisao',
+          dataPagamento: '', guiaId: '', baseLive,
+        });
+      }
+    }
+
+    const compAtual = `${anoAtual}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
+    const linhaAtual = linhas.find((l) => l['competencia'] === compAtual);
+    const provisaoMesAtual = linhaAtual ? Number(linhaAtual['valor']) : 0;
+    const reservaRecomendada = linhas.filter((l) => l['status'] !== 'pago').reduce((s, l) => s + Number(l['valor'] || 0), 0);
+    const pagoAno = guias.filter((g) => String(g['status']) === 'pago' && String(g['competencia']).indexOf(String(anoAtual)) === 0)
+      .reduce((s, g) => s + Number(g['valor'] || 0), 0);
+    const aPagar = linhas.filter((l) => l['status'] === 'pendente').reduce((s, l) => s + Number(l['valor'] || 0), 0);
+
+    return {
+      ok: true,
+      data: {
+        config: cfg, linhas,
+        provisaoMesAtual: Math.round(provisaoMesAtual),
+        reservaRecomendada: Math.round(reservaRecomendada),
+        pagoAno: Math.round(pagoAno),
+        aPagar: Math.round(aPagar),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao resumir impostos' };
+  }
+}
+
+// Gera (ou atualiza) a guia de uma competência a partir da receita realizada.
+function impostoGerarGuia(competencia: string): ServerResult {
+  try {
+    const comp = String(competencia || '');
+    if (!/^\d{4}-\d{2}$/.test(comp)) return { ok: false, error: 'Competência inválida (use YYYY-MM).' };
+    const cfg = _impostosConfig();
+    const base = _receitaBrutaComp(comp);
+    const valor = Math.round(base * cfg.aliquota) / 100;
+    const venc = _impVencimento(comp, cfg.diaVencimento);
+    const agora = new Date().toISOString();
+    const existente = (dbGetAll('Impostos') as Array<Record<string, unknown>>).find((g) => String(g['competencia']) === comp);
+    if (existente) {
+      if (String(existente['status']) === 'pago') return { ok: false, error: 'Guia já paga — não dá pra regerar.' };
+      const upd = dbUpdate('Impostos', String(existente['id']), {
+        regime: cfg.regime, baseCalculo: base, aliquota: cfg.aliquota, valor, vencimento: venc, atualizadoEm: agora,
+      });
+      return { ok: true, data: upd };
+    }
+    const row = dbCreate('Impostos', {
+      competencia: comp, regime: cfg.regime, baseCalculo: base, aliquota: cfg.aliquota, valor,
+      vencimento: venc, status: 'pendente', dataPagamento: '', despesaId: '', notas: '',
+      criadoEm: agora, atualizadoEm: agora,
+    });
+    return { ok: true, data: row };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar guia' };
+  }
+}
+
+// Marca a guia como paga e lança a saída no livro-caixa (categoria Impostos).
+function impostoRegistrarPagamento(id: string, payload?: Record<string, unknown>): ServerResult {
+  try {
+    const g = dbGetById('Impostos', String(id));
+    if (!g) return { ok: false, error: 'Guia não encontrada' };
+    if (String(g['status']) === 'pago') return { ok: false, error: 'Guia já está paga.' };
+    const p = payload || {};
+    const data = String(p['data'] || new Date().toISOString().substring(0, 10)).substring(0, 10);
+    const valor = p['valor'] !== undefined && p['valor'] !== null && p['valor'] !== '' ? Math.abs(Number(p['valor'])) : Number(g['valor'] || 0);
+
+    let despesaId = String(g['despesaId'] || '');
+    if (!despesaId) {
+      const desp = dbCreate('FinEmpresaDespesas', {
+        data, competencia: _competenciaDe(data),
+        fornecedor: String(g['regime'] || 'Imposto'),
+        descricao: `${String(g['regime'] || 'Imposto')} · competência ${String(g['competencia'])}`,
+        categoria: 'Impostos', valor, sistemaId: '', status: 'pago', formaPagamento: '',
+        origem: 'imposto', documento: '', notas: 'Lançado pela guia de imposto.',
+        criadoEm: new Date().toISOString(), atualizadoEm: new Date().toISOString(),
+      });
+      despesaId = String(desp.id || '');
+    }
+    const upd = dbUpdate('Impostos', String(id), {
+      status: 'pago', dataPagamento: data, valor, despesaId, atualizadoEm: new Date().toISOString(),
+    });
+    return { ok: true, data: upd };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao registrar pagamento' };
+  }
+}
+
+function impostoExcluirGuia(id: string): ServerResult {
+  try {
+    return dbDelete('Impostos', String(id)) ? { ok: true } : { ok: false, error: 'Guia não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao excluir guia' };
   }
 }
 

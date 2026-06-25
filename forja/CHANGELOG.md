@@ -36,6 +36,35 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.164.0] — 2026-06-25
+
+### Adicionado — Impostos (DAS / Simples Nacional): provisão e acompanhamento
+
+Nova estação **Impostos** no Financeiro da Empresa pra provisionar e acompanhar o
+imposto mensal (DAS do Simples) sem sair do app:
+
+- **Base de cálculo automática**: receita bruta **realizada** do mês (ledger de
+  Recebimentos) × **alíquota efetiva** que você configura (sua faixa do Simples).
+- **KPIs**: provisão do mês, **reserva recomendada** (provisões + guias em aberto),
+  total a pagar (guias geradas) e pago no ano.
+- **Mês a mês**: receita bruta, alíquota, imposto, vencimento e status. Botão
+  **"Gerar guia"** congela o valor da competência (status A pagar) e o **"Pagar"**
+  registra o pagamento e **lança a saída no livro-caixa** (categoria Impostos).
+- **Configuração**: regime, alíquota efetiva (%) e dia de vencimento (mês seguinte,
+  padrão dia 20).
+
+É uma ferramenta de provisão/gestão de caixa — não substitui a contabilidade.
+
+### Detalhes técnicos — 1.164.0
+
+- `server.ts`: tabela `Impostos`; `SCHEMA_VERSION` → `v1.80-impostos`. RPCs
+  `impostosConfigGet/Salvar`, `getImpostosResumo`, `impostoGerarGuia`,
+  `impostoRegistrarPagamento` (cria `FinEmpresaDespesas` categoria Impostos),
+  `impostoExcluirGuia`. Config em Script Properties (`IMPOSTOS_CFG`).
+- UI: `views/FinImpostos.tsx`; nova aba `impostos` em `Financeiro.tsx`.
+
+---
+
 ## [1.163.0] — 2026-06-24
 
 ### Adicionado — NFS-e (nota fiscal de serviço) via Asaas
