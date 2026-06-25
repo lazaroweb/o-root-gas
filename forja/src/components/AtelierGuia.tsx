@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Drawer } from 'antd';
+import { Drawer, Tooltip } from 'antd';
 import {
   BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat,
   CheckCircle2, Circle, ArrowRight, Sparkles, Compass, Flame, Trophy,
@@ -273,6 +273,29 @@ export default function AtelierGuia({ irPara }: AtelierGuiaProps): React.ReactEl
   // Cobertura da IA: % dos padrões do Códex marcados como "incluir em IA".
   const coberturaIA = stats && stats.codex > 0 ? Math.round((stats.codexNaIa / stats.codex) * 100) : 0;
   const pctAtivas = Math.round((estacoesAtivas / CARDS.length) * 100);
+  // Estações ainda vazias (para o tooltip de "Estações ativas").
+  const estacoesInativas = stats ? CARDS.filter((c) => c.contagem(stats) === 0).map((c) => c.titulo) : [];
+
+  // Textos de apoio dos gauges (tooltips).
+  const dicaSetup: React.ReactNode = (
+    <span style={{ fontFamily: FONTS.ui, fontSize: 12 }}>
+      {feitos} de {CHECKLIST.length} passos do setup recomendado concluídos. Clique para abrir o guia.
+    </span>
+  );
+  const dicaAtivas: React.ReactNode = (
+    <span style={{ fontFamily: FONTS.ui, fontSize: 12 }}>
+      {estacoesInativas.length === 0
+        ? 'Todas as 8 estações já têm conteúdo. 🎉'
+        : <>Faltam encher {estacoesInativas.length}: <strong>{estacoesInativas.join(', ')}</strong>.</>}
+    </span>
+  );
+  const dicaCobertura: React.ReactNode = (
+    <span style={{ fontFamily: FONTS.ui, fontSize: 12 }}>
+      {stats && stats.codex > 0
+        ? <>{stats.codexNaIa} de {stats.codex} padrões do Códex estão marcados para entrar no contexto da IA. Quanto maior, mais a IA conhece seu DNA de desenvolvimento.</>
+        : 'Marque padrões do Códex como "incluir na IA" para alimentar o contexto do seu assistente.'}
+    </span>
+  );
 
   return (
     <div style={{ padding: 24 }}>
@@ -335,11 +358,13 @@ export default function AtelierGuia({ irPara }: AtelierGuiaProps): React.ReactEl
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14, justifyItems: 'center' }}>
           <GaugeRing t={t} cor={completo ? sage : t.accents.clay} pct={carregando ? 0 : progressoPct}
             centro={`${feitos}/${CHECKLIST.length}`} label="Setup" sub={completo ? 'tudo pronto' : 'recomendado'}
-            onClick={() => setGuiaOpen(true)} />
+            dica={dicaSetup} onClick={() => setGuiaOpen(true)} />
           <GaugeRing t={t} cor={t.accents.blue} pct={carregando ? 0 : pctAtivas}
-            centro={`${estacoesAtivas}/${CARDS.length}`} label="Estações ativas" sub="com conteúdo" />
+            centro={`${estacoesAtivas}/${CARDS.length}`} label="Estações ativas" sub="com conteúdo"
+            dica={dicaAtivas} />
           <GaugeRing t={t} cor={t.accents.lavender} pct={carregando ? 0 : coberturaIA}
-            centro={`${coberturaIA}%`} label="Cobertura da IA" sub="padrões na IA" />
+            centro={`${coberturaIA}%`} label="Cobertura da IA" sub="padrões na IA"
+            dica={dicaCobertura} />
         </div>
       </div>
 
@@ -371,7 +396,7 @@ export default function AtelierGuia({ irPara }: AtelierGuiaProps): React.ReactEl
           onClick={() => setGuiaOpen(true)}
           aria-label="Abrir guia de início"
           style={{
-            position: 'fixed', right: 22, bottom: 84, zIndex: 1100,
+            position: 'fixed', right: 22, bottom: 104, zIndex: 1100,
             display: 'inline-flex', alignItems: 'center', gap: 9,
             padding: '9px 16px 9px 11px', borderRadius: 999,
             background: t.surface, color: t.text,
@@ -575,8 +600,9 @@ function Kpi({ t, cor, icon, valor, label, sub, progresso, destaque, onClick }: 
 }
 
 // Gauge circular (anel de progresso) — a "forma redonda" dos indicadores.
-function GaugeRing({ t, cor, pct, centro, label, sub, onClick }: {
-  t: ForjaTokens; cor: string; pct: number; centro: string; label: string; sub: string; onClick?: () => void;
+function GaugeRing({ t, cor, pct, centro, label, sub, dica, onClick }: {
+  t: ForjaTokens; cor: string; pct: number; centro: string; label: string; sub: string;
+  dica?: React.ReactNode; onClick?: () => void;
 }): React.ReactElement {
   const size = 104; const stroke = 9;
   const r = (size - stroke) / 2;
@@ -584,11 +610,11 @@ function GaugeRing({ t, cor, pct, centro, label, sub, onClick }: {
   const p = Math.max(0, Math.min(100, pct));
   const off = circ * (1 - p / 100);
   const clicavel = !!onClick;
-  return (
+  const corpo = (
     <div
       onClick={onClick}
       role={clicavel ? 'button' : undefined}
-      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 9, cursor: clicavel ? 'pointer' : 'default' }}
+      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 9, cursor: clicavel ? 'pointer' : (dica ? 'help' : 'default') }}
     >
       <div style={{ position: 'relative', width: size, height: size }}>
         <svg width={size} height={size}>
@@ -610,6 +636,7 @@ function GaugeRing({ t, cor, pct, centro, label, sub, onClick }: {
       </div>
     </div>
   );
+  return dica ? <Tooltip placement="top" title={dica}>{corpo}</Tooltip> : corpo;
 }
 
 // Atalho compacto de estação (dentro do Drawer do guia).
