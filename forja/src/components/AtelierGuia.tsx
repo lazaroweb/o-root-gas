@@ -4,7 +4,7 @@ import { Drawer, Tooltip } from 'antd';
 import {
   BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat,
   CheckCircle2, Circle, ArrowRight, Sparkles, Compass, Flame, Trophy,
-  Layers, Crown, Activity,
+  Layers, Crown, Activity, PieChart, Brain,
 } from 'lucide-react';
 import { useTokens, useForja } from '../themeContext';
 import { FONTS } from '../theme';
@@ -276,6 +276,17 @@ export default function AtelierGuia({ irPara }: AtelierGuiaProps): React.ReactEl
   // Estações ainda vazias (para o tooltip de "Estações ativas").
   const estacoesInativas = stats ? CARDS.filter((c) => c.contagem(stats) === 0).map((c) => c.titulo) : [];
 
+  // Composição do acervo: como o total se distribui pelas estações (só >0, desc).
+  const composicao = stats
+    ? CARDS.map((c) => ({ titulo: c.titulo, n: c.contagem(stats), cor: t.accents[c.accent] }))
+        .filter((x) => x.n > 0)
+        .sort((a, b) => b.n - a.n)
+    : [];
+  const totalComp = composicao.reduce((a, x) => a + x.n, 0) || 1;
+  const pct = (n: number) => Math.round((n / totalComp) * 100);
+  // Insight de concentração: quanto a estação líder representa do acervo.
+  const concentracaoTop = composicao.length ? pct(composicao[0].n) : 0;
+
   // Textos de apoio dos gauges (tooltips).
   const dicaSetup: React.ReactNode = (
     <span style={{ fontFamily: FONTS.ui, fontSize: 12 }}>
@@ -333,7 +344,7 @@ export default function AtelierGuia({ irPara }: AtelierGuiaProps): React.ReactEl
       }}>
         <Kpi t={t} cor={peach} icon={<Layers size={18} strokeWidth={1.7} />}
           valor={dash ?? String(totalItens)} label="itens no total" sub="somando as 8 estações" />
-        <Kpi t={t} cor={t.accents.lavender} icon={<Sparkles size={18} strokeWidth={1.7} />}
+        <Kpi t={t} cor={t.accents.lavender} icon={<Brain size={18} strokeWidth={1.7} />}
           valor={dash ?? String(noContextoIA)} label="no contexto da IA" sub="padrões do Códex" />
         <Kpi t={t} cor={t.accents.clay} icon={<Crown size={18} strokeWidth={1.7} />}
           valor={dash ?? (temTop ? String(topEstacao!.n) : '0')}
@@ -366,6 +377,58 @@ export default function AtelierGuia({ irPara }: AtelierGuiaProps): React.ReactEl
             centro={`${coberturaIA}%`} label="Cobertura da IA" sub="padrões na IA"
             dica={dicaCobertura} />
         </div>
+      </div>
+
+      {/* ─── Composição do acervo ────────────────────────────────────────────
+          Indicador "inteligente": responde ONDE está o volume. Barra
+          proporcional + ranking com %. Só dado real (contagens das estações). */}
+      <div style={{
+        borderRadius: 14, border: `1px solid ${t.borderSoft}`, background: t.surfaceMuted,
+        padding: '18px 18px 20px', marginBottom: 22,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            fontFamily: FONTS.display, fontSize: 14.5, fontWeight: 500, color: t.text,
+          }}>
+            <PieChart size={15} strokeWidth={1.8} style={{ color: peach }} />
+            Composição do acervo
+          </div>
+          {composicao.length > 0 && (
+            <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary }}>
+              <strong style={{ color: t.textSecondary }}>{composicao[0].titulo}</strong> concentra {concentracaoTop}% dos {totalComp} itens
+            </div>
+          )}
+        </div>
+
+        {carregando || composicao.length === 0 ? (
+          <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textTertiary }}>
+            {carregando ? 'Calculando…' : 'Sem itens ainda — comece preenchendo as estações.'}
+          </div>
+        ) : (
+          <>
+            {/* Barra proporcional segmentada */}
+            <div style={{ display: 'flex', height: 14, borderRadius: 999, overflow: 'hidden', background: t.borderSoft, marginBottom: 16 }}>
+              {composicao.map((x) => (
+                <Tooltip key={x.titulo} title={<span style={{ fontFamily: FONTS.ui, fontSize: 12 }}>{x.titulo}: {x.n} ({pct(x.n)}%)</span>}>
+                  <div style={{ width: `${(x.n / totalComp) * 100}%`, background: x.cor, height: '100%', transition: 'width .6s ease' }} />
+                </Tooltip>
+              ))}
+            </div>
+
+            {/* Ranking com bolinhas (formas redondas) + % */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '8px 18px' }}>
+              {composicao.map((x) => (
+                <div key={x.titulo} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: '50%', background: x.cor, flexShrink: 0 }} />
+                  <span style={{ flex: 1, minWidth: 0, fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.titulo}</span>
+                  <span style={{ fontFamily: FONTS.mono, fontSize: 11.5, color: t.text, fontWeight: 600 }}>{x.n}</span>
+                  <span style={{ fontFamily: FONTS.mono, fontSize: 10.5, color: t.textTertiary, width: 34, textAlign: 'right' }}>{pct(x.n)}%</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       {/* As 8 estações agora vivem no Guia (botão flutuante → Drawer), como
