@@ -16,6 +16,7 @@ import dayjs, { Dayjs } from 'dayjs';
 import {
   Plus, Trash2, Copy, QrCode, FileText, RefreshCw, Settings, Barcode,
   CircleDollarSign, Clock, CheckCircle2, XCircle, Filter, Link2, Check, Bell, Send,
+  ScrollText, FileCheck2,
 } from 'lucide-react';
 import { Panel, formatBRL } from '../components/ui';
 import { useTokens } from '../themeContext';
@@ -48,6 +49,8 @@ export default function FinCobrancas({ sistemas }: { sistemas: Sistema[] }): Rea
   const [detalhe, setDetalhe] = useState<EmpresaCobranca | null>(null);
   const [marcarPaga, setMarcarPaga] = useState<EmpresaCobranca | null>(null);
   const [lembretesOpen, setLembretesOpen] = useState(false);
+  const [nfseConfigOpen, setNfseConfigOpen] = useState(false);
+  const [nfseCob, setNfseCob] = useState<EmpresaCobranca | null>(null);
   const [statusFiltro, setStatusFiltro] = useState<string>('todos');
   const [busy, setBusy] = useState<string>('');
 
@@ -141,6 +144,7 @@ export default function FinCobrancas({ sistemas }: { sistemas: Sistema[] }): Rea
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <Button icon={<Bell size={16} />} onClick={() => setLembretesOpen(true)}>Lembretes</Button>
+          <Button icon={<ScrollText size={16} />} onClick={() => setNfseConfigOpen(true)}>NFS-e</Button>
           <Button icon={<Settings size={16} />} onClick={() => setConfigOpen(true)}>Configurar PSP</Button>
           <Button type="primary" icon={<Plus size={16} />} onClick={() => setEmitirOpen(true)} style={{ background: t.accents.sage, borderColor: t.accents.sage }}>
             Emitir cobrança
@@ -193,6 +197,11 @@ export default function FinCobrancas({ sistemas }: { sistemas: Sistema[] }): Rea
                   <Tooltip title="Ver boleto / PIX">
                     <Button type="text" size="small" icon={<QrCode size={15} />} style={{ color: t.accents.blue }} onClick={() => setDetalhe(c)} />
                   </Tooltip>
+                  {c.provedor === 'asaas' && c.status !== 'cancelada' && (
+                    <Tooltip title="NFS-e (nota de serviço)">
+                      <Button type="text" size="small" icon={<FileCheck2 size={15} />} style={{ color: t.accents.lavender }} onClick={() => setNfseCob(c)} />
+                    </Tooltip>
+                  )}
                   {c.linhaDigitavel && (
                     <Tooltip title="Copiar linha digitável">
                       <Button type="text" size="small" icon={<Barcode size={15} />} onClick={() => copiar(c.linhaDigitavel || '', 'Linha digitável')} />
@@ -254,7 +263,200 @@ export default function FinCobrancas({ sistemas }: { sistemas: Sistema[] }): Rea
       <ModalMarcarPaga cobranca={marcarPaga} onClose={() => setMarcarPaga(null)} onSaved={() => { setMarcarPaga(null); load(); }} />
 
       <ModalLembretes open={lembretesOpen} onClose={() => setLembretesOpen(false)} onRan={load} />
+
+      <ModalNfseConfig open={nfseConfigOpen} onClose={() => setNfseConfigOpen(false)} />
+
+      <ModalNfse cobranca={nfseCob} onClose={() => setNfseCob(null)} onConfig={() => { setNfseCob(null); setNfseConfigOpen(true); }} />
     </div>
+  );
+}
+
+// ─── Modal: configuração da NFS-e (padrões) ──────────────────────────────────
+
+interface NfseCfg {
+  serviceDescription: string; municipalServiceCode: string; municipalServiceName: string;
+  issAliquota: number; retainIss: boolean; deducoes: number; observations: string;
+  autoAuthorize: boolean; asaasConfigurado?: boolean; provider?: string;
+}
+
+function ModalNfseConfig({ open, onClose }: { open: boolean; onClose: () => void }): React.ReactElement {
+  const t = useTokens();
+  const { message } = AntApp.useApp();
+  const [cfg, setCfg] = useState<NfseCfg | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    callServer<ServerResponse<NfseCfg>>('nfseConfigGet')
+      .then((res) => { if (res.ok && res.data) setCfg(res.data as NfseCfg); })
+      .catch(() => { /* preview */ })
+      .finally(() => setLoading(false));
+  }, [open]);
+
+  const patch = (p: Partial<NfseCfg>) => setCfg((c) => (c ? { ...c, ...p } : c));
+
+  const salvar = async () => {
+    if (!cfg) return;
+    setSaving(true);
+    try {
+      const res = await callServer<ServerResponse<NfseCfg>>('nfseConfigSalvar', cfg);
+      if (res.ok) { if (res.data) setCfg(res.data as NfseCfg); message.success('Padrões da NFS-e salvos'); }
+      else message.error(res.error || 'Erro');
+    } catch { message.error('Erro ao salvar'); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Modal title="NFS-e — padrões de emissão" open={open} onCancel={onClose} onOk={salvar} confirmLoading={saving} okText="Salvar" destroyOnClose width={560}>
+      {loading || !cfg ? <Spin style={{ display: 'block', margin: '32px auto' }} /> : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {cfg.provider !== 'asaas' && (
+            <Alert type="info" showIcon message="NFS-e por API é só com Asaas" description="O provedor ativo não é o Asaas. A emissão de NFS-e usa a conta Asaas (configure a chave em 'Configurar PSP')." />
+          )}
+          <Alert
+            type="warning" showIcon
+            message="Antes de emitir, configure no painel do Asaas"
+            description="Habilite a emissão de notas fiscais, informe a inscrição municipal e os dados da empresa. Aqui ficam só os padrões da nota."
+          />
+          <div>
+            <div style={{ fontSize: 12.5, color: t.textSecondary, marginBottom: 4 }}>Descrição do serviço *</div>
+            <Input.TextArea rows={2} value={cfg.serviceDescription} onChange={(e) => patch({ serviceDescription: e.target.value })} placeholder="Ex.: Desenvolvimento e manutenção de software sob demanda." />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 12.5, color: t.textSecondary, marginBottom: 4 }}>Código do serviço municipal</div>
+              <Input value={cfg.municipalServiceCode} onChange={(e) => patch({ municipalServiceCode: e.target.value })} placeholder="Ex.: 1.05" />
+            </div>
+            <div>
+              <div style={{ fontSize: 12.5, color: t.textSecondary, marginBottom: 4 }}>ISS (%)</div>
+              <InputNumber min={0} max={100} value={cfg.issAliquota} onChange={(v) => patch({ issAliquota: Number(v || 0) })} style={{ width: '100%' }} decimalSeparator="," />
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12.5, color: t.textSecondary, marginBottom: 4 }}>Nome do serviço municipal (opcional)</div>
+            <Input value={cfg.municipalServiceName} onChange={(e) => patch({ municipalServiceName: e.target.value })} placeholder="Conforme tabela do município" />
+          </div>
+          <div>
+            <div style={{ fontSize: 12.5, color: t.textSecondary, marginBottom: 4 }}>Observações na nota (opcional)</div>
+            <Input.TextArea rows={2} value={cfg.observations} onChange={(e) => patch({ observations: e.target.value })} placeholder="Texto livre que sai na nota." />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <span style={{ color: t.text, fontSize: 13 }}>Reter ISS</span>
+            <Segmented size="small" value={cfg.retainIss ? 'sim' : 'nao'} onChange={(v) => patch({ retainIss: v === 'sim' })} options={[{ value: 'nao', label: 'Não' }, { value: 'sim', label: 'Sim' }]} />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <div>
+              <div style={{ color: t.text, fontSize: 13 }}>Emitir na hora</div>
+              <div style={{ color: t.textTertiary, fontSize: 11.5 }}>Autoriza a nota imediatamente (em vez de só agendar)</div>
+            </div>
+            <Segmented size="small" value={cfg.autoAuthorize ? 'sim' : 'nao'} onChange={(v) => patch({ autoAuthorize: v === 'sim' })} options={[{ value: 'sim', label: 'Sim' }, { value: 'nao', label: 'Agendar' }]} />
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ─── Modal: NFS-e de uma cobrança (emitir / acompanhar / cancelar) ───────────
+
+interface NotaFiscal {
+  id: string; status: string; numero?: string; urlPdf?: string; urlXml?: string; valor?: number; provedorNotaId?: string;
+}
+
+function statusNfseLabel(s: string): { label: string; color: string } {
+  const map: Record<string, { label: string; color: string }> = {
+    SCHEDULED: { label: 'agendada', color: 'blue' },
+    SYNCHRONIZED: { label: 'sincronizada', color: 'cyan' },
+    AUTHORIZED: { label: 'autorizada', color: 'green' },
+    PROCESSING_CANCELLATION: { label: 'cancelando', color: 'orange' },
+    CANCELED: { label: 'cancelada', color: 'default' },
+    CANCELLATION_DENIED: { label: 'cancelamento negado', color: 'red' },
+    ERROR: { label: 'erro', color: 'red' },
+  };
+  return map[s] || { label: s || '—', color: 'default' };
+}
+
+function ModalNfse({ cobranca, onClose, onConfig }: {
+  cobranca: EmpresaCobranca | null; onClose: () => void; onConfig: () => void;
+}): React.ReactElement {
+  const t = useTokens();
+  const { message } = AntApp.useApp();
+  const [notas, setNotas] = useState<NotaFiscal[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState('');
+
+  const load = useCallback(() => {
+    if (!cobranca) return;
+    setLoading(true);
+    callServer<ServerResponse<NotaFiscal[]>>('nfseList', cobranca.id)
+      .then((res) => { if (res.ok && res.data) setNotas(res.data as NotaFiscal[]); })
+      .catch(() => { /* preview */ })
+      .finally(() => setLoading(false));
+  }, [cobranca]);
+  useEffect(() => { if (cobranca) load(); }, [cobranca, load]);
+
+  const emitir = () => {
+    if (!cobranca) return;
+    setBusy('emitir');
+    callServer<ServerResponse<unknown>>('nfseEmitir', cobranca.id)
+      .then((res) => { if (res.ok) { message.success('NFS-e enviada ao Asaas'); load(); } else message.error(res.error || 'Erro'); })
+      .catch(() => message.error('Erro ao emitir'))
+      .finally(() => setBusy(''));
+  };
+
+  const acao = (rpc: string, id: string, ok: string) => {
+    setBusy(id + rpc);
+    callServer<ServerResponse<unknown>>(rpc, id)
+      .then((res) => { if (res.ok) { message.success(ok); load(); } else message.error(res.error || 'Erro'); })
+      .catch(() => message.error('Erro'))
+      .finally(() => setBusy(''));
+  };
+
+  const ativa = notas.find((n) => ['SCHEDULED', 'SYNCHRONIZED', 'AUTHORIZED', 'PROCESSING_CANCELLATION'].indexOf(n.status) >= 0);
+
+  return (
+    <Modal title="NFS-e da cobrança" open={!!cobranca} onCancel={onClose} footer={null} destroyOnClose width={560}>
+      {cobranca && (
+        <div style={{ fontSize: 13, color: t.textSecondary, marginBottom: 14 }}>
+          {cobranca.pessoaNome} · {cobranca.descricao} · <b>{formatBRL(Number(cobranca.valor || 0))}</b>
+        </div>
+      )}
+      {loading ? <Spin style={{ display: 'block', margin: '24px auto' }} /> : (
+        <>
+          {notas.length === 0 ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Nenhuma NFS-e emitida pra esta cobrança" />
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {notas.map((n) => {
+                const st = statusNfseLabel(n.status);
+                return (
+                  <div key={n.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', border: `1px solid ${t.borderSoft}`, borderRadius: 10 }}>
+                    <Tag bordered={false} color={st.color}>{st.label}</Tag>
+                    <span style={{ color: t.text, fontSize: 13 }}>{n.numero ? `Nº ${n.numero}` : 'sem número ainda'}</span>
+                    <span style={{ flex: 1 }} />
+                    {n.urlPdf && <Tooltip title="Abrir PDF"><Button type="text" size="small" icon={<FileText size={15} />} onClick={() => window.open(n.urlPdf, '_blank')} /></Tooltip>}
+                    <Tooltip title="Atualizar status"><Button type="text" size="small" icon={<RefreshCw size={14} />} loading={busy === n.id + 'nfseStatus'} onClick={() => acao('nfseStatus', n.id, 'Status atualizado')} /></Tooltip>
+                    {['SCHEDULED', 'SYNCHRONIZED', 'AUTHORIZED'].indexOf(n.status) >= 0 && (
+                      <Popconfirm title="Cancelar esta NFS-e?" onConfirm={() => acao('nfseCancelar', n.id, 'Cancelamento solicitado')} okText="Cancelar nota" cancelText="Voltar" okButtonProps={{ danger: true }}>
+                        <Button type="text" size="small" icon={<XCircle size={15} />} style={{ color: t.accents.rose }} loading={busy === n.id + 'nfseCancelar'} />
+                      </Popconfirm>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 16 }}>
+            <Button size="small" type="text" icon={<Settings size={14} />} onClick={onConfig}>Padrões da NFS-e</Button>
+            <Button type="primary" icon={<FileCheck2 size={16} />} loading={busy === 'emitir'} disabled={!!ativa} onClick={emitir} style={{ background: t.accents.lavender, borderColor: t.accents.lavender }}>
+              {ativa ? 'NFS-e já emitida' : 'Emitir NFS-e'}
+            </Button>
+          </div>
+        </>
+      )}
+    </Modal>
   );
 }
 

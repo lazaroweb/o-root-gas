@@ -36,6 +36,33 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.163.0] — 2026-06-24
+
+### Adicionado — NFS-e (nota fiscal de serviço) via Asaas
+
+Emissão de **NFS-e** direto da estação de Cobranças, amarrada ao pagamento Asaas:
+
+- **Padrões de emissão** (botão "NFS-e"): descrição do serviço, código do serviço
+  municipal, alíquota de ISS, reter ISS, observações e "emitir na hora × agendar".
+- **Emitir / acompanhar / cancelar** por cobrança (ícone de nota nas linhas Asaas):
+  cria a NFS-e no Asaas (com `authorize` imediato opcional), mostra status
+  (agendada → autorizada), abre o **PDF** e permite **cancelar**.
+- Status sincronizável a qualquer momento; histórico de notas por cobrança.
+
+Só funciona com **Asaas** (Mercado Pago não emite NFS-e por API) e exige a
+configuração fiscal da empresa feita **no painel do Asaas** (inscrição municipal,
+dados da empresa) — pré-requisito do próprio provedor.
+
+### Detalhes técnicos — 1.163.0
+
+- `server.ts`: tabela `NotasFiscais`; `SCHEMA_VERSION` → `v1.79-nfse`. RPCs
+  `nfseConfigGet/Salvar`, `nfseMunicipalServices`, `nfseEmitir`, `nfseList`,
+  `nfseStatus`, `nfseCancelar` — sobre o adapter Asaas (`/v3/invoices`).
+- Front: `FinCobrancas` ganhou modal de **padrões da NFS-e** e modal por cobrança
+  (emitir/acompanhar/cancelar), além da ação de NFS-e nas linhas Asaas.
+
+---
+
 ## [1.162.0] — 2026-06-24
 
 ### Adicionado — Conciliação bancária (import de extrato OFX)

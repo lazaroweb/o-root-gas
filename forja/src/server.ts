@@ -127,6 +127,10 @@ const SCHEMA: SheetSchema[] = [
   // credito|debito. `status`: pendente|conciliada|ignorada. `vinculoTipo`:
   // cobranca|despesa|custo|recebimento (o que foi baixado ao conciliar).
   { name: 'ConciliacaoTransacoes', columns: ['id', 'fitid', 'data', 'descricao', 'valor', 'tipo', 'status', 'vinculoTipo', 'vinculoId', 'banco', 'conciliadoEm', 'criadoEm'] },
+  // NotasFiscais (v1.163.0): NFS-e (nota de serviço) emitida via PSP (Asaas).
+  // `status` espelha o Asaas: SCHEDULED|SYNCHRONIZED|AUTHORIZED|PROCESSING_CANCELLATION|
+  // CANCELED|CANCELLATION_DENIED|ERROR. `provedorNotaId` é o id da nota no Asaas.
+  { name: 'NotasFiscais', columns: ['id', 'cobrancaId', 'pessoaId', 'provedor', 'provedorNotaId', 'status', 'numero', 'urlPdf', 'urlXml', 'valor', 'criadoEm', 'atualizadoEm', 'jsonProvedor'] },
   // v1.4.1: `origem` marca geração (ex: 'forja-self' pra dogfooding) e
   // `referencia` permite destacar um item como referência fixa no topo da
   // lista. Append-only — schema migra sem desalinhar dados antigos.
@@ -378,7 +382,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.78-conciliacao';
+const SCHEMA_VERSION = 'v1.79-nfse';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -5078,6 +5082,196 @@ function conciliacaoExcluir(id: string): ServerResult {
     return dbDelete('ConciliacaoTransacoes', String(id)) ? { ok: true } : { ok: false, error: 'Transação não encontrada' };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao excluir' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NFS-e (v1.163.0) — nota fiscal de serviço via Asaas
+//   Asaas é o único PSP suportado que emite NFS-e por API (Mercado Pago não emite).
+//   Pré-requisitos (feitos no painel do Asaas, uma vez): habilitar emissão fiscal,
+//   informar inscrição municipal e dados da empresa. Aqui guardamos só os PADRÕES
+//   da nota (descrição do serviço, código do serviço municipal, alíquota de ISS) e
+//   emitimos amarrando a NFS-e ao pagamento Asaas da cobrança.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface NfseConfig {
+  serviceDescription: string;
+  municipalServiceCode: string;
+  municipalServiceName: string;
+  issAliquota: number;     // % de ISS
+  retainIss: boolean;
+  deducoes: number;
+  observations: string;
+  autoAuthorize: boolean;  // emite na hora (authorize) em vez de só agendar
+}
+
+function _nfseConfig(): NfseConfig {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty('NFSE_CFG');
+    const p = raw ? JSON.parse(raw) : {};
+    return {
+      serviceDescription: String(p.serviceDescription || ''),
+      municipalServiceCode: String(p.municipalServiceCode || ''),
+      municipalServiceName: String(p.municipalServiceName || ''),
+      issAliquota: Number(p.issAliquota >= 0 ? p.issAliquota : 0),
+      retainIss: !!p.retainIss,
+      deducoes: Number(p.deducoes >= 0 ? p.deducoes : 0),
+      observations: String(p.observations || ''),
+      autoAuthorize: p.autoAuthorize !== undefined ? !!p.autoAuthorize : true,
+    };
+  } catch {
+    return { serviceDescription: '', municipalServiceCode: '', municipalServiceName: '', issAliquota: 0, retainIss: false, deducoes: 0, observations: '', autoAuthorize: true };
+  }
+}
+
+function nfseConfigGet(): ServerResult {
+  try {
+    const cfg = _pspConfig();
+    return { ok: true, data: { ..._nfseConfig(), asaasConfigurado: !!cfg.asaasKey, provider: cfg.provider } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ler config NFS-e' };
+  }
+}
+
+function nfseConfigSalvar(payload: Record<string, unknown>): ServerResult {
+  try {
+    const atual = _nfseConfig();
+    const p = payload || {};
+    const novo: NfseConfig = {
+      serviceDescription: p['serviceDescription'] !== undefined ? String(p['serviceDescription'] || '') : atual.serviceDescription,
+      municipalServiceCode: p['municipalServiceCode'] !== undefined ? String(p['municipalServiceCode'] || '') : atual.municipalServiceCode,
+      municipalServiceName: p['municipalServiceName'] !== undefined ? String(p['municipalServiceName'] || '') : atual.municipalServiceName,
+      issAliquota: p['issAliquota'] !== undefined ? Math.max(0, Math.min(100, Number(p['issAliquota']))) : atual.issAliquota,
+      retainIss: p['retainIss'] !== undefined ? !!p['retainIss'] : atual.retainIss,
+      deducoes: p['deducoes'] !== undefined ? Math.max(0, Number(p['deducoes'])) : atual.deducoes,
+      observations: p['observations'] !== undefined ? String(p['observations'] || '') : atual.observations,
+      autoAuthorize: p['autoAuthorize'] !== undefined ? !!p['autoAuthorize'] : atual.autoAuthorize,
+    };
+    PropertiesService.getScriptProperties().setProperty('NFSE_CFG', JSON.stringify(novo));
+    return nfseConfigGet();
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar config NFS-e' };
+  }
+}
+
+// Busca serviços municipais no Asaas (pra preencher código/nome na config).
+function nfseMunicipalServices(descricao: string): ServerResult {
+  try {
+    const q = encodeURIComponent(String(descricao || ''));
+    const res = _asaasFetch('get', `/invoices/municipalServices?description=${q}`);
+    if (res.code >= 300) return { ok: false, error: _asaasErro(res.json, 'Falha ao buscar serviços municipais.') };
+    const data = (res.json.data as Array<Record<string, unknown>> | undefined) || [];
+    return { ok: true, data: data.map((s) => ({ code: String(s.id || s.code || ''), name: String(s.description || s.name || ''), issTax: Number(s.issTax || 0) })) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar serviços' };
+  }
+}
+
+function _nfseMap(inv: Record<string, unknown>): Record<string, unknown> {
+  return {
+    provedorNotaId: String(inv.id || ''),
+    status: String(inv.status || ''),
+    numero: String(inv.number || ''),
+    urlPdf: String(inv.pdfUrl || ''),
+    urlXml: String(inv.xmlUrl || ''),
+    jsonProvedor: JSON.stringify(inv),
+  };
+}
+
+// Emite (agenda/autoriza) uma NFS-e pra uma cobrança Asaas paga/emitida.
+function nfseEmitir(cobrancaId: string): ServerResult {
+  try {
+    const cob = dbGetById('EmpresaCobrancas', String(cobrancaId));
+    if (!cob) return { ok: false, error: 'Cobrança não encontrada' };
+    if (String(cob.provedor || '') !== 'asaas') return { ok: false, error: 'NFS-e por API só com Asaas. Esta cobrança não é do Asaas.' };
+    const payId = String(cob.provedorCobrancaId || '');
+    if (!payId) return { ok: false, error: 'Cobrança sem id no Asaas — emita a cobrança primeiro.' };
+
+    const jaAtiva = (dbGetAll('NotasFiscais') as Array<Record<string, unknown>>)
+      .find((n) => String(n.cobrancaId) === String(cobrancaId) && ['SCHEDULED', 'SYNCHRONIZED', 'AUTHORIZED', 'PROCESSING_CANCELLATION'].indexOf(String(n.status)) >= 0);
+    if (jaAtiva) return { ok: false, error: 'Já existe uma NFS-e ativa pra esta cobrança.' };
+
+    const cfg = _nfseConfig();
+    if (!cfg.serviceDescription) return { ok: false, error: 'Configure a descrição do serviço da NFS-e antes de emitir.' };
+
+    const body: Record<string, unknown> = {
+      payment: payId,
+      serviceDescription: cfg.serviceDescription,
+      observations: cfg.observations || cfg.serviceDescription,
+      value: Number(cob.valor || 0),
+      deductions: Number(cfg.deducoes || 0),
+      effectiveDate: new Date().toISOString().substring(0, 10),
+      updatePayment: false,
+      taxes: { retainIss: !!cfg.retainIss, iss: Number(cfg.issAliquota || 0), cofins: 0, csll: 0, inss: 0, ir: 0, pis: 0 },
+    };
+    if (cfg.municipalServiceCode) body.municipalServiceCode = cfg.municipalServiceCode;
+    if (cfg.municipalServiceName) body.municipalServiceName = cfg.municipalServiceName;
+
+    const res = _asaasFetch('post', '/invoices', body);
+    if (res.code >= 300 || !res.json.id) return { ok: false, error: _asaasErro(res.json, 'Falha ao criar NFS-e no Asaas.') };
+    let inv = res.json;
+
+    // Autoriza na hora (emite), se configurado. Se falhar, mantém agendada.
+    if (cfg.autoAuthorize) {
+      const auth = _asaasFetch('post', `/invoices/${encodeURIComponent(String(inv.id))}/authorize`);
+      if (auth.code < 300 && auth.json.id) inv = auth.json;
+    }
+
+    const agora = new Date().toISOString();
+    const mapped = _nfseMap(inv);
+    const row = dbCreate('NotasFiscais', {
+      cobrancaId: String(cobrancaId),
+      pessoaId: String(cob.pessoaId || ''),
+      provedor: 'asaas',
+      valor: Number(cob.valor || 0),
+      criadoEm: agora, atualizadoEm: agora,
+      ...mapped,
+    });
+    return { ok: true, data: row };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao emitir NFS-e' };
+  }
+}
+
+function nfseList(cobrancaId?: string): ServerResult {
+  try {
+    let rows = dbGetAll('NotasFiscais') as Array<Record<string, unknown>>;
+    if (cobrancaId) rows = rows.filter((n) => String(n.cobrancaId) === String(cobrancaId));
+    rows.sort((a, b) => String(b.criadoEm).localeCompare(String(a.criadoEm)));
+    return { ok: true, data: rows };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar NFS-e' };
+  }
+}
+
+// Re-sincroniza o status/links de uma NFS-e com o Asaas.
+function nfseStatus(id: string): ServerResult {
+  try {
+    const row = dbGetById('NotasFiscais', String(id));
+    if (!row) return { ok: false, error: 'NFS-e não encontrada' };
+    const res = _asaasFetch('get', `/invoices/${encodeURIComponent(String(row.provedorNotaId))}`);
+    if (res.code >= 300 || !res.json.id) return { ok: false, error: _asaasErro(res.json, 'Falha ao consultar NFS-e.') };
+    const patch = _nfseMap(res.json);
+    patch.atualizadoEm = new Date().toISOString();
+    const atualizado = dbUpdate('NotasFiscais', String(id), patch);
+    return { ok: true, data: atualizado };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao consultar NFS-e' };
+  }
+}
+
+function nfseCancelar(id: string): ServerResult {
+  try {
+    const row = dbGetById('NotasFiscais', String(id));
+    if (!row) return { ok: false, error: 'NFS-e não encontrada' };
+    const res = _asaasFetch('post', `/invoices/${encodeURIComponent(String(row.provedorNotaId))}/cancel`);
+    if (res.code >= 300) return { ok: false, error: _asaasErro(res.json, 'Falha ao cancelar NFS-e.') };
+    const patch = _nfseMap(res.json && res.json.id ? res.json : { ...row, status: 'PROCESSING_CANCELLATION' });
+    patch.atualizadoEm = new Date().toISOString();
+    const atualizado = dbUpdate('NotasFiscais', String(id), patch);
+    return { ok: true, data: atualizado };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao cancelar NFS-e' };
   }
 }
 
