@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Tabs } from 'antd';
-import { LayoutDashboard, ArrowUpRight, ArrowDownRight, Wallet, Building2, Receipt, FileText, LineChart } from 'lucide-react';
+import { LayoutDashboard, ArrowUpRight, ArrowDownRight, Wallet, Building2, Receipt, FileText, LineChart, Landmark } from 'lucide-react';
 import { PageHeader } from '../components/ui';
 import SubNav, { type SubNavItem } from '../components/SubNav';
 import FinResumo from './FinResumo';
@@ -9,6 +9,7 @@ import FinCobrancas from './FinCobrancas';
 import FinCustos from './FinCustos';
 import FinEmpresaDespesas from './FinEmpresaDespesas';
 import FinProjecao from './FinProjecao';
+import FinConciliacao from './FinConciliacao';
 // v1.3: tab Pessoal — mini sistema financeiro pessoal (despesas, cartões, Pix,
 // contas a pagar). Totalmente separado das receitas/custos do negócio.
 // v1.13: separação macro Empresa × Pessoal — cada lado com suas próprias abas,
@@ -21,7 +22,7 @@ function tabLabel(icon: React.ReactNode, texto: string): React.ReactElement {
   return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>{icon} {texto}</span>;
 }
 
-type EmpresaView = 'resumo' | 'receber' | 'cobrancas' | 'despesas' | 'pagar' | 'projecao';
+type EmpresaView = 'resumo' | 'receber' | 'cobrancas' | 'despesas' | 'pagar' | 'projecao' | 'conciliacao';
 
 function FinEmpresa({ sistemas }: { sistemas: Sistema[] }): React.ReactElement {
   const [view, setView] = useState<EmpresaView>('resumo');
@@ -32,6 +33,7 @@ function FinEmpresa({ sistemas }: { sistemas: Sistema[] }): React.ReactElement {
     { key: 'despesas', icon: Receipt, label: 'Despesas', accent: 'clay', desc: 'Livro-caixa mensal: contas, boletos e recibos — com importação por PDF/foto.' },
     { key: 'pagar', icon: ArrowDownRight, label: 'A pagar', accent: 'rose', desc: 'Custos recorrentes (contratos): fornecedor, valor e próxima cobrança.' },
     { key: 'projecao', icon: LineChart, label: 'Projeção', accent: 'lavender', desc: 'Caixa pra frente, mês a mês: entradas previstas × saídas, saldo e runway.' },
+    { key: 'conciliacao', icon: Landmark, label: 'Conciliação', accent: 'blue', desc: 'Importe o extrato (OFX) e case cada transação com o sistema, dando baixa.' },
   ];
   return (
     <SubNav items={NAV} value={view} onChange={setView} ariaLabel="Áreas do Financeiro da Empresa">
@@ -41,6 +43,7 @@ function FinEmpresa({ sistemas }: { sistemas: Sistema[] }): React.ReactElement {
       {view === 'despesas' && <FinEmpresaDespesas sistemas={sistemas} />}
       {view === 'pagar' && <FinCustos sistemas={sistemas} />}
       {view === 'projecao' && <FinProjecao />}
+      {view === 'conciliacao' && <FinConciliacao />}
     </SubNav>
   );
 }

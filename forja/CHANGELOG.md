@@ -36,6 +36,33 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.162.0] — 2026-06-24
+
+### Adicionado — Conciliação bancária (import de extrato OFX)
+
+Nova estação **Conciliação** no Financeiro da Empresa. Fecha o gap do "o dinheiro
+de fato caiu/saiu no banco":
+
+- **Importa extrato OFX** (formato universal de banco). Deduplica por **FITID** —
+  reimportar o mesmo arquivo não duplica.
+- **Sugestão automática de casamento**: créditos → cobranças em aberto; débitos →
+  despesas pendentes / custos (casa por valor com tolerância + proximidade de data).
+- **Conciliar dá a baixa**: crédito marca a cobrança como **paga** (entra no caixa);
+  débito marca a despesa como **paga** ou registra o **pagamento do custo**.
+- **Casamento manual** quando não há sugestão (escolhe cobrança/despesa/custo em
+  aberto), além de **ignorar**, **desfazer** e **excluir** transações.
+
+### Detalhes técnicos — 1.162.0
+
+- `server.ts`: tabela `ConciliacaoTransacoes`; `SCHEMA_VERSION` → `v1.78-conciliacao`.
+  Parser OFX (`_parseOFX`/`_ofxTag`) tolerante a SGML e XML; RPCs `importarOFX`,
+  `conciliacaoList` (com sugestão inline), `conciliarTransacao`, `conciliacaoIgnorar`,
+  `conciliacaoDesfazer`, `conciliacaoExcluir`.
+- Front: nova view `FinConciliacao.tsx` (upload OFX, lista, sugestões, match manual)
+  e item **Conciliação** no SubNav da Empresa.
+
+---
+
 ## [1.161.0] — 2026-06-24
 
 ### Adicionado — Projeção de caixa (visão pra frente, mês a mês)

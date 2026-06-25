@@ -122,6 +122,11 @@ const SCHEMA: SheetSchema[] = [
   // CobrancaEventos (v1.157.0): log de eventos de webhook do PSP. `eventoId` é o
   // id único do evento no provedor — usado pra idempotência (não dar baixa 2x).
   { name: 'CobrancaEventos', columns: ['id', 'provedor', 'eventoId', 'cobrancaId', 'tipo', 'payloadJson', 'recebidoEm'] },
+  // ConciliacaoTransacoes (v1.162.0): transações importadas de extrato OFX pra
+  // conciliação bancária. `fitid` é o id único do banco (dedupe). `tipo`:
+  // credito|debito. `status`: pendente|conciliada|ignorada. `vinculoTipo`:
+  // cobranca|despesa|custo|recebimento (o que foi baixado ao conciliar).
+  { name: 'ConciliacaoTransacoes', columns: ['id', 'fitid', 'data', 'descricao', 'valor', 'tipo', 'status', 'vinculoTipo', 'vinculoId', 'banco', 'conciliadoEm', 'criadoEm'] },
   // v1.4.1: `origem` marca geração (ex: 'forja-self' pra dogfooding) e
   // `referencia` permite destacar um item como referência fixa no topo da
   // lista. Append-only — schema migra sem desalinhar dados antigos.
@@ -373,7 +378,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.77-pagamentos-custo';
+const SCHEMA_VERSION = 'v1.78-conciliacao';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -4886,6 +4891,193 @@ function cobrancaEnviarLembrete(id: string, stage?: string): ServerResult {
     return { ok: true, data: { canais, estagio } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao enviar lembrete' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONCILIAÇÃO BANCÁRIA (v1.162.0) — importa extrato OFX e casa com o sistema
+//   Importa transações de um arquivo OFX (formato universal de extrato bancário),
+//   deduplica por FITID e sugere o casamento: créditos → cobranças em aberto;
+//   débitos → despesas pendentes / custos. Ao conciliar, dá a baixa correspondente
+//   (cobrança paga, despesa paga, pagamento de custo) e marca a transação.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Lê o valor de uma tag OFX (SGML costuma não fechar a tag: <TAG>valor\n<OUTRA>).
+function _ofxTag(bloco: string, tag: string): string {
+  const re = new RegExp('<' + tag + '>([^<\\r\\n]*)', 'i');
+  const m = re.exec(bloco);
+  return m ? m[1].trim() : '';
+}
+
+function _ofxData(dt: string): string {
+  const m = /^(\d{4})(\d{2})(\d{2})/.exec(String(dt || ''));
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
+}
+
+interface OFXTransacao { fitid: string; data: string; valor: number; tipo: string; descricao: string }
+
+function _parseOFX(texto: string): OFXTransacao[] {
+  const t = String(texto || '');
+  const partes = t.split(/<STMTTRN>/i).slice(1);
+  const out: OFXTransacao[] = [];
+  for (const p of partes) {
+    const bloco = p.split(/<\/STMTTRN>/i)[0];
+    const amtRaw = String(_ofxTag(bloco, 'TRNAMT')).replace(/\./g, '').replace(',', '.');
+    // Acima trata "1.234,56" (pt-BR); se já vier "1234.56" o replace de pontos
+    // quebra — então tenta os dois formatos e usa o que for número válido.
+    let amt = Number(amtRaw);
+    if (isNaN(amt)) amt = Number(String(_ofxTag(bloco, 'TRNAMT')).replace(',', '.'));
+    if (isNaN(amt)) continue;
+    const trntype = _ofxTag(bloco, 'TRNTYPE');
+    out.push({
+      fitid: _ofxTag(bloco, 'FITID'),
+      data: _ofxData(_ofxTag(bloco, 'DTPOSTED')),
+      valor: Math.abs(amt),
+      tipo: amt < 0 || /DEBIT/i.test(trntype) ? 'debito' : 'credito',
+      descricao: _ofxTag(bloco, 'MEMO') || _ofxTag(bloco, 'NAME') || '',
+    });
+  }
+  return out;
+}
+
+// Importa um extrato OFX. Deduplica por FITID (ou, na falta, por data+valor+desc).
+function importarOFX(conteudo: string, banco?: string): ServerResult {
+  try {
+    const txs = _parseOFX(conteudo);
+    if (txs.length === 0) return { ok: false, error: 'Nenhuma transação encontrada. Confira se o arquivo é um OFX válido.' };
+    const existentes = dbGetAll('ConciliacaoTransacoes') as Array<Record<string, unknown>>;
+    const fitids: Record<string, boolean> = {};
+    const chaves: Record<string, boolean> = {};
+    for (const e of existentes) {
+      if (e['fitid']) fitids[String(e['fitid'])] = true;
+      chaves[`${String(e['data'])}|${Number(e['valor'])}|${String(e['descricao'])}`] = true;
+    }
+    const agora = new Date().toISOString();
+    let importadas = 0; let duplicadas = 0;
+    for (const tx of txs) {
+      const chave = `${tx.data}|${tx.valor}|${tx.descricao}`;
+      if ((tx.fitid && fitids[tx.fitid]) || (!tx.fitid && chaves[chave])) { duplicadas++; continue; }
+      dbCreate('ConciliacaoTransacoes', {
+        fitid: tx.fitid, data: tx.data, descricao: tx.descricao, valor: tx.valor, tipo: tx.tipo,
+        status: 'pendente', vinculoTipo: '', vinculoId: '', banco: String(banco || ''),
+        conciliadoEm: '', criadoEm: agora,
+      });
+      if (tx.fitid) fitids[tx.fitid] = true; else chaves[chave] = true;
+      importadas++;
+    }
+    return { ok: true, data: { importadas, duplicadas, total: txs.length } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao importar OFX' };
+  }
+}
+
+// Sugere um casamento pra uma transação: crédito → cobrança em aberto; débito →
+// despesa pendente ou custo. Casa por valor (com tolerância) e proximidade de data.
+function _conciliacaoSugerir(tx: { data: string; valor: number; tipo: string }): { vinculoTipo: string; vinculoId: string; label: string } | null {
+  const tol = Math.max(0.01, tx.valor * 0.01);
+  const dtTx = /^\d{4}-\d{2}-\d{2}$/.test(tx.data) ? new Date(tx.data + 'T00:00:00').getTime() : NaN;
+  const distDias = (iso: string): number => {
+    if (isNaN(dtTx) || !/^\d{4}-\d{2}-\d{2}/.test(String(iso))) return 999;
+    return Math.abs((new Date(String(iso).substring(0, 10) + 'T00:00:00').getTime() - dtTx) / 86400000);
+  };
+  let melhor: { vinculoTipo: string; vinculoId: string; label: string; score: number } | null = null;
+  const considerar = (vinculoTipo: string, vinculoId: string, label: string, valor: number, dataRef: string) => {
+    if (Math.abs(valor - tx.valor) > tol) return;
+    const score = distDias(dataRef);
+    if (score > 45) return;
+    if (!melhor || score < melhor.score) melhor = { vinculoTipo, vinculoId, label, score };
+  };
+
+  if (tx.tipo === 'credito') {
+    const cobs = (dbGetAll('EmpresaCobrancas') as Array<Record<string, unknown>>)
+      .filter((c) => { const s = String(c['status']); return s === 'emitida' || s === 'vencida'; });
+    for (const c of cobs) considerar('cobranca', String(c['id']), `Cobrança · ${String(c['descricao'] || '')}`, Number(c['valor'] || 0), String(c['vencimento'] || ''));
+  } else {
+    const desp = (dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>).filter((d) => String(d['status'] || '') !== 'pago');
+    for (const d of desp) considerar('despesa', String(d['id']), `Despesa · ${String(d['descricao'] || d['fornecedor'] || '')}`, Number(d['valor'] || 0), String(d['data'] || ''));
+    const custos = dbGetAll('Custos') as Array<Record<string, unknown>>;
+    for (const c of custos) considerar('custo', String(c['id']), `Custo · ${String(c['fornecedor'] || '')}`, Number(c['valor'] || 0), String(c['proximaCobranca'] || ''));
+  }
+  if (!melhor) return null;
+  const m = melhor as { vinculoTipo: string; vinculoId: string; label: string; score: number };
+  return { vinculoTipo: m.vinculoTipo, vinculoId: m.vinculoId, label: m.label };
+}
+
+function conciliacaoList(status?: string): ServerResult {
+  try {
+    let rows = dbGetAll('ConciliacaoTransacoes') as Array<Record<string, unknown>>;
+    if (status && status !== 'todos') rows = rows.filter((r) => String(r['status']) === status);
+    rows.sort((a, b) => String(b['data']).localeCompare(String(a['data'])));
+    const enriquecidas = rows.map((r) => {
+      const base: Record<string, unknown> = { ...r };
+      if (String(r['status']) === 'pendente') {
+        const sug = _conciliacaoSugerir({ data: String(r['data']), valor: Number(r['valor']), tipo: String(r['tipo']) });
+        base['sugestao'] = sug || null;
+      }
+      return base;
+    });
+    const pendentes = rows.filter((r) => String(r['status']) === 'pendente').length;
+    return { ok: true, data: { transacoes: enriquecidas, pendentes } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar conciliação' };
+  }
+}
+
+// Concilia uma transação a um item do sistema, dando a baixa correspondente.
+function conciliarTransacao(id: string, vinculoTipo: string, vinculoId: string): ServerResult {
+  try {
+    const tx = dbGetById('ConciliacaoTransacoes', String(id));
+    if (!tx) return { ok: false, error: 'Transação não encontrada' };
+    if (String(tx['status']) === 'conciliada') return { ok: false, error: 'Transação já conciliada.' };
+    const valor = Number(tx['valor'] || 0);
+    const data = String(tx['data'] || new Date().toISOString().substring(0, 10));
+
+    if (vinculoTipo === 'cobranca') {
+      const res = cobrancaMarcarPaga(String(vinculoId), { valor, data });
+      if (!res.ok) return res;
+    } else if (vinculoTipo === 'despesa') {
+      if (!dbGetById('FinEmpresaDespesas', String(vinculoId))) return { ok: false, error: 'Despesa não encontrada.' };
+      dbUpdate('FinEmpresaDespesas', String(vinculoId), { status: 'pago' });
+    } else if (vinculoTipo === 'custo') {
+      const res = registrarPagamentoCusto(String(vinculoId), { valor, data });
+      if (!res.ok) return res;
+    } else {
+      return { ok: false, error: 'Tipo de vínculo inválido.' };
+    }
+
+    const atualizado = dbUpdate('ConciliacaoTransacoes', String(id), {
+      status: 'conciliada', vinculoTipo, vinculoId: String(vinculoId), conciliadoEm: new Date().toISOString(),
+    });
+    return { ok: true, data: atualizado };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao conciliar' };
+  }
+}
+
+function conciliacaoIgnorar(id: string): ServerResult {
+  try {
+    const r = dbUpdate('ConciliacaoTransacoes', String(id), { status: 'ignorada', conciliadoEm: new Date().toISOString() });
+    return r ? { ok: true, data: r } : { ok: false, error: 'Transação não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ignorar' };
+  }
+}
+
+// Volta uma transação pra 'pendente' (não reverte a baixa já feita no item).
+function conciliacaoDesfazer(id: string): ServerResult {
+  try {
+    const r = dbUpdate('ConciliacaoTransacoes', String(id), { status: 'pendente', vinculoTipo: '', vinculoId: '', conciliadoEm: '' });
+    return r ? { ok: true, data: r } : { ok: false, error: 'Transação não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao desfazer' };
+  }
+}
+
+function conciliacaoExcluir(id: string): ServerResult {
+  try {
+    return dbDelete('ConciliacaoTransacoes', String(id)) ? { ok: true } : { ok: false, error: 'Transação não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao excluir' };
   }
 }
 
