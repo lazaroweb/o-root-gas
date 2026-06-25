@@ -19,13 +19,21 @@ interface ImpLinha {
   vencimento: string; status: string; dataPagamento: string;
   guiaId: string; baseLive: number;
 }
-interface ImpConfig { regime: string; aliquota: number; diaVencimento: number }
+interface ImpConfig { empresaId: string; empresaNome: string; regime: string; anexo: string; rbt12: number; aliquota: number; diaVencimento: number; auto: boolean }
 interface ImpResumo {
-  config: ImpConfig; linhas: ImpLinha[];
+  config: ImpConfig; linhas: ImpLinha[]; consolidado: boolean;
   provisaoMesAtual: number; reservaRecomendada: number; pagoAno: number; aPagar: number;
 }
 
 const REGIMES = ['Simples Nacional', 'MEI', 'Lucro Presumido', 'Lucro Real', 'Outro'];
+const ANEXOS = [
+  { value: '', label: 'Sem anexo (alíquota manual)' },
+  { value: 'I', label: 'Anexo I (Comércio)' },
+  { value: 'II', label: 'Anexo II (Indústria)' },
+  { value: 'III', label: 'Anexo III (Serviços)' },
+  { value: 'IV', label: 'Anexo IV (Serviços)' },
+  { value: 'V', label: 'Anexo V (Serviços)' },
+];
 
 const STATUS_META: Record<string, { cor: string; texto: string }> = {
   provisao: { cor: 'default', texto: 'Provisão' },
@@ -106,15 +114,16 @@ export default function FinImpostos(): React.ReactElement {
   if (!data) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Sem dados (rode no app publicado)" style={{ marginTop: 40 }} />;
 
   const cfg = data.config;
+  const consol = data.consolidado;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Controles */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <Tag color="default" style={{ fontSize: 12.5, padding: '2px 10px' }}>
-          {cfg.regime} · alíquota {cfg.aliquota}% · vence dia {cfg.diaVencimento}
+          {consol ? 'Consolidado (todas as empresas)' : `${cfg.regime}${cfg.anexo ? ` · Anexo ${cfg.anexo}` : ''} · alíquota ${cfg.aliquota}%${cfg.auto ? ' (auto)' : ''} · vence dia ${cfg.diaVencimento}`}
         </Tag>
-        <Button size="small" icon={<Settings2 size={14} />} onClick={abrirConfig}>Configurar</Button>
+        {!consol && <Button size="small" icon={<Settings2 size={14} />} onClick={abrirConfig}>Configurar</Button>}
         <div style={{ flex: 1 }} />
         <Segmented
           value={janela}
@@ -124,11 +133,21 @@ export default function FinImpostos(): React.ReactElement {
         {loading && <Spin size="small" />}
       </div>
 
-      <Alert
-        type="info" showIcon
-        message="Como calculamos"
-        description={`A base é a receita bruta realizada do mês (seus recebimentos) × ${cfg.aliquota}% (alíquota efetiva que você configura). "Gerar guia" congela o valor do mês; ao registrar o pagamento, a saída entra no livro-caixa (categoria Impostos).`}
-      />
+      {consol ? (
+        <Alert
+          type="warning" showIcon
+          message="Visão consolidada (somatório das empresas)"
+          description="Cada empresa apura o próprio DAS na sua alíquota. Para gerar guias e registrar pagamentos, selecione uma empresa específica no seletor do topo."
+        />
+      ) : (
+        <Alert
+          type="info" showIcon
+          message="Como calculamos"
+          description={cfg.auto
+            ? `A base é a receita bruta realizada do mês × alíquota efetiva do Simples (Anexo ${cfg.anexo}, RBT12 ${formatBRL(cfg.rbt12)} → ${cfg.aliquota}%), calculada automaticamente. "Gerar guia" congela o valor; ao pagar, a saída entra no livro-caixa.`
+            : `A base é a receita bruta realizada do mês × ${cfg.aliquota}% (alíquota manual). Para cálculo automático, defina o Anexo e o RBT12 em "Configurar". "Gerar guia" congela o valor; ao pagar, a saída entra no livro-caixa.`}
+        />
+      )}
 
       <Row gutter={[16, 16]}>
         <Col xs={12} sm={6}><StatCard label="Provisão do mês" value={formatBRL(data.provisaoMesAtual)} icon={<Landmark size={16} strokeWidth={1.8} />} accent={t.accents.clay} hint="competência atual" /></Col>
@@ -160,7 +179,7 @@ export default function FinImpostos(): React.ReactElement {
             { title: 'Status', dataIndex: 'status', align: 'center', render: (v: string, r: ImpLinha) => { const m = STATUS_META[v] || STATUS_META.provisao; return <Tag color={m.cor}>{m.texto}{v === 'pago' && r.dataPagamento ? ` · ${dayjs(r.dataPagamento).format('DD/MM')}` : ''}</Tag>; } },
             {
               title: 'Ações', key: 'acoes', align: 'right', width: 220,
-              render: (_: unknown, r: ImpLinha) => (
+              render: (_: unknown, r: ImpLinha) => consol ? <span style={{ color: t.textTertiary, fontSize: 12.5 }}>—</span> : (
                 <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                   {r.status === 'provisao' && (
                     <Button size="small" icon={<FilePlus2 size={14} />} loading={acao === r.competencia} onClick={() => gerarGuia(r)} disabled={r.valor <= 0}>Gerar guia</Button>
@@ -197,11 +216,31 @@ export default function FinImpostos(): React.ReactElement {
         destroyOnClose
       >
         <Form form={cfgForm} layout="vertical" onFinish={salvarConfig} initialValues={cfg} style={{ marginTop: 8 }}>
-          <Form.Item name="regime" label="Regime tributário" rules={[{ required: true }]}>
-            <Select options={REGIMES.map((r) => ({ value: r, label: r }))} />
+          <div style={{ color: t.textTertiary, fontSize: 12, marginBottom: 12 }}>
+            Configurando <b>{cfg.empresaNome || 'empresa'}</b>. Regime, anexo e RBT12 ficam no cadastro da empresa.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Form.Item name="regime" label="Regime tributário" rules={[{ required: true }]}>
+              <Select options={REGIMES.map((r) => ({ value: r, label: r }))} onChange={() => setTimeout(() => cfgForm.validateFields(['anexo']), 0)} />
+            </Form.Item>
+            <Form.Item name="anexo" label="Anexo do Simples" extra="Define a tabela da alíquota efetiva.">
+              <Select options={ANEXOS} />
+            </Form.Item>
+          </div>
+          <Form.Item name="rbt12" label="RBT12 — receita bruta dos últimos 12 meses (R$)" extra="Quanto maior o RBT12, maior a alíquota efetiva na tabela do Simples.">
+            <InputNumber min={0} step={1000} decimalSeparator="," style={{ width: '100%' }} controls={false} prefix="R$" />
           </Form.Item>
-          <Form.Item name="aliquota" label="Alíquota efetiva (%)" rules={[{ required: true }]} extra="Da sua faixa do Simples (ex.: 6, 11.2, 14.93).">
-            <InputNumber min={0} max={100} step={0.01} decimalSeparator="," style={{ width: '100%' }} addonAfter="%" />
+          <Form.Item shouldUpdate noStyle>
+            {() => {
+              const regime = cfgForm.getFieldValue('regime');
+              const anexo = cfgForm.getFieldValue('anexo');
+              const auto = regime === 'Simples Nacional' && !!anexo;
+              return (
+                <Form.Item name="aliquota" label="Alíquota (%)" extra={auto ? 'Calculada automaticamente pela tabela do Simples (Anexo + RBT12). Edite o anexo/RBT12 acima.' : 'Alíquota manual — usada quando não há anexo do Simples definido.'}>
+                  <InputNumber min={0} max={100} step={0.01} decimalSeparator="," style={{ width: '100%' }} addonAfter="%" disabled={auto} />
+                </Form.Item>
+              );
+            }}
           </Form.Item>
           <Form.Item name="diaVencimento" label="Dia do vencimento (mês seguinte)" rules={[{ required: true }]} extra="DAS do Simples normalmente vence dia 20.">
             <InputNumber min={1} max={28} style={{ width: '100%' }} />

@@ -5538,24 +5538,63 @@ function nfseCancelar(id: string): ServerResult {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// IMPOSTOS (v1.164.0) — provisão e acompanhamento do DAS / Simples Nacional
+// IMPOSTOS (v1.164.0 / multi-empresa v1.167.0) — DAS / Simples Nacional
 //   Base de cálculo = receita bruta REALIZADA do mês (ledger Recebimentos) ×
-//   alíquota efetiva (que você informa, da sua faixa do Simples). Gera a guia por
-//   competência, mostra a reserva recomendada e, ao pagar, lança no livro-caixa.
+//   alíquota efetiva. A alíquota é calculada AUTOMATICAMENTE pela tabela do Simples
+//   (anexo + RBT12 da empresa) ou informada manualmente. Cada empresa tem sua
+//   própria config (regime/anexo/RBT12 no cadastro; alíquota manual e dia de
+//   vencimento em IMPOSTOS_CFG_<empresaId>). Gera a guia por competência, mostra a
+//   reserva recomendada e, ao pagar, lança no livro-caixa.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-interface ImpostosConfig { regime: string; aliquota: number; diaVencimento: number }
+// Tabelas do Simples Nacional (faixas): [tetoRBT12, alíquotaNominal%, parcelaDeduzir].
+// Alíquota efetiva = (RBT12 × nominal − PD) / RBT12.
+const _SIMPLES_TABELAS: Record<string, Array<[number, number, number]>> = {
+  I: [[180000, 4.0, 0], [360000, 7.3, 5940], [720000, 9.5, 13860], [1800000, 10.7, 22500], [3600000, 14.3, 87300], [4800000, 19.0, 378000]],
+  II: [[180000, 4.5, 0], [360000, 7.8, 5940], [720000, 10.0, 13860], [1800000, 11.2, 22500], [3600000, 14.7, 85500], [4800000, 30.0, 720000]],
+  III: [[180000, 6.0, 0], [360000, 11.2, 9360], [720000, 13.5, 17640], [1800000, 16.0, 35640], [3600000, 21.0, 125640], [4800000, 33.0, 648000]],
+  IV: [[180000, 4.5, 0], [360000, 9.0, 8100], [720000, 10.2, 12420], [1800000, 14.0, 39780], [3600000, 22.0, 183780], [4800000, 33.0, 828000]],
+  V: [[180000, 15.5, 0], [360000, 18.0, 4500], [720000, 19.5, 9900], [1800000, 20.5, 17100], [3600000, 23.0, 62100], [4800000, 30.5, 540000]],
+};
 
+// Alíquota efetiva do Simples pra um anexo e RBT12. Sem RBT12 → nominal da 1ª faixa.
+function _aliquotaSimples(anexo: string, rbt12: number): number {
+  const tab = _SIMPLES_TABELAS[String(anexo || '').toUpperCase()];
+  if (!tab) return 0;
+  const r = Number(rbt12 || 0);
+  if (r <= 0) return tab[0][1];
+  let faixa = tab[tab.length - 1];
+  for (const f of tab) { if (r <= f[0]) { faixa = f; break; } }
+  const [, nominal, pd] = faixa;
+  const efetiva = ((r * (nominal / 100)) - pd) / r * 100;
+  return Math.max(0, Math.round(efetiva * 100) / 100);
+}
+
+interface ImpostosConfig { empresaId: string; empresaNome: string; regime: string; anexo: string; rbt12: number; aliquota: number; diaVencimento: number; auto: boolean }
+
+// Config de impostos de UMA empresa. regime/anexo/rbt12 vêm do cadastro da empresa;
+// alíquota manual e dia de vencimento ficam em IMPOSTOS_CFG_<empresaId>.
+function _impostosConfigEmpresa(empresaId: string): ImpostosConfig {
+  const emp = (empresaId ? dbGetById('Empresas', empresaId) : null) || {};
+  const regime = String((emp as Record<string, unknown>)['regime'] || 'Simples Nacional');
+  const anexo = String((emp as Record<string, unknown>)['anexo'] || '');
+  const rbt12 = Number((emp as Record<string, unknown>)['rbt12'] || 0);
+  let manual: Record<string, unknown> = {};
+  try { const raw = PropertiesService.getScriptProperties().getProperty('IMPOSTOS_CFG_' + empresaId); if (raw) manual = JSON.parse(raw); } catch { /* noop */ }
+  const auto = regime === 'Simples Nacional' && !!_SIMPLES_TABELAS[anexo.toUpperCase()];
+  const aliquota = auto ? _aliquotaSimples(anexo, rbt12) : Number(manual['aliquota'] !== undefined && Number(manual['aliquota']) >= 0 ? manual['aliquota'] : 6);
+  const diaVencimento = Number(manual['diaVencimento'] !== undefined && Number(manual['diaVencimento']) >= 1 ? manual['diaVencimento'] : 20);
+  return {
+    empresaId,
+    empresaNome: String((emp as Record<string, unknown>)['nomeFantasia'] || (emp as Record<string, unknown>)['razaoSocial'] || ''),
+    regime, anexo, rbt12, aliquota, diaVencimento, auto,
+  };
+}
+
+// Config da empresa ativa (ou padrão, no Consolidado).
 function _impostosConfig(): ImpostosConfig {
-  try {
-    const raw = PropertiesService.getScriptProperties().getProperty('IMPOSTOS_CFG');
-    const p = raw ? JSON.parse(raw) : {};
-    return {
-      regime: String(p.regime || 'Simples Nacional'),
-      aliquota: Number(p.aliquota >= 0 ? p.aliquota : 6),
-      diaVencimento: Number(p.diaVencimento >= 1 ? p.diaVencimento : 20),
-    };
-  } catch { return { regime: 'Simples Nacional', aliquota: 6, diaVencimento: 20 }; }
+  const id = _empresaFiltroId() || _empresaDefaultId();
+  return _impostosConfigEmpresa(id);
 }
 
 function impostosConfigGet(): ServerResult {
@@ -5564,15 +5603,22 @@ function impostosConfigGet(): ServerResult {
 
 function impostosConfigSalvar(payload: Record<string, unknown>): ServerResult {
   try {
-    const atual = _impostosConfig();
     const p = payload || {};
-    const novo: ImpostosConfig = {
-      regime: p['regime'] !== undefined ? String(p['regime'] || 'Simples Nacional') : atual.regime,
-      aliquota: p['aliquota'] !== undefined ? Math.max(0, Math.min(100, Number(p['aliquota']))) : atual.aliquota,
-      diaVencimento: p['diaVencimento'] !== undefined ? Math.max(1, Math.min(28, Number(p['diaVencimento']))) : atual.diaVencimento,
+    const id = String(p['empresaId'] || _empresaFiltroId() || _empresaDefaultId());
+    if (!id) return { ok: false, error: 'Cadastre uma empresa primeiro.' };
+    // Alíquota manual + dia de vencimento ficam por empresa em Script Property.
+    const manual = {
+      aliquota: p['aliquota'] !== undefined ? Math.max(0, Math.min(100, Number(p['aliquota']))) : undefined,
+      diaVencimento: p['diaVencimento'] !== undefined ? Math.max(1, Math.min(28, Number(p['diaVencimento']))) : undefined,
     };
-    PropertiesService.getScriptProperties().setProperty('IMPOSTOS_CFG', JSON.stringify(novo));
-    return { ok: true, data: novo };
+    PropertiesService.getScriptProperties().setProperty('IMPOSTOS_CFG_' + id, JSON.stringify(manual));
+    // regime/anexo/rbt12 pertencem ao cadastro da empresa — atualiza se vierem.
+    const patch: Record<string, unknown> = {};
+    if (p['regime'] !== undefined) patch['regime'] = String(p['regime'] || 'Simples Nacional');
+    if (p['anexo'] !== undefined) patch['anexo'] = String(p['anexo'] || '');
+    if (p['rbt12'] !== undefined) patch['rbt12'] = Number(p['rbt12'] || 0);
+    if (Object.keys(patch).length) { patch['atualizadoEm'] = new Date().toISOString(); dbUpdate('Empresas', id, patch); _empresasInvalidarCache(); }
+    return { ok: true, data: _impostosConfigEmpresa(id) };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar config de impostos' };
   }
@@ -5586,6 +5632,18 @@ function _receitaBrutaComp(comp: string): number {
     .reduce((s, r) => s + Number(r['valor'] || 0), 0);
 }
 
+// Receita bruta de uma competência para UMA empresa específica (usado no Consolidado).
+function _receitaBrutaCompEmpresa(comp: string, empresaId: string): number {
+  const def = _empresaDefaultId();
+  return (dbGetAll('Recebimentos') as Array<Record<string, unknown>>)
+    .filter((r) => {
+      if (String(r['competencia']) !== comp) return false;
+      const e = String(r['empresaId'] || '');
+      return e === empresaId || (e === '' && empresaId === def);
+    })
+    .reduce((s, r) => s + Number(r['valor'] || 0), 0);
+}
+
 function _impVencimento(comp: string, dia: number): string {
   const m = /^(\d{4})-(\d{2})$/.exec(String(comp || ''));
   if (!m) return '';
@@ -5594,51 +5652,97 @@ function _impVencimento(comp: string, dia: number): string {
   return d.toISOString().substring(0, 10);
 }
 
+const _NOMES_MES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+
+// Linhas mês a mês de UMA empresa: guia congelada quando existe, senão provisão viva.
+function _impLinhasEmpresa(empresaId: string, N: number): Array<Record<string, unknown>> {
+  const cfg = _impostosConfigEmpresa(empresaId);
+  const hoje = new Date();
+  const guias = (dbGetAll('Impostos') as Array<Record<string, unknown>>).filter((g) => {
+    const e = String(g['empresaId'] || '');
+    return e === empresaId || (e === '' && empresaId === _empresaDefaultId());
+  });
+  const guiaDe = (comp: string) => guias.find((g) => String(g['competencia']) === comp);
+  const linhas: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < N; i++) {
+    const ref = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
+    const comp = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}`;
+    const baseLive = _receitaBrutaCompEmpresa(comp, empresaId);
+    const label = `${_NOMES_MES[ref.getMonth()]}/${String(ref.getFullYear()).slice(2)}`;
+    const g = guiaDe(comp);
+    if (g) {
+      linhas.push({
+        competencia: comp, label,
+        base: Number(g['baseCalculo'] || 0), aliquota: Number(g['aliquota'] || 0), valor: Number(g['valor'] || 0),
+        vencimento: String(g['vencimento'] || ''), status: String(g['status'] || 'pendente'),
+        dataPagamento: String(g['dataPagamento'] || ''), guiaId: String(g['id']), baseLive, empresaId,
+      });
+    } else {
+      linhas.push({
+        competencia: comp, label,
+        base: Math.round(baseLive), aliquota: cfg.aliquota, valor: Math.round(baseLive * cfg.aliquota) / 100,
+        vencimento: _impVencimento(comp, cfg.diaVencimento), status: 'provisao',
+        dataPagamento: '', guiaId: '', baseLive, empresaId,
+      });
+    }
+  }
+  return linhas;
+}
+
 function getImpostosResumo(meses?: number): ServerResult {
   try {
     const N = Math.max(3, Math.min(24, Number(meses || 6)));
     const cfg = _impostosConfig();
-    const nomes = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
     const hoje = new Date();
     const anoAtual = hoje.getFullYear();
-    const guias = _filtraEmpresa(dbGetAll('Impostos') as Array<Record<string, unknown>>);
-    const guiaDe = (comp: string) => guias.find((g) => String(g['competencia']) === comp);
+    const filtroId = _empresaFiltroId();
+    const consolidado = !filtroId;
 
-    const linhas: Array<Record<string, unknown>> = [];
-    for (let i = 0; i < N; i++) {
-      const ref = new Date(anoAtual, hoje.getMonth() - i, 1);
-      const comp = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}`;
-      const baseLive = _receitaBrutaComp(comp);
-      const g = guiaDe(comp);
-      if (g) {
-        linhas.push({
-          competencia: comp, label: `${nomes[ref.getMonth()]}/${String(ref.getFullYear()).slice(2)}`,
-          base: Number(g['baseCalculo'] || 0), aliquota: Number(g['aliquota'] || 0), valor: Number(g['valor'] || 0),
-          vencimento: String(g['vencimento'] || ''), status: String(g['status'] || 'pendente'),
-          dataPagamento: String(g['dataPagamento'] || ''), guiaId: String(g['id']), baseLive,
-        });
-      } else {
-        linhas.push({
-          competencia: comp, label: `${nomes[ref.getMonth()]}/${String(ref.getFullYear()).slice(2)}`,
-          base: Math.round(baseLive), aliquota: cfg.aliquota, valor: Math.round(baseLive * cfg.aliquota) / 100,
-          vencimento: _impVencimento(comp, cfg.diaVencimento), status: 'provisao',
-          dataPagamento: '', guiaId: '', baseLive,
-        });
+    let linhas: Array<Record<string, unknown>>;
+    if (!consolidado) {
+      linhas = _impLinhasEmpresa(filtroId, N);
+    } else {
+      // Consolidado: soma as linhas de cada empresa por competência (cada uma na
+      // sua alíquota). Sem guiaId — ações de gerar/pagar exigem empresa específica.
+      const ids = _empresasAll().map((e) => String(e['id']));
+      const porComp: Record<string, Record<string, unknown>> = {};
+      for (const id of ids) {
+        for (const l of _impLinhasEmpresa(id, N)) {
+          const comp = String(l['competencia']);
+          if (!porComp[comp]) porComp[comp] = { competencia: comp, label: l['label'], base: 0, valor: 0, baseLive: 0, vencimento: l['vencimento'], status: 'provisao', dataPagamento: '', guiaId: '', _pago: 0, _pend: 0, _prov: 0 };
+          const acc = porComp[comp];
+          acc['base'] = Number(acc['base']) + Number(l['base'] || 0);
+          acc['valor'] = Number(acc['valor']) + Number(l['valor'] || 0);
+          acc['baseLive'] = Number(acc['baseLive']) + Number(l['baseLive'] || 0);
+          const st = String(l['status']);
+          if (st === 'pago') acc['_pago'] = Number(acc['_pago']) + 1;
+          else if (st === 'pendente') acc['_pend'] = Number(acc['_pend']) + 1;
+          else acc['_prov'] = Number(acc['_prov']) + 1;
+        }
       }
+      linhas = Object.keys(porComp).sort((a, b) => b.localeCompare(a)).map((comp) => {
+        const acc = porComp[comp];
+        const base = Number(acc['base']);
+        acc['aliquota'] = base > 0 ? Math.round((Number(acc['valor']) / base) * 10000) / 100 : 0;
+        acc['status'] = Number(acc['_pend']) > 0 ? 'pendente' : (Number(acc['_prov']) > 0 ? 'provisao' : 'pago');
+        delete acc['_pago']; delete acc['_pend']; delete acc['_prov'];
+        return acc;
+      });
     }
 
     const compAtual = `${anoAtual}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
     const linhaAtual = linhas.find((l) => l['competencia'] === compAtual);
     const provisaoMesAtual = linhaAtual ? Number(linhaAtual['valor']) : 0;
     const reservaRecomendada = linhas.filter((l) => l['status'] !== 'pago').reduce((s, l) => s + Number(l['valor'] || 0), 0);
-    const pagoAno = guias.filter((g) => String(g['status']) === 'pago' && String(g['competencia']).indexOf(String(anoAtual)) === 0)
-      .reduce((s, g) => s + Number(g['valor'] || 0), 0);
+    const guiasAno = _filtraEmpresa(dbGetAll('Impostos') as Array<Record<string, unknown>>)
+      .filter((g) => String(g['status']) === 'pago' && String(g['competencia']).indexOf(String(anoAtual)) === 0);
+    const pagoAno = guiasAno.reduce((s, g) => s + Number(g['valor'] || 0), 0);
     const aPagar = linhas.filter((l) => l['status'] === 'pendente').reduce((s, l) => s + Number(l['valor'] || 0), 0);
 
     return {
       ok: true,
       data: {
-        config: cfg, linhas,
+        config: cfg, linhas, consolidado,
         provisaoMesAtual: Math.round(provisaoMesAtual),
         reservaRecomendada: Math.round(reservaRecomendada),
         pagoAno: Math.round(pagoAno),
@@ -5655,6 +5759,7 @@ function impostoGerarGuia(competencia: string): ServerResult {
   try {
     const comp = String(competencia || '');
     if (!/^\d{4}-\d{2}$/.test(comp)) return { ok: false, error: 'Competência inválida (use YYYY-MM).' };
+    if (!_empresaFiltroId()) return { ok: false, error: 'Selecione uma empresa específica (não o Consolidado) para gerar a guia.' };
     const cfg = _impostosConfig();
     const base = _receitaBrutaComp(comp);
     const valor = Math.round(base * cfg.aliquota) / 100;

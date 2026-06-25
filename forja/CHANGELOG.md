@@ -36,6 +36,31 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.167.0] — 2026-06-25
+
+### Adicionado — Impostos por empresa + alíquota efetiva automática (RBT12)
+
+A estação Impostos agora é por empresa e calcula a alíquota sozinha:
+
+- **Alíquota efetiva automática** pela tabela do Simples Nacional: você define o
+  **Anexo (I–V)** e o **RBT12** (receita bruta dos últimos 12 meses) da empresa, e o
+  app aplica a fórmula oficial `(RBT12 × nominal − parcela a deduzir) / RBT12`.
+  Sem anexo, cai pra alíquota manual.
+- **Config por empresa**: regime/anexo/RBT12 ficam no cadastro; alíquota manual e
+  dia de vencimento ficam por empresa.
+- **Consolidado**: soma o DAS de todas as empresas (cada uma na sua alíquota);
+  gerar guia/pagar exige selecionar uma empresa específica.
+
+### Detalhes técnicos — 1.167.0
+
+- `server.ts`: tabelas `_SIMPLES_TABELAS` (Anexos I–V) + `_aliquotaSimples`;
+  `_impostosConfigEmpresa`/`impostosConfigSalvar` por empresa (Script Property
+  `IMPOSTOS_CFG_<empresaId>` + campos no cadastro); `getImpostosResumo` agrega por
+  empresa no Consolidado; `impostoGerarGuia` bloqueado no Consolidado.
+- UI: `FinImpostos.tsx` com Anexo + RBT12, alíquota auto/manual e modo consolidado.
+
+---
+
 ## [1.166.0] — 2026-06-25
 
 ### Adicionado — Multi-empresa (fundação): cadastre e gerencie várias empresas
