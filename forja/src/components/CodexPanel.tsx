@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Input, Button, App as AntApp, Tag, Empty, Modal, Form, Switch, Tooltip, Popconfirm,
-  Skeleton, Drawer, Segmented,
+  Skeleton, Drawer, Segmented, Select, AutoComplete,
 } from 'antd';
 import {
   Plus, Search, Edit3, Trash2, Sparkles, Download, Copy, Link as LinkIcon,
   Palette, Layers, Code2, CheckCircle2, Rocket, GitBranch, Compass,
-  BookOpen, Tag as TagIcon, Settings2, FileDown, Upload,
+  BookOpen, Tag as TagIcon, Settings2, FileDown, Upload, FolderGit2, CopyPlus,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useTokens } from '../themeContext';
@@ -35,6 +35,10 @@ function getSecaoIcon(nome?: string): LucideIcon {
   return SECAO_ICONES[nome] || TagIcon;
 }
 
+// Projeto dono padrão (espelha o server). Cards sem projeto explícito = Forja.
+const PROJETO_PADRAO = 'Forja';
+const projetoDoCard = (c: CodexCard): string => (c.projeto || '').trim() || PROJETO_PADRAO;
+
 // Ícones disponíveis pro picker de seção. 8 padrão + opções extras úteis.
 const SECAO_ICONES_PICKER = Object.keys(SECAO_ICONES);
 
@@ -49,6 +53,7 @@ export default function CodexPanel(): React.ReactElement {
   const [secaoAtivaId, setSecaoAtivaId] = useState<string | null>(null);
   const [busca, setBusca] = useState('');
   const [filtroIa, setFiltroIa] = useState<'todos' | 'sim' | 'nao'>('todos');
+  const [projetoFiltro, setProjetoFiltro] = useState<string>('todos');
 
   // Modais
   const [cardEditando, setCardEditando] = useState<CodexCard | null>(null);
@@ -87,18 +92,41 @@ export default function CodexPanel(): React.ReactElement {
     return secoes.find((s) => s.id === secaoAtivaId) || secoes[0] || null;
   }, [secoes, secaoAtivaId]);
 
-  // Total de cards e quantos vão pra IA (mostrado no header pro user ter
-  // consciência do "peso" do Códex no contexto da IA).
+  // Todos os cards (todas as seções) — base pra derivar projetos e contagens.
+  const todosCards = useMemo(() => secoes.flatMap((s) => s.cards || []), [secoes]);
+
+  // Projetos distintos no Códex (ordenados, Forja primeiro).
+  const projetos = useMemo(() => {
+    const set = new Set(todosCards.map(projetoDoCard));
+    const arr = Array.from(set);
+    arr.sort((a, b) => (a === PROJETO_PADRAO ? -1 : b === PROJETO_PADRAO ? 1 : a.localeCompare(b)));
+    return arr;
+  }, [todosCards]);
+  const multiProjeto = projetos.length > 1;
+
+  // Aplica o filtro de projeto a uma lista de cards.
+  const filtraProjeto = useCallback((lista: CodexCard[]) => (
+    projetoFiltro === 'todos' ? lista : lista.filter((c) => projetoDoCard(c) === projetoFiltro)
+  ), [projetoFiltro]);
+
+  // Total de cards e quantos vão pra IA (respeitando o projeto selecionado).
   const stats = useMemo(() => {
-    const all = secoes.flatMap((s) => s.cards || []);
+    const all = filtraProjeto(todosCards);
     const naIa = all.filter((c) => (c.incluirEmIa || 'sim') !== 'nao').length;
     return { total: all.length, naIa };
-  }, [secoes]);
+  }, [todosCards, filtraProjeto]);
 
-  // Cards da seção ativa filtrados pela busca/filtro IA
+  // Contagem por seção respeitando o filtro de projeto (badges da lateral).
+  const contagemPorSecao = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const s of secoes) m[s.id] = filtraProjeto(s.cards || []).length;
+    return m;
+  }, [secoes, filtraProjeto]);
+
+  // Cards da seção ativa filtrados por projeto + busca + filtro IA
   const cardsFiltrados = useMemo(() => {
     if (!secaoAtiva) return [];
-    let lista = secaoAtiva.cards || [];
+    let lista = filtraProjeto(secaoAtiva.cards || []);
     if (busca.trim()) {
       const q = busca.toLowerCase();
       lista = lista.filter((c) =>
@@ -111,7 +139,7 @@ export default function CodexPanel(): React.ReactElement {
       lista = lista.filter((c) => (c.incluirEmIa || 'sim') === filtroIa);
     }
     return lista;
-  }, [secaoAtiva, busca, filtroIa]);
+  }, [secaoAtiva, busca, filtroIa, filtraProjeto]);
 
   // ─── Ações ─────────────────────────────────────────────────────────────────
 
@@ -122,13 +150,23 @@ export default function CodexPanel(): React.ReactElement {
     }
     setCardEditando({
       id: '', secaoId: secaoAtiva.id, titulo: '', valor: '', referencia: '',
-      tags: '', incluirEmIa: 'sim', ordem: (secaoAtiva.cards?.length || 0) + 1,
+      tags: '', incluirEmIa: 'sim', projeto: projetoFiltro === 'todos' ? PROJETO_PADRAO : projetoFiltro,
+      ordem: (secaoAtiva.cards?.length || 0) + 1,
     });
     setCardModalOpen(true);
   };
 
   const editarCard = (c: CodexCard) => {
     setCardEditando(c);
+    setCardModalOpen(true);
+  };
+
+  // Duplica um card (id zerado) — atalho pra replicar um padrão em outro
+  // projeto. Abre o modal pré-preenchido pro user só trocar o projeto.
+  const duplicarCard = (c: CodexCard) => {
+    setCardEditando({
+      ...c, id: '', titulo: c.titulo, ordem: (secaoAtiva?.cards?.length || 0) + 1,
+    });
     setCardModalOpen(true);
   };
 
@@ -214,9 +252,10 @@ export default function CodexPanel(): React.ReactElement {
       secao: s.label,
       key: s.key,
       descricao: s.descricao,
-      cards: (s.cards || []).map((c) => ({
+      cards: filtraProjeto(s.cards || []).map((c) => ({
         titulo: c.titulo,
         valor: c.valor,
+        projeto: projetoDoCard(c),
         referencia: c.referencia,
         tags: c.tags,
         incluirEmIa: c.incluirEmIa,
@@ -273,7 +312,7 @@ export default function CodexPanel(): React.ReactElement {
         {secoes.map((s) => {
           const Ic = getSecaoIcon(s.icone);
           const active = s.id === secaoAtiva?.id;
-          const qtd = s.cards?.length || 0;
+          const qtd = contagemPorSecao[s.id] ?? 0;
           return (
             <button
               key={s.id}
@@ -426,6 +465,19 @@ export default function CodexPanel(): React.ReactElement {
                 style={{ flex: 1, minWidth: 200 }}
                 allowClear
               />
+              <Tooltip title="Filtrar por projeto. Cada padrão pertence a um projeto; as seções são universais.">
+                <Select
+                  size="middle"
+                  value={projetoFiltro}
+                  onChange={setProjetoFiltro}
+                  style={{ minWidth: 150 }}
+                  suffixIcon={<FolderGit2 size={14} color={t.textTertiary} />}
+                  options={[
+                    { label: `Todos os projetos${multiProjeto ? ` · ${projetos.length}` : ''}`, value: 'todos' },
+                    ...projetos.map((p) => ({ label: p, value: p })),
+                  ]}
+                />
+              </Tooltip>
               <Segmented
                 value={filtroIa}
                 onChange={(v) => setFiltroIa(v as 'todos' | 'sim' | 'nao')}
@@ -477,7 +529,9 @@ export default function CodexPanel(): React.ReactElement {
                   <CardItem
                     key={c.id}
                     card={c}
+                    mostrarProjeto={multiProjeto}
                     onEditar={() => editarCard(c)}
+                    onDuplicar={() => duplicarCard(c)}
                     onRemover={() => removerCard(c.id)}
                   />
                 ))}
@@ -493,6 +547,7 @@ export default function CodexPanel(): React.ReactElement {
       <ModalCard
         open={cardModalOpen}
         card={cardEditando}
+        projetosExistentes={projetos}
         onClose={() => setCardModalOpen(false)}
         onSaved={() => { setCardModalOpen(false); carregar({ manterAtiva: true }); }}
       />
@@ -514,15 +569,18 @@ export default function CodexPanel(): React.ReactElement {
 
 // ─── Sub-componente: Card individual ─────────────────────────────────────────
 
-function CardItem({ card, onEditar, onRemover }: {
+function CardItem({ card, mostrarProjeto, onEditar, onDuplicar, onRemover }: {
   card: CodexCard;
+  mostrarProjeto?: boolean;
   onEditar: () => void;
+  onDuplicar: () => void;
   onRemover: () => void;
 }): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const tags = (card.tags || '').split(',').map((x) => x.trim()).filter(Boolean);
   const naIa = (card.incluirEmIa || 'sim') !== 'nao';
+  const projeto = projetoDoCard(card);
 
   return (
     <div style={{
@@ -543,6 +601,17 @@ function CardItem({ card, onEditar, onRemover }: {
             }}>
               {card.titulo}
             </span>
+            {mostrarProjeto && (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                fontFamily: FONTS.mono, fontSize: 9.5, letterSpacing: 0.2,
+                padding: '1px 7px', borderRadius: 999,
+                background: `${t.accents.lavender}1A`, color: t.accents.lavender,
+                border: `1px solid ${t.accents.lavender}33`,
+              }}>
+                <FolderGit2 size={10} /> {projeto}
+              </span>
+            )}
             {!naIa && (
               <Tag color="default" style={{ fontSize: 9.5, margin: 0 }}>
                 fora da IA
@@ -601,6 +670,9 @@ function CardItem({ card, onEditar, onRemover }: {
           <Tooltip title="Editar">
             <Button size="small" type="text" icon={<Edit3 size={13} />} onClick={onEditar} />
           </Tooltip>
+          <Tooltip title="Duplicar (ex: replicar este padrão em outro projeto)">
+            <Button size="small" type="text" icon={<CopyPlus size={13} />} onClick={onDuplicar} />
+          </Tooltip>
           <Popconfirm
             title="Remover este card?"
             okText="Remover"
@@ -618,9 +690,10 @@ function CardItem({ card, onEditar, onRemover }: {
 
 // ─── Modal: Editar/Criar Card ────────────────────────────────────────────────
 
-function ModalCard({ open, card, onClose, onSaved }: {
+function ModalCard({ open, card, projetosExistentes, onClose, onSaved }: {
   open: boolean;
   card: CodexCard | null;
+  projetosExistentes: string[];
   onClose: () => void;
   onSaved: () => void;
 }): React.ReactElement {
@@ -633,12 +706,16 @@ function ModalCard({ open, card, onClose, onSaved }: {
       form.setFieldsValue({
         titulo: card.titulo,
         valor: card.valor,
+        projeto: projetoDoCard(card),
         referencia: card.referencia || '',
         tags: card.tags || '',
         incluirEmIa: (card.incluirEmIa || 'sim') === 'sim',
       });
     }
   }, [open, card, form]);
+
+  const opcoesProjeto = (projetosExistentes.length ? projetosExistentes : [PROJETO_PADRAO])
+    .map((p) => ({ value: p }));
 
   const salvar = async (v: Record<string, unknown>) => {
     if (!card) return;
@@ -649,6 +726,7 @@ function ModalCard({ open, card, onClose, onSaved }: {
         secaoId: card.secaoId,
         titulo: v['titulo'],
         valor: v['valor'],
+        projeto: String(v['projeto'] || '').trim() || PROJETO_PADRAO,
         referencia: v['referencia'],
         tags: v['tags'],
         incluirEmIa: v['incluirEmIa'] ? 'sim' : 'nao',
@@ -699,6 +777,21 @@ function ModalCard({ open, card, onClose, onSaved }: {
             placeholder="Ex: Inter (UI) + Fraunces (display) + JetBrains Mono (mono/código)"
             style={{ fontFamily: 'inherit' }}
           />
+        </Form.Item>
+
+        <Form.Item
+          name="projeto"
+          label="Projeto"
+          tooltip="A qual projeto este padrão pertence. Escolha um existente ou digite um novo (ex: 'Forja', 'App X'). As seções são universais — o projeto é o que separa os padrões de cada app."
+        >
+          <AutoComplete
+            options={opcoesProjeto}
+            placeholder="Forja"
+            filterOption={(input, option) =>
+              String(option?.value || '').toLowerCase().includes(input.toLowerCase())}
+          >
+            <Input prefix={<FolderGit2 size={13} />} />
+          </AutoComplete>
         </Form.Item>
 
         <Form.Item

@@ -1453,6 +1453,9 @@ export interface CodexCard {
   tags?: string;
   // 'sim' ou 'nao'. Default 'sim' — opt-out explícito pra excluir da IA.
   incluirEmIa?: 'sim' | 'nao';
+  // Projeto dono do padrão (v1.86). 'Forja' por padrão. Seções são universais;
+  // o projeto é a dimensão que permite guardar padrões de vários apps.
+  projeto?: string;
   ordem: number;
   criadoEm?: string;
   atualizadoEm?: string;

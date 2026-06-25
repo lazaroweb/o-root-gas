@@ -4,7 +4,7 @@ import { Drawer, Tooltip } from 'antd';
 import {
   BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat,
   CheckCircle2, Circle, ArrowRight, Sparkles, Compass, Flame, Trophy,
-  Layers, Crown, Activity, PieChart, Brain,
+  Layers, Crown, Activity, PieChart, Brain, Clock,
 } from 'lucide-react';
 import { useTokens, useForja } from '../themeContext';
 import { FONTS } from '../theme';
@@ -37,6 +37,8 @@ interface AtelierStats {
   receituario: number;
   hospedagem: number;
   cofre: number;
+  ultimaAtividade?: string; // ISO da adição/edição mais recente entre as estações
+  novosNaSemana?: number;   // itens criados/editados nos últimos 7 dias
 }
 
 interface CardEstacao {
@@ -287,6 +289,21 @@ export default function AtelierGuia({ irPara }: AtelierGuiaProps): React.ReactEl
   // Insight de concentração: quanto a estação líder representa do acervo.
   const concentracaoTop = composicao.length ? pct(composicao[0].n) : 0;
 
+  // Atividade / frescor: novos itens na semana + tempo desde a última adição.
+  const novosNaSemana = stats?.novosNaSemana ?? 0;
+  const ultimaAtividadeRel = (() => {
+    if (!stats?.ultimaAtividade) return 'sem registro';
+    const ms = new Date(stats.ultimaAtividade).getTime();
+    if (isNaN(ms)) return 'sem registro';
+    const dias = Math.floor((Date.now() - ms) / 86400000);
+    if (dias <= 0) return 'última: hoje';
+    if (dias === 1) return 'última: ontem';
+    if (dias < 7) return `última: há ${dias} dias`;
+    if (dias < 30) return `última: há ${Math.floor(dias / 7)} sem`;
+    const meses = Math.floor(dias / 30);
+    return `última: há ${meses} mês${meses > 1 ? 'es' : ''}`;
+  })();
+
   // Textos de apoio dos gauges (tooltips).
   const dicaSetup: React.ReactNode = (
     <span style={{ fontFamily: FONTS.ui, fontSize: 12 }}>
@@ -350,6 +367,9 @@ export default function AtelierGuia({ irPara }: AtelierGuiaProps): React.ReactEl
           valor={dash ?? (temTop ? String(topEstacao!.n) : '0')}
           label={temTop ? `top: ${topEstacao!.titulo}` : 'estação mais cheia'}
           sub={temTop ? 'mais itens guardados' : 'sem itens ainda'} />
+        <Kpi t={t} cor={t.accents.blue} icon={<Clock size={18} strokeWidth={1.7} />}
+          valor={dash ?? String(novosNaSemana)} label="novos em 7 dias"
+          sub={carregando ? 'carregando…' : ultimaAtividadeRel} />
       </div>
 
       {/* ─── Saúde do Atelier (gauges redondos) ──────────────────────────────
@@ -740,6 +760,6 @@ function estadoZerado(): AtelierStats {
   return {
     skills: 0, snippets: 0, templates: 0, bookmarks: 0,
     codex: 0, codexNaIa: 0, receituario: 0,
-    hospedagem: 0, cofre: 0,
+    hospedagem: 0, cofre: 0, ultimaAtividade: '', novosNaSemana: 0,
   };
 }

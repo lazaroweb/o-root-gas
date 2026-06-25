@@ -348,7 +348,10 @@ const SCHEMA: SheetSchema[] = [
   // CodexCards: cada padrão concreto (ex: "Tipografia → Inter + JetBrains Mono").
   // `valor` aceita markdown longo. `referencia` é uma URL opcional (docs, figma).
   // `tags` é csv. `incluirEmIa` controla se o card vai pro contexto da IA.
-  { name: 'CodexCards', columns: ['id', 'secaoId', 'titulo', 'valor', 'referencia', 'tags', 'incluirEmIa', 'ordem', 'criadoEm', 'atualizadoEm'] },
+  // `projeto` (v1.86): a qual projeto o padrão pertence (Forja por padrão). As
+  // seções são universais (Design, Stack...); o projeto é uma dimensão ortogonal
+  // que permite guardar padrões de vários apps no mesmo Códex. Append-only.
+  { name: 'CodexCards', columns: ['id', 'secaoId', 'titulo', 'valor', 'referencia', 'tags', 'incluirEmIa', 'ordem', 'criadoEm', 'atualizadoEm', 'projeto'] },
   // ─── Receituário (v1.4.2) ────────────────────────────────────────────────
   // Atelier → Receituário: catálogo de features reutilizáveis que o user já
   // construiu. Cada receita descreve uma feature transferível (UI, IA, infra,
@@ -414,7 +417,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.85-cofre-segredos';
+const SCHEMA_VERSION = 'v1.86-codex-projeto';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -10918,6 +10921,10 @@ function deletarCategoriaPessoal(id: string, migrarParaNome?: string): ServerRes
 // pra Forja IA (toggle "Incluir Códex" ao gerar prompts/blueprints/diagramas).
 // Modelo: SEÇÕES (agrupadores temáticos) → CARDS (padrões concretos).
 
+// Projeto padrão dos cards (este próprio app). Cards sem projeto explícito são
+// tratados como "Forja" — é o que existia antes da dimensão de projeto (v1.86).
+const _CODEX_PROJETO_PADRAO = 'Forja';
+
 // Seções padrão que viram seed na primeira leitura. Pra adicionar uma nova
 // padrão, basta acrescentar aqui — o seed é idempotente (verifica por `key`).
 const _CODEX_SECOES_PADRAO = [
@@ -10980,6 +10987,8 @@ function getCodex(): ServerResult {
     const enriquecidas = secoes.map((s) => {
       const cardsDaSecao = cards
         .filter((c) => String(c['secaoId']) === String(s['id']))
+        // Coalesce: cards antigos (sem `projeto`) viram "Forja" — eram todos deste app.
+        .map((c) => ({ ...c, projeto: String(c['projeto'] || '').trim() || _CODEX_PROJETO_PADRAO }))
         .sort((a, b) => Number(a['ordem'] || 99) - Number(b['ordem'] || 99));
       return { ...s, cards: cardsDaSecao, qtdCards: cardsDaSecao.length };
     });
@@ -11044,6 +11053,8 @@ function salvarCodexCard(payload: Record<string, unknown>): ServerResult {
       tags: String(payload['tags'] || ''),
       // Padrão: incluir na IA. Pra opt-out o user marca explicitamente.
       incluirEmIa: String(payload['incluirEmIa'] || 'sim'),
+      // Projeto dono do padrão (Forja por padrão).
+      projeto: String(payload['projeto'] || '').trim() || _CODEX_PROJETO_PADRAO,
       ordem: Number(payload['ordem'] || 50),
       atualizadoEm: new Date().toISOString(),
     };
@@ -11089,7 +11100,7 @@ function importarPadroesForja(): ServerResult {
       if (jaTem.has(chave)) continue;
       dbCreate('CodexCards', {
         secaoId, titulo: c.titulo, valor: c.valor, referencia: c.referencia,
-        tags: c.tags, incluirEmIa: 'sim', ordem: i + 1,
+        tags: c.tags, incluirEmIa: 'sim', projeto: _CODEX_PROJETO_PADRAO, ordem: i + 1,
         criadoEm: agora, atualizadoEm: agora,
       });
       inseridos++;
@@ -11118,13 +11129,24 @@ function _buildCodexContext(): string {
       cardsPorSecao[sid].push(c);
     }
 
+    // Quando há mais de um projeto no Códex, rotula cada padrão com o projeto
+    // dono — assim a IA sabe que "Tipografia (Forja)" e "Tipografia (App X)"
+    // são preferências de apps distintos. Com 1 projeto só, omite (mais limpo).
+    const projetos = new Set(cards.map((c) => String(c['projeto'] || '').trim() || _CODEX_PROJETO_PADRAO));
+    const multiProjeto = projetos.size > 1;
+
     const linhas: string[] = ['', '## CÓDEX DO USUÁRIO (padrões pessoais a respeitar)'];
+    if (multiProjeto) {
+      linhas.push(`Padrões de ${projetos.size} projetos: ${Array.from(projetos).join(', ')}. O projeto dono vem entre parênteses.`);
+    }
     for (const s of secoes) {
       const lista = cardsPorSecao[String(s['id'])];
       if (!lista || lista.length === 0) continue;
       linhas.push(`\n### ${s['label']}`);
       for (const c of lista) {
-        linhas.push(`- **${c['titulo']}**: ${c['valor']}`);
+        const proj = String(c['projeto'] || '').trim() || _CODEX_PROJETO_PADRAO;
+        const selo = multiProjeto ? ` _(${proj})_` : '';
+        linhas.push(`- **${c['titulo']}**${selo}: ${c['valor']}`);
       }
     }
     linhas.push('\nUse esses padrões como guia ao gerar qualquer conteúdo. Eles são preferências reais do usuário.');
@@ -23957,6 +23979,33 @@ function getAtelierStats(): ServerResult {
       } catch { return 0; }
     })();
 
+    // ─── Recência / atividade ──────────────────────────────────────────────
+    // Varre as tabelas das estações procurando o timestamp mais recente e
+    // conta quantos itens entraram nos últimos 7 dias. Defensivo: campos de
+    // data variam por tabela, então tentamos um conjunto e ignoramos inválidos.
+    const TABELAS_ESTACAO = ['Skills', 'Snippets', 'Templates', 'Bookmarks', 'CodexCards', 'Receituario', 'Provedores', 'Cofre'];
+    const CAMPOS_DATA = ['atualizadoEm', 'criadoEm', 'data', 'createdAt', 'updatedAt'];
+    const agoraMs = Date.now();
+    const seteDiasMs = 7 * 24 * 60 * 60 * 1000;
+    let ultimaMs = 0;
+    let novosNaSemana = 0;
+    for (const tab of TABELAS_ESTACAO) {
+      let linhas: Array<Record<string, unknown>> = [];
+      try { linhas = dbGetAll(tab) as Array<Record<string, unknown>>; } catch { continue; }
+      for (const row of linhas) {
+        let melhorMs = 0;
+        for (const campo of CAMPOS_DATA) {
+          const v = row[campo];
+          if (!v) continue;
+          const ms = new Date(String(v)).getTime();
+          if (!isNaN(ms) && ms > melhorMs) melhorMs = ms;
+        }
+        if (melhorMs <= 0) continue;
+        if (melhorMs > ultimaMs) ultimaMs = melhorMs;
+        if (agoraMs - melhorMs <= seteDiasMs) novosNaSemana++;
+      }
+    }
+
     const stats = {
       skills: safeCount('Skills'),
       snippets: safeCount('Snippets'),
@@ -23967,6 +24016,8 @@ function getAtelierStats(): ServerResult {
       receituario: safeCount('Receituario'),
       hospedagem: safeCount('Provedores'),
       cofre: safeCount('Cofre'),
+      ultimaAtividade: ultimaMs > 0 ? new Date(ultimaMs).toISOString() : '',
+      novosNaSemana,
     };
     return { ok: true, data: stats };
   } catch (e: unknown) {
