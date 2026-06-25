@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Tooltip, Drawer } from 'antd';
+import { Drawer } from 'antd';
 import {
   BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat,
   CheckCircle2, Circle, ArrowRight, Sparkles, Compass, Flame, Trophy,
-  Layers, Boxes, Target,
+  Layers, Crown, Activity,
 } from 'lucide-react';
 import { useTokens, useForja } from '../themeContext';
 import { FONTS } from '../theme';
@@ -265,6 +265,14 @@ export default function AtelierGuia({ irPara }: AtelierGuiaProps): React.ReactEl
   const estacoesAtivas = stats ? CARDS.filter((c) => c.contagem(stats) > 0).length : 0;
   const noContextoIA = stats ? stats.codexNaIa : 0;
   const dash = carregando ? '—' : undefined;
+  // Estação mais cheia (ranking simples por contagem).
+  const topEstacao = stats
+    ? CARDS.map((c) => ({ titulo: c.titulo, n: c.contagem(stats) })).sort((a, b) => b.n - a.n)[0]
+    : null;
+  const temTop = !!topEstacao && topEstacao.n > 0;
+  // Cobertura da IA: % dos padrões do Códex marcados como "incluir em IA".
+  const coberturaIA = stats && stats.codex > 0 ? Math.round((stats.codexNaIa / stats.codex) * 100) : 0;
+  const pctAtivas = Math.round((estacoesAtivas / CARDS.length) * 100);
 
   return (
     <div style={{ padding: 24 }}>
@@ -295,153 +303,48 @@ export default function AtelierGuia({ irPara }: AtelierGuiaProps): React.ReactEl
         </div>
       </div>
 
-      {/* ─── Indicadores ─────────────────────────────────────────────────────
-          Painel de KPIs derivados das estações — a "cara" da landing agora. */}
+      {/* ─── Indicadores numéricos ───────────────────────────────────────── */}
       <div style={{
         display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-        gap: 14, marginBottom: 28,
+        gap: 14, marginBottom: 14,
       }}>
         <Kpi t={t} cor={peach} icon={<Layers size={18} strokeWidth={1.7} />}
           valor={dash ?? String(totalItens)} label="itens no total" sub="somando as 8 estações" />
-        <Kpi t={t} cor={sage} icon={<Boxes size={18} strokeWidth={1.7} />}
-          valor={dash ?? `${estacoesAtivas}/${CARDS.length}`} label="estações ativas" sub="já com conteúdo" />
         <Kpi t={t} cor={t.accents.lavender} icon={<Sparkles size={18} strokeWidth={1.7} />}
           valor={dash ?? String(noContextoIA)} label="no contexto da IA" sub="padrões do Códex" />
-        <Kpi t={t} cor={completo ? sage : t.accents.clay}
-          icon={completo ? <Trophy size={18} strokeWidth={1.7} /> : <Target size={18} strokeWidth={1.7} />}
-          valor={dash ?? `${feitos}/${CHECKLIST.length}`} label="setup" sub={completo ? 'tudo pronto' : 'passos feitos'}
-          progresso={progressoPct} destaque={completo} onClick={() => setGuiaOpen(true)} />
+        <Kpi t={t} cor={t.accents.clay} icon={<Crown size={18} strokeWidth={1.7} />}
+          valor={dash ?? (temTop ? String(topEstacao!.n) : '0')}
+          label={temTop ? `top: ${topEstacao!.titulo}` : 'estação mais cheia'}
+          sub={temTop ? 'mais itens guardados' : 'sem itens ainda'} />
       </div>
 
-      {/* ─── Cabeçalho da grade de estações ──────────────────────────────── */}
-      <div style={{ marginBottom: 16 }}>
-        <div style={{
-          fontFamily: FONTS.display, fontSize: 15.5, fontWeight: 500, color: t.text,
-          marginBottom: 3,
-        }}>
-          As 8 estações do Atelier
-        </div>
-        <div style={{
-          fontFamily: FONTS.ui, fontSize: 12.5, color: t.textTertiary,
-        }}>
-          Cada card abre a estação correspondente. Comece pelo que faz mais sentido agora.
-        </div>
-      </div>
-
-      {/* ─── Grade de cards (amostragem compacta das estações) ───────────────
-          Cada card é uma "amostra" da estação: ícone, contagem, o que é e CTA.
-          O "quando usar" e o passo-a-passo completo vivem dentro de cada estação
-          (e aparecem no tooltip), pra a landing não ficar densa demais. */}
+      {/* ─── Saúde do Atelier (gauges redondos) ──────────────────────────────
+          Métricas de razão viram anéis — brinca com a forma circular sem
+          inventar dado: tudo derivado das contagens reais. */}
       <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 256px), 1fr))',
-        gap: 16,
+        borderRadius: 14, border: `1px solid ${t.borderSoft}`, background: t.surfaceMuted,
+        padding: '18px 18px 20px', marginBottom: 22,
       }}>
-        {CARDS.map((c) => {
-          const accent = t.accents[c.accent];
-          const n = stats ? c.contagem(stats) : 0;
-          const rotulo = `${n} ${c.rotuloContagem}${n === 1 ? '' : 's'}`;
-          const vazio = n === 0;
-          return (
-            <Tooltip
-              key={c.tab}
-              placement="top"
-              mouseEnterDelay={0.35}
-              title={<span style={{ fontFamily: FONTS.ui, fontSize: 12 }}><strong>Quando usar:</strong> {c.quandoUsar}</span>}
-            >
-              <button
-                onClick={() => irPara(c.tab)}
-                style={{
-                  display: 'flex', flexDirection: 'column',
-                  padding: '14px 16px', borderRadius: 14,
-                  background: t.surface,
-                  border: `1px solid ${t.borderSoft}`,
-                  cursor: 'pointer', textAlign: 'left', height: '100%',
-                  transition: 'border-color 0.18s, transform 0.18s, box-shadow 0.18s',
-                  position: 'relative',
-                  overflow: 'hidden',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = `${accent}66`;
-                  e.currentTarget.style.transform = 'translateY(-1px)';
-                  e.currentTarget.style.boxShadow = t.shadowSoft;
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = t.borderSoft;
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = 'none';
-                }}
-              >
-                {/* Faixa de accent fininha no topo */}
-                <div style={{
-                  position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-                  background: accent, opacity: 0.6,
-                }} />
-
-                {/* Header: ícone + título + contagem */}
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8,
-                }}>
-                  <div style={{
-                    width: 34, height: 34, borderRadius: 10,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    background: `${accent}1A`, color: accent,
-                    flexShrink: 0,
-                  }}>
-                    {c.icon}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{
-                      fontFamily: FONTS.display, fontSize: 15.5, fontWeight: 500,
-                      color: t.text, letterSpacing: '-0.005em',
-                    }}>
-                      {c.titulo}
-                    </div>
-                    <div style={{
-                      fontFamily: FONTS.mono, fontSize: 10.5,
-                      color: vazio ? t.textTertiary : accent,
-                      marginTop: 1, letterSpacing: 0.3,
-                    }}>
-                      {carregando ? '—' : rotulo}
-                    </div>
-                  </div>
-                </div>
-
-                {/* O que é (curto, limitado a 3 linhas) */}
-                <div style={{
-                  fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary,
-                  lineHeight: 1.5, marginBottom: 12, flex: 1,
-                  display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-                }}>
-                  {c.oQueE}
-                </div>
-
-                {/* CTA + badge "vazio" */}
-                <div style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-                }}>
-                  <span style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 5,
-                    fontFamily: FONTS.ui, fontSize: 12, fontWeight: 500, color: accent,
-                  }}>
-                    Abrir {c.titulo}
-                    <ArrowRight size={13} strokeWidth={2} />
-                  </span>
-                  {!carregando && vazio && (
-                    <span style={{
-                      fontFamily: FONTS.mono, fontSize: 9, letterSpacing: 0.4,
-                      color: t.textTertiary, background: t.surfaceMuted,
-                      border: `1px solid ${t.borderSoft}`, borderRadius: 999, padding: '1px 7px',
-                    }}>
-                      vazio
-                    </span>
-                  )}
-                </div>
-              </button>
-            </Tooltip>
-          );
-        })}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16,
+          fontFamily: FONTS.display, fontSize: 14.5, fontWeight: 500, color: t.text,
+        }}>
+          <Activity size={15} strokeWidth={1.8} style={{ color: sage }} />
+          Saúde do Atelier
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14, justifyItems: 'center' }}>
+          <GaugeRing t={t} cor={completo ? sage : t.accents.clay} pct={carregando ? 0 : progressoPct}
+            centro={`${feitos}/${CHECKLIST.length}`} label="Setup" sub={completo ? 'tudo pronto' : 'recomendado'}
+            onClick={() => setGuiaOpen(true)} />
+          <GaugeRing t={t} cor={t.accents.blue} pct={carregando ? 0 : pctAtivas}
+            centro={`${estacoesAtivas}/${CARDS.length}`} label="Estações ativas" sub="com conteúdo" />
+          <GaugeRing t={t} cor={t.accents.lavender} pct={carregando ? 0 : coberturaIA}
+            centro={`${coberturaIA}%`} label="Cobertura da IA" sub="padrões na IA" />
+        </div>
       </div>
+
+      {/* As 8 estações agora vivem no Guia (botão flutuante → Drawer), como
+          atalhos. A Visão geral fica só com os indicadores. */}
 
       {/* ─── Rodapé com dica de versionamento ────────────────────────────── */}
       <div style={{
@@ -560,6 +463,28 @@ export default function AtelierGuia({ irPara }: AtelierGuiaProps): React.ReactEl
             />
           ))}
         </div>
+
+        {/* ─── Atalhos das 8 estações ─────────────────────────────────────── */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, margin: '20px 0 8px',
+          fontFamily: FONTS.display, fontSize: 14, fontWeight: 500, color: t.text,
+        }}>
+          <Compass size={15} strokeWidth={1.7} style={{ color: t.accents.lavender }} />
+          As 8 estações
+        </div>
+        <div style={{ display: 'grid', gap: 4 }}>
+          {CARDS.map((c) => (
+            <EstacaoLauncher
+              key={c.tab}
+              card={c}
+              n={stats ? c.contagem(stats) : 0}
+              carregando={carregando}
+              t={t}
+              mode={mode}
+              onClick={() => { setGuiaOpen(false); irPara(c.tab); }}
+            />
+          ))}
+        </div>
       </Drawer>
     </div>
   );
@@ -645,6 +570,78 @@ function Kpi({ t, cor, icon, valor, label, sub, progresso, destaque, onClick }: 
           <div style={{ width: `${progresso}%`, height: '100%', background: cor, transition: 'width .4s ease' }} />
         </div>
       )}
+    </button>
+  );
+}
+
+// Gauge circular (anel de progresso) — a "forma redonda" dos indicadores.
+function GaugeRing({ t, cor, pct, centro, label, sub, onClick }: {
+  t: ForjaTokens; cor: string; pct: number; centro: string; label: string; sub: string; onClick?: () => void;
+}): React.ReactElement {
+  const size = 104; const stroke = 9;
+  const r = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
+  const p = Math.max(0, Math.min(100, pct));
+  const off = circ * (1 - p / 100);
+  const clicavel = !!onClick;
+  return (
+    <div
+      onClick={onClick}
+      role={clicavel ? 'button' : undefined}
+      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 9, cursor: clicavel ? 'pointer' : 'default' }}
+    >
+      <div style={{ position: 'relative', width: size, height: size }}>
+        <svg width={size} height={size}>
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={t.borderSoft} strokeWidth={stroke} />
+          <circle
+            cx={size / 2} cy={size / 2} r={r} fill="none" stroke={cor} strokeWidth={stroke} strokeLinecap="round"
+            strokeDasharray={circ} strokeDashoffset={off}
+            transform={`rotate(-90 ${size / 2} ${size / 2})`}
+            style={{ transition: 'stroke-dashoffset .7s cubic-bezier(0.22,1,0.36,1)' }}
+          />
+        </svg>
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <span style={{ fontFamily: FONTS.display, fontSize: 19, fontWeight: 600, color: t.text, lineHeight: 1, letterSpacing: '-0.01em' }}>{centro}</span>
+        </div>
+      </div>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: 500, color: t.textSecondary }}>{label}</div>
+        <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginTop: 1 }}>{sub}</div>
+      </div>
+    </div>
+  );
+}
+
+// Atalho compacto de estação (dentro do Drawer do guia).
+function EstacaoLauncher({ card, n, carregando, t, mode, onClick }: {
+  card: CardEstacao; n: number; carregando: boolean; t: ForjaTokens; mode: 'luz' | 'noturno'; onClick: () => void;
+}): React.ReactElement {
+  const accent = t.accents[card.accent];
+  const rotulo = `${n} ${card.rotuloContagem}${n === 1 ? '' : 's'}`;
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 11,
+        padding: '9px 10px', borderRadius: 10,
+        border: 'none', cursor: 'pointer', textAlign: 'left',
+        background: 'transparent', transition: 'background .18s',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = mode === 'luz' ? '#00000008' : '#FFFFFF0A'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+    >
+      <span style={{
+        width: 30, height: 30, borderRadius: 9, flexShrink: 0,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        background: `${accent}1A`, color: accent,
+      }}>
+        {card.icon}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontFamily: FONTS.ui, fontSize: 13.5, fontWeight: 500, color: t.text }}>{card.titulo}</div>
+        <div style={{ fontFamily: FONTS.mono, fontSize: 10.5, color: n ? accent : t.textTertiary, marginTop: 1, letterSpacing: 0.3 }}>{carregando ? '—' : rotulo}</div>
+      </div>
+      <ArrowRight size={14} strokeWidth={1.7} style={{ color: t.textTertiary, flexShrink: 0 }} />
     </button>
   );
 }
