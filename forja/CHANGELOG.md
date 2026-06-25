@@ -36,6 +36,27 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.179.0] — 2026-06-25
+
+### Melhorado — Atelier com mais respiro: guia vira botão flutuante
+
+Feedback: a landing ficou empilhada e sem respiro. Ajustes:
+
+- **Guia saiu do fluxo da página** e virou um **botão flutuante** (canto inferior
+  direito, acima do assistente) que abre um **Drawer lateral** com a explicação +
+  setup recomendado. Enquanto o setup não está 5/5, o botão mostra um selo com os
+  passos que faltam; ao completar, vira troféu.
+- A página agora respira: **header enxuto → indicadores → grade das estações**,
+  com mais espaçamento (gaps e cards maiores).
+- O KPI de **setup** também abre o guia ao clicar.
+
+### Detalhes técnicos — 1.179.0
+
+- `components/AtelierGuia.tsx`: painel inline do guia removido; novo botão fixo +
+  `Drawer` (antd) reaproveitando `ChecklistRow`. Espaçamentos da grade ampliados.
+
+---
+
 ## [1.178.0] — 2026-06-25
 
 ### Melhorado — Landing do Atelier vira painel de indicadores
