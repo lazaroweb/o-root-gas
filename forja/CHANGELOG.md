@@ -36,6 +36,30 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.169.0] — 2026-06-25
+
+### Adicionado — Credenciais de cobrança/NFS-e por empresa
+
+Cada empresa (CNPJ) passa a ter sua **própria conta de cobrança** e config fiscal:
+
+- **PSP por empresa**: chave do Asaas/Mercado Pago, ambiente e **webhook token**
+  são por empresa. Configure a empresa A e a empresa B com contas diferentes.
+- **NFS-e por empresa**: descrição do serviço, código municipal, ISS etc. por CNPJ.
+- **Webhook multi-conta**: o `doPost` identifica de qual empresa é o token recebido
+  e resolve as credenciais certas pra dar baixa (inclusive consulta no Mercado Pago).
+- **Compatibilidade**: a config global anterior vira fallback — a empresa padrão
+  herda o que já estava configurado, sem quebrar a cobrança existente.
+
+### Detalhes técnicos — 1.169.0
+
+- `server.ts`: `_spEmpresaGet/_spEmpresaSet` (chave `<KEY>__<empresaId>` com fallback
+  global) + `_pspEmpresaOverride` pro contexto de webhook; `_pspConfig` e
+  `_nfseConfig` resolvidos por empresa; `cobrancaConfigSalvar`/`nfseConfigSalvar`
+  gravam por empresa; `_webhookEmpresaPorToken` + `doPost` multi-conta; dedup do OFX
+  escopado por empresa.
+
+---
+
 ## [1.168.0] — 2026-06-25
 
 ### Adicionado — Meu Imposto de Renda (IRPF) na aba Pessoal

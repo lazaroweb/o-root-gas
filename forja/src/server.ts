@@ -4365,20 +4365,52 @@ interface PspConfig {
   webhookToken: string;
 }
 
-function _pspConfig(): PspConfig {
+// Multi-empresa: cada empresa tem suas próprias credenciais de PSP/fiscais. Os
+// segredos ficam por empresa em `<CHAVE>__<empresaId>`, com FALLBACK pra a chave
+// global legada (config de antes do multi-empresa) — assim nada quebra: a empresa
+// padrão herda a config existente até você configurar cada CNPJ separadamente.
+// Durante o webhook (sem sessão de UI), `_pspEmpresaOverride` fixa a empresa cujo
+// token validou, pra resolver a chave certa do provedor.
+let _pspEmpresaOverride = '';
+function _pspEmpresaId(): string { return _pspEmpresaOverride || _empresaParaCriarId(); }
+
+function _spEmpresaGet(key: string): string {
   const sp = PropertiesService.getScriptProperties();
-  const env = sp.getProperty('PSP_ENV') === 'producao' ? 'producao' : 'sandbox';
-  const provider = sp.getProperty('PSP_PROVIDER') === 'mercadopago' ? 'mercadopago' : 'asaas';
-  const asaasKey = sp.getProperty('PSP_ASAAS_KEY') || '';
-  const mpKey = sp.getProperty('PSP_MP_KEY') || '';
+  const id = _pspEmpresaId();
+  if (id) { const v = sp.getProperty(`${key}__${id}`); if (v !== null && v !== undefined && v !== '') return v; }
+  return sp.getProperty(key) || '';
+}
+function _spEmpresaSet(key: string, value: string): void {
+  const sp = PropertiesService.getScriptProperties();
+  const id = _pspEmpresaId();
+  sp.setProperty(id ? `${key}__${id}` : key, value);
+}
+
+function _pspConfig(): PspConfig {
+  const env = _spEmpresaGet('PSP_ENV') === 'producao' ? 'producao' : 'sandbox';
+  const provider = _spEmpresaGet('PSP_PROVIDER') === 'mercadopago' ? 'mercadopago' : 'asaas';
+  const asaasKey = _spEmpresaGet('PSP_ASAAS_KEY');
+  const mpKey = _spEmpresaGet('PSP_MP_KEY');
   return {
     provider,
     apiKey: provider === 'mercadopago' ? mpKey : asaasKey,
     asaasKey,
     mpKey,
     env,
-    webhookToken: sp.getProperty('PSP_WEBHOOK_TOKEN') || '',
+    webhookToken: _spEmpresaGet('PSP_WEBHOOK_TOKEN'),
   };
+}
+
+// Encontra a empresa dona de um webhook token (ou '' = legado/global).
+function _webhookEmpresaPorToken(token: string): { ok: boolean; empresaId: string } {
+  if (!token) return { ok: false, empresaId: '' };
+  const sp = PropertiesService.getScriptProperties();
+  for (const e of _empresasAll()) {
+    const id = String(e['id']);
+    if (sp.getProperty(`PSP_WEBHOOK_TOKEN__${id}`) === token) return { ok: true, empresaId: id };
+  }
+  if (sp.getProperty('PSP_WEBHOOK_TOKEN') === token) return { ok: true, empresaId: '' };
+  return { ok: false, empresaId: '' };
 }
 
 // ─── Adapter ASAAS ─────────────────────────────────────────────────────────────
@@ -4684,19 +4716,18 @@ function cobrancaConfigGet(): ServerResult {
 
 function cobrancaConfigSalvar(payload: Record<string, unknown>): ServerResult {
   try {
-    const sp = PropertiesService.getScriptProperties();
     const p = payload || {};
     const provider = String(p.provider) === 'mercadopago' ? 'mercadopago' : 'asaas';
-    sp.setProperty('PSP_PROVIDER', provider);
-    if (p.env !== undefined) sp.setProperty('PSP_ENV', String(p.env) === 'producao' ? 'producao' : 'sandbox');
+    _spEmpresaSet('PSP_PROVIDER', provider);
+    if (p.env !== undefined) _spEmpresaSet('PSP_ENV', String(p.env) === 'producao' ? 'producao' : 'sandbox');
     // Só sobrescreve a chave se vier uma nova não-mascarada — grava na chave do provedor selecionado.
     const novaChave = String(p.apiKey || '').trim();
     if (novaChave && novaChave.indexOf('••') < 0) {
-      sp.setProperty(provider === 'mercadopago' ? 'PSP_MP_KEY' : 'PSP_ASAAS_KEY', novaChave);
+      _spEmpresaSet(provider === 'mercadopago' ? 'PSP_MP_KEY' : 'PSP_ASAAS_KEY', novaChave);
     }
-    // Garante um webhook token (gera se não existir).
-    let token = sp.getProperty('PSP_WEBHOOK_TOKEN') || '';
-    if (!token) { token = Utilities.getUuid().replace(/-/g, ''); sp.setProperty('PSP_WEBHOOK_TOKEN', token); }
+    // Garante um webhook token POR EMPRESA (gera se não existir).
+    let token = _pspConfig().webhookToken;
+    if (!token) { token = Utilities.getUuid().replace(/-/g, ''); _spEmpresaSet('PSP_WEBHOOK_TOKEN', token); }
     return cobrancaConfigGet();
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar config' };
@@ -5218,7 +5249,7 @@ function importarOFX(conteudo: string, banco?: string): ServerResult {
   try {
     const txs = _parseOFX(conteudo);
     if (txs.length === 0) return { ok: false, error: 'Nenhuma transação encontrada. Confira se o arquivo é um OFX válido.' };
-    const existentes = dbGetAll('ConciliacaoTransacoes') as Array<Record<string, unknown>>;
+    const existentes = _filtraEmpresa(dbGetAll('ConciliacaoTransacoes') as Array<Record<string, unknown>>);
     const fitids: Record<string, boolean> = {};
     const chaves: Record<string, boolean> = {};
     for (const e of existentes) {
@@ -5376,7 +5407,7 @@ interface NfseConfig {
 
 function _nfseConfig(): NfseConfig {
   try {
-    const raw = PropertiesService.getScriptProperties().getProperty('NFSE_CFG');
+    const raw = _spEmpresaGet('NFSE_CFG');
     const p = raw ? JSON.parse(raw) : {};
     return {
       serviceDescription: String(p.serviceDescription || ''),
@@ -5416,7 +5447,7 @@ function nfseConfigSalvar(payload: Record<string, unknown>): ServerResult {
       observations: p['observations'] !== undefined ? String(p['observations'] || '') : atual.observations,
       autoAuthorize: p['autoAuthorize'] !== undefined ? !!p['autoAuthorize'] : atual.autoAuthorize,
     };
-    PropertiesService.getScriptProperties().setProperty('NFSE_CFG', JSON.stringify(novo));
+    _spEmpresaSet('NFSE_CFG', JSON.stringify(novo));
     return nfseConfigGet();
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar config NFS-e' };
@@ -23490,9 +23521,12 @@ function doPost(e: GoogleAppsScript.Events.DoPost): GoogleAppsScript.Content.Tex
   const out = (obj: Record<string, unknown>): GoogleAppsScript.Content.TextOutput =>
     ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
   try {
-    const cfg = _pspConfig();
     const token = (e && e.parameter && e.parameter.token) ? String(e.parameter.token) : '';
-    if (!cfg.webhookToken || token !== cfg.webhookToken) return out({ ok: false, error: 'unauthorized' });
+    // Multi-empresa: o token pode ser de qualquer empresa. Identifica a dona e fixa
+    // o contexto pra resolver as credenciais certas do provedor (ex.: MP fetch).
+    const dono = _webhookEmpresaPorToken(token);
+    if (!dono.ok) return out({ ok: false, error: 'unauthorized' });
+    _pspEmpresaOverride = dono.empresaId;
 
     const raw = e && e.postData && e.postData.contents ? e.postData.contents : '{}';
     let body: Record<string, unknown> = {};
