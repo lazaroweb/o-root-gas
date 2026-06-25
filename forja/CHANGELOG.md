@@ -36,6 +36,27 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.177.0] — 2026-06-25
+
+### Melhorado — Atelier mais vivo + Setup que colapsa ao completar
+
+- **Setup recomendado** agora **colapsa** quando você cumpre os 5 passos: vira
+  um cartão comemorativo enxuto ("Setup completo · 5/5") com troféu, em vez de
+  ocupar a tela com a lista toda. Dá pra **reabrir** pra revisar os passos.
+- **Bônus de vida na estação**:
+  - Saudação por horário do dia ("Bom dia/Boa tarde/Boa noite") na boas-vindas.
+  - Ícone de boas-vindas com leve flutuação; ao completar, vira a **brasa**
+    (chama) e o cartão de conclusão ganha troféu com anel de brilho pulsante.
+  - Texto de boas-vindas muda pra um tom de "tudo no ponto" quando 5/5.
+
+### Detalhes técnicos — 1.177.0
+
+- `components/AtelierGuia.tsx`: estado `setupAberto` (auto-colapsa quando
+  `feitos === total`), componente `ChecklistRow` reutilizável, animações CSS
+  (`forjaFloat`, `forjaGlowRing`, `forjaPop`).
+
+---
+
 ## [1.176.0] — 2026-06-25
 
 ### Adicionado — Indicador global de carregamento

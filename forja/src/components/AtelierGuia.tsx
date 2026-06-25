@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Spin, Tooltip } from 'antd';
 import {
   BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat,
-  CheckCircle2, Circle, ArrowRight, Sparkles, Compass,
+  CheckCircle2, Circle, ArrowRight, Sparkles, Compass, Flame, ChevronDown, Trophy,
 } from 'lucide-react';
 import { useTokens, useForja } from '../themeContext';
 import { FONTS } from '../theme';
+import type { ForjaTokens } from '../theme';
 import callServer from '../gas-client';
 import type { ServerResult } from '../types';
 import type { AtelierTab } from '../views/Atelier';
@@ -245,9 +246,30 @@ export default function AtelierGuia({ irPara }: AtelierGuiaProps): React.ReactEl
 
   const feitos = stats ? CHECKLIST.filter((c) => c.feito(stats)).length : 0;
   const progressoPct = stats ? Math.round((feitos / CHECKLIST.length) * 100) : 0;
+  const completo = !!stats && feitos === CHECKLIST.length;
+
+  // Setup completo → colapsa o módulo (mostra só o 5/5). O user pode reabrir pra
+  // revisar. Assim que os stats chegam, ajustamos uma vez; depois é manual.
+  const [setupAberto, setSetupAberto] = useState(false);
+  const ajustadoRef = useRef(false);
+  useEffect(() => {
+    if (stats && !ajustadoRef.current) { setSetupAberto(!completo); ajustadoRef.current = true; }
+  }, [stats, completo]);
+
+  // Toque "vivo": saudação por horário do dia.
+  const hora = new Date().getHours();
+  const saudacao = hora < 12 ? 'Bom dia' : hora < 18 ? 'Boa tarde' : 'Boa noite';
+  const peach = t.accents.peach;
+  const sage = t.accents.sage;
 
   return (
     <div style={{ padding: 24 }}>
+      <style>{`
+        @keyframes forjaFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+        @keyframes forjaGlowRing{0%,100%{box-shadow:0 0 0 0 ${sage}00}50%{box-shadow:0 0 0 7px ${sage}26}}
+        @keyframes forjaPop{0%{transform:scale(.55);opacity:0}60%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
+        @keyframes forjaShimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+      `}</style>
       {/* ─── Bloco de boas-vindas ────────────────────────────────────────── */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 14,
@@ -261,125 +283,145 @@ export default function AtelierGuia({ irPara }: AtelierGuiaProps): React.ReactEl
         <div style={{
           width: 40, height: 40, borderRadius: 12,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: `${t.accents.peach}1A`,
-          color: t.accents.peach,
+          background: `${peach}1A`,
+          color: peach,
           flexShrink: 0,
+          animation: 'forjaFloat 4.5s ease-in-out infinite',
         }}>
-          <Compass size={20} strokeWidth={1.7} />
+          {completo ? <Flame size={20} strokeWidth={1.7} /> : <Compass size={20} strokeWidth={1.7} />}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
             fontFamily: FONTS.display, fontSize: 18, fontWeight: 500,
             color: t.text, marginBottom: 2, letterSpacing: '-0.01em',
           }}>
-            Bem-vindo ao seu Atelier
+            {completo ? 'Seu Atelier está no ponto' : `${saudacao} — bem-vindo ao seu Atelier`}
           </div>
           <div style={{
             fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary,
             lineHeight: 1.5, maxWidth: 720,
           }}>
-            Sua bancada de vibe coder: padrões, skills, receitas, snippets, provedores
-            e segredos — tudo num lugar só. Use o guia pra descobrir por onde começar.
+            {completo
+              ? 'Tudo configurado: a IA tem o seu contexto, suas receitas e padrões estão à mão e seus segredos protegidos. Agora é só forjar.'
+              : 'Sua bancada de vibe coder: padrões, skills, receitas, snippets, provedores e segredos — tudo num lugar só. Use o guia pra descobrir por onde começar.'}
           </div>
         </div>
       </div>
 
-      {/* ─── Checklist de setup recomendado ──────────────────────────────── */}
-      <div style={{
-        padding: '16px 20px', borderRadius: 14,
-        background: t.surfaceMuted,
-        border: `1px solid ${t.borderSoft}`,
-        marginBottom: 18,
-      }}>
+      {/* ─── Setup recomendado ───────────────────────────────────────────────
+          Enquanto não está 5/5, mostra o checklist completo. Ao completar,
+          colapsa num cartão comemorativo (só o 5/5), reabrível pra revisar. */}
+      {completo ? (
         <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          marginBottom: 14,
+          borderRadius: 14, marginBottom: 18, overflow: 'hidden',
+          border: `1px solid ${sage}55`,
+          background: mode === 'luz'
+            ? `linear-gradient(135deg, ${sage}14 0%, ${sage}08 100%)`
+            : `linear-gradient(135deg, ${sage}1f 0%, ${sage}0d 100%)`,
         }}>
-          <div>
+          <button
+            onClick={() => setSetupAberto((v) => !v)}
+            style={{
+              width: '100%', display: 'flex', alignItems: 'center', gap: 14,
+              padding: '14px 18px', border: 'none', background: 'transparent',
+              cursor: 'pointer', textAlign: 'left',
+            }}
+          >
             <div style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              fontFamily: FONTS.display, fontSize: 15, fontWeight: 500, color: t.text,
+              width: 40, height: 40, borderRadius: 12, flexShrink: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: `${sage}22`, color: sage,
+              animation: 'forjaPop .5s ease both, forjaGlowRing 2.8s ease-in-out infinite',
             }}>
-              <Sparkles size={15} strokeWidth={1.7} style={{ color: t.accents.sage }} />
-              Setup recomendado
+              <Trophy size={20} strokeWidth={1.7} />
             </div>
-            <div style={{
-              fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary,
-              marginTop: 2,
-            }}>
-              5 passos pra deixar o Atelier no ponto. Não precisa ser hoje.
-            </div>
-          </div>
-          {carregando ? (
-            <Spin size="small" />
-          ) : (
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 10,
-              fontFamily: FONTS.mono, fontSize: 11, color: t.textSecondary,
-            }}>
-              <span>{feitos}/{CHECKLIST.length}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{
-                width: 110, height: 6, borderRadius: 999,
-                background: t.borderSoft, overflow: 'hidden',
+                display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                fontFamily: FONTS.display, fontSize: 15.5, fontWeight: 500, color: t.text,
               }}>
-                <div style={{
-                  width: `${progressoPct}%`, height: '100%',
-                  background: t.accents.sage,
-                  transition: 'width 0.4s ease',
-                }} />
+                Setup completo
+                <span style={{
+                  fontFamily: FONTS.mono, fontSize: 11, color: sage,
+                  background: `${sage}1f`, border: `1px solid ${sage}55`,
+                  borderRadius: 999, padding: '1px 9px', letterSpacing: 0.4,
+                }}>
+                  {feitos}/{CHECKLIST.length} completo
+                </span>
               </div>
+              <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, marginTop: 2 }}>
+                Seu Atelier está no ponto. {setupAberto ? 'Toque pra recolher.' : 'Toque pra revisar os passos.'}
+              </div>
+            </div>
+            <ChevronDown
+              size={18} strokeWidth={1.8}
+              style={{ color: t.textTertiary, flexShrink: 0, transition: 'transform .2s', transform: setupAberto ? 'rotate(180deg)' : 'none' }}
+            />
+          </button>
+
+          {setupAberto && (
+            <div style={{ padding: '0 14px 12px', display: 'grid', gap: 6 }}>
+              {CHECKLIST.map((c) => (
+                <ChecklistRow key={c.id} item={c} feito={stats ? c.feito(stats) : false} t={t} mode={mode} onClick={() => irPara(c.irPara)} />
+              ))}
             </div>
           )}
         </div>
-
-        <div style={{ display: 'grid', gap: 6 }}>
-          {CHECKLIST.map((c) => {
-            const feito = stats ? c.feito(stats) : false;
-            return (
-              <button
-                key={c.id}
-                onClick={() => irPara(c.irPara)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 12,
-                  padding: '10px 12px', borderRadius: 10,
-                  border: 'none', cursor: 'pointer', textAlign: 'left',
-                  background: 'transparent',
-                  transition: 'background 0.18s',
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = mode === 'luz' ? '#FFFFFF80' : '#26282C80'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-              >
-                <span style={{
-                  display: 'inline-flex',
-                  color: feito ? t.accents.sage : t.textTertiary,
-                  flexShrink: 0,
+      ) : (
+        <div style={{
+          padding: '16px 20px', borderRadius: 14,
+          background: t.surfaceMuted,
+          border: `1px solid ${t.borderSoft}`,
+          marginBottom: 18,
+        }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            marginBottom: 14,
+          }}>
+            <div>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                fontFamily: FONTS.display, fontSize: 15, fontWeight: 500, color: t.text,
+              }}>
+                <Sparkles size={15} strokeWidth={1.7} style={{ color: sage }} />
+                Setup recomendado
+              </div>
+              <div style={{
+                fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary,
+                marginTop: 2,
+              }}>
+                5 passos pra deixar o Atelier no ponto. Não precisa ser hoje.
+              </div>
+            </div>
+            {carregando ? (
+              <Spin size="small" />
+            ) : (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                fontFamily: FONTS.mono, fontSize: 11, color: t.textSecondary,
+              }}>
+                <span>{feitos}/{CHECKLIST.length}</span>
+                <div style={{
+                  width: 110, height: 6, borderRadius: 999,
+                  background: t.borderSoft, overflow: 'hidden',
                 }}>
-                  {feito
-                    ? <CheckCircle2 size={18} strokeWidth={1.8} />
-                    : <Circle size={18} strokeWidth={1.6} />}
-                </span>
-                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{
-                    fontFamily: FONTS.ui, fontSize: 13.5, fontWeight: 500,
-                    color: feito ? t.textSecondary : t.text,
-                    textDecoration: feito ? 'line-through' : 'none',
-                    textDecorationColor: t.textTertiary,
-                  }}>
-                    {c.titulo}
-                  </div>
-                  <div style={{
-                    fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary,
-                    marginTop: 1,
-                  }}>
-                    {c.descricao}
-                  </div>
+                    width: `${progressoPct}%`, height: '100%',
+                    background: sage,
+                    transition: 'width 0.4s ease',
+                  }} />
                 </div>
-                <ArrowRight size={14} strokeWidth={1.6} style={{ color: t.textTertiary, flexShrink: 0 }} />
-              </button>
-            );
-          })}
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'grid', gap: 6 }}>
+            {CHECKLIST.map((c) => (
+              <ChecklistRow key={c.id} item={c} feito={stats ? c.feito(stats) : false} t={t} mode={mode} onClick={() => irPara(c.irPara)} />
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* ─── Cabeçalho da grade de estações ──────────────────────────────── */}
       <div style={{ marginBottom: 12 }}>
@@ -528,6 +570,42 @@ export default function AtelierGuia({ irPara }: AtelierGuiaProps): React.ReactEl
         </div>
       </div>
     </div>
+  );
+}
+
+// Linha do checklist (reusada nos dois estados: aberto e completo-expandido).
+function ChecklistRow({ item, feito, t, mode, onClick }: {
+  item: ChecklistItem; feito: boolean; t: ForjaTokens; mode: 'luz' | 'noturno'; onClick: () => void;
+}): React.ReactElement {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 12,
+        padding: '10px 12px', borderRadius: 10,
+        border: 'none', cursor: 'pointer', textAlign: 'left',
+        background: 'transparent', transition: 'background 0.18s',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = mode === 'luz' ? '#FFFFFF80' : '#26282C80'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+    >
+      <span style={{ display: 'inline-flex', color: feito ? t.accents.sage : t.textTertiary, flexShrink: 0 }}>
+        {feito ? <CheckCircle2 size={18} strokeWidth={1.8} /> : <Circle size={18} strokeWidth={1.6} />}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{
+          fontFamily: FONTS.ui, fontSize: 13.5, fontWeight: 500,
+          color: feito ? t.textSecondary : t.text,
+          textDecoration: feito ? 'line-through' : 'none', textDecorationColor: t.textTertiary,
+        }}>
+          {item.titulo}
+        </div>
+        <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, marginTop: 1 }}>
+          {item.descricao}
+        </div>
+      </div>
+      <ArrowRight size={14} strokeWidth={1.6} style={{ color: t.textTertiary, flexShrink: 0 }} />
+    </button>
   );
 }
 
