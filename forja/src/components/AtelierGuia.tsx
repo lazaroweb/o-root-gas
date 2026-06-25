@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Spin, Tooltip } from 'antd';
+import { Tooltip } from 'antd';
 import {
   BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat,
   CheckCircle2, Circle, ArrowRight, Sparkles, Compass, Flame, ChevronDown, Trophy,
+  Layers, Boxes, Target,
 } from 'lucide-react';
 import { useTokens, useForja } from '../themeContext';
 import { FONTS } from '../theme';
@@ -262,166 +263,154 @@ export default function AtelierGuia({ irPara }: AtelierGuiaProps): React.ReactEl
   const peach = t.accents.peach;
   const sage = t.accents.sage;
 
+  // Indicadores do topo (derivados das contagens das estações).
+  const totalItens = stats ? CARDS.reduce((a, c) => a + c.contagem(stats), 0) : 0;
+  const estacoesAtivas = stats ? CARDS.filter((c) => c.contagem(stats) > 0).length : 0;
+  const noContextoIA = stats ? stats.codexNaIa : 0;
+  const dash = carregando ? '—' : undefined;
+
   return (
     <div style={{ padding: 24 }}>
       <style>{`
         @keyframes forjaFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
         @keyframes forjaGlowRing{0%,100%{box-shadow:0 0 0 0 ${sage}00}50%{box-shadow:0 0 0 7px ${sage}26}}
         @keyframes forjaPop{0%{transform:scale(.55);opacity:0}60%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
-        @keyframes forjaShimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
       `}</style>
-      {/* ─── Bloco de boas-vindas ────────────────────────────────────────── */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 14,
-        padding: '15px 18px', borderRadius: 14,
-        background: mode === 'luz'
-          ? 'linear-gradient(135deg, #FBF8F2 0%, #F5F0E5 100%)'
-          : 'linear-gradient(135deg, #1F2023 0%, #232427 100%)',
-        border: `1px solid ${t.borderSoft}`,
-        marginBottom: 18,
-      }}>
+      {/* ─── Header enxuto: saudação ─────────────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
         <div style={{
-          width: 40, height: 40, borderRadius: 12,
+          width: 38, height: 38, borderRadius: 11, flexShrink: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: `${peach}1A`,
-          color: peach,
-          flexShrink: 0,
+          background: `${peach}1A`, color: peach,
           animation: 'forjaFloat 4.5s ease-in-out infinite',
         }}>
-          {completo ? <Flame size={20} strokeWidth={1.7} /> : <Compass size={20} strokeWidth={1.7} />}
+          {completo ? <Flame size={19} strokeWidth={1.7} /> : <Compass size={19} strokeWidth={1.7} />}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
             fontFamily: FONTS.display, fontSize: 18, fontWeight: 500,
-            color: t.text, marginBottom: 2, letterSpacing: '-0.01em',
+            color: t.text, letterSpacing: '-0.01em',
           }}>
             {completo ? 'Seu Atelier está no ponto' : `${saudacao} — bem-vindo ao seu Atelier`}
           </div>
-          <div style={{
-            fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary,
-            lineHeight: 1.5, maxWidth: 720,
-          }}>
-            {completo
-              ? 'Tudo configurado: a IA tem o seu contexto, suas receitas e padrões estão à mão e seus segredos protegidos. Agora é só forjar.'
-              : 'Sua bancada de vibe coder: padrões, skills, receitas, snippets, provedores e segredos — tudo num lugar só. Use o guia pra descobrir por onde começar.'}
+          <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textTertiary, marginTop: 1 }}>
+            Um panorama da sua bancada. Precisa de instruções? Abra o guia logo abaixo.
           </div>
         </div>
       </div>
 
-      {/* ─── Setup recomendado ───────────────────────────────────────────────
-          Enquanto não está 5/5, mostra o checklist completo. Ao completar,
-          colapsa num cartão comemorativo (só o 5/5), reabrível pra revisar. */}
-      {completo ? (
-        <div style={{
-          borderRadius: 14, marginBottom: 18, overflow: 'hidden',
-          border: `1px solid ${sage}55`,
-          background: mode === 'luz'
-            ? `linear-gradient(135deg, ${sage}14 0%, ${sage}08 100%)`
-            : `linear-gradient(135deg, ${sage}1f 0%, ${sage}0d 100%)`,
-        }}>
-          <button
-            onClick={() => setSetupAberto((v) => !v)}
-            style={{
-              width: '100%', display: 'flex', alignItems: 'center', gap: 14,
-              padding: '14px 18px', border: 'none', background: 'transparent',
-              cursor: 'pointer', textAlign: 'left',
-            }}
-          >
-            <div style={{
-              width: 40, height: 40, borderRadius: 12, flexShrink: 0,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: `${sage}22`, color: sage,
-              animation: 'forjaPop .5s ease both, forjaGlowRing 2.8s ease-in-out infinite',
-            }}>
-              <Trophy size={20} strokeWidth={1.7} />
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-                fontFamily: FONTS.display, fontSize: 15.5, fontWeight: 500, color: t.text,
-              }}>
-                Setup completo
-                <span style={{
-                  fontFamily: FONTS.mono, fontSize: 11, color: sage,
-                  background: `${sage}1f`, border: `1px solid ${sage}55`,
-                  borderRadius: 999, padding: '1px 9px', letterSpacing: 0.4,
-                }}>
-                  {feitos}/{CHECKLIST.length} completo
-                </span>
-              </div>
-              <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, marginTop: 2 }}>
-                Seu Atelier está no ponto. {setupAberto ? 'Toque pra recolher.' : 'Toque pra revisar os passos.'}
-              </div>
-            </div>
-            <ChevronDown
-              size={18} strokeWidth={1.8}
-              style={{ color: t.textTertiary, flexShrink: 0, transition: 'transform .2s', transform: setupAberto ? 'rotate(180deg)' : 'none' }}
-            />
-          </button>
+      {/* ─── Indicadores ─────────────────────────────────────────────────────
+          Painel de KPIs derivados das estações — a "cara" da landing agora. */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(168px, 1fr))',
+        gap: 12, marginBottom: 18,
+      }}>
+        <Kpi t={t} cor={peach} icon={<Layers size={18} strokeWidth={1.7} />}
+          valor={dash ?? String(totalItens)} label="itens no total" sub="somando as 8 estações" />
+        <Kpi t={t} cor={sage} icon={<Boxes size={18} strokeWidth={1.7} />}
+          valor={dash ?? `${estacoesAtivas}/${CARDS.length}`} label="estações ativas" sub="já com conteúdo" />
+        <Kpi t={t} cor={t.accents.lavender} icon={<Sparkles size={18} strokeWidth={1.7} />}
+          valor={dash ?? String(noContextoIA)} label="no contexto da IA" sub="padrões do Códex" />
+        <Kpi t={t} cor={completo ? sage : t.accents.clay}
+          icon={completo ? <Trophy size={18} strokeWidth={1.7} /> : <Target size={18} strokeWidth={1.7} />}
+          valor={dash ?? `${feitos}/${CHECKLIST.length}`} label="setup" sub={completo ? 'tudo pronto' : 'passos feitos'}
+          progresso={progressoPct} destaque={completo} onClick={() => setSetupAberto((v) => !v)} />
+      </div>
 
-          {setupAberto && (
-            <div style={{ padding: '0 14px 12px', display: 'grid', gap: 6 }}>
+      {/* ─── Guia de início (compacto e recolhível) ──────────────────────────
+          O antigo "Guia" da landing virou um painel colapsável: explicação +
+          setup recomendado. Abre por padrão enquanto o setup não está 5/5; ao
+          completar, fica recolhido (e o KPI de setup mostra o troféu). */}
+      <div style={{
+        borderRadius: 14, marginBottom: 18, overflow: 'hidden',
+        border: `1px solid ${completo ? `${sage}55` : t.borderSoft}`,
+        background: completo
+          ? (mode === 'luz' ? `linear-gradient(135deg, ${sage}12 0%, ${sage}06 100%)` : `linear-gradient(135deg, ${sage}1a 0%, ${sage}0a 100%)`)
+          : t.surfaceMuted,
+      }}>
+        <button
+          onClick={() => setSetupAberto((v) => !v)}
+          style={{
+            width: '100%', display: 'flex', alignItems: 'center', gap: 12,
+            padding: '12px 16px', border: 'none', background: 'transparent',
+            cursor: 'pointer', textAlign: 'left',
+          }}
+        >
+          <div style={{
+            width: 34, height: 34, borderRadius: 10, flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: completo ? `${sage}22` : `${t.accents.lavender}1A`,
+            color: completo ? sage : t.accents.lavender,
+            ...(completo ? { animation: 'forjaGlowRing 2.8s ease-in-out infinite' } : {}),
+          }}>
+            {completo ? <Trophy size={17} strokeWidth={1.7} /> : <BookOpen size={17} strokeWidth={1.7} />}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+              fontFamily: FONTS.display, fontSize: 14.5, fontWeight: 500, color: t.text,
+            }}>
+              Guia de início
+              <span style={{
+                fontFamily: FONTS.mono, fontSize: 10.5,
+                color: completo ? sage : t.textSecondary,
+                background: completo ? `${sage}1f` : t.surface,
+                border: `1px solid ${completo ? `${sage}55` : t.borderSoft}`,
+                borderRadius: 999, padding: '1px 8px', letterSpacing: 0.3,
+              }}>
+                {completo ? 'setup completo' : `setup ${feitos}/${CHECKLIST.length}`}
+              </span>
+            </div>
+            <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, marginTop: 1 }}>
+              Como usar o Atelier e o setup recomendado. {setupAberto ? 'Toque pra recolher.' : 'Toque pra abrir.'}
+            </div>
+          </div>
+          <ChevronDown
+            size={18} strokeWidth={1.8}
+            style={{ color: t.textTertiary, flexShrink: 0, transition: 'transform .2s', transform: setupAberto ? 'rotate(180deg)' : 'none' }}
+          />
+        </button>
+
+        {setupAberto && (
+          <div style={{ padding: '0 16px 16px' }}>
+            <div style={{
+              fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, lineHeight: 1.55,
+              padding: '2px 2px 14px', borderBottom: `1px solid ${t.borderSoft}`, marginBottom: 12,
+            }}>
+              O Atelier é sua bancada de vibe coder: <strong>Códex</strong> (seus padrões),
+              <strong> Receituário</strong>, <strong>Skills</strong>, <strong>Snippets</strong>,
+              <strong> Templates</strong>, <strong>Bookmarks</strong>, <strong>Hospedagem</strong> e
+              <strong> Cofre</strong>. Marque os padrões essenciais como "incluir em IA" pra o assistente
+              falar a sua língua. Os cartões mais abaixo abrem cada estação.
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                fontFamily: FONTS.display, fontSize: 13.5, fontWeight: 500, color: t.text,
+              }}>
+                <Sparkles size={14} strokeWidth={1.7} style={{ color: sage }} />
+                Setup recomendado
+              </div>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 9,
+                fontFamily: FONTS.mono, fontSize: 11, color: t.textSecondary,
+              }}>
+                <span>{feitos}/{CHECKLIST.length}</span>
+                <div style={{ width: 96, height: 5, borderRadius: 999, background: t.borderSoft, overflow: 'hidden' }}>
+                  <div style={{ width: `${progressoPct}%`, height: '100%', background: sage, transition: 'width 0.4s ease' }} />
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gap: 4 }}>
               {CHECKLIST.map((c) => (
                 <ChecklistRow key={c.id} item={c} feito={stats ? c.feito(stats) : false} t={t} mode={mode} onClick={() => irPara(c.irPara)} />
               ))}
             </div>
-          )}
-        </div>
-      ) : (
-        <div style={{
-          padding: '16px 20px', borderRadius: 14,
-          background: t.surfaceMuted,
-          border: `1px solid ${t.borderSoft}`,
-          marginBottom: 18,
-        }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            marginBottom: 14,
-          }}>
-            <div>
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                fontFamily: FONTS.display, fontSize: 15, fontWeight: 500, color: t.text,
-              }}>
-                <Sparkles size={15} strokeWidth={1.7} style={{ color: sage }} />
-                Setup recomendado
-              </div>
-              <div style={{
-                fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary,
-                marginTop: 2,
-              }}>
-                5 passos pra deixar o Atelier no ponto. Não precisa ser hoje.
-              </div>
-            </div>
-            {carregando ? (
-              <Spin size="small" />
-            ) : (
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 10,
-                fontFamily: FONTS.mono, fontSize: 11, color: t.textSecondary,
-              }}>
-                <span>{feitos}/{CHECKLIST.length}</span>
-                <div style={{
-                  width: 110, height: 6, borderRadius: 999,
-                  background: t.borderSoft, overflow: 'hidden',
-                }}>
-                  <div style={{
-                    width: `${progressoPct}%`, height: '100%',
-                    background: sage,
-                    transition: 'width 0.4s ease',
-                  }} />
-                </div>
-              </div>
-            )}
           </div>
-
-          <div style={{ display: 'grid', gap: 6 }}>
-            {CHECKLIST.map((c) => (
-              <ChecklistRow key={c.id} item={c} feito={stats ? c.feito(stats) : false} t={t} mode={mode} onClick={() => irPara(c.irPara)} />
-            ))}
-          </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* ─── Cabeçalho da grade de estações ──────────────────────────────── */}
       <div style={{ marginBottom: 12 }}>
@@ -605,6 +594,54 @@ function ChecklistRow({ item, feito, t, mode, onClick }: {
         </div>
       </div>
       <ArrowRight size={14} strokeWidth={1.6} style={{ color: t.textTertiary, flexShrink: 0 }} />
+    </button>
+  );
+}
+
+// Cartão de indicador (KPI) do topo da landing.
+function Kpi({ t, cor, icon, valor, label, sub, progresso, destaque, onClick }: {
+  t: ForjaTokens; cor: string; icon: React.ReactNode; valor: string; label: string; sub: string;
+  progresso?: number; destaque?: boolean; onClick?: () => void;
+}): React.ReactElement {
+  const clicavel = !!onClick;
+  return (
+    <button
+      onClick={onClick}
+      disabled={!clicavel}
+      style={{
+        position: 'relative', overflow: 'hidden', textAlign: 'left',
+        display: 'flex', flexDirection: 'column', gap: 8,
+        padding: '14px 15px', borderRadius: 14,
+        background: t.surface, border: `1px solid ${destaque ? `${cor}66` : t.borderSoft}`,
+        cursor: clicavel ? 'pointer' : 'default',
+        transition: 'border-color .18s, transform .18s, box-shadow .18s',
+      }}
+      onMouseEnter={clicavel ? (e) => { e.currentTarget.style.borderColor = `${cor}66`; e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = t.shadowSoft; } : undefined}
+      onMouseLeave={clicavel ? (e) => { e.currentTarget.style.borderColor = destaque ? `${cor}66` : t.borderSoft; e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; } : undefined}
+    >
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: cor, opacity: 0.6 }} />
+      <div style={{
+        width: 32, height: 32, borderRadius: 9,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: `${cor}1A`, color: cor,
+        ...(destaque ? { animation: 'forjaPop .5s ease both' } : {}),
+      }}>
+        {icon}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+        <span style={{ fontFamily: FONTS.display, fontSize: 26, fontWeight: 600, color: t.text, lineHeight: 1, letterSpacing: '-0.01em' }}>
+          {valor}
+        </span>
+      </div>
+      <div>
+        <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: 500, color: t.textSecondary }}>{label}</div>
+        <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginTop: 1 }}>{sub}</div>
+      </div>
+      {typeof progresso === 'number' && (
+        <div style={{ width: '100%', height: 4, borderRadius: 999, background: t.borderSoft, overflow: 'hidden', marginTop: 2 }}>
+          <div style={{ width: `${progresso}%`, height: '100%', background: cor, transition: 'width .4s ease' }} />
+        </div>
+      )}
     </button>
   );
 }

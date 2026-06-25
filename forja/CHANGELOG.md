@@ -36,6 +36,29 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.178.0] — 2026-06-25
+
+### Melhorado — Landing do Atelier vira painel de indicadores
+
+A página inicial do Atelier deixou de ser só o Guia e ganhou **KPIs** no topo:
+
+- **4 indicadores** derivados das estações: total de itens, estações ativas
+  (N/8), itens no contexto da IA (padrões do Códex) e progresso do setup (com
+  mini barra). O card de setup é clicável e abre/fecha o guia.
+- **Guia compactado**: a explicação ("como usar") + o setup recomendado foram
+  recolhidos num painel **colapsável e sempre visível** ("Guia de início").
+  Abre por padrão enquanto o setup não está 5/5; ao completar, fica recolhido e
+  o KPI de setup exibe o troféu.
+- Cabeçalho mais enxuto (saudação por horário) pra dar espaço aos indicadores.
+
+### Detalhes técnicos — 1.178.0
+
+- `components/AtelierGuia.tsx`: novo componente `Kpi` (cartão de indicador),
+  KPIs calculados a partir de `CARDS`/`CHECKLIST`, guia recolhível reaproveitando
+  `ChecklistRow`.
+
+---
+
 ## [1.177.0] — 2026-06-25
 
 ### Melhorado — Atelier mais vivo + Setup que colapsa ao completar
