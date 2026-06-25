@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat, Compass, HardDrive, Wallet, Hammer, Cpu, Bot, Boxes } from 'lucide-react';
+import { BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat, LayoutDashboard, HardDrive, Wallet, Hammer, Cpu, Bot, Boxes } from 'lucide-react';
 import { PageHeader } from '../components/ui';
 import { useForja, useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -55,12 +55,11 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
   const ESTACOES: Estacao[] = [
     {
       key: 'guia',
-      icon: <Compass size={17} strokeWidth={1.6} />,
-      iconActive: <Compass size={17} strokeWidth={1.8} />,
-      label: 'Guia',
-      descricao: 'Tour rápido pelas estações + checklist de setup recomendado pra começar com pé direito.',
+      icon: <LayoutDashboard size={17} strokeWidth={1.6} />,
+      iconActive: <LayoutDashboard size={17} strokeWidth={1.8} />,
+      label: 'Visão geral',
+      descricao: 'Panorama do seu Atelier: indicadores das estações num relance. O guia de início fica no botão flutuante.',
       accent: 'peach',
-      novo: true,
     },
     {
       key: 'skills',

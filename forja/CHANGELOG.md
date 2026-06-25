@@ -36,6 +36,28 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.179.1] — 2026-06-25
+
+### Corrigido — A aba "Guia" agora é "Visão geral" + botão do guia visível
+
+A mudança anterior não "apareceu" porque o cabeçalho/sub-nav ainda chamavam a
+primeira estação de **Guia**, e o botão flutuante estava sendo contido pelo
+wrapper da estação.
+
+- A primeira estação virou **Visão geral** (ícone de dashboard) — o painel de
+  indicadores agora se apresenta como dashboard, não como "Guia".
+- O **botão do guia** virou uma **pílula "Guia de início"** (com selo de passos
+  faltando) renderizada via portal no `body`, garantindo que fique sempre
+  visível no canto inferior direito, acima do assistente.
+
+### Detalhes técnicos — 1.179.1
+
+- `views/Atelier.tsx`: estação `guia` renomeada para "Visão geral"
+  (`LayoutDashboard`).
+- `components/AtelierGuia.tsx`: botão flutuante via `createPortal(document.body)`.
+
+---
+
 ## [1.179.0] — 2026-06-25
 
 ### Melhorado — Atelier com mais respiro: guia vira botão flutuante

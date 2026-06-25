@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Tooltip, Drawer } from 'antd';
 import {
   BookMarked, Server, Shield, Code2, FileText, Bookmark, BookOpen, ChefHat,
@@ -460,37 +461,47 @@ export default function AtelierGuia({ irPara }: AtelierGuiaProps): React.ReactEl
       </div>
 
       {/* ─── Botão flutuante do Guia ─────────────────────────────────────────
-          Tira o guia do fluxo da página: fica acessível sempre, abre o Drawer
-          quando acionado. Empilhado acima do assistente (laranja). */}
-      <Tooltip title="Guia de início" placement="left">
+          Tira o guia do fluxo da página: pílula fixa (via portal no body, pra
+          não ser contida por wrappers), acima do assistente (laranja). */}
+      {typeof document !== 'undefined' && createPortal(
         <button
           onClick={() => setGuiaOpen(true)}
           aria-label="Abrir guia de início"
           style={{
-            position: 'fixed', right: 22, bottom: 84, zIndex: 1000,
-            width: 46, height: 46, borderRadius: '50%',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: t.surface, color: completo ? sage : t.accents.lavender,
-            border: `1px solid ${t.border}`, boxShadow: t.shadowSoft, cursor: 'pointer',
+            position: 'fixed', right: 22, bottom: 84, zIndex: 1100,
+            display: 'inline-flex', alignItems: 'center', gap: 9,
+            padding: '9px 16px 9px 11px', borderRadius: 999,
+            background: t.surface, color: t.text,
+            border: `1px solid ${t.border}`, boxShadow: '0 8px 24px rgba(0,0,0,.22)',
+            cursor: 'pointer', fontFamily: FONTS.ui, fontSize: 13, fontWeight: 600,
             transition: 'transform .18s, box-shadow .18s',
           }}
-          onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; }}
+          onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 12px 30px rgba(0,0,0,.28)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,.22)'; }}
         >
-          {completo ? <Trophy size={20} strokeWidth={1.7} /> : <BookOpen size={20} strokeWidth={1.7} />}
-          {!completo && !carregando && (
-            <span style={{
-              position: 'absolute', top: -3, right: -3, minWidth: 17, height: 17, padding: '0 4px',
-              borderRadius: 999, background: peach, color: '#fff',
-              fontFamily: FONTS.mono, fontSize: 9.5, fontWeight: 600,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              border: `2px solid ${t.appBg}`,
-            }}>
-              {CHECKLIST.length - feitos}
-            </span>
-          )}
-        </button>
-      </Tooltip>
+          <span style={{
+            position: 'relative', width: 26, height: 26, borderRadius: '50%', flexShrink: 0,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            background: completo ? `${sage}22` : `${t.accents.lavender}1A`,
+            color: completo ? sage : t.accents.lavender,
+          }}>
+            {completo ? <Trophy size={15} strokeWidth={1.8} /> : <BookOpen size={15} strokeWidth={1.8} />}
+            {!completo && !carregando && (
+              <span style={{
+                position: 'absolute', top: -6, right: -7, minWidth: 16, height: 16, padding: '0 4px',
+                borderRadius: 999, background: peach, color: '#fff',
+                fontFamily: FONTS.mono, fontSize: 9, fontWeight: 700,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                border: `2px solid ${t.appBg}`,
+              }}>
+                {CHECKLIST.length - feitos}
+              </span>
+            )}
+          </span>
+          Guia de início
+        </button>,
+        document.body,
+      )}
 
       {/* ─── Drawer do Guia ──────────────────────────────────────────────── */}
       <Drawer
