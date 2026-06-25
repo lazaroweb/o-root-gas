@@ -52,8 +52,9 @@ export default function FinDocumentos(): React.ReactElement {
   const [reorganizando, setReorganizando] = useState(false);
   const [upOpen, setUpOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
-  const [arquivo, setArquivo] = useState<File | null>(null);
+  const [arquivos, setArquivos] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
+  const [progresso, setProgresso] = useState('');
   const [form] = Form.useForm();
   // Autorização do Drive (escopo novo exige reconsentimento)
   const [driveAuth, setDriveAuth] = useState<{ checked: boolean; ok: boolean; url: string }>({ checked: false, ok: true, url: '' });
@@ -126,7 +127,7 @@ export default function FinDocumentos(): React.ReactElement {
   };
 
   const abrirUpload = (catInicial?: string) => {
-    setEditId(null); setArquivo(null); form.resetFields();
+    setEditId(null); setArquivos([]); setProgresso(''); form.resetFields();
     // undefined = botão geral (deixa vazio pra escolher na lista); '' = nova pasta.
     form.setFieldsValue({ categoria: catInicial !== undefined ? catInicial : (pasta || '') });
     setUpOpen(true);
@@ -156,7 +157,7 @@ export default function FinDocumentos(): React.ReactElement {
 
   const docsDaPasta = useMemo(() => (pasta ? docs.filter((d) => (d.categoria || 'Outros') === pasta) : docs), [docs, pasta]);
   const abrirEdit = (d: Documento) => {
-    setEditId(d.id); setArquivo(null);
+    setEditId(d.id); setArquivos([]); setProgresso('');
     form.resetFields();
     form.setFieldsValue({ nome: d.nome, categoria: d.categoria, validade: d.validade ? dayjs(d.validade) : null, notas: d.notas });
     setUpOpen(true);
@@ -171,16 +172,34 @@ export default function FinDocumentos(): React.ReactElement {
         if (res.ok) { message.success('Documento atualizado'); setUpOpen(false); load(); }
         else message.error(res.error || 'Erro');
       } else {
-        if (!arquivo) { message.error('Escolha um arquivo.'); setSaving(false); return; }
-        const base64 = await fileToBase64(arquivo);
-        const res = await callServer<ServerResponse<unknown>>('uploadDocumentoEmpresa', {
-          nome: String(v['nome'] || arquivo.name), categoria: v['categoria'], mime: arquivo.type || 'application/octet-stream', base64, validade, notas: v['notas'],
-        });
-        if (res.ok) { message.success('Documento guardado'); setUpOpen(false); load(); }
-        else message.error(res.error || 'Erro ao subir');
+        if (!arquivos.length) { message.error('Escolha pelo menos um arquivo.'); setSaving(false); return; }
+        const multi = arquivos.length > 1;
+        let okN = 0; const falhas: string[] = [];
+        for (let i = 0; i < arquivos.length; i++) {
+          const f = arquivos[i];
+          setProgresso(`Enviando ${i + 1} de ${arquivos.length}: ${f.name}`);
+          try {
+            const base64 = await fileToBase64(f);
+            // Vários arquivos → cada um mantém o nome do próprio arquivo; validade/notas
+            // ficam pra editar individualmente depois. Um arquivo só → usa o nome do form.
+            const res = await callServer<ServerResponse<unknown>>('uploadDocumentoEmpresa', {
+              nome: multi ? f.name : String(v['nome'] || f.name),
+              categoria: v['categoria'],
+              mime: f.type || 'application/octet-stream',
+              base64,
+              validade: multi ? '' : validade,
+              notas: multi ? '' : String(v['notas'] || ''),
+            });
+            if (res.ok) okN++; else falhas.push(`${f.name}: ${res.error || 'erro'}`);
+          } catch { falhas.push(`${f.name}: falha ao ler`); }
+        }
+        setProgresso('');
+        if (okN) message.success(multi ? `${okN} documento(s) guardado(s)` : 'Documento guardado');
+        if (falhas.length) message.error(`Falharam ${falhas.length}: ${falhas.slice(0, 3).join(' · ')}`);
+        if (okN) { setUpOpen(false); load(); }
       }
     } catch { message.error('Erro ao salvar'); }
-    finally { setSaving(false); }
+    finally { setSaving(false); setProgresso(''); }
   };
 
   const remover = (d: Documento) => callServer<ServerResponse<unknown>>('excluirDocumentoEmpresa', d.id).then((r) => { if (r.ok) { message.success('Removido'); load(); } else message.error(r.error || 'Erro'); });
@@ -394,7 +413,7 @@ export default function FinDocumentos(): React.ReactElement {
         open={upOpen}
         onCancel={() => setUpOpen(false)}
         onOk={() => form.submit()}
-        okText={editId ? 'Salvar' : 'Enviar'}
+        okText={editId ? 'Salvar' : (arquivos.length > 1 ? `Enviar ${arquivos.length}` : 'Enviar')}
         confirmLoading={saving}
         destroyOnClose
       >
@@ -413,22 +432,35 @@ export default function FinDocumentos(): React.ReactElement {
             </div>
           )}
           {!editId && (
-            <Form.Item label="Arquivo" required>
+            <Form.Item label="Arquivos" required tooltip="Pode soltar vários de uma vez — cada um vira um documento.">
               <Upload.Dragger
-                maxCount={1}
-                multiple={false}
-                beforeUpload={(file) => { setArquivo(file); if (!form.getFieldValue('nome')) form.setFieldsValue({ nome: file.name }); return false; }}
-                onRemove={() => setArquivo(null)}
-                fileList={arquivo ? [{ uid: '1', name: arquivo.name } as never] : []}
+                multiple
+                beforeUpload={(file) => {
+                  setArquivos((prev) => (prev.some((p) => p.name === file.name && p.size === file.size) ? prev : [...prev, file]));
+                  if (!form.getFieldValue('nome')) form.setFieldsValue({ nome: file.name });
+                  return false;
+                }}
+                onRemove={(file) => { setArquivos((prev) => prev.filter((p) => p.name !== file.name)); }}
+                fileList={arquivos.map((f, i) => ({ uid: String(i), name: f.name } as never))}
               >
-                <p style={{ margin: 0, color: t.textSecondary }}><UploadCloud size={22} style={{ verticalAlign: 'middle', marginRight: 8 }} />Clique ou arraste o arquivo aqui</p>
+                <p style={{ margin: 0, color: t.textSecondary }}><UploadCloud size={22} style={{ verticalAlign: 'middle', marginRight: 8 }} />Clique ou arraste um ou vários arquivos</p>
               </Upload.Dragger>
             </Form.Item>
           )}
-          <Form.Item name="nome" label="Nome" rules={[{ required: true, message: 'Informe um nome' }]}>
-            <Input placeholder="Ex.: Contrato social 2024" />
-          </Form.Item>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          {/* Vários arquivos: cada um entra com o próprio nome; nome/validade/notas
+              são editados individualmente depois. Um arquivo só → campos normais. */}
+          {arquivos.length > 1 ? (
+            <Alert
+              type="info" showIcon style={{ marginBottom: 12 }}
+              message={`${arquivos.length} arquivos selecionados`}
+              description="Cada um entra com o nome do próprio arquivo. Depois edite um a um para ajustar nome, validade e notas."
+            />
+          ) : (
+            <Form.Item name="nome" label="Nome" rules={editId || arquivos.length === 1 ? [{ required: true, message: 'Informe um nome' }] : []}>
+              <Input placeholder="Ex.: Contrato social 2024" />
+            </Form.Item>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: arquivos.length > 1 ? '1fr' : '1fr 1fr', gap: 12 }}>
             <Form.Item name="categoria" label="Categoria / pasta" rules={[{ required: true, message: 'Escolha ou digite uma pasta' }]} tooltip="Escolha uma pasta existente na lista ou digite o nome de uma nova.">
               <AutoComplete
                 placeholder="Escolha uma pasta ou digite uma nova"
@@ -446,13 +478,18 @@ export default function FinDocumentos(): React.ReactElement {
                 filterOption={(input, option) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())}
               />
             </Form.Item>
-            <Form.Item name="validade" label="Validade (opcional)" tooltip="Pra certidões/certificados — alerta quando perto de vencer.">
-              <DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} />
-            </Form.Item>
+            {arquivos.length <= 1 && (
+              <Form.Item name="validade" label="Validade (opcional)" tooltip="Pra certidões/certificados — alerta quando perto de vencer.">
+                <DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} />
+              </Form.Item>
+            )}
           </div>
-          <Form.Item name="notas" label="Notas (opcional)">
-            <Input.TextArea rows={2} placeholder="Observações" />
-          </Form.Item>
+          {arquivos.length <= 1 && (
+            <Form.Item name="notas" label="Notas (opcional)">
+              <Input.TextArea rows={2} placeholder="Observações" />
+            </Form.Item>
+          )}
+          {saving && progresso && <div style={{ color: t.textSecondary, fontSize: 12.5, marginTop: 4 }}>{progresso}</div>}
         </Form>
       </Modal>
 

@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.175.2] — 2026-06-25
+
+### Adicionado — Upload de vários documentos de uma vez
+
+- O modal **Adicionar documento** agora aceita **vários arquivos** (clicar ou
+  arrastar em lote). Todos vão pra mesma pasta/categoria, cada um com o nome do
+  próprio arquivo. Ex.: entrar em Certidões, soltar as 5 de uma vez e depois
+  editar uma a uma pra ajustar nome, validade e notas.
+- Mostra **progresso** ("Enviando 2 de 5…") e um resumo de sucessos/falhas.
+- Com **um arquivo só**, segue o fluxo de antes (nome, validade e notas no envio).
+
+---
+
 ## [1.175.1] — 2026-06-25
 
 ### Melhorado — Escolher pasta direto no "Adicionar documento"
