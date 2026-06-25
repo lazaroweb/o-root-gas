@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Layout, App as AntApp, Drawer } from 'antd';
 import AppSidebar, { SIDEBAR_WIDTH } from './components/AppSidebar';
 import TopRightControls from './components/TopRightControls';
+import GlobalLoadingBar from './components/GlobalLoadingBar';
 import MobileTopbar, { TOPBAR_HEIGHT } from './components/MobileTopbar';
 import AlertsBell from './components/AlertsBell';
 import LumeAssistant from './components/LumeAssistant';
@@ -325,6 +326,7 @@ export default function App(): React.ReactElement {
 
   return (
     <Layout style={{ minHeight: '100vh', background: t.appBg }}>
+      <GlobalLoadingBar />
       {isMobile ? (
         <>
           <MobileTopbar

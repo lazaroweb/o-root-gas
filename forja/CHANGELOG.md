@@ -36,6 +36,28 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.176.0] — 2026-06-25
+
+### Adicionado — Indicador global de carregamento
+
+Quando uma seção abre e os dados ainda estão chegando do servidor, dava a
+sensação de "quebrou" (tela vazia). Agora há um sinal claro de atividade.
+
+- **Barra fininha no topo** acende sempre que há qualquer chamada ao servidor em
+  andamento — vale pra **todas as seções** automaticamente, sem instrumentar
+  cada tela.
+- Tem um pequeno atraso (~120ms) pra não piscar em chamadas instantâneas, e
+  some suavemente quando termina.
+
+### Detalhes técnicos — 1.176.0
+
+- `gas-client.ts`: contador de chamadas em andamento + `subscribeLoading` /
+  `isLoading` (pub/sub); incrementa no início e decrementa no fim de cada RPC.
+- `components/GlobalLoadingBar.tsx`: barra indeterminada (cor da marca) montada
+  no topo do `App.tsx`.
+
+---
+
 ## [1.175.4] — 2026-06-25
 
 ### Adicionado — Proteção contra documento duplicado
