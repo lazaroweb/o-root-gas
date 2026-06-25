@@ -36,6 +36,25 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.165.0] — 2026-06-25
+
+### Alterado — Empresa: estações agrupadas em Financeiro × Contabilidade
+
+A coluna de navegação do Financeiro › Empresa agora separa as estações em duas
+macro-seções (cabeçalhos na própria sidebar, via `group` do `SubNav`):
+
+- **Financeiro** (gestão do dinheiro): Visão geral, A receber, Cobranças, A pagar,
+  Projeção.
+- **Contabilidade** (registros e obrigações): Despesas (livro-caixa), Conciliação,
+  Impostos.
+
+Critério: "A pagar" são custos recorrentes/contratos (planejamento → Financeiro);
+"Despesas" é o livro-caixa de lançamentos efetivos (registro → Contabilidade), ao
+lado de conciliação bancária e impostos. Sem mudança de comportamento — só
+organização visual.
+
+---
+
 ## [1.164.0] — 2026-06-25
 
 ### Adicionado — Impostos (DAS / Simples Nacional): provisão e acompanhamento

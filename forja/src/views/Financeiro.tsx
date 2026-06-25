@@ -27,15 +27,18 @@ type EmpresaView = 'resumo' | 'receber' | 'cobrancas' | 'despesas' | 'pagar' | '
 
 function FinEmpresa({ sistemas }: { sistemas: Sistema[] }): React.ReactElement {
   const [view, setView] = useState<EmpresaView>('resumo');
+  // Duas macro-seções na mesma coluna (via `group` do SubNav):
+  // Financeiro = gestão do dinheiro (entradas, saídas planejadas, projeção);
+  // Contabilidade = registros e obrigações (livro-caixa, conciliação, impostos).
   const NAV: SubNavItem<EmpresaView>[] = [
-    { key: 'resumo', icon: LayoutDashboard, label: 'Visão geral', accent: 'peach', desc: 'Saúde financeira do negócio: receita, custo e lucro por app.' },
-    { key: 'receber', icon: ArrowUpRight, label: 'A receber', accent: 'sage', desc: 'Assinaturas e cobranças a receber dos clientes.' },
-    { key: 'cobrancas', icon: FileText, label: 'Cobranças', accent: 'blue', desc: 'Emita boleto e PIX com baixa automática por webhook.' },
-    { key: 'despesas', icon: Receipt, label: 'Despesas', accent: 'clay', desc: 'Livro-caixa mensal: contas, boletos e recibos — com importação por PDF/foto.' },
-    { key: 'pagar', icon: ArrowDownRight, label: 'A pagar', accent: 'rose', desc: 'Custos recorrentes (contratos): fornecedor, valor e próxima cobrança.' },
-    { key: 'projecao', icon: LineChart, label: 'Projeção', accent: 'lavender', desc: 'Caixa pra frente, mês a mês: entradas previstas × saídas, saldo e runway.' },
-    { key: 'conciliacao', icon: Landmark, label: 'Conciliação', accent: 'blue', desc: 'Importe o extrato (OFX) e case cada transação com o sistema, dando baixa.' },
-    { key: 'impostos', icon: Scale, label: 'Impostos', accent: 'clay', desc: 'Provisão e acompanhamento do DAS/Simples: base, alíquota, guia e reserva.' },
+    { key: 'resumo', icon: LayoutDashboard, label: 'Visão geral', accent: 'peach', group: 'Financeiro', desc: 'Saúde financeira do negócio: receita, custo e lucro por app.' },
+    { key: 'receber', icon: ArrowUpRight, label: 'A receber', accent: 'sage', group: 'Financeiro', desc: 'Assinaturas e cobranças a receber dos clientes.' },
+    { key: 'cobrancas', icon: FileText, label: 'Cobranças', accent: 'blue', group: 'Financeiro', desc: 'Emita boleto e PIX com baixa automática por webhook.' },
+    { key: 'pagar', icon: ArrowDownRight, label: 'A pagar', accent: 'rose', group: 'Financeiro', desc: 'Custos recorrentes (contratos): fornecedor, valor e próxima cobrança.' },
+    { key: 'projecao', icon: LineChart, label: 'Projeção', accent: 'lavender', group: 'Financeiro', desc: 'Caixa pra frente, mês a mês: entradas previstas × saídas, saldo e runway.' },
+    { key: 'despesas', icon: Receipt, label: 'Despesas', accent: 'clay', group: 'Contabilidade', desc: 'Livro-caixa mensal: contas, boletos e recibos — com importação por PDF/foto.' },
+    { key: 'conciliacao', icon: Landmark, label: 'Conciliação', accent: 'blue', group: 'Contabilidade', desc: 'Importe o extrato (OFX) e case cada transação com o sistema, dando baixa.' },
+    { key: 'impostos', icon: Scale, label: 'Impostos', accent: 'clay', group: 'Contabilidade', desc: 'Provisão e acompanhamento do DAS/Simples: base, alíquota, guia e reserva.' },
   ];
   return (
     <SubNav items={NAV} value={view} onChange={setView} ariaLabel="Áreas do Financeiro da Empresa">
