@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Button, Input, Select, Form, Spin, Empty, Tag, Popconfirm, Tooltip, App as AntApp } from 'antd';
-import { Sparkles, Plus, Wand2, Trash2, Lightbulb, MessageSquareText, FileText, Save, Link2, Copy, Check, Send, ClipboardList, Gauge } from 'lucide-react';
+import { Button, Input, Select, Form, Spin, Empty, Tag, Popconfirm, Tooltip, Drawer, App as AntApp } from 'antd';
+import { Sparkles, Plus, Wand2, Trash2, Lightbulb, MessageSquareText, FileText, Save, Link2, Copy, Check, Send, ClipboardList, Gauge, Eye, FileDown, Mail, CalendarClock, Wrench } from 'lucide-react';
 import { Panel, CopyBlock, copyText } from '../components/ui';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
+import { gerarEbaixarPdf } from '../pdf-client';
 import type { Pessoa, Entrevista, AnaliseEntrevista, DiscoveryForm, DiscoveryResposta, ServerResponse } from '../types';
 
 const TIPO_OPTIONS = [
@@ -19,6 +20,29 @@ function fmtDataHora(iso?: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return '';
   return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+// Estrutura uma pergunta do roteiro (que após publicada vira objeto com id/texto).
+interface PerguntaEstruturada { id: string; texto: string; tipo?: string }
+function blocosComPerguntas(form?: DiscoveryForm | null): Array<{ tema: string; perguntas: PerguntaEstruturada[] }> {
+  if (!form) return [];
+  return (form.blocos || []).map((b, bi) => ({
+    tema: b.tema || `Bloco ${bi + 1}`,
+    perguntas: ((b.perguntas || []) as unknown[]).map((p, pi) => {
+      const obj = (p && typeof p === 'object') ? p as Record<string, unknown> : null;
+      return {
+        id: obj && obj['id'] ? String(obj['id']) : `b${bi}q${pi}`,
+        texto: obj ? String(obj['texto'] || '') : String(p || ''),
+        tipo: obj ? String(obj['tipo'] || 'texto') : 'texto',
+      };
+    }).filter((p) => p.texto),
+  })).filter((b) => b.perguntas.length);
+}
+
+function fmtResposta(v: unknown): string {
+  if (v == null || String(v).trim() === '') return '';
+  if (Array.isArray(v)) return v.map((x) => String(x)).join(' · ');
+  return String(v);
 }
 
 function Lista({ titulo, itens, cor }: { titulo: string; itens: string[]; cor: string }): React.ReactElement | null {
@@ -57,6 +81,7 @@ export default function Discovery({ pessoaId, pessoaNome }: { pessoaId?: string;
   const [publicandoId, setPublicandoId] = useState<string | null>(null);
   const [copiadoId, setCopiadoId] = useState<string | null>(null);
   const [promovendoId, setPromovendoId] = useState<string | null>(null);
+  const [respostaAberta, setRespostaAberta] = useState<DiscoveryResposta | null>(null);
 
   // config do app público (URL /exec)
   const [publicUrl, setPublicUrl] = useState('');
@@ -427,7 +452,13 @@ export default function Discovery({ pessoaId, pessoaNome }: { pessoaId?: string;
             {respostas.map((r) => {
               const cor = r.score >= 70 ? t.accents.sage : r.score >= 40 ? t.accents.peach : t.accents.rose;
               return (
-                <div key={r.id} style={{ border: `1px solid ${t.border}`, borderRadius: 14, padding: 16, background: t.surface, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div
+                  key={r.id}
+                  onClick={() => setRespostaAberta(r)}
+                  style={{ border: `1px solid ${t.border}`, borderRadius: 14, padding: 16, background: t.surface, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', cursor: 'pointer', transition: 'border-color .15s, box-shadow .15s' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.borderColor = `${cor}88`; e.currentTarget.style.boxShadow = t.shadowSoft; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = t.border; e.currentTarget.style.boxShadow = 'none'; }}
+                >
                   <div style={{ width: 56, height: 56, borderRadius: '50%', border: `3px solid ${cor}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                     <span style={{ fontFamily: FONTS.display, fontSize: 18, fontWeight: 700, color: cor }}>{r.score}</span>
                   </div>
@@ -449,9 +480,14 @@ export default function Discovery({ pessoaId, pessoaNome }: { pessoaId?: string;
                       </div>
                     )}
                   </div>
-                  <Button type="primary" ghost icon={<Lightbulb size={15} />} loading={promovendoId === r.id} onClick={() => promoverResposta(r.id)}>
-                    Promover a ideia
-                  </Button>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }} onClick={(e) => e.stopPropagation()}>
+                    <Button icon={<Eye size={15} />} onClick={() => setRespostaAberta(r)}>
+                      Ver respostas
+                    </Button>
+                    <Button type="primary" ghost icon={<Lightbulb size={15} />} loading={promovendoId === r.id} onClick={() => promoverResposta(r.id)}>
+                      Promover a ideia
+                    </Button>
+                  </div>
                 </div>
               );
             })}
@@ -554,6 +590,158 @@ export default function Discovery({ pessoaId, pessoaNome }: { pessoaId?: string;
           </div>
         )}
       </Panel>
+
+      <RespostaDrawer
+        resposta={respostaAberta}
+        form={respostaAberta ? (forms.find((f) => f.id === respostaAberta.formId) || null) : null}
+        onClose={() => setRespostaAberta(null)}
+        onPromover={promoverResposta}
+        promovendo={!!respostaAberta && promovendoId === respostaAberta.id}
+      />
     </div>
+  );
+}
+
+// ─── Drawer: visualizador da resposta de Discovery ────────────────────────────
+
+function RespostaDrawer({ resposta, form, onClose, onPromover, promovendo }: {
+  resposta: DiscoveryResposta | null;
+  form: DiscoveryForm | null;
+  onClose: () => void;
+  onPromover: (id: string) => void;
+  promovendo: boolean;
+}): React.ReactElement {
+  const t = useTokens();
+  const { message } = AntApp.useApp();
+  const [baixando, setBaixando] = useState(false);
+
+  const r = resposta;
+  const cor = !r ? t.textTertiary : r.score >= 70 ? t.accents.sage : r.score >= 40 ? t.accents.peach : t.accents.rose;
+  const grupos = blocosComPerguntas(form);
+  // Ids já cobertos pelos blocos — o resto vira "Outras respostas".
+  const idsCobertos = new Set(grupos.flatMap((g) => g.perguntas.map((p) => p.id)));
+  const extras = r ? Object.keys(r.respostas || {}).filter((k) => !idsCobertos.has(k) && fmtResposta(r.respostas[k])) : [];
+
+  const exportarPdf = async () => {
+    if (!r) return;
+    setBaixando(true);
+    try {
+      await gerarEbaixarPdf('gerarPdfRespostaDiscovery', { id: r.id });
+      message.success('PDF gerado');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Falha ao gerar PDF');
+    } finally {
+      setBaixando(false);
+    }
+  };
+
+  const Pergunta = ({ texto, valor }: { texto: string; valor: string }) => (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: t.text, marginBottom: 3 }}>{texto}</div>
+      <div style={{
+        fontSize: 13, lineHeight: 1.6, color: valor ? t.textSecondary : t.textTertiary,
+        paddingLeft: 11, borderLeft: `2px solid ${valor ? `${cor}66` : t.borderSoft}`, whiteSpace: 'pre-wrap',
+      }}>
+        {valor || '— sem resposta —'}
+      </div>
+    </div>
+  );
+
+  const MetaItem = ({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: t.textSecondary }}>
+      <span style={{ color: t.textTertiary, display: 'inline-flex' }}>{icon}</span>{children}
+    </div>
+  );
+
+  return (
+    <Drawer
+      open={!!r}
+      onClose={onClose}
+      placement="right"
+      width={560}
+      title={
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Gauge size={16} color={cor} />
+          <span>Resposta de Discovery</span>
+        </div>
+      }
+      extra={r && (
+        <Button type="primary" icon={<FileDown size={15} />} loading={baixando} onClick={exportarPdf}>
+          Exportar PDF
+        </Button>
+      )}
+    >
+      {r && (
+        <>
+          {/* Cabeçalho: nome + score */}
+          <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 18 }}>
+            <div style={{ width: 64, height: 64, borderRadius: '50%', border: `4px solid ${cor}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <span style={{ fontFamily: FONTS.display, fontSize: 22, fontWeight: 700, color: cor }}>{r.score}</span>
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontFamily: FONTS.display, fontSize: 18, fontWeight: 600, color: t.text }}>
+                {r.nome || r.pessoaNome || r.emailRespondente || '—'}
+              </div>
+              <div style={{ fontSize: 12.5, color: t.textTertiary, marginTop: 2 }}>
+                {form?.titulo || 'Discovery'}{r.pessoaNome && r.pessoaNome !== r.nome ? ` · cliente: ${r.pessoaNome}` : ''}
+              </div>
+            </div>
+          </div>
+
+          {/* Metadados */}
+          <div style={{ display: 'grid', gap: 8, padding: '12px 14px', borderRadius: 12, background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, marginBottom: 18 }}>
+            {r.emailRespondente && <MetaItem icon={<Mail size={13} />}>{r.emailRespondente}</MetaItem>}
+            {r.criadoEm && <MetaItem icon={<CalendarClock size={13} />}>Recebido em {fmtDataHora(r.criadoEm)}</MetaItem>}
+            <MetaItem icon={<Lightbulb size={13} />}>
+              {r.querAmostra ? 'Quer amostra' : 'Não pediu amostra'}{r.agendaPref ? ` · ${r.agendaPref}` : ''}
+            </MetaItem>
+            {r.ferramentas && r.ferramentas.length > 0 && (
+              <MetaItem icon={<Wrench size={13} />}>
+                <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {r.ferramentas.map((f, i) => (
+                    <Tag key={i} bordered={false} style={{ borderRadius: 999, margin: 0, background: t.surface, color: t.textSecondary }}>{f}</Tag>
+                  ))}
+                </span>
+              </MetaItem>
+            )}
+          </div>
+
+          {/* Respostas por bloco */}
+          {grupos.length === 0 && extras.length === 0 ? (
+            <Empty description={<span style={{ color: t.textTertiary }}>Sem respostas detalhadas para exibir.</span>} />
+          ) : (
+            <>
+              {grupos.map((g, gi) => (
+                <div key={gi} style={{ marginBottom: 20 }}>
+                  <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', color: t.textTertiary, marginBottom: 10 }}>
+                    {g.tema}
+                  </div>
+                  {g.perguntas.map((p) => (
+                    <Pergunta key={p.id} texto={p.texto} valor={fmtResposta(r.respostas[p.id])} />
+                  ))}
+                </div>
+              ))}
+              {extras.length > 0 && (
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', color: t.textTertiary, marginBottom: 10 }}>
+                    Outras respostas
+                  </div>
+                  {extras.map((k) => (
+                    <Pergunta key={k} texto={k} valor={fmtResposta(r.respostas[k])} />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Ações */}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', paddingTop: 12, borderTop: `1px solid ${t.borderSoft}` }}>
+            <Button type="primary" ghost icon={<Lightbulb size={15} />} loading={promovendo} onClick={() => onPromover(r.id)}>
+              Promover a ideia
+            </Button>
+          </div>
+        </>
+      )}
+    </Drawer>
   );
 }

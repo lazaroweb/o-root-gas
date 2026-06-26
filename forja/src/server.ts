@@ -13785,6 +13785,121 @@ function getRespostasDiscovery(): ServerResult {
   } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar respostas' }; }
 }
 
+// Gera um PDF premium de UMA resposta de Discovery — pergunta a pergunta, com
+// score, metadados e ferramentas. Reaproveita o pipeline HTML→PDF do server
+// (_pdfDoc + _htmlToPdfResult), casando os enunciados via o roteiro (formId).
+function gerarPdfRespostaDiscovery(input: { id?: string }): ServerResult {
+  try {
+    const id = String(input.id || '').trim();
+    if (!id) return { ok: false, error: 'Resposta inválida' };
+    const r = dbGetAll('DiscoveryRespostas').find((x) => String(x['id']) === id);
+    if (!r) return { ok: false, error: 'Resposta não encontrada' };
+
+    const pessoas = dbGetAll('Pessoas');
+    const pessoaNome = String(pessoas.find((p) => String(p['id']) === String(r['pessoaId']))?.['nome'] || '');
+
+    let respostas: Record<string, unknown> = {};
+    let ferramentas: unknown[] = [];
+    let breakdown: Record<string, number> = {};
+    try { respostas = JSON.parse(String(r['respostasJson'] || '{}')) || {}; } catch { /* ignora */ }
+    try { ferramentas = JSON.parse(String(r['ferramentasJson'] || '[]')) || []; } catch { /* ignora */ }
+    try { breakdown = JSON.parse(String(r['scoreBreakdownJson'] || '{}')) || {}; } catch { /* ignora */ }
+
+    const form = dbGetAll('DiscoveryForms').find((f) => String(f['id']) === String(r['formId']));
+    const tituloForm = String(form?.['titulo'] || 'Discovery');
+    const blocos = form
+      ? _parseBlocosDiscovery(form['perguntasJson']) as Array<{ tema?: string; perguntas?: unknown[] }>
+      : [];
+
+    const score = Number(r['score'] || 0);
+    const nome = String(r['nome'] || '') || pessoaNome || String(r['emailRespondente'] || '—');
+    const corScore = score >= 70 ? '#6E8E5E' : score >= 40 ? '#C29A5B' : '#BE7E78';
+    const querAmostra = String(r['querAmostra'] || '') === 'true' || r['querAmostra'] === true;
+
+    const fmtValor = (v: unknown): string => {
+      if (v == null || String(v).trim() === '') return '<span class="muted">— sem resposta —</span>';
+      if (Array.isArray(v)) return v.length ? v.map((x) => _escHtml(String(x))).join(' · ') : '<span class="muted">— sem resposta —</span>';
+      return _escHtml(String(v)).replace(/\n/g, '<br/>');
+    };
+
+    // Q&A agrupado por bloco (casando o id da pergunta com o enunciado).
+    let qaHtml = '';
+    for (const b of blocos) {
+      const perguntas = (b.perguntas || []) as Array<Record<string, unknown>>;
+      const linhas = perguntas.map((p) => {
+        const po = (p && typeof p === 'object') ? p : { id: '', texto: String(p || '') };
+        const pid = String(po['id'] || '');
+        const texto = String(po['texto'] || '');
+        if (!texto) return '';
+        return '<div style="margin:0 0 14px;">'
+          + '<div style="font-size:12.5px; font-weight:600; color:#3A352F; margin-bottom:3px;">' + _escHtml(texto) + '</div>'
+          + '<div style="font-size:13px; color:#5C554C; padding-left:10px; border-left:2px solid #E7E1D8;">' + fmtValor(respostas[pid]) + '</div>'
+          + '</div>';
+      }).filter(Boolean).join('');
+      if (!linhas) continue;
+      qaHtml += '<h3 style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:#8C8378; margin:22px 0 12px;">'
+        + _escHtml(b.tema || 'Bloco') + '</h3>' + linhas;
+    }
+    if (!qaHtml) {
+      const linhas = Object.keys(respostas).map((k) =>
+        '<div style="margin:0 0 12px;"><div style="font-weight:600; color:#3A352F;">' + _escHtml(k)
+        + '</div><div style="color:#5C554C;">' + fmtValor(respostas[k]) + '</div></div>').join('');
+      qaHtml = linhas || '<p class="muted">Sem respostas detalhadas.</p>';
+    }
+
+    // Metadados (linha de chips).
+    const metaItens: string[] = [];
+    if (r['emailRespondente']) metaItens.push('<strong>E-mail:</strong> ' + _escHtml(String(r['emailRespondente'])));
+    if (r['criadoEm']) metaItens.push('<strong>Recebido em:</strong> ' + _escHtml(_fmtDataBR(String(r['criadoEm']))));
+    metaItens.push('<strong>Quer amostra:</strong> ' + (querAmostra ? 'Sim' : 'Não'));
+    if (r['agendaPref']) metaItens.push('<strong>Agenda:</strong> ' + _escHtml(String(r['agendaPref'])));
+    const metaHtml = '<div style="font-size:12px; color:#5C554C; line-height:1.9;">' + metaItens.join(' &nbsp;•&nbsp; ') + '</div>';
+
+    const ferramentasHtml = ferramentas.length
+      ? '<div style="margin-top:12px;"><div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:#8C8378; margin-bottom:6px;">Ferramentas que usa hoje</div>'
+        + ferramentas.map((f) => '<span class="tag" style="background:#F2EEE7; color:#5C554C; margin:0 6px 6px 0;">' + _escHtml(String(f)) + '</span>').join('')
+        + '</div>'
+      : '';
+
+    const rotuloBreak: Record<string, string> = {
+      completude: 'Completude', ferramentas: 'Ferramentas', riquezaTexto: 'Riqueza do texto',
+      pediuAmostra: 'Pediu amostra', agenda: 'Agenda', contato: 'Contato',
+    };
+    const chavesBreak = Object.keys(breakdown);
+    const breakdownHtml = chavesBreak.length
+      ? '<h3 style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:#8C8378; margin:24px 0 10px;">Composição do score</h3>'
+        + '<table><tr>' + chavesBreak.map((k) => '<th>' + _escHtml(rotuloBreak[k] || k) + '</th>').join('') + '</tr>'
+        + '<tr>' + chavesBreak.map((k) => '<td style="font-weight:600;">' + _escHtml(String(breakdown[k])) + '</td>').join('') + '</tr></table>'
+      : '';
+
+    const cabecalho = '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:20px; padding-bottom:18px; border-bottom:2px solid #2A2724; margin-bottom:20px;">'
+      + '<div>'
+      + '<div style="font-size:11px; text-transform:uppercase; letter-spacing:0.12em; color:#8C8378; margin-bottom:4px;">Resposta de Discovery</div>'
+      + '<h1 style="font-size:22px; color:#2A2724;">' + _escHtml(nome) + '</h1>'
+      + '<div style="font-size:12.5px; color:#5C554C; margin-top:4px;">' + _escHtml(tituloForm)
+      + (pessoaNome && pessoaNome !== nome ? ' &nbsp;•&nbsp; cliente: ' + _escHtml(pessoaNome) : '') + '</div>'
+      + '</div>'
+      + '<div style="text-align:center; flex-shrink:0;">'
+      + '<div style="width:74px; height:74px; border-radius:50%; border:4px solid ' + corScore + '; display:flex; align-items:center; justify-content:center; margin:0 auto;">'
+      + '<span style="font-size:26px; font-weight:700; color:' + corScore + ';">' + score + '</span></div>'
+      + '<div style="font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:#8C8378; margin-top:6px;">oportunidade /100</div>'
+      + '</div>'
+      + '</div>';
+
+    const rodape = '<div style="margin-top:32px; padding-top:14px; border-top:1px solid #E7E1D8; font-size:10.5px; color:#8C8378; text-align:center;">'
+      + 'Gerado pela Forja em ' + _escHtml(_fmtDataBR(new Date().toISOString())) + '</div>';
+
+    const corpo = cabecalho + metaHtml + ferramentasHtml
+      + '<div style="margin-top:8px;"></div>' + qaHtml + breakdownHtml + rodape;
+
+    const html = _pdfDoc('Discovery — ' + nome, corpo);
+    const base = ('discovery-' + (nome || 'resposta') + '-' + _fmtDataBR(String(r['criadoEm'] || ''))).replace(/\s+/g, '-');
+    return _htmlToPdfResult(html, base);
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar PDF' };
+  }
+}
+
 // Transforma uma resposta de discovery numa Ideia no banco (fecha o ciclo:
 // oportunidade clara → ideia priorizável). Impacto sugerido a partir do score.
 function promoverRespostaDiscoveryParaIdeia(input: { id?: string }): ServerResult {
