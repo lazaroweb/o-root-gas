@@ -7,6 +7,7 @@ import IntegracoesFiscaisPanel from '../components/IntegracoesFiscaisPanel';
 import ApisPanel from '../components/ApisPanel';
 import ServidoresPanel from '../components/ServidoresPanel';
 import PagamentosPanel from '../components/PagamentosPanel';
+import EmpresaScopeBar from '../components/EmpresaScopeBar';
 import AutomacoesPanel from '../components/AutomacoesPanel';
 import UsuariosPanel from '../components/UsuariosPanel';
 import ModeloAuditoriaPanel from '../components/ModeloAuditoriaPanel';
@@ -40,6 +41,9 @@ export default function Configuracoes({ initialSecao }: ConfiguracoesProps = {})
   useEffect(() => {
     if (initialSecao && SECAO_VALIDAS.indexOf(initialSecao as SecaoKey) >= 0) setSecao(initialSecao as SecaoKey);
   }, [initialSecao]);
+
+  // Bump pra remontar os painéis de conexões quando troca a empresa ativa (Fase 3b).
+  const [conexoesEscopoKey, setConexoesEscopoKey] = useState(0);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [stacks, setStacks] = useState<Stack[]>([]);
   const [status, setStatus] = useState<StatusGeral | null>(null);
@@ -317,7 +321,8 @@ export default function Configuracoes({ initialSecao }: ConfiguracoesProps = {})
               <span style={{ fontFamily: FONTS.display, fontSize: 16, fontWeight: 600, color: t.text }}>APIs & Webhooks</span>
             </div>
             <div style={{ marginBottom: 16, color: t.textSecondary, fontSize: 12.5, lineHeight: 1.6 }}>{intro}</div>
-            <ApisPanel mode="full" />
+            <EmpresaScopeBar onChange={() => setConexoesEscopoKey((k) => k + 1)} />
+            <ApisPanel key={conexoesEscopoKey} mode="full" />
           </div>
         );
       }
@@ -330,7 +335,8 @@ export default function Configuracoes({ initialSecao }: ConfiguracoesProps = {})
               <span style={{ fontFamily: FONTS.display, fontSize: 16, fontWeight: 600, color: t.text }}>Infraestrutura & Servidores</span>
             </div>
             <div style={{ marginBottom: 16, color: t.textSecondary, fontSize: 12.5, lineHeight: 1.6 }}>{intro}</div>
-            <ServidoresPanel mode="full" />
+            <EmpresaScopeBar onChange={() => setConexoesEscopoKey((k) => k + 1)} />
+            <ServidoresPanel key={conexoesEscopoKey} mode="full" />
           </div>
         );
       }

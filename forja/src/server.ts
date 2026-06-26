@@ -12337,7 +12337,8 @@ function reimportarReceitasForja(): ServerResult {
 
 function getApis(): ServerResult {
   try {
-    return { ok: true, data: dbGetAll('Apis') };
+    // v1.190 — escopo por empresa ativa (Consolidado = todas).
+    return { ok: true, data: _filtraEmpresa(dbGetAll('Apis') as Array<Record<string, unknown>>) };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar APIs' };
   }
@@ -12345,7 +12346,9 @@ function getApis(): ServerResult {
 
 function createApi(data: Record<string, unknown>): ServerResult {
   try {
-    return { ok: true, data: dbCreate('Apis', data) };
+    // Carimba a empresa ativa (a menos que o payload já traga uma explícita).
+    const empresaId = (data && data['empresaId']) ? String(data['empresaId']) : _empresaParaCriarId();
+    return { ok: true, data: dbCreate('Apis', { ...data, empresaId }) };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao criar API' };
   }
@@ -20141,7 +20144,8 @@ interface PathItem { label?: string; valor?: string }
 
 function servidoresList(): ServerResult {
   try {
-    const todos = (dbGetAll('Servidores') as Array<Record<string, unknown>>).map((s) => {
+    // v1.190 — escopo por empresa ativa (Consolidado = todas).
+    const todos = _filtraEmpresa(dbGetAll('Servidores') as Array<Record<string, unknown>>).map((s) => {
       // Normaliza paths: aceita string JSON, array ou vazio.
       let paths: PathItem[] = [];
       const rawPaths = s.paths;
@@ -20217,7 +20221,7 @@ function servidoresSave(payload: {
       dbUpdate('Servidores', payload.id, base);
       return { ok: true, data: { id: payload.id } };
     }
-    const novo = dbCreate('Servidores', { ...base, criadoEm: agora });
+    const novo = dbCreate('Servidores', { ...base, criadoEm: agora, empresaId: _empresaParaCriarId() });
     return { ok: true, data: { id: String(novo.id || '') } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar servidor' };

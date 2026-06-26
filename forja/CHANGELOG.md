@@ -36,6 +36,10 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.190.0] — 2026-06-26
+
+- **Escopo por empresa ligado nas conexões (Fase 3b)** — APIs e Servidores agora filtram pela empresa ativa (Consolidado = todas) e novas conexões são carimbadas na empresa do escopo. Novo `EmpresaScopeBar` no hub (Configurações → Conexões → APIs/Infra) dá o contexto e troca de escopo na hora. O monitor global (Operações → Status) segue mostrando a saúde de todos os endpoints. Reversível — os dados já estavam preparados pela Fase 3a e o backup automático foi criado antes.
+
 ## [1.189.0] — 2026-06-26
 
 - **Backup automático + escopo por empresa nas conexões (Fase 3a)** — preparação segura para a unificação. Nova migração idempotente que (1) faz backup das abas `Apis`/`Servidores`/`Recursos` antes de tocar (abas ocultas `_bkp_…`) e (2) adiciona a coluna `empresaId` (append-only) carimbando os registros legados na empresa padrão. Sem mudança de comportamento — leitura/escrita seguem como antes, então é reversível.
