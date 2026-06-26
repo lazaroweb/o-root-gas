@@ -14,7 +14,7 @@ import {
   Search,
   Compass,
   Keyboard,
-  Wrench,
+  Gem,
   Bell,
   Sun,
   Moon,
@@ -56,7 +56,7 @@ const ITEMS: Array<{ key: ViewName; icon: React.ReactNode; label: string }> = [
   { key: 'operacoes', icon: <Activity size={18} strokeWidth={1.6} />, label: 'Ao vivo' },
   { key: 'financeiro', icon: <Wallet size={18} strokeWidth={1.6} />, label: 'Financeiro' },
   { key: 'forja-ia', icon: <Sparkles size={18} strokeWidth={1.6} />, label: 'Forja IA' },
-  { key: 'atelier', icon: <Wrench size={18} strokeWidth={1.6} />, label: 'Atelier' },
+  { key: 'atelier', icon: <Gem size={18} strokeWidth={1.6} />, label: 'Atelier' },
   { key: 'estudos', icon: <GraduationCap size={18} strokeWidth={1.6} />, label: 'Estudos' },
   { key: 'relatorios', icon: <FileText size={18} strokeWidth={1.6} />, label: 'Relatórios' },
 ];
@@ -97,7 +97,7 @@ export default function AppSidebar({ currentView, saudeMedia, papel, onNavigate,
         onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = mode === 'luz' ? '#F5F1EA' : '#212327'; }}
         onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}
       >
-        <span className={item.key === 'operacoes' ? 'forja-live-icon' : undefined} style={{ display: 'inline-flex', color: active ? t.accents.peach : t.textTertiary }}>{item.icon}</span>
+        <span className={item.key === 'operacoes' ? 'forja-live-icon' : item.key === 'atelier' ? 'forja-gem-icon' : undefined} style={{ display: 'inline-flex', color: active ? t.accents.peach : t.textTertiary }}>{item.icon}</span>
         <span style={{ flex: 1 }}>{item.label}</span>
         {item.key === 'ideias' && ideiasInbox > 0 && (
           <span

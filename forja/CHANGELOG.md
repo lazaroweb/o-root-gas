@@ -36,6 +36,10 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.191.2] — 2026-06-26
+
+- **Atelier ganha ícone de joia (Gem) com vida própria** — o ícone do Atelier na sidebar virou uma pedra lapidada com brilho que respira e um glint que cintila de tempos em tempos (luz batendo na joia). Tratamento distinto do "Ao vivo"; respeita `prefers-reduced-motion`.
+
 ## [1.191.1] — 2026-06-26
 
 - **Ícone "Ao vivo" ganha vida na sidebar** — um arco de luz (na cor do próprio ícone) gira sutilmente ao redor do ícone de "Ao vivo", como um sinal pulsando. Só nesse item, premium e discreto; respeita `prefers-reduced-motion`.

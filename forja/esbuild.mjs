@@ -238,6 +238,32 @@ const html = `<!DOCTYPE html>
       @media (prefers-reduced-motion: reduce) {
         .forja-live-icon::before { animation: none; opacity: 0; }
       }
+      /* ─── Atelier: joia que respira e cintila ─────────────────────────────
+         O lugar predileto. Um brilho suave pulsa na cor do ícone e, de tempos
+         em tempos, um glint (estrelinha) cintila numa faceta — como luz batendo
+         numa pedra lapidada. Distinto do "Ao vivo" (que gira). */
+      @keyframes forjaGemGlow {
+        0%, 100% { filter: drop-shadow(0 0 0 transparent); }
+        50%      { filter: drop-shadow(0 0 3.5px currentColor); }
+      }
+      @keyframes forjaGemSparkle {
+        0%, 64%, 100% { opacity: 0; transform: translate(-2px, -2px) scale(0.5) rotate(0deg); }
+        72%           { opacity: 1; transform: translate(0, 0) scale(1) rotate(20deg); }
+        84%           { opacity: 0; transform: translate(2px, 2px) scale(0.5) rotate(40deg); }
+      }
+      .forja-gem-icon {
+        position: relative; display: inline-flex; align-items: center; justify-content: center;
+        animation: forjaGemGlow 3.6s ease-in-out infinite;
+      }
+      .forja-gem-icon::after {
+        content: ''; position: absolute; top: 0px; right: 1px; width: 3.5px; height: 3.5px;
+        border-radius: 50%; background: #fff; box-shadow: 0 0 4px 1px currentColor;
+        opacity: 0; animation: forjaGemSparkle 4.6s ease-in-out infinite; pointer-events: none;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .forja-gem-icon { animation: none; }
+        .forja-gem-icon::after { animation: none; opacity: 0; }
+      }
       /* ─── Premium ambient (Dashboard) ──────────────────────────────────────
          Aurora: manchas de cor da paleta, muito borradas, derivando devagar —
          dá profundidade e "vida" sem poluir. Lift: cards sobem de leve no hover. */
