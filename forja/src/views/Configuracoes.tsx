@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Row, Col, Input, Button, Form, Select, Tag, Popconfirm, App as AntApp, Skeleton, Spin, Collapse } from 'antd';
 import { Sparkles, GitBranch, Layers, KeyRound, Plus, Trash2, CheckCircle2, Zap, RefreshCw, ExternalLink } from 'lucide-react';
-import { ShieldCheck, Tags, Bell, Database, Layers as LayersSection, Landmark, Plug, Cpu } from 'lucide-react';
+import { ShieldCheck, Tags, Bell, Database, Layers as LayersSection, Landmark, Plug, Cpu, CreditCard } from 'lucide-react';
 import { PageHeader, Panel } from '../components/ui';
 import IntegracoesFiscaisPanel from '../components/IntegracoesFiscaisPanel';
 import ApisPanel from '../components/ApisPanel';
 import ServidoresPanel from '../components/ServidoresPanel';
+import PagamentosPanel from '../components/PagamentosPanel';
 import AutomacoesPanel from '../components/AutomacoesPanel';
 import UsuariosPanel from '../components/UsuariosPanel';
 import ModeloAuditoriaPanel from '../components/ModeloAuditoriaPanel';
@@ -19,9 +20,9 @@ import { useIsMobile } from '../useResponsive';
 import callServer from '../gas-client';
 import type { Settings, Stack, StatusGeral, ServerResponse } from '../types';
 
-type SecaoKey = 'conta' | 'ia' | 'integracoes' | 'apis' | 'infra' | 'fiscal' | 'financeiro' | 'automacoes' | 'dados' | 'stacks';
+type SecaoKey = 'conta' | 'ia' | 'integracoes' | 'apis' | 'infra' | 'pagamentos' | 'fiscal' | 'financeiro' | 'automacoes' | 'dados' | 'stacks';
 
-const SECAO_VALIDAS: SecaoKey[] = ['conta', 'ia', 'integracoes', 'apis', 'infra', 'fiscal', 'financeiro', 'automacoes', 'dados', 'stacks'];
+const SECAO_VALIDAS: SecaoKey[] = ['conta', 'ia', 'integracoes', 'apis', 'infra', 'pagamentos', 'fiscal', 'financeiro', 'automacoes', 'dados', 'stacks'];
 
 interface ConfiguracoesProps {
   // Deep-link: abre direto numa seção (ex.: vindo de Operações/Atelier → Conexões).
@@ -175,6 +176,7 @@ export default function Configuracoes({ initialSecao }: ConfiguracoesProps = {})
     { key: 'integracoes', label: 'Integrações', descricao: 'GitHub', icon: <GitBranch size={18} strokeWidth={1.6} />, accent: t.accents.lavender, status: settings?.github.temToken ? 'ok' : 'pendente' },
     { key: 'apis', label: 'APIs & Webhooks', descricao: 'Endpoints monitorados por aplicação', icon: <Plug size={18} strokeWidth={1.6} />, accent: t.accents.peach },
     { key: 'infra', label: 'Infraestrutura', descricao: 'Servidores e instâncias que você roda', icon: <Cpu size={18} strokeWidth={1.6} />, accent: t.accents.sage },
+    { key: 'pagamentos', label: 'Pagamentos (PSP)', descricao: 'Asaas / Mercado Pago — boleto, PIX, webhook', icon: <CreditCard size={18} strokeWidth={1.6} />, accent: t.accents.blue },
     { key: 'fiscal', label: 'Fiscal & Governo', descricao: 'Receita, SEFAZ, NFS-e, provedores', icon: <Landmark size={18} strokeWidth={1.6} />, accent: t.accents.clay },
     { key: 'financeiro', label: 'Financeiro', descricao: 'Regras de categoria', icon: <Tags size={18} strokeWidth={1.6} />, accent: t.accents.sage },
     { key: 'automacoes', label: 'Automações & Alertas', descricao: 'Regras, e-mail, WhatsApp', icon: <Bell size={18} strokeWidth={1.6} />, accent: t.accents.clay },
@@ -328,6 +330,19 @@ export default function Configuracoes({ initialSecao }: ConfiguracoesProps = {})
             </div>
             <div style={{ marginBottom: 16, color: t.textSecondary, fontSize: 12.5, lineHeight: 1.6 }}>{intro}</div>
             <ServidoresPanel mode="full" />
+          </div>
+        );
+      }
+      case 'pagamentos': {
+        const intro = 'Provedor de cobrança usado pelas Cobranças do Financeiro (boleto/PIX + baixa automática por webhook). Mesma configuração — editar aqui ou lá dá no mesmo.';
+        return (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <CreditCard size={18} strokeWidth={1.6} color={t.accents.blue} />
+              <span style={{ fontFamily: FONTS.display, fontSize: 16, fontWeight: 600, color: t.text }}>Pagamentos (PSP)</span>
+            </div>
+            <div style={{ marginBottom: 16, color: t.textSecondary, fontSize: 12.5, lineHeight: 1.6 }}>{intro}</div>
+            <PagamentosPanel />
           </div>
         );
       }

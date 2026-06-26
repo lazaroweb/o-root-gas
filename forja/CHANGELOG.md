@@ -36,6 +36,10 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.188.1] — 2026-06-26
+
+- **Pagamentos (PSP) no hub de Conexões (Fase 2)** — configuração de Asaas/Mercado Pago agora também vive em Configurações → Conexões → Pagamentos, via novo `PagamentosPanel`. Usa as mesmas RPCs (`cobrancaConfigGet`/`cobrancaConfigSalvar`) do modal do Financeiro, então as duas telas ficam sempre em sincronia. Sem mudança de backend — reversível.
+
 ## [1.188.0] — 2026-06-26
 
 - **Conexões centralizadas em Configurações (Fase 1)** — APIs e Servidores agora têm cadastro único em Configurações → Conexões. Operações → Status e Atelier → Servidores viram monitor (leitura + teste/ping) com atalho "Gerenciar em Configurações". Sem migração de dados — totalmente reversível.
