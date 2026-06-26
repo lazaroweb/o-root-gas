@@ -27,7 +27,7 @@ const GRUPOS: Grupo[] = [
       { keys: ['G', 'I'], label: 'Ideias' },
       { keys: ['G', 'X'], label: 'Captura rápida de ideia (modal flutuante)' },
       { keys: ['G', 'S'], label: 'Sistemas' },
-      { keys: ['G', 'O'], label: 'Operações' },
+      { keys: ['G', 'O'], label: 'Ao vivo' },
       { keys: ['G', 'F'], label: 'Financeiro' },
       { keys: ['G', 'A'], label: 'Forja AI' },
       { keys: ['G', 'R'], label: 'Relatórios' },

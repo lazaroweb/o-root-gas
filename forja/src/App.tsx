@@ -39,7 +39,7 @@ const { Content } = Layout;
 const VIEW_LABELS: Record<ViewName, string> = {
   dashboard: 'Dashboard', clientes: 'Clientes', ideias: 'Ideias',
   sistemas: 'Sistemas (Bancada)',
-  operacoes: 'Operações', financeiro: 'Financeiro', 'forja-ia': 'Forja IA', relatorios: 'Relatórios',
+  operacoes: 'Ao vivo', financeiro: 'Financeiro', 'forja-ia': 'Forja IA', relatorios: 'Relatórios',
   atelier: 'Atelier', estudos: 'Estudos', configuracoes: 'Configurações', 'sistema-form': 'Criar/editar sistema',
   'sistema-detail': 'Detalhe do sistema', oportunidades: 'Oportunidades', genese: 'Gênese (kickoff)',
 };

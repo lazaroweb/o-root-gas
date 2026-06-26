@@ -370,7 +370,7 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
                 const precisaAjuste = !r.live.configurado || !r.live.conectado;
                 const tipFinal = precisaAjuste
                   ? `${r.tip}\n\nClique pra abrir Configurações e corrigir.`
-                  : `${r.tip}\n\nClique pra ver detalhes em Operações.`;
+                  : `${r.tip}\n\nClique pra ver detalhes em Ao vivo.`;
                 const onClick = () => onNavigate(precisaAjuste ? 'configuracoes' : 'operacoes');
                 return (
                   <Tooltip key={i} title={tipFinal} placement="left">

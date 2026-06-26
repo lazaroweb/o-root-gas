@@ -36,6 +36,10 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.191.0] — 2026-06-26
+
+- **"Operações" vira "Ao vivo" + cockpit de visão geral** — a seção foi renomeada (deixou de gerir conexões, agora só observa em tempo real) e ganhou uma aba inicial "Visão geral": anel de saúde geral, tiles de Conexões/Aplicações/Repositórios/Monitor e um painel "Precisa de atenção" que agrega tudo que está fora do ar com caminho de resolução. As abas de detalhe (Conexões, Aplicações, GitHub, Monitoramento) seguem para o aprofundamento. Chave interna `operacoes` preservada (atalho G+O e deep-links intactos).
+
 ## [1.190.0] — 2026-06-26
 
 - **Escopo por empresa ligado nas conexões (Fase 3b)** — APIs e Servidores agora filtram pela empresa ativa (Consolidado = todas) e novas conexões são carimbadas na empresa do escopo. Novo `EmpresaScopeBar` no hub (Configurações → Conexões → APIs/Infra) dá o contexto e troca de escopo na hora. O monitor global (Operações → Status) segue mostrando a saúde de todos os endpoints. Reversível — os dados já estavam preparados pela Fase 3a e o backup automático foi criado antes.

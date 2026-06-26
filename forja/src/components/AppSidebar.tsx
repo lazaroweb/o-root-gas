@@ -53,7 +53,7 @@ const ITEMS: Array<{ key: ViewName; icon: React.ReactNode; label: string }> = [
   // maduro. Captura zero-fricção, triagem rica, lifecycle completo, modo foco.
   { key: 'ideias', icon: <Lightbulb size={18} strokeWidth={1.6} />, label: 'Ideias' },
   { key: 'sistemas', icon: <Boxes size={18} strokeWidth={1.6} />, label: 'Sistemas' },
-  { key: 'operacoes', icon: <Activity size={18} strokeWidth={1.6} />, label: 'Operações' },
+  { key: 'operacoes', icon: <Activity size={18} strokeWidth={1.6} />, label: 'Ao vivo' },
   { key: 'financeiro', icon: <Wallet size={18} strokeWidth={1.6} />, label: 'Financeiro' },
   { key: 'forja-ia', icon: <Sparkles size={18} strokeWidth={1.6} />, label: 'Forja IA' },
   { key: 'atelier', icon: <Wrench size={18} strokeWidth={1.6} />, label: 'Atelier' },
