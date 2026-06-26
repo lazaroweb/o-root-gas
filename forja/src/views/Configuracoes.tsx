@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Row, Col, Input, Button, Form, Select, Tag, Popconfirm, App as AntApp, Skeleton, Spin, Collapse } from 'antd';
 import { Sparkles, GitBranch, Layers, KeyRound, Plus, Trash2, CheckCircle2, Zap, RefreshCw, ExternalLink } from 'lucide-react';
-import { ShieldCheck, Tags, Bell, Database, Layers as LayersSection } from 'lucide-react';
+import { ShieldCheck, Tags, Bell, Database, Layers as LayersSection, Landmark } from 'lucide-react';
 import { PageHeader, Panel } from '../components/ui';
+import IntegracoesFiscaisPanel from '../components/IntegracoesFiscaisPanel';
 import AutomacoesPanel from '../components/AutomacoesPanel';
 import UsuariosPanel from '../components/UsuariosPanel';
 import ModeloAuditoriaPanel from '../components/ModeloAuditoriaPanel';
@@ -16,7 +17,7 @@ import { useIsMobile } from '../useResponsive';
 import callServer from '../gas-client';
 import type { Settings, Stack, StatusGeral, ServerResponse } from '../types';
 
-type SecaoKey = 'conta' | 'ia' | 'integracoes' | 'financeiro' | 'automacoes' | 'dados' | 'stacks';
+type SecaoKey = 'conta' | 'ia' | 'integracoes' | 'fiscal' | 'financeiro' | 'automacoes' | 'dados' | 'stacks';
 
 export default function Configuracoes(): React.ReactElement {
   const t = useTokens();
@@ -158,6 +159,7 @@ export default function Configuracoes(): React.ReactElement {
     { key: 'conta', label: 'Conta & Acesso', descricao: 'Usuários e permissões', icon: <ShieldCheck size={18} strokeWidth={1.6} />, accent: t.accents.peach },
     { key: 'ia', label: 'Inteligência (IA)', descricao: 'Proxy, Gemini e auditoria', icon: <Sparkles size={18} strokeWidth={1.6} />, accent: t.accents.peach, status: (settings?.llm.temChave || settings?.gemini?.temChave) ? 'ok' : 'pendente' },
     { key: 'integracoes', label: 'Integrações', descricao: 'GitHub', icon: <GitBranch size={18} strokeWidth={1.6} />, accent: t.accents.lavender, status: settings?.github.temToken ? 'ok' : 'pendente' },
+    { key: 'fiscal', label: 'Fiscal & Governo', descricao: 'Receita, SEFAZ, NFS-e, provedores', icon: <Landmark size={18} strokeWidth={1.6} />, accent: t.accents.clay },
     { key: 'financeiro', label: 'Financeiro', descricao: 'Regras de categoria', icon: <Tags size={18} strokeWidth={1.6} />, accent: t.accents.sage },
     { key: 'automacoes', label: 'Automações & Alertas', descricao: 'Regras, e-mail, WhatsApp', icon: <Bell size={18} strokeWidth={1.6} />, accent: t.accents.clay },
     { key: 'dados', label: 'Dados & Backup', descricao: 'Exportar e restaurar', icon: <Database size={18} strokeWidth={1.6} />, accent: t.accents.blue },
@@ -287,6 +289,8 @@ export default function Configuracoes(): React.ReactElement {
             </Form>
           </Panel>
         );
+      case 'fiscal':
+        return <IntegracoesFiscaisPanel />;
       case 'financeiro':
         return <RegrasCategoriaPanel />;
       case 'automacoes':

@@ -5471,6 +5471,243 @@ function nfseConfigSalvar(payload: Record<string, unknown>): ServerResult {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// INTEGRAÇÕES FISCAIS & GOVERNO (v1.187) — catálogo de conectores por empresa
+//   Registro central de endpoints + credenciais das integrações fiscais e com
+//   órgãos do governo. Config NÃO-secreta vai numa Script Property por empresa
+//   (INTEG_CFG_<id>__<empresaId>); SEGREDOS vão em chaves isoladas, nunca
+//   retornados (só um flag + últimos 4 dígitos). Emissão real roteia por um
+//   provedor (PlugNotas/Focus/Asaas); SEFAZ/cert/SOAP ficam como registro+docs.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface IntegCampo { key: string; label: string; tipo: 'text' | 'password' | 'url'; secreto?: boolean; placeholder?: string; }
+interface IntegConector {
+  id: string; nome: string; categoria: string; descricao: string; docsUrl: string;
+  accent: string; authLabel: string; nota?: string; externo?: string;
+  endpoints: { producao: string; homologacao: string };
+  campos: IntegCampo[];
+  test?: { path: string; auth: 'header' | 'basic'; header?: string; campoChave: string };
+}
+
+const _INTEG_CATEGORIAS = [
+  { key: 'emissao', label: 'Emissão de notas' },
+  { key: 'federal', label: 'Federal' },
+  { key: 'estadual', label: 'Estadual (Bahia)' },
+  { key: 'municipal', label: 'Municipal (Salvador)' },
+];
+
+const _INTEG_CATALOGO: IntegConector[] = [
+  {
+    id: 'plugnotas', nome: 'PlugNotas (Tecnospeed)', categoria: 'emissao', accent: 'sage',
+    descricao: 'Motor de emissão de NF-e, NFS-e e NFC-e via API JSON. Recomendado.',
+    docsUrl: 'https://docs.plugnotas.com.br/', authLabel: 'API key (x-api-key)',
+    endpoints: { producao: 'https://api.plugnotas.com.br', homologacao: 'https://api.sandbox.plugnotas.com.br' },
+    campos: [{ key: 'apiKey', label: 'API key', tipo: 'password', secreto: true, placeholder: 'x-api-key do PlugNotas' }],
+    test: { path: '/empresa', auth: 'header', header: 'x-api-key', campoChave: 'apiKey' },
+  },
+  {
+    id: 'focus', nome: 'Focus NFe', categoria: 'emissao', accent: 'blue',
+    descricao: 'Emissão de NF-e/NFS-e/NFC-e com cobertura ampla de prefeituras.',
+    docsUrl: 'https://focusnfe.com.br/doc/', authLabel: 'Token (HTTP Basic)',
+    endpoints: { producao: 'https://api.focusnfe.com.br', homologacao: 'https://homologacao.focusnfe.com.br' },
+    campos: [{ key: 'token', label: 'Token', tipo: 'password', secreto: true, placeholder: 'token da Focus NFe' }],
+    test: { path: '/v2/empresas', auth: 'basic', campoChave: 'token' },
+  },
+  {
+    id: 'enotas', nome: 'eNotas', categoria: 'emissao', accent: 'lavender',
+    descricao: 'Emissão de NF-e/NFS-e por API. Bom para produtos digitais.',
+    docsUrl: 'https://docs.enotasgw.com.br/', authLabel: 'API key',
+    endpoints: { producao: 'https://api.enotasgw.com.br', homologacao: 'https://api.enotasgw.com.br' },
+    campos: [{ key: 'apiKey', label: 'API key', tipo: 'password', secreto: true, placeholder: 'api key eNotas' }],
+  },
+  {
+    id: 'asaas', nome: 'Asaas (cobranças + NFS-e)', categoria: 'emissao', accent: 'clay', externo: 'asaas',
+    descricao: 'Já integrado para cobranças (boleto/PIX) e NFS-e via Asaas.',
+    docsUrl: 'https://docs.asaas.com/', authLabel: 'Configurado em Financeiro › Cobranças',
+    nota: 'Gerencie a chave do Asaas em Financeiro › Cobranças. Aqui é só o status.',
+    endpoints: { producao: 'https://api.asaas.com/v3', homologacao: 'https://sandbox.asaas.com/api/v3' },
+    campos: [],
+  },
+  {
+    id: 'serpro', nome: 'Receita Federal / Serpro', categoria: 'federal', accent: 'peach',
+    descricao: 'APIs Serpro: Integra Contador, consulta CNPJ e situação fiscal.',
+    docsUrl: 'https://apicenter.estaleiro.serpro.gov.br/documentacao/', authLabel: 'OAuth (consumer key/secret)',
+    endpoints: { producao: 'https://gateway.apiserpro.serpro.gov.br', homologacao: 'https://gateway.apiserprohml.serpro.gov.br' },
+    campos: [
+      { key: 'consumerKey', label: 'Consumer Key', tipo: 'password', secreto: true, placeholder: 'consumer key Serpro' },
+      { key: 'consumerSecret', label: 'Consumer Secret', tipo: 'password', secreto: true, placeholder: 'consumer secret Serpro' },
+    ],
+  },
+  {
+    id: 'nfse_nacional', nome: 'NFS-e Nacional (gov.br / ADN)', categoria: 'federal', accent: 'blue',
+    descricao: 'Ambiente de Dados Nacional: consulta/distribuição de NFS-e. Acesso por certificado digital.',
+    docsUrl: 'https://www.gov.br/nfse/pt-br/biblioteca/documentacao-tecnica', authLabel: 'Certificado digital A1',
+    nota: 'Acesso por certificado A1 (mTLS) — a emissão/consulta roteia pelo provedor. SEFIN Nacional: https://sefin.nfse.gov.br',
+    endpoints: { producao: 'https://adn.nfse.gov.br', homologacao: 'https://adn.producaorestrita.nfse.gov.br' },
+    campos: [
+      { key: 'inscricao', label: 'Inscrição / observações', tipo: 'text', placeholder: 'referência do certificado / inscrição' },
+      { key: 'senhaCertificado', label: 'Senha do certificado A1', tipo: 'password', secreto: true, placeholder: 'senha do .pfx/.p12' },
+    ],
+  },
+  {
+    id: 'govbr', nome: 'gov.br (Login Único)', categoria: 'federal', accent: 'lavender',
+    descricao: 'Autenticação OAuth via gov.br (Login Único).',
+    docsUrl: 'https://acesso.gov.br/roteiro-tecnico/', authLabel: 'OAuth (client id/secret)',
+    endpoints: { producao: 'https://sso.acesso.gov.br', homologacao: 'https://sso.staging.acesso.gov.br' },
+    campos: [
+      { key: 'clientId', label: 'Client ID', tipo: 'text', placeholder: 'client id gov.br' },
+      { key: 'clientSecret', label: 'Client Secret', tipo: 'password', secreto: true, placeholder: 'client secret gov.br' },
+    ],
+  },
+  {
+    id: 'sefaz_ba', nome: 'SEFAZ-BA (NF-e / NFC-e)', categoria: 'estadual', accent: 'clay',
+    descricao: 'Autorizador estadual da Bahia para notas de mercadoria (modelo 55/65).',
+    docsUrl: 'http://www.sefaz.ba.gov.br/', authLabel: 'Certificado digital A1 (SOAP)',
+    nota: 'Webservices SOAP com certificado — emissão roteia pelo provedor (PlugNotas/Focus).',
+    endpoints: { producao: 'https://nfe.sefaz.ba.gov.br', homologacao: 'https://hnfe.sefaz.ba.gov.br' },
+    campos: [
+      { key: 'inscricaoEstadual', label: 'Inscrição Estadual', tipo: 'text', placeholder: 'IE da empresa' },
+      { key: 'senhaCertificado', label: 'Senha do certificado A1', tipo: 'password', secreto: true, placeholder: 'senha do .pfx/.p12' },
+    ],
+  },
+  {
+    id: 'juceb', nome: 'JUCEB / Redesim', categoria: 'estadual', accent: 'peach',
+    descricao: 'Junta Comercial da Bahia e integrador estadual (Redesim) para registro empresarial.',
+    docsUrl: 'http://www.juceb.ba.gov.br/', authLabel: 'Usuário e senha do integrador',
+    endpoints: { producao: 'http://www.juceb.ba.gov.br', homologacao: 'http://www.juceb.ba.gov.br' },
+    campos: [
+      { key: 'usuario', label: 'Usuário', tipo: 'text', placeholder: 'usuário JUCEB/Redesim' },
+      { key: 'senha', label: 'Senha', tipo: 'password', secreto: true, placeholder: 'senha' },
+    ],
+  },
+  {
+    id: 'sefaz_salvador', nome: 'SEFAZ Salvador (ISS / Nota Salvador)', categoria: 'municipal', accent: 'rose',
+    descricao: 'NFS-e municipal de Salvador (ISS). Acesso por login da prefeitura.',
+    docsUrl: 'https://notasalvador.salvador.ba.gov.br/', authLabel: 'Login da prefeitura',
+    endpoints: { producao: 'https://notasalvador.salvador.ba.gov.br', homologacao: 'https://notasalvador.salvador.ba.gov.br' },
+    campos: [
+      { key: 'inscricaoMunicipal', label: 'Inscrição Municipal', tipo: 'text', placeholder: 'IM da empresa' },
+      { key: 'login', label: 'Login', tipo: 'text', placeholder: 'login da prefeitura' },
+      { key: 'senha', label: 'Senha', tipo: 'password', secreto: true, placeholder: 'senha' },
+    ],
+  },
+];
+
+function _integEmpresaId(): string { return _empresaFiltroId() || _empresaDefaultId(); }
+function _integCfgKey(cid: string): string { return 'INTEG_CFG_' + cid + '__' + _integEmpresaId(); }
+function _integSecKey(cid: string, campo: string): string { return 'INTEG_SEC_' + cid + '_' + campo + '__' + _integEmpresaId(); }
+function _integConector(cid: string): IntegConector | null { return _INTEG_CATALOGO.find((c) => c.id === cid) || null; }
+function _integSecGet(cid: string, campo: string): string {
+  try { return PropertiesService.getScriptProperties().getProperty(_integSecKey(cid, campo)) || ''; } catch { return ''; }
+}
+
+function _integCfgLer(cid: string): { ambiente: string; endpoints: { producao: string; homologacao: string }; valores: Record<string, string> } {
+  const c = _integConector(cid);
+  let saved: Record<string, unknown> = {};
+  try { const raw = PropertiesService.getScriptProperties().getProperty(_integCfgKey(cid)); if (raw) saved = JSON.parse(raw); } catch { /* noop */ }
+  const sEnd = (saved['endpoints'] as Record<string, unknown>) || {};
+  return {
+    ambiente: saved['ambiente'] === 'producao' ? 'producao' : 'homologacao',
+    endpoints: {
+      producao: String(sEnd['producao'] || (c ? c.endpoints.producao : '') || ''),
+      homologacao: String(sEnd['homologacao'] || (c ? c.endpoints.homologacao : '') || ''),
+    },
+    valores: (saved['valores'] && typeof saved['valores'] === 'object') ? (saved['valores'] as Record<string, string>) : {},
+  };
+}
+
+function getIntegracoesFiscais(): ServerResult {
+  try {
+    const empId = _integEmpresaId();
+    const emp = _empresasAll().find((e) => String(e['id']) === empId);
+    const empNome = emp ? String(emp['nomeFantasia'] || emp['razaoSocial'] || '') : '';
+    const conectores = _INTEG_CATALOGO.map((c) => {
+      const cfg = _integCfgLer(c.id);
+      const campos = c.campos.map((f) => {
+        if (f.secreto) { const v = _integSecGet(c.id, f.key); return { key: f.key, label: f.label, tipo: f.tipo, secreto: true, placeholder: f.placeholder || '', tem: !!v, ultimos: v ? v.slice(-4) : '' }; }
+        return { key: f.key, label: f.label, tipo: f.tipo, secreto: false, placeholder: f.placeholder || '', valor: String(cfg.valores[f.key] || '') };
+      });
+      let configurado: boolean;
+      if (c.externo === 'asaas') { configurado = !!_pspConfig().asaasKey; }
+      else {
+        const secs = c.campos.filter((f) => f.secreto);
+        configurado = secs.length ? secs.some((f) => !!_integSecGet(c.id, f.key)) : Object.keys(cfg.valores).some((k) => !!cfg.valores[k]);
+      }
+      return {
+        id: c.id, nome: c.nome, categoria: c.categoria, descricao: c.descricao, docsUrl: c.docsUrl,
+        accent: c.accent, authLabel: c.authLabel, nota: c.nota || '', externo: c.externo || '',
+        testavel: !!c.test, ambiente: cfg.ambiente, endpoints: cfg.endpoints, campos, configurado,
+      };
+    });
+    return { ok: true, data: { empresaId: empId, empresaNome: empNome, categorias: _INTEG_CATEGORIAS, conectores } };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar integrações' }; }
+}
+
+function salvarIntegracaoFiscal(connectorId: string, payload: Record<string, unknown>): ServerResult {
+  try {
+    const c = _integConector(String(connectorId));
+    if (!c) return { ok: false, error: 'Conector inválido' };
+    if (c.externo) return { ok: false, error: 'Este conector é gerenciado em outro lugar.' };
+    const p = payload || {};
+    const cfg = _integCfgLer(c.id);
+    const pEnd = (p['endpoints'] as Record<string, unknown>) || {};
+    const pVal = (p['valores'] as Record<string, unknown>) || {};
+    const pSec = (p['segredos'] as Record<string, unknown>) || {};
+    const novo = {
+      ambiente: p['ambiente'] === 'producao' ? 'producao' : 'homologacao',
+      endpoints: {
+        producao: String(pEnd['producao'] !== undefined ? pEnd['producao'] : cfg.endpoints.producao || ''),
+        homologacao: String(pEnd['homologacao'] !== undefined ? pEnd['homologacao'] : cfg.endpoints.homologacao || ''),
+      },
+      valores: { ...cfg.valores } as Record<string, string>,
+    };
+    for (const f of c.campos) {
+      if (!f.secreto && pVal[f.key] !== undefined) novo.valores[f.key] = String(pVal[f.key] || '');
+    }
+    PropertiesService.getScriptProperties().setProperty(_integCfgKey(c.id), JSON.stringify(novo));
+    for (const f of c.campos) {
+      if (f.secreto && pSec[f.key] !== undefined) {
+        const v = String(pSec[f.key] || '');
+        if (v) PropertiesService.getScriptProperties().setProperty(_integSecKey(c.id, f.key), v);
+      }
+    }
+    return getIntegracoesFiscais();
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar integração' }; }
+}
+
+function testarIntegracaoFiscal(connectorId: string): ServerResult {
+  try {
+    const c = _integConector(String(connectorId));
+    if (!c) return { ok: false, error: 'Conector inválido' };
+    if (c.externo === 'asaas') {
+      return _pspConfig().asaasKey
+        ? { ok: true, data: { status: 'conectado', mensagem: 'Asaas configurado em Financeiro › Cobranças.' } }
+        : { ok: false, error: 'Asaas ainda não configurado (Financeiro › Cobranças).' };
+    }
+    if (!c.test) return { ok: true, data: { status: 'registro', mensagem: 'Registro salvo. Este conector não tem teste automático (emissão via provedor ou certificado digital).' } };
+    const chave = _integSecGet(c.id, c.test.campoChave);
+    if (!chave) return { ok: false, error: 'Configure e salve as credenciais antes de testar.' };
+    const cfg = _integCfgLer(c.id);
+    const base = (cfg.ambiente === 'producao' ? cfg.endpoints.producao : cfg.endpoints.homologacao) || '';
+    if (!base) return { ok: false, error: 'Endpoint não configurado.' };
+    const headers: Record<string, string> = {};
+    if (c.test.auth === 'header' && c.test.header) headers[c.test.header] = chave;
+    else if (c.test.auth === 'basic') headers['Authorization'] = 'Basic ' + Utilities.base64Encode(chave + ':');
+    const t0 = Date.now();
+    const resp = UrlFetchApp.fetch(base.replace(/\/$/, '') + c.test.path, { method: 'get', headers, muteHttpExceptions: true });
+    const latenciaMs = Date.now() - t0;
+    const code = resp.getResponseCode();
+    const conectado = code >= 200 && code < 300;
+    return {
+      ok: true,
+      data: {
+        status: conectado ? 'conectado' : 'falha', code, latenciaMs,
+        mensagem: conectado ? `Conexão OK (${latenciaMs}ms · HTTP ${code})` : `Resposta HTTP ${code} — verifique as credenciais/ambiente.`,
+      },
+    };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Falha ao testar conexão' }; }
+}
+
 // Busca serviços municipais no Asaas (pra preencher código/nome na config).
 function nfseMunicipalServices(descricao: string): ServerResult {
   try {
