@@ -36,6 +36,12 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.189.0] — 2026-06-26
+
+- **Backup automático + escopo por empresa nas conexões (Fase 3a)** — preparação segura para a unificação. Nova migração idempotente que (1) faz backup das abas `Apis`/`Servidores`/`Recursos` antes de tocar (abas ocultas `_bkp_…`) e (2) adiciona a coluna `empresaId` (append-only) carimbando os registros legados na empresa padrão. Sem mudança de comportamento — leitura/escrita seguem como antes, então é reversível.
+- Novo painel "Backup das conexões" em Configurações → Dados: backup manual, histórico e restauração (com snapshot `pre-restore` automático antes de sobrescrever).
+- Novos RPCs: `backupConexoes`, `listarBackupsConexoes`, `restaurarBackupConexoes`.
+
 ## [1.188.1] — 2026-06-26
 
 - **Pagamentos (PSP) no hub de Conexões (Fase 2)** — configuração de Asaas/Mercado Pago agora também vive em Configurações → Conexões → Pagamentos, via novo `PagamentosPanel`. Usa as mesmas RPCs (`cobrancaConfigGet`/`cobrancaConfigSalvar`) do modal do Financeiro, então as duas telas ficam sempre em sincronia. Sem mudança de backend — reversível.

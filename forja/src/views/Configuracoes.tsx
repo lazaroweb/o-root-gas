@@ -14,6 +14,7 @@ import RoteamentoIAPanel from '../components/RoteamentoIAPanel';
 import RegrasCategoriaPanel from '../components/RegrasCategoriaPanel';
 import ModelosDisponiveisWidget from '../components/ModelosDisponiveisWidget';
 import BackupRestorePanel from '../components/BackupRestorePanel';
+import ConexoesBackupPanel from '../components/ConexoesBackupPanel';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import { useIsMobile } from '../useResponsive';
@@ -353,7 +354,12 @@ export default function Configuracoes({ initialSecao }: ConfiguracoesProps = {})
       case 'automacoes':
         return <AutomacoesPanel />;
       case 'dados':
-        return <BackupRestorePanel />;
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <BackupRestorePanel />
+            <ConexoesBackupPanel />
+          </div>
+        );
       case 'stacks':
         return (
           <Panel title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Layers size={18} strokeWidth={1.6} color={t.accents.blue} /> Catálogo de Stacks</span>}>

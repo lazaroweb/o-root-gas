@@ -95,7 +95,9 @@ const SCHEMA: SheetSchema[] = [
   { name: 'Alertas', columns: ['id', 'tipo', 'severidade', 'titulo', 'mensagem', 'sistemaId', 'criadoEm', 'lidoEm', 'dedupeKey', 'link'] },
   // ─── Novas entidades (Fase 1+) ─────────────────────────────────────────────
   { name: 'Stacks', columns: ['id', 'nome', 'categoria', 'descricao', 'docsUrl'] },
-  { name: 'Apis', columns: ['id', 'nome', 'provider', 'categoria', 'baseUrl', 'healthUrl', 'modelo', 'chaveRef', 'ultimoStatus', 'latenciaMs', 'sistemaId'] },
+  // `empresaId` (v1.189 — Fase 3): escopo por empresa das conexões. Append-only;
+  // legados sem empresa caem na default via _filtraEmpresa.
+  { name: 'Apis', columns: ['id', 'nome', 'provider', 'categoria', 'baseUrl', 'healthUrl', 'modelo', 'chaveRef', 'ultimoStatus', 'latenciaMs', 'sistemaId', 'empresaId'] },
   // `canceladaEm` (v1.16): data (YYYY-MM-DD) em que a assinatura foi cancelada —
   // append-only, preenchida automaticamente quando o status vira 'cancelada'.
   // Permite calcular churn do mês.
@@ -251,7 +253,7 @@ const SCHEMA: SheetSchema[] = [
   // m\u00edstria, DBs, workers, self-hosted). Diferente de "Hospedagem" (provedores
   // cloud que vendem infra). `paths` \u00e9 JSON com {config, logs, data, etc}.
   // `cofreLabel` referencia um item do Cofre quando o servidor tem API key/senha.
-  { name: 'Servidores', columns: ['id', 'nome', 'tipo', 'descricao', 'status', 'host', 'porta', 'url', 'ambiente', 'tecnologia', 'sistemaId', 'comandoStart', 'paths', 'dependencias', 'recursos', 'custoMensal', 'moeda', 'docsUrl', 'cofreLabel', 'tags', 'notas', 'criadoEm', 'atualizadoEm'] },
+  { name: 'Servidores', columns: ['id', 'nome', 'tipo', 'descricao', 'status', 'host', 'porta', 'url', 'ambiente', 'tecnologia', 'sistemaId', 'comandoStart', 'paths', 'dependencias', 'recursos', 'custoMensal', 'moeda', 'docsUrl', 'cofreLabel', 'tags', 'notas', 'criadoEm', 'atualizadoEm', 'empresaId'] },
   // v1.147.0: DebitoTecnico — dívida técnica + TODO/FIXME/HACK detectados via
   // scan do repositório GitHub. Cada item é ancorado em arquivo:linha.
   // - tipo: 'debt' (estruturado via comentário `// DEBT(area,sev): desc`)
@@ -417,7 +419,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.86-codex-projeto';
+const SCHEMA_VERSION = 'v1.87-conexoes-empresa';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -507,7 +509,129 @@ function _executarMigracoes(): void {
       } catch { /* segue baile */ }
       props.setProperty('MIGRATION_V166_EMPRESAS', 'done');
     }
+    // v1.189.0 — Conexões (Fase 3): escopo por empresa para Apis/Servidores.
+    // Passo 1: BACKUP automático das abas afetadas (rede de segurança antes de
+    // qualquer escrita). Passo 2: carimba empresaId=default nos legados.
+    // Idempotente e append-only — nada é apagado, então é reversível.
+    if (props.getProperty('MIGRATION_V189_CONEXOES_EMPRESA') !== 'done') {
+      try {
+        _backupConexoesSheets('premig-v189');
+        const def = _empresaDefaultId();
+        if (def) _stampEmpresaIdConexoes(def);
+      } catch { /* segue baile — não bloqueia init */ }
+      props.setProperty('MIGRATION_V189_CONEXOES_EMPRESA', 'done');
+    }
   } catch { /* PropertiesService pode falhar em contextos limitados */ }
+}
+
+// ─── Backup das abas de conexões (rede de segurança da Fase 3) ────────────────
+// Duplica as abas dentro da própria planilha (sem novo escopo do Drive). O
+// restore é só copiar a aba de volta. Mantém um registro em ScriptProperties.
+
+const _CONEXOES_SHEETS = ['Apis', 'Servidores', 'Recursos'];
+
+function _bkpStamp(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+function _backupConexoesSheets(motivo: string): { stamp: string; abas: Array<{ origem: string; backup: string; linhas: number }> } {
+  const ss = getSpreadsheet();
+  const stamp = _bkpStamp();
+  const abas: Array<{ origem: string; backup: string; linhas: number }> = [];
+  for (const nome of _CONEXOES_SHEETS) {
+    const sheet = ss.getSheetByName(nome);
+    if (!sheet) continue;
+    const nomeBackup = `_bkp_${nome}__${stamp}`;
+    try {
+      const copia = sheet.copyTo(ss);
+      copia.setName(nomeBackup);
+      // Esconde a aba de backup pra não poluir a navegação da planilha.
+      try { copia.hideSheet(); } catch { /* algumas contas não permitem */ }
+      abas.push({ origem: nome, backup: nomeBackup, linhas: Math.max(0, sheet.getLastRow() - 1) });
+    } catch { /* se falhar uma aba, segue com as outras */ }
+  }
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const reg = JSON.parse(props.getProperty('FORJA_CONEXOES_BACKUPS') || '[]') as unknown[];
+    reg.unshift({ stamp, motivo: String(motivo || ''), criadoEm: new Date().toISOString(), abas });
+    // Mantém só os 20 backups mais recentes no registro.
+    props.setProperty('FORJA_CONEXOES_BACKUPS', JSON.stringify(reg.slice(0, 20)));
+  } catch { /* registro é best-effort */ }
+  return { stamp, abas };
+}
+
+function _stampEmpresaIdConexoes(defaultId: string): void {
+  const ss = getSpreadsheet();
+  for (const nome of ['Apis', 'Servidores']) {
+    const schema = SCHEMA.find((s) => s.name === nome);
+    if (!schema) continue;
+    const col = schema.columns.indexOf('empresaId');
+    if (col < 0) continue;
+    const sheet = ss.getSheetByName(nome);
+    if (!sheet) continue;
+    const lastRow = sheet.getLastRow();
+    if (lastRow <= 1) continue;
+    const range = sheet.getRange(2, col + 1, lastRow - 1, 1);
+    const vals = range.getValues();
+    let mudou = false;
+    for (let i = 0; i < vals.length; i++) {
+      if (vals[i][0] === '' || vals[i][0] === null || vals[i][0] === undefined) { vals[i][0] = defaultId; mudou = true; }
+    }
+    if (mudou) range.setValues(vals);
+  }
+}
+
+// RPC: cria um backup manual das abas de conexões (botão no hub).
+function backupConexoes(): ServerResult {
+  try {
+    initDatabase();
+    const r = _backupConexoesSheets('manual');
+    return { ok: true, data: r };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao fazer backup' };
+  }
+}
+
+// RPC: lista backups registrados (mais recentes primeiro).
+function listarBackupsConexoes(): ServerResult {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const reg = JSON.parse(props.getProperty('FORJA_CONEXOES_BACKUPS') || '[]') as unknown[];
+    return { ok: true, data: { backups: reg } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar backups' };
+  }
+}
+
+// RPC: restaura as abas de conexões a partir de um backup (por stamp).
+// Antes de sobrescrever, cria um backup-de-segurança do estado atual ('pre-restore'),
+// pra que um restore equivocado também seja reversível.
+function restaurarBackupConexoes(stamp: string): ServerResult {
+  try {
+    initDatabase();
+    const alvo = String(stamp || '').trim();
+    if (!alvo) return { ok: false, error: 'Backup inválido' };
+    const ss = getSpreadsheet();
+    // Segurança: snapshot do estado atual antes de mexer.
+    _backupConexoesSheets('pre-restore');
+    const restauradas: Array<{ sheet: string; linhas: number }> = [];
+    for (const nome of _CONEXOES_SHEETS) {
+      const bkp = ss.getSheetByName(`_bkp_${nome}__${alvo}`);
+      const live = ss.getSheetByName(nome);
+      if (!bkp || !live) continue;
+      const vals = bkp.getDataRange().getValues();
+      live.clearContents();
+      if (vals.length > 0) live.getRange(1, 1, vals.length, vals[0].length).setValues(vals);
+      live.setFrozenRows(1);
+      restauradas.push({ sheet: nome, linhas: Math.max(0, vals.length - 1) });
+    }
+    if (restauradas.length === 0) return { ok: false, error: 'Nenhuma aba desse backup foi encontrada.' };
+    return { ok: true, data: { restauradas } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao restaurar backup' };
+  }
 }
 
 // Self-bootstrap: cadastra repoUrl do repo oficial Forja quando detecta o
