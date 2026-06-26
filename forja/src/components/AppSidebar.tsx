@@ -97,7 +97,7 @@ export default function AppSidebar({ currentView, saudeMedia, papel, onNavigate,
         onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = mode === 'luz' ? '#F5F1EA' : '#212327'; }}
         onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}
       >
-        <span style={{ display: 'inline-flex', color: active ? t.accents.peach : t.textTertiary }}>{item.icon}</span>
+        <span className={item.key === 'operacoes' ? 'forja-live-icon' : undefined} style={{ display: 'inline-flex', color: active ? t.accents.peach : t.textTertiary }}>{item.icon}</span>
         <span style={{ flex: 1 }}>{item.label}</span>
         {item.key === 'ideias' && ideiasInbox > 0 && (
           <span

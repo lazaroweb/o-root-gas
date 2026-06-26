@@ -36,6 +36,10 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.191.1] — 2026-06-26
+
+- **Ícone "Ao vivo" ganha vida na sidebar** — um arco de luz (na cor do próprio ícone) gira sutilmente ao redor do ícone de "Ao vivo", como um sinal pulsando. Só nesse item, premium e discreto; respeita `prefers-reduced-motion`.
+
 ## [1.191.0] — 2026-06-26
 
 - **"Operações" vira "Ao vivo" + cockpit de visão geral** — a seção foi renomeada (deixou de gerir conexões, agora só observa em tempo real) e ganhou uma aba inicial "Visão geral": anel de saúde geral, tiles de Conexões/Aplicações/Repositórios/Monitor e um painel "Precisa de atenção" que agrega tudo que está fora do ar com caminho de resolução. As abas de detalhe (Conexões, Aplicações, GitHub, Monitoramento) seguem para o aprofundamento. Chave interna `operacoes` preservada (atalho G+O e deep-links intactos).

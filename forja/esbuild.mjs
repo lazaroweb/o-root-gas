@@ -221,6 +221,23 @@ const html = `<!DOCTYPE html>
         0%, 100% { opacity: 1; transform: scale(1); }
         50%      { opacity: 0.45; transform: scale(0.85); }
       }
+      /* ─── "Ao vivo": luz correndo ao redor do ícone ───────────────────────
+         Um arco curto (cor = currentColor do ícone) gira em volta, como um
+         sinal vivo. Mask deixa só um anel finíssimo. Premium e discreto. */
+      @keyframes forjaLiveSweep { to { transform: rotate(360deg); } }
+      @keyframes forjaLiveBreath { 0%,100% { opacity: 0.85; } 50% { opacity: 0.35; } }
+      .forja-live-icon { position: relative; display: inline-flex; align-items: center; justify-content: center; }
+      .forja-live-icon::before {
+        content: ''; position: absolute; inset: -4px; border-radius: 50%;
+        background: conic-gradient(from 0deg, transparent 0deg, currentColor 55deg, transparent 110deg);
+        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+                mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+        opacity: 0.6; animation: forjaLiveSweep 2.4s linear infinite, forjaLiveBreath 2.4s ease-in-out infinite;
+        pointer-events: none;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .forja-live-icon::before { animation: none; opacity: 0; }
+      }
       /* ─── Premium ambient (Dashboard) ──────────────────────────────────────
          Aurora: manchas de cor da paleta, muito borradas, derivando devagar —
          dá profundidade e "vida" sem poluir. Lift: cards sobem de leve no hover. */
