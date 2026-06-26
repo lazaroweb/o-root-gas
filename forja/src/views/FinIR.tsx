@@ -11,6 +11,7 @@ import StatCard from '../components/StatCard';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
+import { gerarEbaixarPdf } from '../pdf-client';
 import type { ServerResponse } from '../types';
 
 const TIPOS_RENDIMENTO = [
@@ -58,6 +59,14 @@ export default function FinIR(): React.ReactElement {
   const [dedForm] = Form.useForm();
   const [savingR, setSavingR] = useState(false);
   const [savingD, setSavingD] = useState(false);
+  const [pdf, setPdf] = useState(false);
+
+  const baixarPdf = async () => {
+    setPdf(true);
+    try { await gerarEbaixarPdf('gerarPdfIR', ano); message.success('PDF gerado'); }
+    catch (e) { message.error(e instanceof Error ? e.message : 'Erro ao gerar PDF'); }
+    finally { setPdf(false); }
+  };
 
   const load = useCallback((a: number) => {
     setLoading(true);
@@ -133,6 +142,7 @@ export default function FinIR(): React.ReactElement {
           <Button icon={<Download size={15} />} loading={importando} onClick={importar}>Importar das empresas</Button>
         </Tooltip>
         <div style={{ flex: 1 }} />
+        <Button icon={<FileDown size={15} />} loading={pdf} onClick={baixarPdf}>Gerar PDF</Button>
         <Button icon={<Plus size={15} />} onClick={abrirDed}>Dedução</Button>
         <Button type="primary" icon={<Plus size={15} />} onClick={abrirRend}>Rendimento</Button>
         {loading && <Spin size="small" />}

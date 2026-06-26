@@ -3,13 +3,14 @@
 // custos recorrentes + despesas pendentes (saídas), com saldo acumulado a partir
 // de um saldo inicial e alerta de runway (mês em que o caixa fica negativo).
 import React, { useState, useEffect, useCallback } from 'react';
-import { Row, Col, Spin, Empty, Table, InputNumber, Segmented, Alert, Tooltip } from 'antd';
-import { TrendingUp, TrendingDown, Wallet, AlertTriangle, Coins } from 'lucide-react';
+import { Row, Col, Spin, Empty, Table, InputNumber, Segmented, Alert, Tooltip, Button, App as AntApp } from 'antd';
+import { TrendingUp, TrendingDown, Wallet, AlertTriangle, Coins, FileDown } from 'lucide-react';
 import { Panel, AreaChart, formatBRL } from '../components/ui';
 import StatCard from '../components/StatCard';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
+import { gerarEbaixarPdf } from '../pdf-client';
 import type { ServerResponse } from '../types';
 
 interface MesProjecao {
@@ -28,10 +29,19 @@ interface Projecao {
 
 export default function FinProjecao(): React.ReactElement {
   const t = useTokens();
+  const { message } = AntApp.useApp();
   const [data, setData] = useState<Projecao | null>(null);
   const [loading, setLoading] = useState(true);
   const [janela, setJanela] = useState(6);
   const [saldoInicial, setSaldoInicial] = useState(0);
+  const [pdf, setPdf] = useState(false);
+
+  const baixarPdf = async () => {
+    setPdf(true);
+    try { await gerarEbaixarPdf('gerarPdfProjecao', janela, saldoInicial); message.success('PDF gerado'); }
+    catch (e) { message.error(e instanceof Error ? e.message : 'Erro ao gerar PDF'); }
+    finally { setPdf(false); }
+  };
 
   const load = useCallback((meses: number, saldo: number) => {
     setLoading(true);
@@ -75,6 +85,7 @@ export default function FinProjecao(): React.ReactElement {
           options={[{ value: 6, label: '6 meses' }, { value: 12, label: '12 meses' }]}
         />
         {loading && <Spin size="small" />}
+        <Button icon={<FileDown size={15} />} loading={pdf} onClick={baixarPdf} style={{ marginLeft: 'auto' }}>Gerar PDF</Button>
       </div>
 
       {temRisco && (

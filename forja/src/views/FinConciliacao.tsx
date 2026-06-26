@@ -8,12 +8,13 @@ import {
 } from 'antd';
 import type { UploadProps } from 'antd';
 import {
-  Upload as UploadIcon, ArrowUpRight, ArrowDownRight, Check, X, RotateCcw, Trash2, Link2,
+  Upload as UploadIcon, ArrowUpRight, ArrowDownRight, Check, X, RotateCcw, Trash2, Link2, FileDown,
 } from 'lucide-react';
 import { Panel, formatBRL } from '../components/ui';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
+import { gerarEbaixarPdf } from '../pdf-client';
 import type { ServerResponse } from '../types';
 
 interface Sugestao { vinculoTipo: string; vinculoId: string; label: string }
@@ -33,6 +34,14 @@ export default function FinConciliacao(): React.ReactElement {
   const [filtro, setFiltro] = useState('pendente');
   const [busy, setBusy] = useState('');
   const [matchTx, setMatchTx] = useState<Transacao | null>(null);
+  const [pdf, setPdf] = useState(false);
+
+  const baixarPdf = async () => {
+    setPdf(true);
+    try { await gerarEbaixarPdf('gerarPdfConciliacao', filtro); message.success('PDF gerado'); }
+    catch (e) { message.error(e instanceof Error ? e.message : 'Erro ao gerar PDF'); }
+    finally { setPdf(false); }
+  };
 
   const load = useCallback(() => {
     setLoading(true);
@@ -117,11 +126,14 @@ export default function FinConciliacao(): React.ReactElement {
             <span style={{ color: t.accents.sage }}>+{formatBRL(totais.cred)}</span> entradas · <span style={{ color: t.accents.clay }}>−{formatBRL(totais.deb)}</span> saídas a conciliar
           </div>
         </div>
-        <Upload {...uploadProps}>
-          <Button type="primary" icon={<UploadIcon size={16} />} loading={importando} style={{ background: t.accents.blue, borderColor: t.accents.blue }}>
-            Importar extrato (OFX)
-          </Button>
-        </Upload>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button icon={<FileDown size={16} />} loading={pdf} onClick={baixarPdf}>Gerar PDF</Button>
+          <Upload {...uploadProps}>
+            <Button type="primary" icon={<UploadIcon size={16} />} loading={importando} style={{ background: t.accents.blue, borderColor: t.accents.blue }}>
+              Importar extrato (OFX)
+            </Button>
+          </Upload>
+        </div>
       </div>
 
       <Panel title="Transações do extrato" padding={8}>

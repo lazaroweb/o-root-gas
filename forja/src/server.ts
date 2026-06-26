@@ -4067,7 +4067,7 @@ function deleteReceita(id: string): ServerResult {
 // churn do mês, MRR por app e próximas cobranças. Core do negócio = assinaturas.
 function getResumoReceitas(): ServerResult {
   try {
-    const receitas = dbGetAll('Receitas') as Array<Record<string, unknown>>;
+    const receitas = _filtraEmpresa(dbGetAll('Receitas') as Array<Record<string, unknown>>);
     const sistemas = dbGetAll('Sistemas') as Array<Record<string, unknown>>;
     const pessoas = dbGetAll('Pessoas') as Array<Record<string, unknown>>;
     const nomeApp = (id: unknown) => { const s = sistemas.find((x) => String(x['id']) === String(id)); return s ? String(s['nome']) : 'Sem app'; };
@@ -4160,7 +4160,7 @@ function getResumoReceitas(): ServerResult {
 
     // Recebido no mês (realizado) — ledger Recebimentos da competência atual.
     const compAtual = `${ano}-${String(mesAtual + 1).padStart(2, '0')}`;
-    const recebimentos = dbGetAll('Recebimentos') as Array<Record<string, unknown>>;
+    const recebimentos = _filtraEmpresa(dbGetAll('Recebimentos') as Array<Record<string, unknown>>);
     const recebimentosMes = recebimentos.filter((r) => String(r['competencia']) === compAtual);
     const recebidoMes = recebimentosMes.reduce((s, r) => s + Number(r['valor'] || 0), 0);
 
@@ -6754,6 +6754,188 @@ function gerarPdfExemploTimbre(): ServerResult {
   } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar exemplo' }; }
 }
 
+// ─── Helpers de relatório (KPIs + tags de status) ──────────────────────────────
+function _pdfKpisHtml(items: Array<{ l: string; v: string; accent?: boolean }>): string {
+  return '<div class="kpis">' + items.map((k) =>
+    '<div class="kpi"><div class="k-l">' + _escHtml(k.l) + '</div>'
+    + '<div class="k-v' + (k.accent ? ' accent' : '') + '">' + _escHtml(k.v) + '</div></div>').join('') + '</div>';
+}
+
+function _pdfStatusTag(status: string): string {
+  const s = String(status || '').toLowerCase();
+  let bg = '#F2EEE7', cor = '#8C8378', txt = s;
+  if (s === 'pago' || s === 'conciliada') { bg = '#E8F1E8'; cor = '#4F7A4D'; }
+  else if (s === 'pendente' || s === 'vencida') { bg = '#FBEEDF'; cor = '#B07A3C'; }
+  else if (s === 'provisao') { bg = '#F2EEE7'; cor = '#8C8378'; txt = 'provisão'; }
+  else if (s === 'ignorada') { bg = '#F2EEE7'; cor = '#A89F93'; }
+  const label = txt.charAt(0).toUpperCase() + txt.slice(1);
+  return '<span class="tag" style="background:' + bg + ';color:' + cor + ';">' + _escHtml(label) + '</span>';
+}
+
+// ─── PDF: Impostos / DAS por competência ───────────────────────────────────────
+function gerarPdfImpostos(meses?: number): ServerResult {
+  try {
+    const res = getImpostosResumo(meses);
+    if (!res.ok || !res.data) return res;
+    const d = res.data as Record<string, unknown>;
+    const cfg = (d['config'] as Record<string, unknown>) || {};
+    const consolidado = d['consolidado'] === true;
+    const linhas = (d['linhas'] as Array<Record<string, unknown>>) || [];
+    const titulo = 'Impostos — DAS';
+    const periodo = consolidado ? 'Consolidado' : String(cfg['empresaNome'] || '');
+    const detalhe = consolidado
+      ? 'Consolidado de todas as empresas'
+      : [String(cfg['regime'] || ''), cfg['anexo'] ? ('Anexo ' + String(cfg['anexo'])) : '', (cfg['aliquota'] != null ? ('Alíquota ' + String(cfg['aliquota']) + '%') : '')].filter(Boolean).join('  ·  ');
+    let corpo = _pdfTimbreHtml(titulo, periodo);
+    corpo += '<div class="muted" style="font-size:11px;margin:-12px 0 16px;">' + _escHtml(detalhe) + '</div>';
+    corpo += _pdfKpisHtml([
+      { l: 'Provisão do mês', v: _fmtBRLpdf(Number(d['provisaoMesAtual'] || 0)) },
+      { l: 'Reserva recomendada', v: _fmtBRLpdf(Number(d['reservaRecomendada'] || 0)), accent: true },
+      { l: 'Pago no ano', v: _fmtBRLpdf(Number(d['pagoAno'] || 0)) },
+      { l: 'A pagar', v: _fmtBRLpdf(Number(d['aPagar'] || 0)) },
+    ]);
+    corpo += '<div class="sec">Guias por competência</div>';
+    const rows = linhas.length === 0
+      ? '<tr><td colspan="6" class="muted">Sem competências no período.</td></tr>'
+      : linhas.map((l) => '<tr>'
+        + '<td>' + _escHtml(_fmtCompetenciaBR(String(l['competencia']))) + '</td>'
+        + '<td class="right mono">' + _fmtBRLpdf(Number(l['base'] || 0)) + '</td>'
+        + '<td class="right">' + _escHtml(l['aliquota'] != null ? l['aliquota'] + '%' : '—') + '</td>'
+        + '<td class="right mono">' + _fmtBRLpdf(Number(l['valor'] || 0)) + '</td>'
+        + '<td>' + _escHtml(l['vencimento'] ? _fmtDataBR(String(l['vencimento'])) : '—') + '</td>'
+        + '<td>' + _pdfStatusTag(String(l['status'])) + '</td></tr>').join('');
+    const totBase = linhas.reduce((s, l) => s + Number(l['base'] || 0), 0);
+    const totDas = linhas.reduce((s, l) => s + Number(l['valor'] || 0), 0);
+    corpo += '<table><thead><tr><th>Competência</th><th class="right">Base (receita)</th><th class="right">Alíquota</th><th class="right">DAS</th><th>Vencimento</th><th>Status</th></tr></thead><tbody>'
+      + rows + '</tbody><tfoot><tr><td>Total</td><td class="right mono">' + _fmtBRLpdf(totBase) + '</td><td></td><td class="right mono">' + _fmtBRLpdf(totDas) + '</td><td></td><td></td></tr></tfoot></table>';
+    corpo += _pdfRodapeHtml();
+    return _htmlToPdfResult(_pdfDoc(titulo, corpo), 'forja-impostos-das');
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar PDF de impostos' }; }
+}
+
+// ─── PDF: Extrato de conciliação bancária ──────────────────────────────────────
+function gerarPdfConciliacao(status?: string): ServerResult {
+  try {
+    const res = conciliacaoList(status);
+    if (!res.ok || !res.data) return res;
+    const d = res.data as Record<string, unknown>;
+    const txs = (d['transacoes'] as Array<Record<string, unknown>>) || [];
+    const titulo = 'Conciliação bancária';
+    const filtroLabel = (!status || status === 'todos') ? 'Todas as transações' : ('Filtro: ' + status);
+    const ehEntrada = (t: Record<string, unknown>): boolean => {
+      const v = Number(t['valor'] || 0);
+      return String(t['tipo']) === 'credito' || (String(t['tipo']) !== 'debito' && v >= 0);
+    };
+    let creditos = 0, debitos = 0, conc = 0, pend = 0;
+    for (const t of txs) {
+      const v = Math.abs(Number(t['valor'] || 0));
+      if (ehEntrada(t)) creditos += v; else debitos += v;
+      const st = String(t['status']);
+      if (st === 'conciliada') conc++; else if (st === 'pendente') pend++;
+    }
+    let corpo = _pdfTimbreHtml(titulo);
+    corpo += '<div class="muted" style="font-size:11px;margin:-12px 0 16px;">' + _escHtml(filtroLabel) + ' · ' + txs.length + ' transações</div>';
+    corpo += _pdfKpisHtml([
+      { l: 'Créditos', v: _fmtBRLpdf(creditos) },
+      { l: 'Débitos', v: _fmtBRLpdf(debitos) },
+      { l: 'Conciliadas', v: String(conc), accent: true },
+      { l: 'Pendentes', v: String(pend) },
+    ]);
+    corpo += '<div class="sec">Transações</div>';
+    const rows = txs.length === 0
+      ? '<tr><td colspan="6" class="muted">Nenhuma transação.</td></tr>'
+      : txs.map((t) => {
+        const v = Number(t['valor'] || 0);
+        const ent = ehEntrada(t);
+        return '<tr><td>' + _escHtml(_fmtDataBR(String(t['data']))) + '</td>'
+          + '<td>' + _escHtml(t['descricao']) + '</td>'
+          + '<td>' + _escHtml(t['banco']) + '</td>'
+          + '<td>' + (ent ? 'Crédito' : 'Débito') + '</td>'
+          + '<td>' + _pdfStatusTag(String(t['status'])) + '</td>'
+          + '<td class="right mono" style="color:' + (ent ? '#4F7A4D' : '#B5544E') + ';">' + (ent ? '+' : '-') + _fmtBRLpdf(Math.abs(v)) + '</td></tr>';
+      }).join('');
+    corpo += '<table><thead><tr><th>Data</th><th>Descrição</th><th>Banco</th><th>Tipo</th><th>Status</th><th class="right">Valor</th></tr></thead><tbody>'
+      + rows + '</tbody><tfoot><tr><td colspan="5">Saldo (créditos − débitos)</td><td class="right mono">' + _fmtBRLpdf(creditos - debitos) + '</td></tr></tfoot></table>';
+    corpo += _pdfRodapeHtml();
+    return _htmlToPdfResult(_pdfDoc(titulo, corpo), 'forja-conciliacao');
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar PDF da conciliação' }; }
+}
+
+// ─── PDF: Projeção de caixa ────────────────────────────────────────────────────
+function gerarPdfProjecao(meses?: number, saldoInicial?: number): ServerResult {
+  try {
+    const res = getProjecaoCaixa(meses, saldoInicial);
+    if (!res.ok || !res.data) return res;
+    const d = res.data as Record<string, unknown>;
+    const ms = (d['meses'] as Array<Record<string, unknown>>) || [];
+    const titulo = 'Projeção de caixa';
+    const periodo = d['janela'] ? String(d['janela']) + ' meses' : '';
+    let corpo = _pdfTimbreHtml(titulo, periodo);
+    corpo += _pdfKpisHtml([
+      { l: 'Saldo inicial', v: _fmtBRLpdf(Number(d['saldoInicial'] || 0)) },
+      { l: 'Entradas previstas', v: _fmtBRLpdf(Number(d['totalEntradas'] || 0)) },
+      { l: 'Saídas previstas', v: _fmtBRLpdf(Number(d['totalSaidas'] || 0)) },
+      { l: 'Saldo projetado', v: _fmtBRLpdf(Number(d['saldoProjetado'] || 0)), accent: true },
+    ]);
+    if (d['mesNegativo']) {
+      corpo += '<div style="margin:4px 0 12px;padding:10px 12px;border-radius:10px;background:#FBEDEB;color:#B5544E;font-size:11.5px;font-weight:600;">'
+        + 'Atenção: o caixa fica negativo em ' + _escHtml(String(d['mesNegativo'])) + ' — menor saldo acumulado: ' + _fmtBRLpdf(Number(d['menorAcumulado'] || 0)) + '.</div>';
+    }
+    corpo += '<div class="sec">Mês a mês</div>';
+    const rows = ms.map((b) => {
+      const saldo = Number(b['saldoMes'] || 0); const ac = Number(b['acumulado'] || 0);
+      return '<tr><td>' + _escHtml(b['label']) + '</td>'
+        + '<td class="right mono" style="color:#4F7A4D;">' + _fmtBRLpdf(Number(b['entradas'] || 0)) + '</td>'
+        + '<td class="right mono" style="color:#B5544E;">' + _fmtBRLpdf(Number(b['saidas'] || 0)) + '</td>'
+        + '<td class="right mono">' + (saldo >= 0 ? '+' : '') + _fmtBRLpdf(saldo) + '</td>'
+        + '<td class="right mono" style="color:' + (ac < 0 ? '#B5544E' : '#2A2724') + ';font-weight:700;">' + _fmtBRLpdf(ac) + '</td></tr>';
+    }).join('');
+    corpo += '<table><thead><tr><th>Mês</th><th class="right">Entradas</th><th class="right">Saídas</th><th class="right">Saldo do mês</th><th class="right">Acumulado</th></tr></thead><tbody>'
+      + rows + '</tbody></table>';
+    corpo += _pdfRodapeHtml();
+    return _htmlToPdfResult(_pdfDoc(titulo, corpo), 'forja-projecao-caixa');
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar PDF da projeção' }; }
+}
+
+// ─── PDF: Demonstrativo IRPF anual ─────────────────────────────────────────────
+function gerarPdfIR(ano?: number): ServerResult {
+  try {
+    const res = getIRResumo(ano);
+    if (!res.ok || !res.data) return res;
+    const d = res.data as Record<string, unknown>;
+    const ms = (d['meses'] as Array<Record<string, unknown>>) || [];
+    const tot = (d['totais'] as Record<string, unknown>) || {};
+    const ano2 = String(d['ano']);
+    const titulo = 'Demonstrativo IRPF';
+    const ajuste = Number(tot['ajuste'] || 0);
+    let corpo = _pdfTimbreHtml(titulo, 'Ano-base ' + ano2);
+    corpo += _pdfKpisHtml([
+      { l: 'Base anual', v: _fmtBRLpdf(Number(tot['baseAnual'] || 0)) },
+      { l: 'Imposto devido', v: _fmtBRLpdf(Number(tot['impostoDevido'] || 0)) },
+      { l: 'Já pago (retido + carnê)', v: _fmtBRLpdf(Number(tot['jaPago'] || 0)) },
+      { l: ajuste >= 0 ? 'A pagar (ajuste)' : 'A restituir', v: _fmtBRLpdf(Math.abs(ajuste)), accent: true },
+    ]);
+    corpo += '<div class="sec">Carnê-leão mês a mês</div>';
+    const rows = ms.map((m) => '<tr><td>' + _escHtml(m['label']) + '</td>'
+      + '<td class="right mono">' + _fmtBRLpdf(Number(m['carneLeao'] || 0)) + '</td>'
+      + '<td class="right mono">' + _fmtBRLpdf(Number(m['deducoes'] || 0)) + '</td>'
+      + '<td class="right mono">' + _fmtBRLpdf(Number(m['baseCarne'] || 0)) + '</td>'
+      + '<td class="right mono">' + _fmtBRLpdf(Number(m['darf'] || 0)) + '</td></tr>').join('');
+    corpo += '<table><thead><tr><th>Mês</th><th class="right">Rend. carnê-leão</th><th class="right">Deduções</th><th class="right">Base</th><th class="right">DARF</th></tr></thead><tbody>'
+      + rows + '</tbody><tfoot><tr><td>Total carnê-leão no ano</td><td colspan="3"></td><td class="right mono">' + _fmtBRLpdf(Number(tot['carneLeaoAno'] || 0)) + '</td></tr></tfoot></table>';
+    corpo += '<div class="sec">Consolidado anual</div>';
+    corpo += '<table><tbody>'
+      + '<tr><td>Rendimentos tributáveis</td><td class="right mono">' + _fmtBRLpdf(Number(tot['totalTributavel'] || 0)) + '</td></tr>'
+      + '<tr><td>Rendimentos isentos</td><td class="right mono">' + _fmtBRLpdf(Number(tot['totalIsento'] || 0)) + '</td></tr>'
+      + '<tr><td>Deduções</td><td class="right mono">' + _fmtBRLpdf(Number(tot['totalDeducoes'] || 0)) + '</td></tr>'
+      + '<tr><td>IRRF retido na fonte</td><td class="right mono">' + _fmtBRLpdf(Number(tot['totalRetido'] || 0)) + '</td></tr>'
+      + '</tbody></table>';
+    corpo += '<div class="muted" style="font-size:10px;margin-top:10px;">Estimativa gerencial com base nos dados lançados — confira na declaração oficial.</div>';
+    corpo += _pdfRodapeHtml();
+    return _htmlToPdfResult(_pdfDoc(titulo, corpo), 'forja-irpf-' + ano2);
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar PDF do IR' }; }
+}
+
 function _htmlToPdfResult(html: string, filename: string): ServerResult {
   try {
     const safe = filename.replace(/[^\w.\-]+/g, '_');
@@ -9166,7 +9348,7 @@ function getResumoDespesasEmpresa(competencia?: string): ServerResult {
   try {
     const agora = new Date();
     const comp = competencia || `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
-    const todas = dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>;
+    const todas = _filtraEmpresa(dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>);
     const doMes = todas.filter((r) => String(r['competencia']) === comp);
     let total = 0; let pago = 0; let pendente = 0;
     const porCat: Record<string, number> = {};
@@ -15251,9 +15433,9 @@ function _sistemaNomeMap(): Record<string, string> {
 
 function _dadosDreRel(mesRef: string): Record<string, unknown> {
   const sis = _sistemaNomeMap();
-  const custos = dbGetAll('Custos') as Array<Record<string, unknown>>;
-  const receitas = dbGetAll('Receitas') as Array<Record<string, unknown>>;
-  const despesas = dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>;
+  const custos = _filtraEmpresa(dbGetAll('Custos') as Array<Record<string, unknown>>);
+  const receitas = _filtraEmpresa(dbGetAll('Receitas') as Array<Record<string, unknown>>);
+  const despesas = _filtraEmpresa(dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>);
   const ativas = receitas.filter((r) => String(r['status'] || 'ativa').toLowerCase() !== 'cancelada');
   const receitaRec = ativas.reduce((s, r) => s + toMonthly(Number(r['valor'] || 0), String(r['recorrencia'] || 'mensal')), 0);
   const custoRec = custos.reduce((s, c) => s + toMonthly(Number(c['valor'] || 0), String(c['recorrencia'] || 'mensal')), 0);
@@ -15282,7 +15464,7 @@ function _dadosDreRel(mesRef: string): Record<string, unknown> {
 
 function _dadosLivroRel(mesRef: string): Record<string, unknown> {
   const sis = _sistemaNomeMap();
-  const despesas = (dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>)
+  const despesas = _filtraEmpresa(dbGetAll('FinEmpresaDespesas') as Array<Record<string, unknown>>)
     .filter((d) => String(d['competencia']) === mesRef)
     .sort((a, b) => String(a['data'] || '').localeCompare(String(b['data'] || '')));
   const linhas = despesas.map((d) => ({
@@ -15301,7 +15483,7 @@ function _dadosLivroRel(mesRef: string): Record<string, unknown> {
 
 function _dadosMrrRel(): Record<string, unknown> {
   const sis = _sistemaNomeMap();
-  const receitas = dbGetAll('Receitas') as Array<Record<string, unknown>>;
+  const receitas = _filtraEmpresa(dbGetAll('Receitas') as Array<Record<string, unknown>>);
   const ativas = receitas.filter((r) => String(r['status'] || 'ativa').toLowerCase() !== 'cancelada');
   const linhas = ativas.map((r) => ({
     app: r['sistemaId'] ? (sis[String(r['sistemaId'])] || 'Sem app') : 'Sem app',

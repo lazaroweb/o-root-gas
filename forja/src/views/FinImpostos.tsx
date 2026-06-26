@@ -4,13 +4,14 @@
 // recomenda a reserva e, ao pagar, lança a saída no livro-caixa (categoria Impostos).
 import React, { useState, useEffect, useCallback } from 'react';
 import { Row, Col, Spin, Empty, Table, Tag, Button, Select, InputNumber, Segmented, Alert, Tooltip, Popconfirm, Modal, Form, DatePicker, App as AntApp } from 'antd';
-import { Landmark, PiggyBank, CalendarClock, CheckCircle2, FilePlus2, Check, Trash2, Settings2 } from 'lucide-react';
+import { Landmark, PiggyBank, CalendarClock, CheckCircle2, FilePlus2, Check, Trash2, Settings2, FileDown } from 'lucide-react';
 import dayjs from 'dayjs';
 import { Panel, formatBRL } from '../components/ui';
 import StatCard from '../components/StatCard';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
+import { gerarEbaixarPdf } from '../pdf-client';
 import type { ServerResponse } from '../types';
 
 interface ImpLinha {
@@ -54,6 +55,14 @@ export default function FinImpostos(): React.ReactElement {
   const [pagForm] = Form.useForm();
   const [pagando, setPagando] = useState(false);
   const [acao, setAcao] = useState<string>('');
+  const [pdf, setPdf] = useState(false);
+
+  const baixarPdf = async () => {
+    setPdf(true);
+    try { await gerarEbaixarPdf('gerarPdfImpostos', janela); message.success('PDF gerado'); }
+    catch (e) { message.error(e instanceof Error ? e.message : 'Erro ao gerar PDF'); }
+    finally { setPdf(false); }
+  };
 
   const load = useCallback((meses: number) => {
     setLoading(true);
@@ -130,6 +139,7 @@ export default function FinImpostos(): React.ReactElement {
           onChange={(v) => setJanela(Number(v))}
           options={[{ value: 6, label: '6 meses' }, { value: 12, label: '12 meses' }]}
         />
+        <Button size="small" icon={<FileDown size={14} />} loading={pdf} onClick={baixarPdf}>Gerar PDF</Button>
         {loading && <Spin size="small" />}
       </div>
 
