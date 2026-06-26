@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Button, Select, Switch, App as AntApp, Skeleton, Segmented, Tooltip, Input, Empty } from 'antd';
+import { Button, Select, Switch, App as AntApp, Skeleton, Segmented, Tooltip, Input, Empty, Drawer, Upload, ColorPicker } from 'antd';
 import {
   Printer, Download, FileText, RefreshCw, Sparkles, Info,
   Database, FileJson, FileSpreadsheet, Calendar, Mail, Send, Wallet, Building2,
   LayoutDashboard, ArrowLeftRight, BarChart3, PieChart, TrendingUp, TrendingDown, FileDown,
-  CreditCard, Layers, CalendarRange, Receipt, Repeat,
+  CreditCard, Layers, CalendarRange, Receipt, Repeat, Palette, ImageUp, Trash2, Eye,
 } from 'lucide-react';
 import { Panel } from '../components/ui';
 import SubNav from '../components/SubNav';
@@ -66,6 +66,7 @@ type RelEmp = RelDre | RelLivro | RelMrr;
 export default function Relatorios(): React.ReactElement {
   const t = useTokens();
   const [secao, setSecao] = useState<'financeiro' | 'empresa' | 'portfolio' | 'exportar'>('financeiro');
+  const [timbreOpen, setTimbreOpen] = useState(false);
 
   const NAV: SubNavItem<typeof secao>[] = [
     { key: 'financeiro', icon: Wallet, label: 'Financeiro', accent: 'sage', desc: 'Extrato, gastos por categoria e fluxo de caixa — exporte em PDF, CSV e Excel.' },
@@ -88,12 +89,19 @@ export default function Relatorios(): React.ReactElement {
         }
       `}</style>
 
-      <div style={{ marginBottom: 20 }} className="forja-no-print">
-        <h1 style={{ fontFamily: FONTS.display, fontSize: 26, fontWeight: 500, margin: 0, color: t.text, letterSpacing: '-0.02em' }}>Relatórios</h1>
-        <div style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.textTertiary, marginTop: 4 }}>
-          Saídas do sistema: relatórios financeiros, snapshot do portfólio e exportação de dados.
+      <div style={{ marginBottom: 20, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }} className="forja-no-print">
+        <div>
+          <h1 style={{ fontFamily: FONTS.display, fontSize: 26, fontWeight: 500, margin: 0, color: t.text, letterSpacing: '-0.02em' }}>Relatórios</h1>
+          <div style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.textTertiary, marginTop: 4 }}>
+            Saídas do sistema: relatórios financeiros, snapshot do portfólio e exportação de dados.
+          </div>
         </div>
+        <Tooltip title="Logo, cor e identidade da folha de impressão dos PDFs">
+          <Button icon={<Palette size={15} />} onClick={() => setTimbreOpen(true)}>Personalizar PDF</Button>
+        </Tooltip>
       </div>
+
+      <TimbrePdfDrawer open={timbreOpen} onClose={() => setTimbreOpen(false)} />
 
       <SubNav items={NAV} value={secao} onChange={setSecao} ariaLabel="Tipos de relatório">
         {secao === 'financeiro' && <RelatoriosFinanceiro />}
@@ -102,6 +110,145 @@ export default function Relatorios(): React.ReactElement {
         {secao === 'exportar' && <ExportarPanel />}
       </SubNav>
     </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Personalização da folha timbrada dos PDFs (logo, cor, slogan, site)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface BrandResolvido { nome: string; documento: string; email: string; telefone: string; endereco: string; site: string; slogan: string; cor: string }
+
+function TimbrePdfDrawer({ open, onClose }: { open: boolean; onClose: () => void }): React.ReactElement {
+  const t = useTokens();
+  const { message } = AntApp.useApp();
+  const [loading, setLoading] = useState(false);
+  const [salvando, setSalvando] = useState(false);
+  const [exemplo, setExemplo] = useState(false);
+  const [resolvido, setResolvido] = useState<BrandResolvido | null>(null);
+  const [logo, setLogo] = useState('');
+  const [cor, setCor] = useState('#D99B73');
+  const [slogan, setSlogan] = useState('');
+  const [site, setSite] = useState('');
+
+  const carregar = useCallback(() => {
+    setLoading(true);
+    callServer<ServerResult>('getPdfBranding')
+      .then((r) => {
+        if (r.ok && r.data) {
+          const d = r.data as { resolvido: BrandResolvido; marca: { logoBase64: string; cor: string; slogan: string; site: string } };
+          setResolvido(d.resolvido);
+          setLogo(d.marca.logoBase64 || '');
+          setCor(d.marca.cor || d.resolvido.cor || '#D99B73');
+          setSlogan(d.marca.slogan || '');
+          setSite(d.marca.site || '');
+        }
+      })
+      .catch(() => message.warning('Marca só carrega no app publicado'))
+      .finally(() => setLoading(false));
+  }, [message]);
+
+  useEffect(() => { if (open) carregar(); }, [open, carregar]);
+
+  const onUpload = (file: File): boolean => {
+    if (file.size > 400 * 1024) { message.error('Imagem muito grande — use até 400KB (PNG/JPG/SVG).'); return false; }
+    const reader = new FileReader();
+    reader.onload = () => setLogo(String(reader.result || ''));
+    reader.readAsDataURL(file);
+    return false;
+  };
+
+  const salvar = async () => {
+    setSalvando(true);
+    try {
+      const r = await callServer<ServerResult>('salvarPdfBranding', { logoBase64: logo, cor, slogan, site });
+      if (r.ok) message.success('Marca salva — vale pra todos os PDFs');
+      else message.error(r.error || 'Erro ao salvar');
+    } catch (e) { message.error(e instanceof Error ? e.message : 'Erro ao salvar'); }
+    finally { setSalvando(false); }
+  };
+
+  const verExemplo = async () => {
+    setExemplo(true);
+    try {
+      await salvar();
+      await gerarEbaixarPdf('gerarPdfExemploTimbre');
+    } catch (e) { message.error(e instanceof Error ? e.message : 'Erro ao gerar exemplo'); }
+    finally { setExemplo(false); }
+  };
+
+  const lbl = { fontFamily: FONTS.ui, fontSize: 12, fontWeight: 600, color: t.textSecondary, marginBottom: 6, display: 'block' } as React.CSSProperties;
+
+  return (
+    <Drawer
+      title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Palette size={18} color={t.accents.peach} /> Personalizar PDF</span>}
+      open={open}
+      onClose={onClose}
+      width={460}
+      extra={<Button type="primary" loading={salvando} onClick={salvar}>Salvar</Button>}
+    >
+      {loading ? <Skeleton active /> : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+          <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textTertiary, lineHeight: 1.6 }}>
+            A folha timbrada vale para todos os relatórios em PDF. A identidade (nome, CNPJ, endereço, contato) vem da <strong>empresa ativa</strong>; aqui você define a logo, a cor de destaque e os textos da marca.
+          </div>
+
+          <div>
+            <span style={lbl}>Logotipo</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              <div style={{ width: 120, height: 56, borderRadius: 10, border: `1px dashed ${t.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', background: t.surfaceMuted, overflow: 'hidden' }}>
+                {logo ? <img src={logo} alt="logo" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} /> : <ImageUp size={20} color={t.textTertiary} />}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <Upload accept="image/*" showUploadList={false} beforeUpload={onUpload}>
+                  <Button size="small" icon={<ImageUp size={14} />}>Enviar logo</Button>
+                </Upload>
+                {logo && <Button size="small" danger icon={<Trash2 size={14} />} onClick={() => setLogo('')}>Remover</Button>}
+              </div>
+            </div>
+            <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginTop: 6 }}>PNG, JPG ou SVG até 400KB. Fundo transparente fica melhor.</div>
+          </div>
+
+          <div>
+            <span style={lbl}>Cor de destaque</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <ColorPicker value={cor} onChange={(c) => setCor(c.toHexString())} showText />
+              <div style={{ display: 'flex', gap: 6 }}>
+                {['#D99B73', '#7FA98B', '#7E9DC4', '#9B8FC4', '#C98AA0', '#C2A37A'].map((c) => (
+                  <button key={c} onClick={() => setCor(c)} title={c}
+                    style={{ width: 22, height: 22, borderRadius: 999, background: c, border: cor.toLowerCase() === c.toLowerCase() ? `2px solid ${t.text}` : `1px solid ${t.border}`, cursor: 'pointer' }} />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <span style={lbl}>Slogan / linha da marca</span>
+            <Input value={slogan} onChange={(e) => setSlogan(e.target.value)} placeholder="Ex.: Tecnologia que organiza o seu negócio" maxLength={80} />
+          </div>
+
+          <div>
+            <span style={lbl}>Site</span>
+            <Input value={site} onChange={(e) => setSite(e.target.value)} placeholder="www.suaempresa.com.br" maxLength={80} />
+          </div>
+
+          {resolvido && (
+            <div style={{ border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, background: t.surfaceMuted }}>
+              <div style={{ fontFamily: FONTS.ui, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: t.textTertiary, marginBottom: 8 }}>Identidade da empresa ativa</div>
+              <div style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.text, fontWeight: 600 }}>{resolvido.nome}</div>
+              <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, marginTop: 3, lineHeight: 1.5 }}>
+                {resolvido.documento && <>CNPJ/CPF {resolvido.documento}<br /></>}
+                {resolvido.endereco && <>{resolvido.endereco}<br /></>}
+                {[resolvido.email, resolvido.telefone].filter(Boolean).join(' · ')}
+              </div>
+              <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginTop: 8 }}>Edite estes dados na empresa (seletor do Financeiro).</div>
+            </div>
+          )}
+
+          <Button block icon={<Eye size={15} />} loading={exemplo} onClick={verExemplo}>Salvar e baixar exemplo</Button>
+        </div>
+      )}
+    </Drawer>
   );
 }
 

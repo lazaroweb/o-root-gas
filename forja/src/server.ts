@@ -6586,19 +6586,172 @@ function _fmtCompetenciaBR(comp: string): string {
 
 // Documento HTML base, estilizado e pronto pra impressão (A4) — fontes do sistema
 // (não dependemos de fontes externas, que não carregam na conversão pra PDF).
-function _pdfDoc(titulo: string, corpoHtml: string): string {
+function _pdfDoc(titulo: string, corpoHtml: string, accent?: string): string {
+  const ac = accent || _pdfBranding().cor || '#D99B73';
   return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8" />'
     + '<title>' + _escHtml(titulo) + '</title><style>'
+    + ':root{--ac:' + ac + ';}'
     + '* { box-sizing: border-box; } '
-    + 'body { font-family: Helvetica, Arial, sans-serif; color: #2A2724; margin: 0; padding: 40px 44px; font-size: 13px; line-height: 1.5; } '
-    + 'h1,h2,h3 { margin: 0; font-weight: 600; letter-spacing: -0.01em; } '
+    + 'body { font-family: Helvetica, Arial, sans-serif; color: #2A2724; margin: 0; padding: 38px 42px 30px; font-size: 12.5px; line-height: 1.55; } '
+    + 'h1,h2,h3 { margin: 0; font-weight: 700; letter-spacing: -0.01em; } '
     + '.muted { color: #8C8378; } .right { text-align: right; } .center { text-align: center; } '
-    + 'table { width: 100%; border-collapse: collapse; } '
-    + 'th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: #8C8378; padding: 8px 6px; border-bottom: 1px solid #E7E1D8; } '
-    + 'td { padding: 9px 6px; border-bottom: 1px solid #F2EEE7; } '
-    + '.tag { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; } '
+    + '.accent { color: ' + ac + '; } '
+    + 'table { width: 100%; border-collapse: collapse; margin: 4px 0; } '
+    + 'th { text-align: left; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.07em; color: #8C8378; padding: 8px 8px; border-bottom: 1.5px solid #E7E1D8; } '
+    + 'td { padding: 8px 8px; border-bottom: 1px solid #F2EEE7; } '
+    + 'tbody tr:nth-child(even) td { background: #FBF9F6; } '
+    + 'tfoot td { border-top: 1.5px solid #E7E1D8; border-bottom: none; font-weight: 700; background: #FBF9F6; } '
+    + '.tag { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 10.5px; font-weight: 600; } '
     + '.mono { font-family: "Courier New", monospace; } '
+    // ── Folha timbrada (letterhead) ──
+    + '.lh { display: flex; justify-content: space-between; align-items: flex-start; gap: 22px; padding-bottom: 16px; margin-bottom: 22px; border-bottom: 1px solid #E7E1D8; } '
+    + '.lh-logo { height: 44px; max-width: 200px; display: block; margin-bottom: 8px; } '
+    + '.lh-emp { font-size: 15px; font-weight: 700; color: #2A2724; } '
+    + '.lh-sub { font-size: 10px; color: #8C8378; margin-top: 3px; line-height: 1.55; } '
+    + '.lh-overline { font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 700; color: ' + ac + '; } '
+    + '.lh-title { font-size: 21px; font-weight: 700; margin-top: 4px; color: #2A2724; } '
+    + '.lh-period { font-weight: 400; color: #8C8378; } '
+    // ── Seções e KPIs ──
+    + '.sec { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: #8C8378; font-weight: 700; margin: 26px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #F2EEE7; } '
+    + '.kpis { display: flex; gap: 12px; margin: 6px 0 10px; } '
+    + '.kpi { flex: 1; border: 1px solid #E7E1D8; border-radius: 12px; padding: 12px 14px; } '
+    + '.kpi .k-l { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: #8C8378; } '
+    + '.kpi .k-v { font-size: 19px; font-weight: 700; margin-top: 4px; color: #2A2724; } '
+    + '.foot { margin-top: 30px; padding-top: 10px; border-top: 1px solid #E7E1D8; font-size: 9.5px; color: #8C8378; display: flex; justify-content: space-between; gap: 12px; } '
     + '</style></head><body>' + corpoHtml + '</body></html>';
+}
+
+// ─── Marca / folha timbrada (v1.185) ───────────────────────────────────────────
+// Resolve a identidade visual dos PDFs combinando: (a) identidade da EMPRESA
+// ATIVA (razão/nome, CNPJ, endereço, contato, cor) com fallback pro perfil
+// global do emissor; (b) marca visual (logo, cor, slogan, site) guardada numa
+// Script Property. Assim os relatórios saem com a cara da empresa selecionada.
+interface PdfBranding {
+  nome: string; documento: string; email: string; telefone: string;
+  endereco: string; pix: string; site: string; slogan: string;
+  logoBase64: string; cor: string;
+}
+
+function _pdfBrandExtra(): { site: string; slogan: string; logoBase64: string; cor: string } {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty('FORJA_PDF_BRAND');
+    const p = raw ? JSON.parse(raw) : {};
+    return {
+      site: String(p.site || ''), slogan: String(p.slogan || ''),
+      logoBase64: String(p.logoBase64 || ''), cor: String(p.cor || ''),
+    };
+  } catch { return { site: '', slogan: '', logoBase64: '', cor: '' }; }
+}
+
+function _pdfBranding(): PdfBranding {
+  const perfil = _empresaPerfil();
+  const extra = _pdfBrandExtra();
+  let nome = perfil.nome, documento = perfil.documento, email = perfil.email;
+  let telefone = perfil.telefone, endereco = perfil.endereco, corEmp = '';
+  try {
+    const fid = _empresaFiltroId();
+    const emp = fid ? _empresasAll().find((e) => String(e['id']) === fid) : null;
+    if (emp) {
+      const fant = String(emp['nomeFantasia'] || emp['razaoSocial'] || '').trim();
+      if (fant) nome = fant;
+      const cnpj = String(emp['cnpj'] || '').trim(); if (cnpj) documento = cnpj;
+      const em = String(emp['email'] || '').trim(); if (em) email = em;
+      const tel = String(emp['telefone'] || '').trim(); if (tel) telefone = tel;
+      const end = [
+        [String(emp['logradouro'] || ''), String(emp['numero'] || '')].filter(Boolean).join(', '),
+        String(emp['bairro'] || ''),
+        [String(emp['cidade'] || ''), String(emp['uf'] || '')].filter(Boolean).join('/'),
+        String(emp['cep'] || ''),
+      ].filter(Boolean).join(' — ');
+      if (end) endereco = end;
+      corEmp = String(emp['cor'] || '');
+    }
+  } catch { /* sem empresa: usa perfil */ }
+  const cor = extra.cor || corEmp || '#D99B73';
+  return {
+    nome, documento, email, telefone, endereco, pix: perfil.pix,
+    site: extra.site, slogan: extra.slogan, logoBase64: extra.logoBase64, cor,
+  };
+}
+
+// Cabeçalho timbrado moderno: logo/empresa à esquerda, título + período à direita.
+function _pdfTimbreHtml(titulo: string, periodo?: string): string {
+  const b = _pdfBranding();
+  const ac = b.cor;
+  const esquerda = b.logoBase64
+    ? '<img class="lh-logo" src="' + b.logoBase64 + '" alt="logo" />'
+    : '<div class="lh-emp">' + _escHtml(b.nome) + '</div>';
+  const linhasContato = [
+    b.documento ? 'CNPJ/CPF ' + _escHtml(b.documento) : '',
+    _escHtml(b.endereco),
+    [b.email, b.telefone].filter(Boolean).map((x) => _escHtml(String(x))).join(' · '),
+    _escHtml(b.site),
+  ].filter(Boolean).join('<br/>');
+  return '<div class="lh">'
+    + '<div>' + esquerda
+    + (b.logoBase64 ? '<div class="lh-emp">' + _escHtml(b.nome) + '</div>' : '')
+    + (b.slogan ? '<div class="lh-sub" style="color:' + ac + ';font-weight:600;">' + _escHtml(b.slogan) + '</div>' : '')
+    + (linhasContato ? '<div class="lh-sub">' + linhasContato + '</div>' : '')
+    + '</div>'
+    + '<div class="right">'
+    + '<div class="lh-overline">Relatório</div>'
+    + '<div class="lh-title">' + _escHtml(titulo)
+    + (periodo ? ' <span class="lh-period">' + _escHtml(periodo) + '</span>' : '') + '</div>'
+    + '<div class="lh-sub">Gerado em ' + _escHtml(new Date().toLocaleDateString('pt-BR')) + '</div>'
+    + '</div></div>';
+}
+
+// Rodapé timbrado padrão.
+function _pdfRodapeHtml(): string {
+  const b = _pdfBranding();
+  const dir = [b.site, b.email].filter(Boolean).map((x) => _escHtml(String(x))).join(' · ');
+  return '<div class="foot"><span>' + _escHtml(b.nome) + (dir ? ' &nbsp;·&nbsp; ' + dir : '') + '</span>'
+    + '<span>Gerado pela Forja · ' + _escHtml(new Date().toLocaleString('pt-BR')) + '</span></div>';
+}
+
+function getPdfBranding(): ServerResult {
+  try {
+    const b = _pdfBranding();
+    const extra = _pdfBrandExtra();
+    // Devolve identidade resolvida (pra preview) + os campos editáveis da marca.
+    return { ok: true, data: { resolvido: b, marca: extra } };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro' }; }
+}
+
+function salvarPdfBranding(payload: Record<string, unknown>): ServerResult {
+  try {
+    const logo = String(payload['logoBase64'] || '');
+    // Limite defensivo: logo muito grande estoura o PDF/Properties (~9KB cap).
+    if (logo && logo.length > 600000) return { ok: false, error: 'Logo muito grande — use uma imagem até ~400KB.' };
+    const data = {
+      site: String(payload['site'] || '').trim(),
+      slogan: String(payload['slogan'] || '').trim(),
+      cor: String(payload['cor'] || '').trim(),
+      logoBase64: logo,
+    };
+    PropertiesService.getScriptProperties().setProperty('FORJA_PDF_BRAND', JSON.stringify(data));
+    return { ok: true, data: { marca: data, resolvido: _pdfBranding() } };
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar marca' }; }
+}
+
+// PDF de exemplo pra o usuário visualizar a folha timbrada na hora.
+function gerarPdfExemploTimbre(): ServerResult {
+  try {
+    const corpo = _pdfTimbreHtml('Exemplo de relatório', 'Junho/2026')
+      + '<div class="kpis">'
+      + '<div class="kpi"><div class="k-l">Receita</div><div class="k-v">' + _fmtBRLpdf(48250) + '</div></div>'
+      + '<div class="kpi"><div class="k-l">Despesa</div><div class="k-v">' + _fmtBRLpdf(19870) + '</div></div>'
+      + '<div class="kpi"><div class="k-l">Resultado</div><div class="k-v accent">' + _fmtBRLpdf(28380) + '</div></div>'
+      + '</div>'
+      + '<div class="sec">Demonstrativo</div>'
+      + '<table><thead><tr><th>Descrição</th><th class="right">Valor</th></tr></thead><tbody>'
+      + '<tr><td>Assinaturas recorrentes (MRR)</td><td class="right">' + _fmtBRLpdf(42000) + '</td></tr>'
+      + '<tr><td>Serviços avulsos</td><td class="right">' + _fmtBRLpdf(6250) + '</td></tr>'
+      + '<tr><td>Custos e despesas</td><td class="right">-' + _fmtBRLpdf(19870) + '</td></tr>'
+      + '</tbody><tfoot><tr><td>Resultado do período</td><td class="right">' + _fmtBRLpdf(28380) + '</td></tr></tfoot></table>'
+      + _pdfRodapeHtml();
+    return _htmlToPdfResult(_pdfDoc('Exemplo — folha timbrada', corpo), 'forja-exemplo-timbre');
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar exemplo' }; }
 }
 
 function _htmlToPdfResult(html: string, filename: string): ServerResult {
@@ -15388,10 +15541,7 @@ function _relKpiBox(label: string, valor: string, cor?: string): string {
 }
 
 function _relCabecalhoHtml(titulo: string, periodo: string): string {
-  return '<div style="border-bottom:2px solid #D99B73;padding-bottom:16px;margin-bottom:22px;">'
-    + '<div class="muted" style="font-size:10px;letter-spacing:0.16em;text-transform:uppercase;">FORJA — Relatório financeiro</div>'
-    + '<h1 style="font-size:28px;margin-top:6px;">' + _escHtml(titulo) + ' <span class="muted" style="font-weight:400;">' + _escHtml(periodo) + '</span></h1>'
-    + '<div class="muted" style="font-size:11px;margin-top:4px;">Gerado em ' + _escHtml(new Date().toLocaleString('pt-BR')) + '</div></div>';
+  return _pdfTimbreHtml(titulo, periodo);
 }
 
 function gerarRelatorioFinanceiroPdf(tipo: string, mes?: string, meses?: number): ServerResult {
@@ -15534,7 +15684,7 @@ function gerarRelatorioFinanceiroPdf(tipo: string, mes?: string, meses?: number)
         + _relTabelaHtml(_relTabela(ds));
     }
 
-    const html = _pdfDoc(titulo, corpo);
+    const html = _pdfDoc(titulo, corpo + _pdfRodapeHtml());
     return _htmlToPdfResult(html, _relNomeArquivo(ds));
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar PDF do relatório' };
