@@ -401,7 +401,7 @@ export default function IdeiasView({ onGenese }: IdeiasViewProps): React.ReactEl
   if (loading) return <Spin size="large" style={{ display: 'block', margin: '120px auto' }} />;
 
   return (
-    <div className="forja-view" style={{ padding: '36px 40px', maxWidth: 1040, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
+    <div className="forja-view" style={{ padding: '68px 40px 56px', maxWidth: 1040, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
       <PageHeader
         title="Ideias"
         subtitle="Caixa única: captura zero-fricção, triagem rica, lifecycle completo. Aperte g+x de qualquer tela pra capturar rápido."

@@ -190,9 +190,16 @@ function pingDisplay(ping: PingResult | undefined, t: ReturnType<typeof useToken
 
 // ─── Componente principal ────────────────────────────────────────────────────
 
-export default function ServidoresPanel({ onAbrirCofre }: { onAbrirCofre?: (label?: string) => void } = {}): React.ReactElement {
+export default function ServidoresPanel({ onAbrirCofre, mode = 'full', onGerenciar }: {
+  onAbrirCofre?: (label?: string) => void;
+  // 'full' = cadastro completo (hub em Configurações).
+  // 'monitor' = só leitura + ping + atalho pro hub (Atelier). Centralização v1.188.0.
+  mode?: 'full' | 'monitor';
+  onGerenciar?: () => void;
+} = {}): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
+  const isFull = mode !== 'monitor';
 
   const [servidores, setServidores] = useState<Servidor[]>([]);
   const [sistemas, setSistemas] = useState<Sistema[]>([]);
@@ -461,7 +468,11 @@ export default function ServidoresPanel({ onAbrirCofre }: { onAbrirCofre?: (labe
               </Button>
             </Tooltip>
           )}
-          <Button type="primary" icon={<Plus size={14} />} onClick={abrirNova}>Adicionar servidor</Button>
+          {isFull ? (
+            <Button type="primary" icon={<Plus size={14} />} onClick={abrirNova}>Adicionar servidor</Button>
+          ) : onGerenciar ? (
+            <Button type="primary" icon={<Hammer size={14} />} onClick={onGerenciar}>Gerenciar em Configurações</Button>
+          ) : null}
         </div>
       </div>
 
@@ -534,7 +545,11 @@ export default function ServidoresPanel({ onAbrirCofre }: { onAbrirCofre?: (labe
           }
         >
           {servidores.length === 0 && (
-            <Button type="primary" icon={<Plus size={14} />} onClick={abrirNova}>Adicionar servidor</Button>
+            isFull ? (
+              <Button type="primary" icon={<Plus size={14} />} onClick={abrirNova}>Adicionar servidor</Button>
+            ) : onGerenciar ? (
+              <Button type="primary" icon={<Hammer size={14} />} onClick={onGerenciar}>Cadastrar em Configurações</Button>
+            ) : null
           )}
         </Empty>
       ) : (
@@ -592,6 +607,7 @@ export default function ServidoresPanel({ onAbrirCofre }: { onAbrirCofre?: (labe
             onEditar={() => { setDetalhe(null); abrirEditar(detalhe); }}
             onRemover={() => { remover(detalhe.id); setDetalhe(null); }}
             onAbrirCofre={onAbrirCofre ? (label?: string) => { onAbrirCofre(label); setDetalhe(null); } : undefined}
+            podeEditar={isFull}
           />
         )}
       </Modal>
@@ -925,7 +941,7 @@ function ServidorCard({ servidor, sistemaNome, ping, onAbrir, onPingar }: {
 }
 
 // ─── Sub: detalhe (modal aberto) ──────────────────────────────────────────────
-function ServidorDetalhe({ servidor, sistemaNome, ping, onPingar, onCopiar, onEditar, onRemover, onAbrirCofre }: {
+function ServidorDetalhe({ servidor, sistemaNome, ping, onPingar, onCopiar, onEditar, onRemover, onAbrirCofre, podeEditar = true }: {
   servidor: Servidor;
   sistemaNome: string;
   ping?: PingResult;
@@ -934,6 +950,7 @@ function ServidorDetalhe({ servidor, sistemaNome, ping, onPingar, onCopiar, onEd
   onEditar: () => void;
   onRemover: () => void;
   onAbrirCofre?: (label?: string) => void;
+  podeEditar?: boolean;
 }): React.ReactElement {
   const t = useTokens();
   const amb = AMBIENTE[servidor.ambiente] || AMBIENTE.outro;
@@ -1144,11 +1161,13 @@ function ServidorDetalhe({ servidor, sistemaNome, ping, onPingar, onCopiar, onEd
             <Button size="small" icon={<ShieldCheck size={13} />} onClick={() => onAbrirCofre(servidor.cofreLabel)}>Cofre</Button>
           </Tooltip>
         )}
-        <Button size="small" icon={<Pencil size={13} />} onClick={onEditar}>Editar</Button>
+        {podeEditar && <Button size="small" icon={<Pencil size={13} />} onClick={onEditar}>Editar</Button>}
         <span style={{ flex: 1 }} />
-        <Popconfirm title="Remover este servidor?" onConfirm={onRemover} okText="Remover" cancelText="Cancelar">
-          <Button size="small" danger icon={<Trash2 size={13} />}>Remover</Button>
-        </Popconfirm>
+        {podeEditar && (
+          <Popconfirm title="Remover este servidor?" onConfirm={onRemover} okText="Remover" cancelText="Cancelar">
+            <Button size="small" danger icon={<Trash2 size={13} />}>Remover</Button>
+          </Popconfirm>
+        )}
       </div>
     </div>
   );

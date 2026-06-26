@@ -99,6 +99,8 @@ export default function App(): React.ReactElement {
   // Tab inicial do Atelier — Dashboard pode pular direto pra estação Servidores
   // ao clicar na linha de monitoramento no widget Conexões.
   const [atelierInitialTab, setAtelierInitialTab] = useState<import('./views/Atelier').AtelierTab>('guia');
+  // Deep-link de seção em Configurações (hub de Conexões — v1.188.0).
+  const [configInitialSecao, setConfigInitialSecao] = useState<string | undefined>(undefined);
   const [saudeMedia, setSaudeMedia] = useState(0);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const [alertsDrawerOpen, setAlertsDrawerOpen] = useState(false);
@@ -240,6 +242,8 @@ export default function App(): React.ReactElement {
     }
   };
 
+  const navegarConfig = (secao?: string) => { setConfigInitialSecao(secao); handleNavigate('configuracoes'); };
+
   const handleSelectSistema = (id: string) => { setSelectedSistemaId(id); setCurrentView('sistema-detail'); };
   const handleEditSistema = (id: string) => { setSelectedSistemaId(id); setCurrentView('sistema-form'); };
   const handleSaved = () => { message.success('Salvo com sucesso'); loadSaude(); setCurrentView('sistemas'); setSelectedSistemaId(null); };
@@ -272,7 +276,7 @@ export default function App(): React.ReactElement {
       case 'sistemas':
         return <Bancada onSelectSistema={handleSelectSistema} onNewSistema={() => setCurrentView('sistema-form')} onImportGAS={() => setImportGASOpen(true)} refreshKey={sistemasRefresh} />;
       case 'operacoes':
-        return <Operacoes onAbrirSistema={handleSelectSistema} onIrPara={handleNavigate} />;
+        return <Operacoes onAbrirSistema={handleSelectSistema} onIrPara={handleNavigate} onIrParaConfigSecao={navegarConfig} />;
       case 'financeiro':
         return isAdmin ? <Financeiro /> : <AcessoNegado area="Financeiro" onVoltar={() => handleNavigate('dashboard')} />;
       case 'forja-ia':
@@ -280,11 +284,11 @@ export default function App(): React.ReactElement {
       case 'relatorios':
         return <Relatorios />;
       case 'atelier':
-        return <Atelier initialTab={atelierInitialTab} />;
+        return <Atelier initialTab={atelierInitialTab} onGerenciarConexoes={navegarConfig} />;
       case 'estudos':
         return <Estudos />;
       case 'configuracoes':
-        return isAdmin ? <Configuracoes /> : <AcessoNegado area="Configurações" onVoltar={() => handleNavigate('dashboard')} />;
+        return isAdmin ? <Configuracoes initialSecao={configInitialSecao} /> : <AcessoNegado area="Configurações" onVoltar={() => handleNavigate('dashboard')} />;
       case 'sistema-form':
         return <SistemaForm sistemaId={selectedSistemaId} onBack={handleBack} onSaved={handleSaved} />;
       case 'sistema-detail':

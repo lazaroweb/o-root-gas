@@ -133,7 +133,7 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
 
   if (loading) {
     return (
-      <div className="forja-view" style={{ padding: '36px 40px', maxWidth: 1280, margin: '0 auto' }}>
+      <div className="forja-view" style={{ padding: '68px 40px 56px', maxWidth: 1280, margin: '0 auto' }}>
         <Skeleton width={160} height={14} radius={6} />
         <div style={{ height: 14 }} />
         <Skeleton width={340} height={40} radius={8} />

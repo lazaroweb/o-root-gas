@@ -32,7 +32,7 @@ export default function ForjaIA(): React.ReactElement {
   ];
 
   return (
-    <div className="forja-view" style={{ padding: '36px 40px', maxWidth: 1160, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
+    <div className="forja-view" style={{ padding: '68px 40px 56px', maxWidth: 1160, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
       <PageHeader title="Forja IA" subtitle="O cérebro da Forja: assistente, conselho de especialistas, blueprints e diagramas." />
       <Tabs defaultActiveKey="chat" items={items} destroyInactiveTabPane />
     </div>

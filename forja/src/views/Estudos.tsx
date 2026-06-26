@@ -107,7 +107,7 @@ export default function Estudos(): React.ReactElement {
   );
 
   return (
-    <div className="forja-view" style={{ padding: '36px 40px', maxWidth: 1240, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
+    <div className="forja-view" style={{ padding: '68px 40px 56px', maxWidth: 1240, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
       <PageHeader
         title="Estudos"
         subtitle="Seu canto de aprendizado: assista, salve o que importa e registre o que precisa aprofundar."

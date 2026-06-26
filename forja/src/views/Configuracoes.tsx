@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Row, Col, Input, Button, Form, Select, Tag, Popconfirm, App as AntApp, Skeleton, Spin, Collapse } from 'antd';
 import { Sparkles, GitBranch, Layers, KeyRound, Plus, Trash2, CheckCircle2, Zap, RefreshCw, ExternalLink } from 'lucide-react';
-import { ShieldCheck, Tags, Bell, Database, Layers as LayersSection, Landmark } from 'lucide-react';
+import { ShieldCheck, Tags, Bell, Database, Layers as LayersSection, Landmark, Plug, Cpu } from 'lucide-react';
 import { PageHeader, Panel } from '../components/ui';
 import IntegracoesFiscaisPanel from '../components/IntegracoesFiscaisPanel';
+import ApisPanel from '../components/ApisPanel';
+import ServidoresPanel from '../components/ServidoresPanel';
 import AutomacoesPanel from '../components/AutomacoesPanel';
 import UsuariosPanel from '../components/UsuariosPanel';
 import ModeloAuditoriaPanel from '../components/ModeloAuditoriaPanel';
@@ -17,13 +19,25 @@ import { useIsMobile } from '../useResponsive';
 import callServer from '../gas-client';
 import type { Settings, Stack, StatusGeral, ServerResponse } from '../types';
 
-type SecaoKey = 'conta' | 'ia' | 'integracoes' | 'fiscal' | 'financeiro' | 'automacoes' | 'dados' | 'stacks';
+type SecaoKey = 'conta' | 'ia' | 'integracoes' | 'apis' | 'infra' | 'fiscal' | 'financeiro' | 'automacoes' | 'dados' | 'stacks';
 
-export default function Configuracoes(): React.ReactElement {
+const SECAO_VALIDAS: SecaoKey[] = ['conta', 'ia', 'integracoes', 'apis', 'infra', 'fiscal', 'financeiro', 'automacoes', 'dados', 'stacks'];
+
+interface ConfiguracoesProps {
+  // Deep-link: abre direto numa seção (ex.: vindo de Operações/Atelier → Conexões).
+  initialSecao?: string;
+}
+
+export default function Configuracoes({ initialSecao }: ConfiguracoesProps = {}): React.ReactElement {
   const t = useTokens();
   const isMobile = useIsMobile();
   const { message } = AntApp.useApp();
-  const [secao, setSecao] = useState<SecaoKey>('conta');
+  const secaoInicial: SecaoKey = (initialSecao && SECAO_VALIDAS.indexOf(initialSecao as SecaoKey) >= 0) ? (initialSecao as SecaoKey) : 'conta';
+  const [secao, setSecao] = useState<SecaoKey>(secaoInicial);
+
+  useEffect(() => {
+    if (initialSecao && SECAO_VALIDAS.indexOf(initialSecao as SecaoKey) >= 0) setSecao(initialSecao as SecaoKey);
+  }, [initialSecao]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [stacks, setStacks] = useState<Stack[]>([]);
   const [status, setStatus] = useState<StatusGeral | null>(null);
@@ -159,6 +173,8 @@ export default function Configuracoes(): React.ReactElement {
     { key: 'conta', label: 'Conta & Acesso', descricao: 'Usuários e permissões', icon: <ShieldCheck size={18} strokeWidth={1.6} />, accent: t.accents.peach },
     { key: 'ia', label: 'Inteligência (IA)', descricao: 'Proxy, Gemini e auditoria', icon: <Sparkles size={18} strokeWidth={1.6} />, accent: t.accents.peach, status: (settings?.llm.temChave || settings?.gemini?.temChave) ? 'ok' : 'pendente' },
     { key: 'integracoes', label: 'Integrações', descricao: 'GitHub', icon: <GitBranch size={18} strokeWidth={1.6} />, accent: t.accents.lavender, status: settings?.github.temToken ? 'ok' : 'pendente' },
+    { key: 'apis', label: 'APIs & Webhooks', descricao: 'Endpoints monitorados por aplicação', icon: <Plug size={18} strokeWidth={1.6} />, accent: t.accents.peach },
+    { key: 'infra', label: 'Infraestrutura', descricao: 'Servidores e instâncias que você roda', icon: <Cpu size={18} strokeWidth={1.6} />, accent: t.accents.sage },
     { key: 'fiscal', label: 'Fiscal & Governo', descricao: 'Receita, SEFAZ, NFS-e, provedores', icon: <Landmark size={18} strokeWidth={1.6} />, accent: t.accents.clay },
     { key: 'financeiro', label: 'Financeiro', descricao: 'Regras de categoria', icon: <Tags size={18} strokeWidth={1.6} />, accent: t.accents.sage },
     { key: 'automacoes', label: 'Automações & Alertas', descricao: 'Regras, e-mail, WhatsApp', icon: <Bell size={18} strokeWidth={1.6} />, accent: t.accents.clay },
@@ -289,6 +305,32 @@ export default function Configuracoes(): React.ReactElement {
             </Form>
           </Panel>
         );
+      case 'apis': {
+        const intro = 'Cadastro central dos endpoints que você monitora por aplicação. Operações → Status mostra o mesmo em modo leitura/teste. Nunca cole chaves aqui — use só a referência (ex.: Vault/LLM).';
+        return (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <Plug size={18} strokeWidth={1.6} color={t.accents.peach} />
+              <span style={{ fontFamily: FONTS.display, fontSize: 16, fontWeight: 600, color: t.text }}>APIs & Webhooks</span>
+            </div>
+            <div style={{ marginBottom: 16, color: t.textSecondary, fontSize: 12.5, lineHeight: 1.6 }}>{intro}</div>
+            <ApisPanel mode="full" />
+          </div>
+        );
+      }
+      case 'infra': {
+        const intro = 'Inventário das instâncias que você roda (proxies LLM, automações, bancos locais, self-hosted). Atelier → Servidores mostra o mesmo em modo monitoramento (ping ao vivo). Senhas vão para o Cofre.';
+        return (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <Cpu size={18} strokeWidth={1.6} color={t.accents.sage} />
+              <span style={{ fontFamily: FONTS.display, fontSize: 16, fontWeight: 600, color: t.text }}>Infraestrutura & Servidores</span>
+            </div>
+            <div style={{ marginBottom: 16, color: t.textSecondary, fontSize: 12.5, lineHeight: 1.6 }}>{intro}</div>
+            <ServidoresPanel mode="full" />
+          </div>
+        );
+      }
       case 'fiscal':
         return <IntegracoesFiscaisPanel />;
       case 'financeiro':
@@ -381,7 +423,7 @@ export default function Configuracoes(): React.ReactElement {
   };
 
   return (
-    <div className="forja-view" style={{ padding: isMobile ? '24px 16px' : '36px 40px', maxWidth: 1180, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
+    <div className="forja-view" style={{ padding: isMobile ? '40px 16px 40px' : '68px 40px 56px', maxWidth: 1180, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
       <PageHeader
         title="Configurações"
         subtitle="O Vault da Forja: conexões de IA, GitHub e catálogo de tecnologias."

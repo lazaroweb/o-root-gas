@@ -36,6 +36,13 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.188.0] — 2026-06-26
+
+- **Conexões centralizadas em Configurações (Fase 1)** — APIs e Servidores agora têm cadastro único em Configurações → Conexões. Operações → Status e Atelier → Servidores viram monitor (leitura + teste/ping) com atalho "Gerenciar em Configurações". Sem migração de dados — totalmente reversível.
+- Novo componente reutilizável `ApisPanel` (modos full/monitor) extraído de OpsStatus.
+- `ServidoresPanel` ganha modos full/monitor.
+- Deep-link de seção em Configurações (`initialSecao`) para abrir direto em APIs & Webhooks / Infraestrutura.
+
 ## [1.179.1] — 2026-06-25
 
 ### Corrigido — A aba "Guia" agora é "Visão geral" + botão do guia visível

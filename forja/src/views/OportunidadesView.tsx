@@ -90,7 +90,7 @@ export default function OportunidadesView(): React.ReactElement {
   );
 
   return (
-    <div className="forja-view" style={{ padding: '36px 40px', maxWidth: 1040, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
+    <div className="forja-view" style={{ padding: '68px 40px 56px', maxWidth: 1040, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
       <PageHeader
         title="Oportunidades"
         subtitle="Seu pipeline comercial, do primeiro contato ao fechamento."

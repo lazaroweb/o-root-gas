@@ -26,6 +26,9 @@ export type AtelierTab = 'guia' | 'skills' | 'agents' | 'kits' | 'snippets' | 't
 
 interface AtelierProps {
   initialTab?: AtelierTab;
+  // Centralização v1.188.0: a estação Servidores vira monitor; o cadastro
+  // vive em Configurações → Conexões → Infraestrutura.
+  onGerenciarConexoes?: (secao: string) => void;
 }
 
 interface Estacao {
@@ -41,7 +44,7 @@ interface Estacao {
 
 // ─── Componente ──────────────────────────────────────────────────────────────
 
-export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.ReactElement {
+export default function Atelier({ initialTab = 'guia', onGerenciarConexoes }: AtelierProps): React.ReactElement {
   const t = useTokens();
   const { mode } = useForja();
   const [tab, setTab] = useState<AtelierTab>(initialTab);
@@ -158,7 +161,7 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
       icon: <Cpu size={17} strokeWidth={1.6} />,
       iconActive: <Cpu size={17} strokeWidth={1.8} />,
       label: 'Servidores',
-      descricao: 'Instâncias que você roda: proxies LLM, automações, mística, bancos locais e self-hosted.',
+      descricao: 'Monitore as instâncias que você roda (proxies LLM, automações, bancos locais). O cadastro vive em Configurações → Conexões.',
       accent: 'sage',
       novo: true,
     },
@@ -206,7 +209,7 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
       case 'hospedagem':
         return wrapCard(<HospedagemPanel />);
       case 'servidores':
-        return wrapCard(<ServidoresPanel onAbrirCofre={abrirCofre} />);
+        return wrapCard(<ServidoresPanel onAbrirCofre={abrirCofre} mode="monitor" onGerenciar={onGerenciarConexoes ? () => onGerenciarConexoes('infra') : undefined} />);
       case 'cofre':
         return wrapCard(<CofrePanel initialFiltro={cofreFiltro} />);
       default:
@@ -224,7 +227,7 @@ export default function Atelier({ initialTab = 'guia' }: AtelierProps): React.Re
 
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="forja-view" style={{ padding: '36px 40px', maxWidth: 1440, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
+    <div className="forja-view" style={{ padding: '68px 40px 56px', maxWidth: 1440, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
       <PageHeader
         title="Atelier"
         subtitle="O kit de bancada do vibe coder. Tudo ao toque dos dedos."

@@ -16,6 +16,8 @@ interface OperacoesProps {
   // (sistema, configurações). Princípio "alerta sem ação proibido".
   onAbrirSistema?: (id: string) => void;
   onIrPara?: (view: ViewName) => void;
+  // Deep-link pro hub de Conexões em Configurações (seção específica).
+  onIrParaConfigSecao?: (secao: string) => void;
 }
 
 // Mesmo padrão de seções do Atelier/Configurações: trilho lateral (sticky) com
@@ -27,7 +29,11 @@ const SECOES: SubNavItem<OpsTab>[] = [
   { key: 'monitor', icon: Radar, label: 'Monitoramento', accent: 'peach', desc: 'Verificações automáticas e alertas de disponibilidade.' },
 ];
 
-export default function Operacoes({ onAbrirSistema, onIrPara }: OperacoesProps = {}): React.ReactElement {
+export default function Operacoes({ onAbrirSistema, onIrPara, onIrParaConfigSecao }: OperacoesProps = {}): React.ReactElement {
+  const irConfig = (secao: string) => {
+    if (onIrParaConfigSecao) onIrParaConfigSecao(secao);
+    else if (onIrPara) onIrPara('configuracoes');
+  };
   const [sistemas, setSistemas] = useState<Sistema[]>([]);
   const [tab, setTab] = useState<OpsTab>('status');
 
@@ -40,7 +46,7 @@ export default function Operacoes({ onAbrirSistema, onIrPara }: OperacoesProps =
   // Só a seção ativa é montada — equivale ao destroyInactiveTabPane das tabs.
   const renderConteudo = (): React.ReactNode => {
     switch (tab) {
-      case 'status': return <OpsStatus sistemas={sistemas} onIrParaConfig={() => onIrPara && onIrPara('configuracoes')} />;
+      case 'status': return <OpsStatus sistemas={sistemas} onIrParaConfig={() => irConfig('ia')} onGerenciarApis={() => irConfig('apis')} />;
       case 'apps': return <OpsAplicacoes onAbrirSistema={onAbrirSistema} />;
       case 'github': return <OpsGitHub />;
       case 'monitor': return <OpsMonitor onIrParaStatus={() => setTab('status')} onIrParaApps={() => setTab('apps')} />;
@@ -49,7 +55,7 @@ export default function Operacoes({ onAbrirSistema, onIrPara }: OperacoesProps =
   };
 
   return (
-    <div className="forja-view" style={{ padding: '36px 40px', maxWidth: 1180, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
+    <div className="forja-view" style={{ padding: '68px 40px 56px', maxWidth: 1180, margin: '0 auto', animation: 'forjaFadeIn 0.3s ease' }}>
       <PageHeader title="Operações" subtitle="Status ao vivo, aplicações no ar, repositórios e monitoramento automático." />
       <SubNav<OpsTab> items={SECOES} value={tab} onChange={setTab} ariaLabel="Áreas de Operações">
         {renderConteudo()}
