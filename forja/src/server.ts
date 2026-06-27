@@ -18699,6 +18699,39 @@ function getHistoricoAuditorias(sistemaId: string): ServerResult {
   }
 }
 
+// Abre uma rodada de auditoria específica (por id) com o payload completo —
+// alimenta o drill-down do histórico na aba "Auditorias" do sistema, pra você
+// reabrir os achados de qualquer auditoria passada (não só a última).
+function getAuditoriaPorId(auditoriaId: string): ServerResult {
+  try {
+    const linha = dbGetById('Auditorias', String(auditoriaId || '').trim());
+    if (!linha) return { ok: false, error: 'Auditoria não encontrada' };
+    let payload: AuditPayload | null = null;
+    let fontes: AuditFontes | null = null;
+    let registros: Record<string, RegistroFinding> = {};
+    try { payload = JSON.parse(String(linha.payloadJson || 'null')); } catch { payload = null; }
+    try { fontes = JSON.parse(String(linha.fontesJson || 'null')); } catch { fontes = null; }
+    try { registros = JSON.parse(String(linha.registrosJson || '{}')) || {}; } catch { registros = {}; }
+    return {
+      ok: true,
+      data: {
+        id: String(linha.id || ''),
+        sistemaId: String(linha.sistemaId || ''),
+        criadoEm: String(linha.criadoEm || ''),
+        modeloUsado: String(linha.modeloUsado || ''),
+        duracaoMs: Number(linha.duracaoMs || 0),
+        scoreNoMomento: Number(linha.scoreNoMomento || 0),
+        numFindings: Number(linha.numFindings || 0),
+        payload,
+        fontes,
+        registros,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao abrir auditoria' };
+  }
+}
+
 // Marca um finding específico como "já registrado" — atualiza o JSON do registrosJson
 // na linha da Auditorias. Permite que ao reabrir o drawer, o FindingCard mostre
 // "Já registrado" ao invés do botão de ação, evitando duplicações.

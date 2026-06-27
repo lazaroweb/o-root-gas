@@ -36,6 +36,11 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.192.0] — 2026-06-26
+
+- **Histórico de auditorias Forja IA dentro de cada sistema** — nova aba "Auditorias" no detalhe do sistema com a linha do tempo de todas as rodadas que você já rodou: sparkline da evolução do score (delta desde a primeira), lista de rodadas (data, score, nº de achados, resolvidos, modelo, commit, duração) e badge com o total de auditorias. Clicar numa rodada reabre o drill-down completo daquela auditoria — estado geral, resumo de severidades, achados (problema/evidência/solução/prompt via `FindingCard`) e o que foi resolvido. "Nova auditoria" abre o drawer de auditoria. A aba recarrega sozinha quando uma nova auditoria roda.
+- Novo RPC `getAuditoriaPorId` para abrir o payload de qualquer rodada passada (antes só a última tinha payload acessível). Nada de migração — lê o que já estava salvo na aba `Auditorias`.
+
 ## [1.191.2] — 2026-06-26
 
 - **Atelier ganha ícone de joia (Gem) com vida própria** — o ícone do Atelier na sidebar virou uma pedra lapidada com brilho que respira e um glint que cintila de tempos em tempos (luz batendo na joia). Tratamento distinto do "Ao vivo"; respeita `prefers-reduced-motion`.

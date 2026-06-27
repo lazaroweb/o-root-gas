@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Typography, Button, Space, Spin, Alert, Descriptions, Divider, Tabs, App as AntApp, Tooltip, Popover, Progress } from 'antd';
-import { ArrowLeft, Pencil, ExternalLink, GitBranch, RefreshCw, FileCode, Wand2, Globe2, CheckCircle2, XCircle, HeartPulse, Info, Plug, ClipboardList, ShieldAlert, Receipt, Activity, Layers, Bug } from 'lucide-react';
+import { ArrowLeft, Pencil, ExternalLink, GitBranch, RefreshCw, FileCode, Wand2, Globe2, CheckCircle2, XCircle, HeartPulse, Info, Plug, ClipboardList, ShieldAlert, Receipt, Activity, Layers, Bug, History } from 'lucide-react';
 import StageBadge from '../components/StageBadge';
 import { Panel } from '../components/ui';
 import { useTokens } from '../themeContext';
@@ -17,6 +17,7 @@ import AuditoriaDrawer from '../components/AuditoriaDrawer';
 import GraduacaoChecklist from '../components/GraduacaoChecklist';
 import CustosTab from '../components/CustosTab';
 import DividaTecnicaPanel from '../components/DividaTecnicaPanel';
+import AuditoriasTab from '../components/AuditoriasTab';
 import callServer from '../gas-client';
 import type { Sistema, ServerResponse, ServerResult, SaudeBreakdown } from '../types';
 
@@ -50,7 +51,9 @@ export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDeta
   const [auditOpen, setAuditOpen] = useState(false);
   const [saude, setSaude] = useState<SaudeBreakdown | null>(null);
   const [recalculando, setRecalculando] = useState(false);
-  const [ultimaAuditoria, setUltimaAuditoria] = useState<{ criadoEm: string; numFindings: number; modeloUsado: string } | null>(null);
+  const [ultimaAuditoria, setUltimaAuditoria] = useState<{ criadoEm: string; numFindings: number; modeloUsado: string; totalAuditorias: number } | null>(null);
+  // Sinal pra a aba "Auditorias" recarregar o histórico após rodar nova auditoria.
+  const [auditoriasReload, setAuditoriasReload] = useState(0);
   // Contagem do backlog deste sistema (aFazer + fazendo + alta) — alimenta o
   // badge no tab "Backlog" pra você saber se tem trabalho pendente sem clicar.
   const [backlogCount, setBacklogCount] = useState<{ aFazer: number; fazendo: number; alta: number; total: number } | null>(null);
@@ -74,11 +77,12 @@ export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDeta
     callServer<ServerResult>('getUltimaAuditoria', sistemaId)
       .then((r) => {
         if (r.ok && r.data) {
-          const d = r.data as { criadoEm: string; numFindings: number; modeloUsado: string };
-          setUltimaAuditoria({ criadoEm: d.criadoEm, numFindings: d.numFindings, modeloUsado: d.modeloUsado });
+          const d = r.data as { criadoEm: string; numFindings: number; modeloUsado: string; totalAuditorias?: number };
+          setUltimaAuditoria({ criadoEm: d.criadoEm, numFindings: d.numFindings, modeloUsado: d.modeloUsado, totalAuditorias: d.totalAuditorias || 0 });
         } else { setUltimaAuditoria(null); }
       })
       .catch(() => { /* preview */ });
+    setAuditoriasReload((n) => n + 1);
   };
 
   const carregarBacklogCount = () => {
@@ -188,6 +192,28 @@ export default function SistemaDetail({ sistemaId, onBack, onEdit }: SistemaDeta
       children: (
         <TabBody titulo="Recursos & integrações" hint="APIs, serviços externos, dependências, credenciais e chaves usadas por este sistema. Registre tudo que tem ID/URL/token pra mapear sua superfície de risco.">
           <RecursosPanel sistemaId={sistemaId} />
+        </TabBody>
+      ),
+    },
+    {
+      key: 'auditorias',
+      label: (
+        <TabLabel
+          emoji={<History size={14} strokeWidth={1.7} />}
+          label="Auditorias"
+          badge={ultimaAuditoria && ultimaAuditoria.totalAuditorias > 0
+            ? { numero: ultimaAuditoria.totalAuditorias }
+            : undefined}
+        />
+      ),
+      children: (
+        <TabBody titulo="Histórico de auditorias Forja IA" hint="Linha do tempo de todas as auditorias que você rodou neste sistema — evolução do score ao longo do tempo. Clique numa rodada pra reabrir os achados daquela auditoria (problema, evidência, solução e prompt).">
+          <AuditoriasTab
+            sistemaId={sistemaId}
+            sistemaNome={sistema.nome}
+            onAbrirAuditoria={() => setAuditOpen(true)}
+            reloadSignal={auditoriasReload}
+          />
         </TabBody>
       ),
     },

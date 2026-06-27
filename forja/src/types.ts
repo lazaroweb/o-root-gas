@@ -200,6 +200,21 @@ export interface HistoricoAuditoriaItem {
   commitSha: string;
 }
 
+// Rodada de auditoria completa (drill-down do histórico). Retorno de
+// getAuditoriaPorId — payload + fontes + vínculos de registro.
+export interface AuditoriaDetalhe {
+  id: string;
+  sistemaId: string;
+  criadoEm: string;
+  modeloUsado: string;
+  duracaoMs: number;
+  scoreNoMomento: number;
+  numFindings: number;
+  payload: AuditPayload | null;
+  fontes: AuditFontes | null;
+  registros: Record<string, RegistroFinding>;
+}
+
 // Status de frescor da auditoria de código (Fase 2): diz se o repositório mudou
 // desde a última auditoria, pra UI decidir se vale re-rodar.
 export interface StatusAuditoriaCodigo {
