@@ -8130,7 +8130,9 @@ function marcarLancamentoStatus(id: string, status: string): ServerResult {
       status: st,
       atualizadoEm: new Date().toISOString(),
     });
-    return upd ? { ok: true, data: upd } : { ok: false, error: 'Lançamento não encontrado' };
+    // Sanitiza: a linha tem `data` como Date e o google.script.run devolve null
+    // silencioso se o retorno tiver Date (vira "Sem resposta do servidor").
+    return upd ? { ok: true, data: _sanitizarLinha(upd) } : { ok: false, error: 'Lançamento não encontrado' };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao mudar status' };
   }
@@ -11256,8 +11258,11 @@ function alternarRecorrencia(id: string, acao: 'pausar' | 'reativar' | 'concluir
       patch['recorrenciaAtiva'] = 'concluida';
     }
 
+    // _sanitizarLinha é obrigatório: a linha tem `data` como Date (Sheets) e o
+    // google.script.run devolve null silencioso se o retorno tiver Date — o que
+    // estourava "Sem resposta do servidor" ao reabrir/concluir.
     const upd = dbUpdate('FinPessoalLancamentos', id, patch);
-    return upd ? { ok: true, data: upd } : { ok: false, error: 'Lançamento não encontrado' };
+    return upd ? { ok: true, data: _sanitizarLinha(upd) } : { ok: false, error: 'Lançamento não encontrado' };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao alternar recorrência' };
   }
@@ -11302,8 +11307,10 @@ function getRecorrenciasAtivas(): ServerResult {
       return {
         ..._sanitizarLinha(o),
         totalGerados: clones.length,
+        // _valorJsonSafe normaliza Date → 'YYYY-MM-DD' (String(Date) cru dava
+        // "Invalid Date" no dayjs do frontend).
         ultimoGeradoEm: clones.length > 0
-          ? clones.map((c) => String(c['data'])).sort().pop()
+          ? clones.map((c) => String(_valorJsonSafe(c['data']))).filter(Boolean).sort().pop() || null
           : null,
         statusRecorrencia: _statusRecorrencia(o),
       };

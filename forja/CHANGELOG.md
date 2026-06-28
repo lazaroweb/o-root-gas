@@ -36,6 +36,10 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.197.1] — 2026-06-28
+
+- **Fix: "Sem resposta do servidor" ao reabrir/concluir recorrência** — `alternarRecorrencia` e `marcarLancamentoStatus` devolviam a linha crua, que tem o campo `data` como `Date`; o `google.script.run` devolve `null` silencioso quando o retorno contém `Date`, virando o erro "Sem resposta do servidor". Agora os dois sanitizam o retorno (`_sanitizarLinha`). Também corrige o "Invalid Date" no "último gerado" das recorrências (normaliza a data do clone).
+
 ## [1.197.0] — 2026-06-28
 
 - **Financeiro Pessoal mais limpo (menos redundância)** — no "Meu mês" o topo deixou de repetir o que a própria tela já mostra:
