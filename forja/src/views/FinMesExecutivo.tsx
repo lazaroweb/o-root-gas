@@ -11,7 +11,7 @@ import { App as AntApp, Spin, Empty, Button, Tooltip } from 'antd';
 import {
   TrendingUp, TrendingDown, Wallet, CreditCard, Check, Clock,
   Smartphone, Banknote, FileText, ArrowLeftRight, Target, Sparkles, Plus, CalendarClock,
-  PiggyBank, RefreshCw,
+  PiggyBank, RefreshCw, ChevronLeft, ChevronRight, Undo2,
 } from 'lucide-react';
 import { Panel, formatBRL } from '../components/ui';
 import { useTokens } from '../themeContext';
@@ -26,6 +26,8 @@ interface Props {
   onAbrirCartao: (cartaoId: string) => void;
   onNovoLancamento: () => void;
   onIrParaOrcamentos: () => void;
+  onNavegarMes: (delta: number) => void;
+  onMesHoje: () => void;
 }
 
 const METODO_META: Record<string, { label: string; cor: string; icon: React.ReactNode }> = {
@@ -37,7 +39,7 @@ const METODO_META: Record<string, { label: string; cor: string; icon: React.Reac
   transferencia: { label: 'Transferência', cor: '#06b6d4', icon: <ArrowLeftRight size={13} /> },
 };
 
-export default function FinMesExecutivo({ mes, categorias, onRecarregar, onAbrirCartao, onNovoLancamento, onIrParaOrcamentos }: Props): React.ReactElement {
+export default function FinMesExecutivo({ mes, categorias, onRecarregar, onAbrirCartao, onNovoLancamento, onIrParaOrcamentos, onNavegarMes, onMesHoje }: Props): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [data, setData] = useState<MesExecutivo | null>(null);
@@ -97,6 +99,9 @@ export default function FinMesExecutivo({ mes, categorias, onRecarregar, onAbrir
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Navegador de mês — ver os meses à frente (previstos) sem sair da tela. */}
+      <MesNavegador mes={mes} t={t} onNavegar={onNavegarMes} onHoje={onMesHoje} />
+
       {/* Faixa executiva: Sobra em destaque + Entradas/Saídas + barra de pago */}
       <div
         style={{
@@ -360,6 +365,52 @@ export default function FinMesExecutivo({ mes, categorias, onRecarregar, onAbrir
 
 type Tokens = ReturnType<typeof useTokens>;
 
+// Navegador de mês embutido na própria tela "Meu mês": setas pra andar pra
+// frente (ver previstos) e pra trás, com atalho "hoje". Mostra a distância em
+// meses ("daqui a 2 meses" / "há 1 mês") pra dar contexto sem precisar contar.
+function MesNavegador({ mes, t, onNavegar, onHoje }: { mes: string; t: Tokens; onNavegar: (delta: number) => void; onHoje: () => void }): React.ReactElement {
+  const [yyyy, mm] = mes.split('-').map(Number);
+  const d = new Date(yyyy, mm - 1, 1);
+  const label = d.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  const hoje = new Date();
+  const delta = (yyyy - hoje.getFullYear()) * 12 + (mm - 1 - hoje.getMonth());
+  const ehAtual = delta === 0;
+  const contexto = ehAtual
+    ? 'mês atual'
+    : delta > 0
+      ? (delta === 1 ? 'mês que vem · previsto' : `daqui a ${delta} meses · previsto`)
+      : (delta === -1 ? 'mês passado' : `há ${Math.abs(delta)} meses`);
+
+  const btn: React.CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: 32, height: 32, borderRadius: 9, cursor: 'pointer',
+    background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, color: t.textSecondary,
+    transition: 'all 0.15s',
+  };
+  const hoverOn = (e: React.MouseEvent) => { const el = e.currentTarget as HTMLElement; el.style.borderColor = t.accents.lavender + '66'; el.style.color = t.accents.lavender; };
+  const hoverOff = (e: React.MouseEvent) => { const el = e.currentTarget as HTMLElement; el.style.borderColor = t.borderSoft; el.style.color = t.textSecondary; };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <button style={btn} onClick={() => onNavegar(-1)} onMouseEnter={hoverOn} onMouseLeave={hoverOff} aria-label="Mês anterior">
+        <ChevronLeft size={16} />
+      </button>
+      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 168, textAlign: 'center' }}>
+        <span style={{ fontFamily: FONTS.display, fontSize: 16, fontWeight: 600, color: t.text, textTransform: 'capitalize', lineHeight: 1.15 }}>{label}</span>
+        <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: delta > 0 ? t.accents.lavender : t.textTertiary }}>{contexto}</span>
+      </div>
+      <button style={btn} onClick={() => onNavegar(1)} onMouseEnter={hoverOn} onMouseLeave={hoverOff} aria-label="Próximo mês">
+        <ChevronRight size={16} />
+      </button>
+      {!ehAtual && (
+        <Button type="text" size="small" onClick={onHoje} style={{ color: t.textTertiary, fontFamily: FONTS.ui, fontSize: 12 }}>
+          hoje
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function HeroNum({ icon, label, valor, cor }: { icon: React.ReactNode; label: string; valor: number; cor: string }): React.ReactElement {
   const t = useTokens();
   return (
@@ -405,6 +456,7 @@ function Linha({
   onToggle: () => void; onAbrir?: () => void;
 }): React.ReactElement {
   const clicavel = !!onAbrir;
+  const [hoverPago, setHoverPago] = useState(false);
   return (
     <div
       onClick={onAbrir}
@@ -429,22 +481,25 @@ function Linha({
           <CalendarClock size={11} /> previsto
         </span>
       ) : (
-        <Tooltip title={pago ? 'Clique pra desmarcar' : 'Clique pra marcar como pago'}>
+        <Tooltip title={pago ? `Clique para marcar como "${labelPendente.toLowerCase()}"` : `Clique para marcar como "${labelPago.toLowerCase()}"`}>
           <button
             onClick={(e) => { e.stopPropagation(); onToggle(); }}
+            onMouseEnter={() => setHoverPago(true)}
+            onMouseLeave={() => setHoverPago(false)}
             disabled={loading}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0,
               fontFamily: FONTS.ui, fontSize: 11.5, fontWeight: 600, cursor: loading ? 'wait' : 'pointer',
-              padding: '4px 11px', borderRadius: 999,
-              border: `1px solid ${pago ? t.accents.sage + '66' : t.accents.peach + '55'}`,
-              background: pago ? `${t.accents.sage}1a` : 'transparent',
-              color: pago ? t.accents.sage : t.accents.peach,
+              padding: '4px 11px', borderRadius: 999, whiteSpace: 'nowrap',
+              border: `1px solid ${pago ? (hoverPago ? t.accents.rose + '66' : t.accents.sage + '66') : t.accents.peach + '55'}`,
+              background: pago ? (hoverPago ? `${t.accents.rose}14` : `${t.accents.sage}1a`) : (hoverPago ? `${t.accents.sage}14` : 'transparent'),
+              color: pago ? (hoverPago ? t.accents.rose : t.accents.sage) : (hoverPago ? t.accents.sage : t.accents.peach),
               opacity: loading ? 0.6 : 1, transition: 'all 0.15s',
             }}
           >
-            {pago ? <Check size={13} /> : <Clock size={13} />}
-            {pago ? labelPago : labelPendente}
+            {pago
+              ? (hoverPago ? <><Undo2 size={13} /> {labelPendente}</> : <><Check size={13} /> {labelPago}</>)
+              : (hoverPago ? <><Check size={13} /> {labelPago} ?</> : <><Clock size={13} /> {labelPendente}</>)}
           </button>
         </Tooltip>
       )}

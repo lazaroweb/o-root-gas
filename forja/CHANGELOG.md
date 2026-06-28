@@ -36,6 +36,11 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.195.0] — 2026-06-28
+
+- **"Meu mês" — navegar meses à frente ali mesmo** — agora a própria tela tem um navegador de mês no topo (← mês →, com atalho "hoje") e uma legenda de contexto ("mês atual", "mês que vem · previsto", "daqui a N meses · previsto", "mês passado"). Dá pra olhar os próximos meses com os lançamentos previstos (parcelas, recorrências, salário) sem subir até o cabeçalho global — e ver se ainda cabe no orçamento e quanto sobra.
+- **Toggle de pago mais claro** — o controle ao lado de cada item agora deixa óbvio que é editável nos dois sentidos: ao passar o mouse sobre algo marcado como **Pago/Recebido/Paga**, ele vira **"marcar não pago"** (ícone de desfazer, em vermelho); sobre algo pendente, prévia em verde de marcar como pago. Tooltip também atualizada.
+
 ## [1.194.1] — 2026-06-27
 
 - **Fix: "Meu mês" travava ao abrir** (`color is not defined`) — no componente `HeroNum` usei o shorthand `{{ color }}` referenciando uma variável inexistente; a prop correta é `cor`. Corrigido para `{{ color: cor }}`. Sem mudança de comportamento.

@@ -631,6 +631,11 @@ export default function FinPessoal(): React.ReactElement {
           onAbrirCartao={abrirCartaoNoPainel}
           onNovoLancamento={abrirNovoLancamento}
           onIrParaOrcamentos={() => setView('orcamentos')}
+          onNavegarMes={navegarMes}
+          onMesHoje={() => {
+            const d = new Date();
+            setMes(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+          }}
         />
       )}
       {view === 'visao' && (
