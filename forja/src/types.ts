@@ -1215,6 +1215,9 @@ export interface MembroResumo {
   membro: FamiliaMembro;
   totalPendente: number;
   totalPago: number;
+  // Visão consultiva (custo atribuído, independente de pago/pendente).
+  custoMes?: number;   // custo que cai na fatura do mês selecionado
+  custoTotal?: number; // custo atribuído em todos os meses
   qtdCobrancas: number;
   qtdPendentes: number;
 }
@@ -1233,6 +1236,8 @@ export interface ResumoFamilia {
   membros: MembroResumo[];
   totalAReceber: number;
   totalRecebido: number;
+  totalCustoMes?: number;   // custo total da família na fatura do mês
+  totalCustoTotal?: number; // custo total atribuído (todos os meses)
   qtdMembros: number;
   naoAtribuidos: NaoAtribuido[];
   totalNaoAtribuido: number;

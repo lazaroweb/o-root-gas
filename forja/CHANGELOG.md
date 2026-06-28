@@ -36,6 +36,27 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.201.0] — 2026-06-28
+
+### Mudado
+- **Família virou consultiva (custo, não contas-a-receber)**: a aba deixou de ser
+  um "contas-a-receber" com baixa e passou a mostrar o **custo da família** —
+  quanto do seu cartão é de cada membro, por mês. Antes o "a receber" não zerava
+  ao pagar a fatura (status da cobrança era separado), o que confundia.
+  - Hero: "Custo da família · <mês>" + "Total atribuído".
+  - Donut: "Custo por membro" com toggle Este mês × Total.
+  - Card do membro: custo este mês + total atribuído (sem pendente/baixa).
+  - Régua de 12 meses: soma o custo total por mês (não só o pendente).
+  - Gaveta: "Custo total / Este mês / Futuro · parcelas".
+- **Reembolso ficou opcional e discreto**: o marcar "pago" no item virou só um
+  registro de "já me reembolsou" (não afeta os totais de custo), com tooltip e
+  tag sutil. Relatórios/PDF mantidos.
+
+### Técnico
+- `getResumoFamilia` passou a devolver `custoMes`/`custoTotal` por membro e
+  `totalCustoMes`/`totalCustoTotal`. `getProvisaoMembro` agora soma custo
+  (`totalCusto`, `custoEsteMes`, `custoFuturo`) com `totalPago` à parte.
+
 ## [1.200.1] — 2026-06-28
 
 ### Corrigido

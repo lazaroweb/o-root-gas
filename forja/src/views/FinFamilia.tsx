@@ -42,23 +42,23 @@ interface CobrancaDetalhada extends Cobranca {
   parcelaGrupoId?: string;
 }
 
-// Provisionamento do membro por mês (vem de getProvisaoMembro).
+// Provisionamento do membro por mês (vem de getProvisaoMembro). Consultivo:
+// os totais somam o CUSTO atribuído; `pago` é só o reembolso (discreto).
 interface ProvisaoMesMembro {
   competencia: string;
   total: number;
   pendente: number;
   pago: number;
   futuro: boolean;
-  atrasado: boolean;
   itens: CobrancaDetalhada[];
 }
 interface ProvisaoMembro {
   mesAtual: string;
-  totalPendente: number;
+  totalCusto: number;
+  custoEsteMes: number;
+  custoFuturo: number;
+  custoPassado: number;
   totalPago: number;
-  totalEsteMes: number;
-  totalFuturo: number;
-  totalAtrasado: number;
   porMes: ProvisaoMesMembro[];
 }
 
@@ -183,26 +183,26 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
       }}>
         <div style={{ flex: '1 1 260px', minWidth: 240 }}>
           <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, letterSpacing: 0.4, textTransform: 'uppercase' }}>
-            A receber · em aberto (todos os meses)
+            Custo da família · {compToLabel(mes)}
           </div>
           <div style={{ fontFamily: FONTS.display, fontSize: 36, fontWeight: 600, color: t.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.1, marginTop: 2 }}>
-            {formatBRL(resumo?.totalAReceber || 0)}
+            {formatBRL(resumo?.totalCustoMes ?? 0)}
           </div>
           <div style={{ display: 'flex', gap: 18, marginTop: 8, flexWrap: 'wrap' }}>
-            <MiniStat label="Recebido no mês" valor={formatBRL(resumo?.totalRecebido || 0)} cor={t.accents.sage} />
+            <MiniStat label="Total atribuído" valor={formatBRL(resumo?.totalCustoTotal ?? 0)} cor={t.accents.lavender} />
             <DivV t={t} />
             <MiniStat label="Membros" valor={String(resumo?.qtdMembros ?? listaMembros.length)} cor={t.text} />
             {resumo && resumo.totalNaoAtribuido > 0 && (
               <>
                 <DivV t={t} />
-                <MiniStat label="Na fatura, sem cobrar" valor={formatBRL(resumo.totalNaoAtribuido)} cor={t.accents.peach} />
+                <MiniStat label="Na fatura, sem atribuir" valor={formatBRL(resumo.totalNaoAtribuido)} cor={t.accents.peach} />
               </>
             )}
           </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 18, flexWrap: 'wrap' }}>
             <Button icon={<Plus size={16} />} onClick={() => { setMembroEdit(null); setModalMembro(true); }}>Novo membro</Button>
             <Button type="primary" icon={<HandCoins size={16} />} onClick={() => abrirNovaCobranca()} disabled={semMembros} style={{ background: t.accents.lavender, borderColor: t.accents.lavender }}>
-              Nova cobrança
+              Atribuir manual
             </Button>
           </div>
         </div>
@@ -356,21 +356,23 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar }: {
       if (!comp) continue;
       if (!porComp[comp]) porComp[comp] = { pendente: 0, pago: 0, qtd: 0 };
       const v = Math.abs(Number(c.valor || 0));
+      porComp[comp].qtd++;
       if (String(c.status) === 'pago') porComp[comp].pago += v;
-      else { porComp[comp].pendente += v; porComp[comp].qtd++; }
+      else porComp[comp].pendente += v;
     }
     // 12 meses a partir do mês corrente.
-    const out: Array<{ comp: string; pendente: number; pago: number; qtd: number }> = [];
+    const out: Array<{ comp: string; total: number; qtd: number }> = [];
     for (let i = 0; i < 12; i++) {
       const d = new Date(hoje.getFullYear(), hoje.getMonth() + i, 1);
       const comp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      out.push({ comp, pendente: porComp[comp]?.pendente || 0, pago: porComp[comp]?.pago || 0, qtd: porComp[comp]?.qtd || 0 });
+      const reg = porComp[comp];
+      out.push({ comp, total: (reg?.pendente || 0) + (reg?.pago || 0), qtd: reg?.qtd || 0 });
     }
     return out;
   }, [cobrancas]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const maxV = Math.max(1, ...meses.map((m) => m.pendente));
-  const totalFuturo = meses.reduce((s, m) => s + m.pendente, 0);
+  const maxV = Math.max(1, ...meses.map((m) => m.total));
+  const totalPeriodo = meses.reduce((s, m) => s + m.total, 0);
   const fmtMesCurto = (comp: string) => {
     const [y, mm] = comp.split('-').map(Number);
     return new Date(y, mm - 1, 1).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
@@ -378,17 +380,17 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar }: {
 
   return (
     <Panel
-      title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CalendarRange size={16} color={t.accents.lavender} /> Próximos 12 meses · a receber</span>}
-      extra={<span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>Total previsto: <strong style={{ color: t.text }}>{formatBRL(totalFuturo)}</strong></span>}
+      title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CalendarRange size={16} color={t.accents.lavender} /> Próximos 12 meses · custo da família</span>}
+      extra={<span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>Total no período: <strong style={{ color: t.text }}>{formatBRL(totalPeriodo)}</strong></span>}
     >
       <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, marginBottom: 12 }}>
-        Cada compra parcelada já cai no mês da sua fatura. Clique num mês pra focá-lo na tela.
+        Quanto do seu cartão é da família em cada mês — cada parcela já cai no mês da sua fatura. Clique num mês pra focá-lo.
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(96px, 1fr))', gap: 8 }}>
         {meses.map((m) => {
           const ativo = m.comp === mesAtivo.substring(0, 7);
           const ehHoje = m.comp === mesHoje;
-          const temValor = m.pendente > 0.01;
+          const temValor = m.total > 0.01;
           const cor = ehHoje ? t.accents.peach : t.accents.lavender;
           return (
             <button
@@ -409,12 +411,12 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar }: {
                 {ehHoje && <span style={{ width: 6, height: 6, borderRadius: '50%', background: t.accents.peach }} />}
               </span>
               <span style={{ fontFamily: FONTS.display, fontSize: 14, fontWeight: 600, color: temValor ? t.text : t.textTertiary, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                {temValor ? formatBRL(m.pendente) : '—'}
+                {temValor ? formatBRL(m.total) : '—'}
               </span>
               <span style={{ height: 4, borderRadius: 3, background: t.borderSoft, overflow: 'hidden' }}>
-                <span style={{ display: 'block', height: '100%', width: `${(m.pendente / maxV) * 100}%`, background: cor, borderRadius: 3, transition: 'width 0.3s' }} />
+                <span style={{ display: 'block', height: '100%', width: `${(m.total / maxV) * 100}%`, background: cor, borderRadius: 3, transition: 'width 0.3s' }} />
               </span>
-              <span style={{ fontFamily: FONTS.ui, fontSize: 10, color: t.textTertiary }}>{m.qtd > 0 ? `${m.qtd} cobr.` : 'livre'}</span>
+              <span style={{ fontFamily: FONTS.ui, fontSize: 10, color: t.textTertiary }}>{m.qtd > 0 ? `${m.qtd} item(ns)` : 'livre'}</span>
             </button>
           );
         })}
@@ -428,13 +430,15 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar }: {
 // "Em aberto" (totalPendente) vs "Total" (pendente + pago) + legenda enxuta.
 function PizzaGastosMembros({ membros }: { membros: MembroResumo[] }): React.ReactElement {
   const t = useTokens();
-  const [modo, setModo] = useState<'aberto' | 'total'>('aberto');
+  const [modo, setModo] = useState<'mes' | 'total'>('mes');
   const PALETA = [t.accents.lavender, t.accents.sage, t.accents.peach, t.accents.rose, t.accents.clay, t.accents.blue];
   const dados = membros
     .map((mr, i) => ({
       membro: mr.membro,
       cor: mr.membro.cor || PALETA[i % PALETA.length],
-      total: modo === 'aberto' ? (mr.totalPendente || 0) : (mr.totalPendente || 0) + (mr.totalPago || 0),
+      total: modo === 'mes'
+        ? (mr.custoMes ?? mr.totalPendente ?? 0)
+        : (mr.custoTotal ?? ((mr.totalPendente || 0) + (mr.totalPago || 0))),
     }))
     .filter((d) => d.total > 0)
     .sort((a, b) => b.total - a.total);
@@ -456,10 +460,10 @@ function PizzaGastosMembros({ membros }: { membros: MembroResumo[] }): React.Rea
       background: t.surface, border: `1px solid ${t.borderSoft}`, borderRadius: 16, padding: 20,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 18 }}>
-        <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, letterSpacing: 0.4, textTransform: 'uppercase' }}>Gastos por membro</span>
+        <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, letterSpacing: 0.4, textTransform: 'uppercase' }}>Custo por membro</span>
         {/* Toggle custom (mais contraste que o Segmented no tema custom) */}
         <div style={{ display: 'inline-flex', background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 9, padding: 3, gap: 3 }}>
-          {([['aberto', 'Em aberto'], ['total', 'Total']] as const).map(([op, label]) => {
+          {([['mes', 'Este mês'], ['total', 'Total']] as const).map(([op, label]) => {
             const on = modo === op;
             return (
               <button
@@ -479,7 +483,7 @@ function PizzaGastosMembros({ membros }: { membros: MembroResumo[] }): React.Rea
       </div>
       {totalGeral <= 0 ? (
         <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textTertiary, padding: '34px 4px', textAlign: 'center' }}>
-          {modo === 'aberto' ? 'Nada em aberto no momento.' : 'Sem gastos atribuídos ainda.'}
+          {modo === 'mes' ? 'Nenhum custo atribuído neste mês.' : 'Sem custos atribuídos ainda.'}
         </div>
       ) : (
         <div style={{ display: 'flex', gap: 26, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -490,7 +494,7 @@ function PizzaGastosMembros({ membros }: { membros: MembroResumo[] }): React.Rea
               position: 'absolute', inset: 30, borderRadius: '50%', background: t.surface,
               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
             }}>
-              <div style={{ fontFamily: FONTS.ui, fontSize: 10, color: t.textTertiary, letterSpacing: 0.3, marginBottom: 1 }}>{modo === 'aberto' ? 'Em aberto' : 'Total'}</div>
+              <div style={{ fontFamily: FONTS.ui, fontSize: 10, color: t.textTertiary, letterSpacing: 0.3, marginBottom: 1 }}>{modo === 'mes' ? 'Este mês' : 'Total'}</div>
               <div style={{ fontFamily: FONTS.display, fontSize: 17, fontWeight: 600, color: t.text, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{formatBRL(totalGeral)}</div>
             </div>
           </div>
@@ -541,19 +545,19 @@ function MembroCard({ mr, onClick, onEditar }: { mr: MembroResumo; onClick: () =
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div>
-          <div style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary }}>a receber</div>
-          <div style={{ fontFamily: FONTS.display, fontSize: 18, fontWeight: 600, color: mr.totalPendente > 0 ? t.accents.peach : t.textTertiary, fontVariantNumeric: 'tabular-nums' }}>
-            {formatBRL(mr.totalPendente)}
+          <div style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary }}>custo este mês</div>
+          <div style={{ fontFamily: FONTS.display, fontSize: 18, fontWeight: 600, color: (mr.custoMes ?? 0) > 0 ? t.text : t.textTertiary, fontVariantNumeric: 'tabular-nums' }}>
+            {formatBRL(mr.custoMes ?? 0)}
           </div>
         </div>
         <div style={{ textAlign: 'right' }}>
-          <div style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary }}>pago no mês</div>
-          <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: 600, color: t.accents.sage, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(mr.totalPago)}</div>
+          <div style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary }}>total atribuído</div>
+          <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: 600, color: t.accents.lavender, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(mr.custoTotal ?? 0)}</div>
         </div>
       </div>
       <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${t.borderSoft}`, fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, display: 'flex', justifyContent: 'space-between' }}>
-        <span>{mr.qtdCobrancas} cobrança(s)</span>
-        {mr.qtdPendentes > 0 ? <span style={{ color: t.accents.peach }}>{mr.qtdPendentes} pendente(s)</span> : <span style={{ color: t.accents.sage }}>em dia</span>}
+        <span>{mr.qtdCobrancas} item(ns) atribuído(s)</span>
+        <span style={{ color: t.textSecondary }}>ver detalhe →</span>
       </div>
     </div>
   );
@@ -575,10 +579,10 @@ function LinhaCobranca({ c, onTogglePago, onEditar, onRemover }: {
       background: t.surface, border: `1px solid ${t.borderSoft}`, borderRadius: 10,
       opacity: pgto ? 0.72 : 1,
     }}>
-      <Tooltip title={pgto ? 'Marcar como pendente' : 'Marcar como pago'}>
+      <Tooltip title={pgto ? 'Reembolsado — clique pra desmarcar' : 'Marcar que o membro já me reembolsou (opcional)'}>
         <Button
           size="small" type="text"
-          icon={pgto ? <CheckCircle2 size={18} color={t.accents.sage} /> : <Clock size={18} color={t.accents.peach} />}
+          icon={pgto ? <CheckCircle2 size={18} color={t.accents.sage} /> : <Clock size={18} color={t.textTertiary} />}
           onClick={() => onTogglePago(c)}
         />
       </Tooltip>
@@ -633,28 +637,28 @@ function DetalheMembro({ membro, cobrancas, provisao, loading, onNova, onToggleP
 }): React.ReactElement {
   const t = useTokens();
   const [modo, setModo] = useState<'mes' | 'lista'>('mes');
-  const pendente = provisao?.totalPendente ?? cobrancas.filter((c) => c.status !== 'pago').reduce((s, c) => s + Number(c.valor || 0), 0);
-  const esteMes = provisao?.totalEsteMes ?? 0;
-  const futuro = provisao?.totalFuturo ?? 0;
-  const atrasado = provisao?.totalAtrasado ?? 0;
+  const custoTotal = provisao?.totalCusto ?? cobrancas.reduce((s, c) => s + Number(c.valor || 0), 0);
+  const esteMes = provisao?.custoEsteMes ?? 0;
+  const futuro = provisao?.custoFuturo ?? 0;
+  const reembolsado = provisao?.totalPago ?? 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Resumo: total em aberto + recorte este mês × futuro (parcelas) */}
+      {/* Resumo consultivo: custo total + recorte este mês × futuro (parcelas) */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <StatMembro label="A receber · em aberto" valor={formatBRL(pendente)} cor={pendente > 0 ? t.accents.peach : t.textTertiary} destaque />
+        <StatMembro label="Custo total atribuído" valor={formatBRL(custoTotal)} cor={custoTotal > 0 ? t.accents.lavender : t.textTertiary} destaque />
         <StatMembro label="Este mês" valor={formatBRL(esteMes)} cor={t.text} />
-        <StatMembro label="Futuro · parcelas" valor={formatBRL(futuro)} cor={futuro > 0 ? t.accents.lavender : t.textTertiary} />
+        <StatMembro label="Futuro · parcelas" valor={formatBRL(futuro)} cor={futuro > 0 ? t.accents.peach : t.textTertiary} />
       </div>
-      {atrasado > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: `${t.accents.rose}14`, border: `1px solid ${t.accents.rose}40`, borderRadius: 10, fontFamily: FONTS.ui, fontSize: 12.5, color: t.accents.rose }}>
-          <AlertCircle size={14} /> {formatBRL(atrasado)} em atraso (meses anteriores)
+      {reembolsado > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 10, fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>
+          <CheckCircle2 size={13} color={t.accents.sage} /> Já reembolsado: <strong style={{ color: t.accents.sage }}>{formatBRL(reembolsado)}</strong> <span style={{ color: t.textTertiary }}>· opcional, não afeta o custo</span>
         </div>
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
         <Button type="primary" size="small" icon={<Plus size={14} />} onClick={onNova} style={{ background: membro.cor, borderColor: membro.cor }}>
-          Nova cobrança
+          Atribuir manual
         </Button>
         {/* Toggle Por mês × Lista */}
         <div style={{ display: 'inline-flex', background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 9, padding: 3, gap: 3 }}>
@@ -687,18 +691,19 @@ function DetalheMembro({ membro, cobrancas, provisao, loading, onNova, onToggleP
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           {provisao.porMes.map((m) => {
-            const tudoPago = m.pendente <= 0.01 && m.pago > 0;
-            const corMes = m.atrasado ? t.accents.rose : m.futuro ? t.accents.lavender : t.accents.peach;
-            const etiqueta = m.atrasado ? 'em atraso' : m.competencia === provisao.mesAtual ? 'este mês' : m.futuro ? 'previsto' : '';
+            const tudoReembolsado = m.pendente <= 0.01 && m.pago > 0;
+            const corMes = m.futuro ? t.accents.lavender : m.competencia === provisao.mesAtual ? t.accents.peach : t.textSecondary;
+            const etiqueta = m.competencia === provisao.mesAtual ? 'este mês' : m.futuro ? 'previsto' : '';
             return (
               <div key={m.competencia} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: 600, color: t.text, textTransform: 'capitalize' }}>{compToLabel(m.competencia)}</span>
                     {etiqueta && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${corMes}1f`, color: corMes }}>{etiqueta}</Tag>}
+                    {tudoReembolsado && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.accents.sage}1a`, color: t.accents.sage }}><CheckCircle2 size={9} style={{ marginRight: 3 }} />reembolsado</Tag>}
                   </span>
-                  <span style={{ fontFamily: FONTS.display, fontSize: 14, fontWeight: 600, color: tudoPago ? t.accents.sage : corMes, fontVariantNumeric: 'tabular-nums' }}>
-                    {tudoPago ? '✓ pago' : formatBRL(m.pendente)}
+                  <span style={{ fontFamily: FONTS.display, fontSize: 14, fontWeight: 600, color: t.text, fontVariantNumeric: 'tabular-nums' }}>
+                    {formatBRL(m.total)}
                   </span>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

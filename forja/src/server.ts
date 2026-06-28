@@ -10413,31 +10413,32 @@ function getProvisaoMembro(membroId: string): ServerResult {
 
     const mapMes: Record<string, {
       competencia: string; total: number; pendente: number; pago: number;
-      futuro: boolean; atrasado: boolean; itens: Array<Record<string, unknown>>;
+      futuro: boolean; itens: Array<Record<string, unknown>>;
     }> = {};
-    let totalPendente = 0, totalPago = 0, totalFuturo = 0, totalEsteMes = 0, totalAtrasado = 0;
+    // Consultivo: os totais somam o CUSTO (independente de pago/pendente).
+    // `pendente`/`pago` ficam por mês só pra exibir o reembolso de forma discreta.
+    let totalCusto = 0, custoEsteMes = 0, custoFuturo = 0, custoPassado = 0, totalPago = 0;
     for (const it of itens) {
-      const comp = String(it['competencia'] || '');
+      const comp = String(it['competencia'] || '').substring(0, 7);
       if (!comp) continue;
       if (!mapMes[comp]) mapMes[comp] = {
         competencia: comp, total: 0, pendente: 0, pago: 0,
-        futuro: comp > mesAtual, atrasado: false, itens: [],
+        futuro: comp > mesAtual, itens: [],
       };
       const v = Math.abs(Number(it['valor'] || 0));
       const pago = String(it['status']) === 'pago';
       mapMes[comp].total += v;
       mapMes[comp].itens.push(it);
-      if (pago) { mapMes[comp].pago += v; totalPago += v; continue; }
-      mapMes[comp].pendente += v;
-      totalPendente += v;
-      if (comp > mesAtual) totalFuturo += v;
-      else if (comp === mesAtual) totalEsteMes += v;
-      else { totalAtrasado += v; mapMes[comp].atrasado = true; }
+      if (pago) { mapMes[comp].pago += v; totalPago += v; } else mapMes[comp].pendente += v;
+      totalCusto += v;
+      if (comp > mesAtual) custoFuturo += v;
+      else if (comp === mesAtual) custoEsteMes += v;
+      else custoPassado += v;
     }
     const porMes = Object.values(mapMes).sort((a, b) => a.competencia.localeCompare(b.competencia));
     return {
       ok: true,
-      data: { mesAtual, totalPendente, totalPago, totalEsteMes, totalFuturo, totalAtrasado, porMes },
+      data: { mesAtual, totalCusto, custoEsteMes, custoFuturo, custoPassado, totalPago, porMes },
     };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao montar provisão do membro' };
@@ -10978,17 +10979,27 @@ function getResumoFamilia(competencia?: string): ServerResult {
 
     let totalAReceber = 0;
     let totalRecebido = 0;
+    let totalCustoMes = 0;
+    let totalCustoTotal = 0;
     const porMembro = membros.map((m) => {
       const doMembro = todasCobr.filter((c) => String(c['membroId']) === String(m['id']));
       const naoPagas = doMembro.filter((c) => String(c['status']) !== 'pago');
       const pendente = naoPagas.reduce((s, c) => s + Number(c['valor'] || 0), 0);
       const pago = cobrMes.filter((c) => String(c['membroId']) === String(m['id']) && String(c['status']) === 'pago').reduce((s, c) => s + Number(c['valor'] || 0), 0);
+      // Visão CONSULTIVA (custo atribuído, independente de pago/pendente):
+      // custoMes = o que cai na fatura deste mês; custoTotal = todos os meses.
+      const custoMes = doMembro.filter((c) => _toYYYYMM(c['competencia']) === comp).reduce((s, c) => s + Number(c['valor'] || 0), 0);
+      const custoTotal = doMembro.reduce((s, c) => s + Number(c['valor'] || 0), 0);
       totalAReceber += pendente;
       totalRecebido += pago;
+      totalCustoMes += custoMes;
+      totalCustoTotal += custoTotal;
       return {
         membro: m,
         totalPendente: pendente,
         totalPago: pago,
+        custoMes,
+        custoTotal,
         qtdCobrancas: doMembro.length,
         qtdPendentes: naoPagas.length,
       };
@@ -11024,6 +11035,8 @@ function getResumoFamilia(competencia?: string): ServerResult {
         membros: porMembro,
         totalAReceber,
         totalRecebido,
+        totalCustoMes,
+        totalCustoTotal,
         qtdMembros: membros.length,
         naoAtribuidos,
         totalNaoAtribuido: naoAtribuidos.reduce((s, n) => s + n.valor, 0),
