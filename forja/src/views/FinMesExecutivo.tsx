@@ -365,7 +365,7 @@ function HeroNum({ icon, label, valor, cor }: { icon: React.ReactNode; label: st
   return (
     <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 2, borderLeft: `1px solid ${t.borderSoft}`, paddingLeft: 16 }}>
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary }}>
-        <span style={{ color }}>{icon}</span> {label}
+        <span style={{ color: cor }}>{icon}</span> {label}
       </span>
       <span style={{ fontFamily: FONTS.display, fontSize: 21, fontWeight: 600, color: t.text }}>{formatBRL(valor)}</span>
     </div>

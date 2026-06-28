@@ -36,6 +36,10 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.194.1] — 2026-06-27
+
+- **Fix: "Meu mês" travava ao abrir** (`color is not defined`) — no componente `HeroNum` usei o shorthand `{{ color }}` referenciando uma variável inexistente; a prop correta é `cor`. Corrigido para `{{ color: cor }}`. Sem mudança de comportamento.
+
 ## [1.194.0] — 2026-06-27
 
 - **"Meu mês" ganha Fixas × Variáveis e Investido** — inspirado na planilha que o Lázaro ama: o topo agora mostra uma barra de split **Fixas × Variáveis** (quanto do mês é compromisso recorrente vs gasto livre) e a lista de Despesas se agrupa em **Fixas** (contas/assinaturas recorrentes) e **Variáveis** (cartões + avulsos), com subtotal por grupo — os rótulos só aparecem quando há os dois tipos, pra meses simples seguirem como lista limpa. Quando há despesas na categoria **Investimento**, surge um selo **"investido"** no topo (dinheiro guardado, não gasto). Tudo opcional e sem ruído.
