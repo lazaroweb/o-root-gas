@@ -10400,11 +10400,15 @@ function _recorrenciasProjetadasDoMes(comp: string, todos?: Array<Record<string,
     !String(l['recorrenciaOrigemId'] || ''));
   const out: Array<Record<string, unknown>> = [];
   for (const r of recorrentes) {
-    const dataOrig = String(r['data'] || '');
+    // IMPORTANTE: o campo `data` vem do Sheets como Date. String(Date) vira
+    // "Sun Jun 28 2026 ..." e quebrava todas as comparações de mês abaixo
+    // (compOrig saía "Sun Jun"), fazendo a projeção NUNCA aparecer nos meses
+    // futuros. Normalizamos pra 'YYYY-MM-DD' antes de fatiar.
+    const dataOrig = String(_valorJsonSafe(r['data'] || ''));
     if (!dataOrig) continue;
     const compOrig = _toYYYYMM(dataOrig);
     if (comp <= compOrig) continue; // o mês da origem já existe como lançamento real
-    const fim = String(r['recorrenciaFim'] || '').substring(0, 10);
+    const fim = String(_valorJsonSafe(r['recorrenciaFim'] || '')).substring(0, 10);
     if (fim && comp > _toYYYYMM(fim)) continue; // recorrência com prazo já encerrada
     const periodicidade = String(r['recorrencia']);
     if (periodicidade === 'anual' && dataOrig.substring(5, 7) !== comp.substring(5, 7)) continue;
@@ -10936,6 +10940,17 @@ function getResumoFinPessoal(mes?: string): ServerResult {
     const despesasDoMes = todos.filter((l) => String(l['tipo']) === 'despesa' && compDe(l) === mesAtual);
     const despesasDoMesAnt = todos.filter((l) => String(l['tipo']) === 'despesa' && compDe(l) === mesAnterior);
     const entradasDoMes = todos.filter((l) => String(l['tipo']) === 'entrada' && _toYYYYMM(l['data']) === mesAtual);
+
+    // Mês futuro: injeta as recorrências projetadas (salário, contas fixas, etc.)
+    // pra os cards refletirem o previsto — mesma regra do "Meu mês" e do painel.
+    const hojeComp = `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
+    if (mesAtual > hojeComp) {
+      for (const p of _recorrenciasProjetadasDoMes(mesAtual, todos)) {
+        if (String(p['tipo']) === 'entrada') entradasDoMes.push(p);
+        else despesasDoMes.push(p);
+      }
+    }
+
     const doMes = [...despesasDoMes, ...entradasDoMes];
 
     const totalDespesas = despesasDoMes.reduce((s, l) => s + Number(l['valor'] || 0), 0);
@@ -10956,7 +10971,7 @@ function getResumoFinPessoal(mes?: string): ServerResult {
     // a pagar do mês.
     const aPagarMesItens = despesasDoMes.filter((l) => {
       const st = String(l['status']);
-      return st === 'pendente' || st === 'agendado';
+      return st === 'pendente' || st === 'agendado' || st === 'projetado';
     });
     const aPagarMes = aPagarMesItens.reduce((s, l) => s + Number(l['valor'] || 0), 0);
     const pagoMesItens = despesasDoMes.filter((l) => String(l['status']) === 'pago');
@@ -11161,19 +11176,21 @@ function gerarRecorrenciasPendentes(): ServerResult {
 
     for (const origem of origens) {
       const periodicidade = String(origem['recorrencia']);
-      // Quais datas já temos pra essa origem (incluindo a própria)
-      const dataOrig = String(origem['data']);
+      // Quais datas já temos pra essa origem (incluindo a própria). IMPORTANTE:
+      // `data` vem do Sheets como Date; normalizamos pra 'YYYY-MM-DD' (String(Date)
+      // cru viraria "Sun Jun 28 2026 ..." e estouraria o _addMonths/_addDays).
+      const dataOrig = String(_valorJsonSafe(origem['data'] || ''));
       if (!dataOrig) continue;
 
       // Clones que apontam pra essa origem
       const clones = todos.filter((l) => String(l['recorrenciaOrigemId']) === String(origem['id']));
-      const datasExistentes = new Set([dataOrig, ...clones.map((c) => String(c['data']))]);
+      const datasExistentes = new Set([dataOrig, ...clones.map((c) => String(_valorJsonSafe(c['data'] || ''))).filter(Boolean)]);
 
       // Próxima data candidata: a partir da última existente, soma 1 período
       // até alcançar/passar a data de hoje (gera todos os intermediários
       // perdidos pra não deixar buracos).
       const ultimaData = [...datasExistentes].sort().pop() || dataOrig;
-      const fim = String(origem['recorrenciaFim'] || '').substring(0, 10);
+      const fim = String(_valorJsonSafe(origem['recorrenciaFim'] || '')).substring(0, 10);
       let proxima = ultimaData;
       let safety = 0; // anti loop infinito (max 100 períodos)
       while (safety++ < 100) {

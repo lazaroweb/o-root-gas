@@ -36,6 +36,11 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.197.2] — 2026-06-28
+
+- **Fix: recorrências não apareciam nos meses futuros** — a projeção lia a data da origem com `String(data)`, e como o Sheets grava `data` como `Date`, virava `"Sun Jun 28 2026 ..."`; aí o "mês da origem" saía `"Sun Jun"` e a comparação de mês descartava TODA projeção futura (salário, contas fixas, etc. sumiam dos próximos meses). Agora normaliza a data (`_valorJsonSafe` → `YYYY-MM-DD`) em `_recorrenciasProjetadasDoMes` e em `gerarRecorrenciasPendentes` (isso também conserta os clones com data errada / "Invalid Date").
+- Os **cards do topo** (`getResumoFinPessoal`) passaram a projetar recorrências em meses futuros também, então Entradas/Gasto/Saldo/A pagar refletem o previsto — alinhados com o "Meu mês" e o "Painel 12 meses".
+
 ## [1.197.1] — 2026-06-28
 
 - **Fix: "Sem resposta do servidor" ao reabrir/concluir recorrência** — `alternarRecorrencia` e `marcarLancamentoStatus` devolviam a linha crua, que tem o campo `data` como `Date`; o `google.script.run` devolve `null` silencioso quando o retorno contém `Date`, virando o erro "Sem resposta do servidor". Agora os dois sanitizam o retorno (`_sanitizarLinha`). Também corrige o "Invalid Date" no "último gerado" das recorrências (normaliza a data do clone).
