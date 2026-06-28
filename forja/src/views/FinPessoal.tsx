@@ -22,7 +22,7 @@ import {
   Plus, ChevronLeft, ChevronRight, Wallet, TrendingDown, TrendingUp,
   CreditCard, Smartphone, Banknote, FileText, ArrowLeftRight, AlertCircle,
   Pencil, Trash2, Calendar, CheckCircle2, Clock, ArrowDownRight, ArrowUpRight,
-  RotateCcw, Layers as LayersIcon, Target, Sparkles, PauseCircle, PlayCircle, XCircle, Repeat,
+  RotateCcw, Layers as LayersIcon, Target, Sparkles, PauseCircle, PlayCircle, Repeat,
   Upload, FileUp, LayoutDashboard, Compass, Users, CalendarRange, FileDown,
   // Ícones de categoria — outline lucide, mesmo padrão da sidebar
   ShoppingCart, Car, Utensils, Gamepad2, Pill, Home, Lightbulb, Tv, BookOpen, Shirt,
@@ -3692,18 +3692,29 @@ function PainelReceitas({ receitas, lancamentos, onNova, onEditar, onRecarregar 
   const t = useTokens();
   const { message } = AntApp.useApp();
 
+  // Só as ATIVAS entram no total recorrente/mês (pausadas e concluídas ficam de fora).
   const totalMensal = receitas
-    .filter((r) => String(r.recorrenciaAtiva || 'sim') !== 'nao')
+    .filter((r) => statusDaRecorrencia(r) === 'ativa')
     .reduce((s, r) => s + mensalDaReceita(r), 0);
 
+  // Ids que são origem de alguma recorrência (têm clones apontando). Ex-origens
+  // (salário "cancelado" no modelo antigo) viram 'unica' mas continuam sendo
+  // recorrências no histórico — não devem aparecer como entrada avulsa.
+  const origensComClones = new Set(
+    lancamentos.map((l) => String(l.recorrenciaOrigemId || '')).filter(Boolean),
+  );
   const avulsas = lancamentos.filter(
-    (l) => l.tipo === 'entrada' && String(l.recorrencia || 'unica') === 'unica' && !l.recorrenciaOrigemId,
+    (l) => l.tipo === 'entrada' && String(l.recorrencia || 'unica') === 'unica'
+      && !l.recorrenciaOrigemId && !origensComClones.has(String(l.id)),
   );
 
-  const alternar = (id: string, acao: 'pausar' | 'reativar' | 'cancelar') => {
+  const alternar = (id: string, acao: 'pausar' | 'reativar' | 'concluir') => {
     callServer<ServerResponse<unknown>>('alternarRecorrencia', id, acao).then((res) => {
       if (res.ok) {
-        message.success(acao === 'cancelar' ? 'Receita cancelada' : acao === 'pausar' ? 'Receita pausada' : 'Receita reativada');
+        message.success(
+          acao === 'concluir' ? 'Receita concluída — segue no histórico'
+            : acao === 'pausar' ? 'Receita pausada' : 'Receita reativada',
+        );
         onRecarregar();
       } else message.error(res.error || 'Erro');
     });
@@ -3748,25 +3759,33 @@ function PainelReceitas({ receitas, lancamentos, onNova, onEditar, onRecarregar 
           </Empty>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {receitas.map((r) => {
-              const ativa = String(r.recorrenciaAtiva || 'sim') !== 'nao';
+            {[...receitas]
+              .sort((a, b) => {
+                const ord: Record<string, number> = { ativa: 0, pausada: 1, concluida: 2 };
+                return (ord[statusDaRecorrencia(a)] ?? 0) - (ord[statusDaRecorrencia(b)] ?? 0);
+              })
+              .map((r) => {
+              const status = statusDaRecorrencia(r);
+              const ativa = status === 'ativa';
+              const concluida = status === 'concluida';
               return (
                 <div key={r.id} style={{
                   display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px',
                   background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 12,
-                  opacity: ativa ? 1 : 0.6,
+                  opacity: ativa ? 1 : 0.65,
                 }}>
                   <div style={{
                     width: 40, height: 40, borderRadius: 10, flexShrink: 0,
                     background: `${t.accents.sage}22`, color: t.accents.sage,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}>
-                    <TrendingUp size={20} />
+                    {concluida ? <CheckCircle2 size={20} /> : <TrendingUp size={20} />}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontFamily: FONTS.display, fontSize: 15, fontWeight: 500, color: t.text, display: 'flex', alignItems: 'center', gap: 8 }}>
                       {r.descricao}
-                      {!ativa && <Tag color="default" style={{ marginInlineEnd: 0 }}>pausada</Tag>}
+                      {status === 'pausada' && <Tag color="default" style={{ marginInlineEnd: 0 }}>pausada</Tag>}
+                      {concluida && <Tag color="green" style={{ marginInlineEnd: 0 }}>concluída</Tag>}
                     </div>
                     <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary }}>
                       {r.recorrencia} · {r.categoria || 'renda'} · desde {r.data ? dayjs(r.data).format('DD/MM/YYYY') : '—'}
@@ -3779,18 +3798,26 @@ function PainelReceitas({ receitas, lancamentos, onNova, onEditar, onRecarregar 
                     <Tooltip title="Editar">
                       <Button size="small" type="text" icon={<Pencil size={14} />} onClick={() => onEditar(r)} />
                     </Tooltip>
-                    {ativa ? (
-                      <Tooltip title="Pausar">
+                    {concluida ? (
+                      <Tooltip title="Reabrir (volta a entrar e projetar nos próximos meses)">
+                        <Button size="small" type="primary" icon={<PlayCircle size={14} />} onClick={() => alternar(r.id, 'reativar')}>Reabrir</Button>
+                      </Tooltip>
+                    ) : ativa ? (
+                      <Tooltip title="Pausar temporariamente">
                         <Button size="small" type="text" icon={<PauseCircle size={14} />} onClick={() => alternar(r.id, 'pausar')} />
                       </Tooltip>
                     ) : (
-                      <Tooltip title="Reativar">
+                      <Tooltip title="Retomar">
                         <Button size="small" type="text" icon={<PlayCircle size={14} />} onClick={() => alternar(r.id, 'reativar')} />
                       </Tooltip>
                     )}
-                    <Popconfirm title="Cancelar essa receita?" description="Para de entrar nos próximos meses (histórico fica)." onConfirm={() => alternar(r.id, 'cancelar')} okText="Cancelar receita" cancelText="Voltar" okButtonProps={{ danger: true }}>
-                      <Button size="small" type="text" icon={<XCircle size={14} />} danger />
-                    </Popconfirm>
+                    {!concluida && (
+                      <Popconfirm title="Concluir essa receita?" description="Para de entrar nos próximos meses, mas continua aqui no histórico (e pode ser reaberta)." onConfirm={() => alternar(r.id, 'concluir')} okText="Concluir" cancelText="Voltar">
+                        <Tooltip title="Concluir (encerra, mantém histórico)">
+                          <Button size="small" type="text" icon={<CheckCircle2 size={14} />} />
+                        </Tooltip>
+                      </Popconfirm>
+                    )}
                   </div>
                 </div>
               );
@@ -4937,6 +4964,17 @@ function PainelOrcamentos({ progresso, categoriasUsadas, onRecarregar }: PainelO
 
 // ─── Sub-view: recorrências ativas ────────────────────────────────────────────
 
+// Status de ciclo de vida da recorrência (espelha _statusRecorrencia do server,
+// com fallback caso o backend antigo não envie statusRecorrencia ainda).
+function statusDaRecorrencia(r: RecorrenciaAtiva): 'ativa' | 'pausada' | 'concluida' {
+  if (r.statusRecorrencia) return r.statusRecorrencia;
+  if (String(r.recorrencia || 'unica') === 'unica') return 'concluida';
+  const a = String(r.recorrenciaAtiva || 'sim');
+  if (a === 'concluida') return 'concluida';
+  if (a === 'nao') return 'pausada';
+  return 'ativa';
+}
+
 interface PainelRecorrenciasProps {
   recorrencias: RecorrenciaAtiva[];
   cartoes: CartaoPessoal[];
@@ -4949,13 +4987,13 @@ function PainelRecorrencias({ recorrencias, cartoes, onEditar, onRecarregar }: P
   const { message } = AntApp.useApp();
   const labelCategoria = useLabelCategoria();
 
-  const alternar = (id: string, acao: 'pausar' | 'reativar' | 'cancelar') => {
+  const alternar = (id: string, acao: 'pausar' | 'reativar' | 'concluir') => {
     callServer<ServerResponse<unknown>>('alternarRecorrencia', id, acao).then((res) => {
       if (res.ok) {
         message.success(
           acao === 'pausar' ? 'Recorrência pausada' :
           acao === 'reativar' ? 'Recorrência reativada' :
-          'Recorrência cancelada'
+          'Recorrência concluída — segue no histórico'
         );
         onRecarregar();
       } else {
@@ -4963,6 +5001,12 @@ function PainelRecorrencias({ recorrencias, cartoes, onEditar, onRecarregar }: P
       }
     });
   };
+
+  // Ordena: ativas primeiro, depois pausadas, concluídas no fim (histórico).
+  const ordemStatus: Record<string, number> = { ativa: 0, pausada: 1, concluida: 2 };
+  const recorrenciasOrdenadas = [...recorrencias].sort(
+    (a, b) => (ordemStatus[statusDaRecorrencia(a)] ?? 0) - (ordemStatus[statusDaRecorrencia(b)] ?? 0),
+  );
 
   const gerarAgora = () => {
     message.loading('Gerando recorrências pendentes…', 0);
@@ -5009,8 +5053,10 @@ function PainelRecorrencias({ recorrencias, cartoes, onEditar, onRecarregar }: P
         />
       ) : (
         <div>
-          {recorrencias.map((r, idx) => {
-            const ativa = r.recorrenciaAtiva === 'sim';
+          {recorrenciasOrdenadas.map((r, idx) => {
+            const status = statusDaRecorrencia(r);
+            const ativa = status === 'ativa';
+            const concluida = status === 'concluida';
             const periodo =
               r.recorrencia === 'mensal' ? 'mês' :
               r.recorrencia === 'semanal' ? 'semana' :
@@ -5022,24 +5068,27 @@ function PainelRecorrencias({ recorrencias, cartoes, onEditar, onRecarregar }: P
                 style={{
                   display: 'flex', alignItems: 'center', gap: 14,
                   padding: '16px 18px',
-                  borderBottom: idx < recorrencias.length - 1 ? `1px solid ${t.borderSoft}` : 'none',
-                  opacity: ativa ? 1 : 0.55,
+                  borderBottom: idx < recorrenciasOrdenadas.length - 1 ? `1px solid ${t.borderSoft}` : 'none',
+                  opacity: ativa ? 1 : 0.62,
                 }}
               >
                 <div style={{
                   width: 38, height: 38, borderRadius: 10,
-                  background: ativa ? `${t.accents.blue}15` : t.surfaceMuted,
-                  color: ativa ? t.accents.blue : t.textTertiary,
+                  background: ativa ? `${t.accents.blue}15` : concluida ? `${t.accents.sage}15` : t.surfaceMuted,
+                  color: ativa ? t.accents.blue : concluida ? t.accents.sage : t.textTertiary,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   flexShrink: 0,
                 }}>
-                  <RotateCcw size={18} />
+                  {concluida ? <CheckCircle2 size={18} /> : <RotateCcw size={18} />}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontFamily: FONTS.ui, fontSize: 14, color: t.text, fontWeight: 500 }}>
                     {r.descricao}
-                    {!ativa && (
+                    {status === 'pausada' && (
                       <Tag color="default" style={{ marginInlineStart: 8, fontSize: 10 }}>pausada</Tag>
+                    )}
+                    {concluida && (
+                      <Tag color="green" style={{ marginInlineStart: 8, fontSize: 10 }}>concluída</Tag>
                     )}
                   </div>
                   <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, marginTop: 2 }}>
@@ -5051,34 +5100,41 @@ function PainelRecorrencias({ recorrencias, cartoes, onEditar, onRecarregar }: P
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                  {ativa ? (
-                    <Tooltip title="Pausar recorrência (para de gerar novos clones)">
+                  {concluida ? (
+                    <Tooltip title="Reabrir recorrência (volta a gerar e projetar nos próximos meses)">
+                      <Button size="small" type="primary" icon={<PlayCircle size={14} />} onClick={() => alternar(r.id, 'reativar')}>
+                        Reabrir
+                      </Button>
+                    </Tooltip>
+                  ) : ativa ? (
+                    <Tooltip title="Pausar temporariamente (para de gerar/projetar; dá pra retomar)">
                       <Button size="small" icon={<PauseCircle size={14} />} onClick={() => alternar(r.id, 'pausar')}>
                         Pausar
                       </Button>
                     </Tooltip>
                   ) : (
-                    <Tooltip title="Reativar recorrência">
+                    <Tooltip title="Retomar recorrência pausada">
                       <Button size="small" type="primary" icon={<PlayCircle size={14} />} onClick={() => alternar(r.id, 'reativar')}>
-                        Reativar
+                        Retomar
                       </Button>
                     </Tooltip>
+                  )}
+                  {!concluida && (
+                    <Popconfirm
+                      title="Concluir essa recorrência?"
+                      description="Para de gerar e projetar nos próximos meses, mas continua aqui no histórico (e pode ser reaberta depois)."
+                      onConfirm={() => alternar(r.id, 'concluir')}
+                      okText="Concluir"
+                      cancelText="Voltar"
+                    >
+                      <Tooltip title="Concluir (encerra, mantém no histórico)">
+                        <Button size="small" type="text" icon={<CheckCircle2 size={14} />}>Concluir</Button>
+                      </Tooltip>
+                    </Popconfirm>
                   )}
                   <Tooltip title="Editar lançamento original">
                     <Button size="small" type="text" icon={<Pencil size={13} />} onClick={() => onEditar(r)} />
                   </Tooltip>
-                  <Popconfirm
-                    title="Cancelar essa recorrência?"
-                    description="Vai parar de gerar novos clones. Os já criados ficam intactos."
-                    onConfirm={() => alternar(r.id, 'cancelar')}
-                    okText="Cancelar recorrência"
-                    cancelText="Voltar"
-                    okButtonProps={{ danger: true }}
-                  >
-                    <Tooltip title="Cancelar recorrência">
-                      <Button size="small" type="text" icon={<XCircle size={13} />} danger />
-                    </Tooltip>
-                  </Popconfirm>
                 </div>
               </div>
             );

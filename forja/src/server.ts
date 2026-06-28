@@ -11229,30 +11229,71 @@ function _addDays(dataStr: string, dias: number): string {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 }
 
-// Pausa/reativa uma recorrência. `acao`: 'pausar' | 'reativar' | 'cancelar'.
-// Cancelar mata a recorrência (não gera mais clones nem volta a gerar).
-function alternarRecorrencia(id: string, acao: 'pausar' | 'reativar' | 'cancelar'): ServerResult {
+// Ciclo de vida de uma recorrência. `acao`:
+//   'pausar'   → pausa temporária (não gera/projeta; pode reativar).
+//   'reativar' → volta a gerar/projetar. Se a periodicidade tinha sido perdida
+//                (ex-recorrência antiga que virou 'unica'), restaura 'mensal'.
+//   'concluir' → encerra de vez, MAS mantém na lista como histórico ('concluida').
+//   'cancelar' → alias legado de 'concluir' (antes era destrutivo e fazia a
+//                recorrência sumir; agora NUNCA apaga — só conclui).
+// Importante: nunca mais zeramos o campo `recorrencia` — assim o histórico fica
+// sempre visível na seção Recorrências.
+function alternarRecorrencia(id: string, acao: 'pausar' | 'reativar' | 'concluir' | 'cancelar'): ServerResult {
   try {
-    const novo = acao === 'reativar' ? 'sim' : 'nao';
-    const upd = dbUpdate('FinPessoalLancamentos', id, {
-      recorrenciaAtiva: novo,
-      recorrencia: acao === 'cancelar' ? 'unica' : undefined,
-      atualizadoEm: new Date().toISOString(),
-    });
+    const atual = (dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>)
+      .find((l) => String(l['id']) === String(id));
+    if (!atual) return { ok: false, error: 'Lançamento não encontrado' };
+
+    const patch: Record<string, unknown> = { atualizadoEm: new Date().toISOString() };
+    if (acao === 'reativar') {
+      patch['recorrenciaAtiva'] = 'sim';
+      // Recupera periodicidade perdida (ex-recorrência cancelada no modelo antigo).
+      if (String(atual['recorrencia'] || 'unica') === 'unica') patch['recorrencia'] = 'mensal';
+    } else if (acao === 'pausar') {
+      patch['recorrenciaAtiva'] = 'nao';
+    } else {
+      // concluir | cancelar — encerra mantendo histórico.
+      patch['recorrenciaAtiva'] = 'concluida';
+    }
+
+    const upd = dbUpdate('FinPessoalLancamentos', id, patch);
     return upd ? { ok: true, data: upd } : { ok: false, error: 'Lançamento não encontrado' };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao alternar recorrência' };
   }
 }
 
-// Lista todas as recorrências ativas (origens) com info agregada.
+// Deriva o status de ciclo de vida de uma recorrência a partir dos campos do
+// lançamento. Ex-recorrências (recorrencia já zerada pelo modelo antigo) contam
+// como 'concluida' pra continuarem aparecendo no histórico.
+function _statusRecorrencia(l: Record<string, unknown>): 'ativa' | 'pausada' | 'concluida' {
+  const ativa = String(l['recorrenciaAtiva'] || 'sim');
+  if (String(l['recorrencia'] || 'unica') === 'unica') return 'concluida';
+  if (ativa === 'concluida') return 'concluida';
+  if (ativa === 'nao') return 'pausada';
+  return 'ativa';
+}
+
+// Lista todas as recorrências (origens) com info agregada — incluindo as
+// concluídas, pra preservar o histórico. Também recupera "ex-recorrências": o
+// modelo antigo de cancelamento zerava `recorrencia` pra 'unica' e a origem
+// sumia da lista (foi o que aconteceu com o salário). Aqui trazemos de volta
+// qualquer lançamento que AINDA tenha clones apontando pra ele, mesmo que a
+// periodicidade tenha sido perdida — assim nada some.
 function getRecorrenciasAtivas(): ServerResult {
   try {
     const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
-    const origens = todos.filter((l) =>
-      String(l['recorrencia'] || 'unica') !== 'unica' &&
-      !String(l['recorrenciaOrigemId'] || '')
-    );
+    const temClones: Record<string, number> = {};
+    for (const l of todos) {
+      const oid = String(l['recorrenciaOrigemId'] || '');
+      if (oid) temClones[oid] = (temClones[oid] || 0) + 1;
+    }
+    const origens = todos.filter((l) => {
+      if (String(l['recorrenciaOrigemId'] || '')) return false; // clones nunca
+      if (String(l['recorrencia'] || 'unica') !== 'unica') return true; // origem real
+      // ex-recorrência: periodicidade perdida mas ainda tem clones gerados.
+      return (temClones[String(l['id'])] || 0) > 0;
+    });
     const enriquecidas = origens.map((o) => {
       const clones = todos.filter((l) => String(l['recorrenciaOrigemId']) === String(o['id']));
       // _sanitizarLinha é obrigatório: o campo `data` vem do Sheets como Date e
@@ -11264,6 +11305,7 @@ function getRecorrenciasAtivas(): ServerResult {
         ultimoGeradoEm: clones.length > 0
           ? clones.map((c) => String(c['data'])).sort().pop()
           : null,
+        statusRecorrencia: _statusRecorrencia(o),
       };
     });
     return { ok: true, data: enriquecidas };

@@ -36,6 +36,15 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.196.0] — 2026-06-28
+
+- **Recorrências: "Concluir" sem perder histórico + recuperação do que sumiu** — o botão antigo "Cancelar" era destrutivo: zerava a periodicidade (`recorrencia` → `unica`) e a recorrência **sumia da lista** (foi o que aconteceu com o salário, apesar do texto prometer "histórico fica"). Agora:
+  - Nova ação **Concluir**: encerra a recorrência (para de gerar e de projetar nos próximos meses) **mantendo-a na seção como "concluída"**, e dá pra **Reabrir** quando quiser.
+  - **Pausar/Retomar** continua pra pausa temporária.
+  - **Recuperação automática**: qualquer recorrência que tinha sido "cancelada" no modelo antigo volta a aparecer na lista como **concluída** (detectada pelos clones já gerados que apontam pra ela). Basta **Reabrir** pra o salário voltar a entrar e a projetar nos meses à frente.
+  - Status fica explícito (ativa / pausada / concluída), ordenado com as ativas no topo e as concluídas no rodapé.
+- Backend: `alternarRecorrencia` nunca mais apaga a periodicidade; ganhou `concluir` (e `cancelar` virou alias não-destrutivo). `getRecorrenciasAtivas` passou a incluir ex-recorrências (com clones) e a devolver `statusRecorrencia`. Geração e projeção de meses futuros seguem só com as **ativas**.
+
 ## [1.195.0] — 2026-06-28
 
 - **"Meu mês" — navegar meses à frente ali mesmo** — agora a própria tela tem um navegador de mês no topo (← mês →, com atalho "hoje") e uma legenda de contexto ("mês atual", "mês que vem · previsto", "daqui a N meses · previsto", "mês passado"). Dá pra olhar os próximos meses com os lançamentos previstos (parcelas, recorrências, salário) sem subir até o cabeçalho global — e ver se ainda cabe no orçamento e quanto sobra.

@@ -846,7 +846,9 @@ export interface LancamentoPessoal {
   // v1.3.1: grupo de parcelas (mesmo grupoId = mesma compra) e rastreio de recorrência
   parcelaGrupoId?: string;
   recorrenciaOrigemId?: string; // se preenchido, esse lançamento é um clone gerado
-  recorrenciaAtiva?: 'sim' | 'nao'; // se 'nao', agendador para de gerar clones
+  // 'sim' = gera clones/projeta; 'nao' = pausada (temporária); 'concluida' =
+  // encerrada de vez mas mantida no histórico (não gera/projeta mais).
+  recorrenciaAtiva?: 'sim' | 'nao' | 'concluida';
   recorrenciaFim?: string; // YYYY-MM-DD opcional — última data em que a recorrência vale (vazio = sem fim)
   projecao?: boolean; // true = item projetado (mês futuro), não existe como lançamento real
   criadoEm?: string;
@@ -857,6 +859,9 @@ export interface LancamentoPessoal {
 export interface RecorrenciaAtiva extends LancamentoPessoal {
   totalGerados: number;
   ultimoGeradoEm: string | null;
+  // Status de ciclo de vida derivado no server: 'ativa' (gera/projeta),
+  // 'pausada' (temporária) ou 'concluida' (encerrada, mantida só como histórico).
+  statusRecorrencia?: 'ativa' | 'pausada' | 'concluida';
 }
 
 // Orçamento por categoria. Limite mensal opcional; quando zero, só conta gasto.
