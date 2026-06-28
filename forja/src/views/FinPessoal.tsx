@@ -1966,13 +1966,14 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, onRecarregar, onImpor
   };
 
   // Atribui em lote (100% de cada item) os lançamentos selecionados a um membro.
-  // Pra "essa fatura toda é do fulano" ou "esses itens são do fulano".
+  // Pra "essa fatura toda é do fulano" ou "esses itens são do fulano". Propaga
+  // (4º arg true) parcelas futuras das compras parceladas pro mesmo membro.
   const atribuirLote = (ids: string[], membroId: string): Promise<boolean> => {
     if (ids.length === 0 || !membroId) return Promise.resolve(false);
-    return callServer<ServerResponse<{ criadas: number }>>('atribuirLancamentosLote', JSON.stringify(ids), membroId, mes).then((res) => {
+    return callServer<ServerResponse<{ criadas: number }>>('atribuirLancamentosLote', JSON.stringify(ids), membroId, mes, true).then((res) => {
       if (res?.ok) {
         const n = (res.data as { criadas: number } | undefined)?.criadas ?? ids.length;
-        message.success(`${n} lançamento(s) atribuído(s)`);
+        message.success(`${n} cobrança(s) gerada(s)`);
         if (cartaoAberto) carregarFatura(cartaoAberto);
         onRecarregar();
         return true;
@@ -2895,9 +2896,16 @@ function ModalAtribuirMembros({ lancamento, membros, mes, onClose, onSaved }: {
   const [sel, setSel] = useState<Record<string, { on: boolean; valor: number }>>({});
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [propagar, setPropagar] = useState(true);
 
   const ativos = membros.filter((m) => m.ativo !== 'nao');
   const valorLanc = lancamento?.valor || 0;
+  // Compra parcelada? (mesmo grupo + mais de 1 parcela). Se sim, oferecemos
+  // levar a atribuição pras parcelas seguintes.
+  const ehParcelado = !!lancamento?.parcelaGrupoId && (lancamento?.parcelas || 0) > 1;
+  const parcelasRestantes = ehParcelado
+    ? Math.max(1, (lancamento?.parcelas || 0) - (lancamento?.parcelaAtual || 1) + 1)
+    : 0;
 
   // Ao abrir: carrega cobranças já vinculadas a esse lançamento pra pré-preencher.
   useEffect(() => {
@@ -2962,12 +2970,19 @@ function ModalAtribuirMembros({ lancamento, membros, mes, onClose, onSaved }: {
       return;
     }
     const atribuicoes = selecionados.map((m) => ({ membroId: m.id, valor: Number((sel[m.id]?.valor || 0).toFixed(2)) }));
+    const propagarParcelas = ehParcelado && propagar;
     setSaving(true);
-    callServer<ServerResponse<{ criadas: number }>>('atribuirLancamentoMembros', lancamento.id, JSON.stringify(atribuicoes), mes)
+    callServer<ServerResponse<{ criadas: number; parcelasAfetadas?: number; propagou?: boolean }>>(
+      'atribuirLancamentoMembros', lancamento.id, JSON.stringify(atribuicoes), mes, propagarParcelas)
       .then((res) => {
         if (res?.ok) {
-          const n = (res.data as { criadas: number } | undefined)?.criadas ?? atribuicoes.length;
-          message.success(n > 0 ? `Atribuído a ${n} membro(s)` : 'Atribuição removida');
+          const d = res.data as { criadas: number; parcelasAfetadas?: number; propagou?: boolean } | undefined;
+          const n = d?.criadas ?? atribuicoes.length;
+          if (d?.propagou && (d?.parcelasAfetadas || 0) > 1) {
+            message.success(`Atribuído e propagado para ${d?.parcelasAfetadas} parcelas`);
+          } else {
+            message.success(n > 0 ? `Atribuído a ${selecionados.length} membro(s)` : 'Atribuição removida');
+          }
           onSaved();
         } else message.error(res?.error || 'Erro ao atribuir');
       })
@@ -3037,8 +3052,27 @@ function ModalAtribuirMembros({ lancamento, membros, mes, onClose, onSaved }: {
               <span>{restante > 0 ? `Sobra ${formatBRL(restante)} (sua parte)` : restante < 0 ? `Excede em ${formatBRL(-restante)}` : 'Fecha certinho ✓'}</span>
             </div>
           )}
+          {ehParcelado && (
+            <div style={{
+              background: propagar ? `${t.accents.lavender}14` : t.surfaceMuted,
+              border: `1px solid ${propagar ? `${t.accents.lavender}55` : t.borderSoft}`,
+              borderRadius: 10, padding: '10px 12px', transition: 'all 0.2s ease',
+            }}>
+              <Checkbox checked={propagar} onChange={(e) => setPropagar(e.target.checked)}>
+                <span style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.text, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <LayersIcon size={13} strokeWidth={1.9} style={{ color: t.accents.lavender }} />
+                  Aplicar nas próximas parcelas
+                </span>
+              </Checkbox>
+              <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, marginTop: 4, marginLeft: 24 }}>
+                {propagar
+                  ? `Esta e as demais parcelas (≈${parcelasRestantes} restantes ainda não pagas) ficam com o mesmo rateio, cada uma no mês da sua fatura.`
+                  : 'Só esta parcela será atribuída.'}
+              </div>
+            </div>
+          )}
           <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary }}>
-            Cria uma cobrança pendente na aba Família em <strong>{compToLabelMes(mes)}</strong>. Salvar sem ninguém marcado remove a atribuição.
+            Cria cobrança(s) pendente(s) na aba Família. Salvar sem ninguém marcado remove a atribuição.
           </div>
         </div>
       )}

@@ -13,6 +13,7 @@ import {
 import {
   Plus, Pencil, Trash2, Users, CheckCircle2, Clock, CreditCard,
   Link2, AlertCircle, Repeat, HandCoins, FileDown, CalendarClock,
+  CalendarRange, Layers, ListChecks,
 } from 'lucide-react';
 import dayjs, { Dayjs } from 'dayjs';
 import { Panel, formatBRL } from '../components/ui';
@@ -36,6 +37,29 @@ interface CobrancaDetalhada extends Cobranca {
   faturaCompetencia?: string;
   vencimentoFatura?: string;
   lancamentoValor?: number;
+  parcelaAtual?: number;
+  parcelasTotal?: number;
+  parcelaGrupoId?: string;
+}
+
+// Provisionamento do membro por mês (vem de getProvisaoMembro).
+interface ProvisaoMesMembro {
+  competencia: string;
+  total: number;
+  pendente: number;
+  pago: number;
+  futuro: boolean;
+  atrasado: boolean;
+  itens: CobrancaDetalhada[];
+}
+interface ProvisaoMembro {
+  mesAtual: string;
+  totalPendente: number;
+  totalPago: number;
+  totalEsteMes: number;
+  totalFuturo: number;
+  totalAtrasado: number;
+  porMes: ProvisaoMesMembro[];
 }
 
 function compToLabel(comp: string): string {
@@ -66,16 +90,22 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
   const [cobrPrefill, setCobrPrefill] = useState<Partial<Cobranca> | null>(null);
   const [drawerMembro, setDrawerMembro] = useState<FamiliaMembro | null>(null);
   const [detalheCobr, setDetalheCobr] = useState<CobrancaDetalhada[] | null>(null);
+  const [provisao, setProvisao] = useState<ProvisaoMembro | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
 
   // Ao abrir o drawer do membro: busca as cobranças ENRIQUECIDAS (com cartão,
-  // data da compra e vencimento da fatura) de todos os meses.
+  // data da compra e vencimento da fatura) de todos os meses + o provisionamento
+  // agrupado por mês (este mês × futuro × atrasado) pra visão de longo prazo.
   useEffect(() => {
-    if (!drawerMembro) { setDetalheCobr(null); return; }
+    if (!drawerMembro) { setDetalheCobr(null); setProvisao(null); return; }
     setDetalheCobr(null);
+    setProvisao(null);
     callServer<ServerResponse<CobrancaDetalhada[]>>('getCobrancasMembroDetalhado', drawerMembro.id)
       .then((res) => { if (res?.ok && Array.isArray(res.data)) setDetalheCobr(res.data as CobrancaDetalhada[]); else setDetalheCobr([]); })
       .catch(() => setDetalheCobr([]));
+    callServer<ServerResponse<ProvisaoMembro>>('getProvisaoMembro', drawerMembro.id)
+      .then((res) => { if (res?.ok && res.data) setProvisao(res.data as ProvisaoMembro); })
+      .catch(() => { /* visão por mês fica indisponível, lista normal segue */ });
   }, [drawerMembro]);
 
   const baixarPdfMembro = (membro: FamiliaMembro) => {
@@ -272,6 +302,7 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
           <DetalheMembro
             membro={drawerMembro}
             cobrancas={(detalheCobr ?? cobrancasDoMembro(drawerMembro.id)) as CobrancaDetalhada[]}
+            provisao={provisao}
             loading={detalheCobr === null}
             onNova={() => abrirNovaCobranca({ membroId: drawerMembro.id, competencia: mes })}
             onTogglePago={togglePago}
@@ -434,10 +465,72 @@ function MembroCard({ mr, onClick, onEditar }: { mr: MembroResumo; onClick: () =
   );
 }
 
+// Uma linha de cobrança no drawer — reusada na lista e na visão por mês.
+function LinhaCobranca({ c, onTogglePago, onEditar, onRemover }: {
+  c: CobrancaDetalhada;
+  onTogglePago: (c: Cobranca) => void;
+  onEditar: (c: Cobranca) => void;
+  onRemover: (id: string) => void;
+}): React.ReactElement {
+  const t = useTokens();
+  const pgto = c.status === 'pago';
+  const temParcela = (c.parcelasTotal || 0) > 1 && (c.parcelaAtual || 0) > 0;
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
+      background: t.surface, border: `1px solid ${t.borderSoft}`, borderRadius: 10,
+      opacity: pgto ? 0.72 : 1,
+    }}>
+      <Tooltip title={pgto ? 'Marcar como pendente' : 'Marcar como pago'}>
+        <Button
+          size="small" type="text"
+          icon={pgto ? <CheckCircle2 size={18} color={t.accents.sage} /> : <Clock size={18} color={t.accents.peach} />}
+          onClick={() => onTogglePago(c)}
+        />
+      </Tooltip>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontFamily: FONTS.ui, fontSize: 13.5, color: t.text, textDecoration: pgto ? 'line-through' : 'none', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {c.descricao}
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 2, flexWrap: 'wrap' }}>
+          {temParcela && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.accents.lavender}1f`, color: t.accents.lavender }}><Layers size={9} style={{ marginRight: 3 }} />{c.parcelaAtual}/{c.parcelasTotal}</Tag>}
+          {c.cartaoNome && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.accents.blue}1a`, color: t.accents.blue }}><CreditCard size={9} style={{ marginRight: 3 }} />{c.cartaoNome}</Tag>}
+          {!c.cartaoNome && c.origem === 'lancamento' && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.accents.blue}1a`, color: t.accents.blue }}><CreditCard size={9} style={{ marginRight: 3 }} />no cartão</Tag>}
+          {c.origem === 'assinatura' && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.accents.lavender}1a`, color: t.accents.lavender }}>assinatura</Tag>}
+          {c.recorrente === 'sim' && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.accents.sage}1a`, color: t.accents.sage }}><Repeat size={9} style={{ marginRight: 3 }} />mensal</Tag>}
+        </div>
+        {(c.dataCompra || c.vencimentoFatura) && (
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 3, fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary }}>
+            {c.dataCompra && <span>Compra {dayjs(String(c.dataCompra)).format('DD/MM/YY')}</span>}
+            {c.vencimentoFatura && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><CalendarClock size={10} /> vence {dayjs(String(c.vencimentoFatura)).format('DD/MM')}</span>}
+          </div>
+        )}
+      </div>
+      <div style={{ fontFamily: FONTS.display, fontSize: 14.5, fontWeight: 600, color: t.text, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(c.valor)}</div>
+      <Button size="small" type="text" icon={<Pencil size={13} />} onClick={() => onEditar(c)} />
+      <Popconfirm title="Remover cobrança?" onConfirm={() => onRemover(c.id)} okText="Remover" cancelText="Cancelar" okButtonProps={{ danger: true }}>
+        <Button size="small" type="text" icon={<Trash2 size={13} />} danger />
+      </Popconfirm>
+    </div>
+  );
+}
+
+// Mini-stat do topo do drawer.
+function StatMembro({ label, valor, cor, destaque }: { label: string; valor: string; cor: string; destaque?: boolean }): React.ReactElement {
+  const t = useTokens();
+  return (
+    <div style={{ flex: 1, background: destaque ? `${cor}12` : t.surfaceMuted, border: `1px solid ${destaque ? `${cor}40` : t.borderSoft}`, borderRadius: 12, padding: 12 }}>
+      <div style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary, whiteSpace: 'nowrap' }}>{label}</div>
+      <div style={{ fontFamily: FONTS.display, fontSize: 19, fontWeight: 600, color: cor, fontVariantNumeric: 'tabular-nums' }}>{valor}</div>
+    </div>
+  );
+}
+
 // ─── Detalhe do membro (drawer) ─────────────────────────────────────────────────
-function DetalheMembro({ membro, cobrancas, loading, onNova, onTogglePago, onEditar, onRemover }: {
+function DetalheMembro({ membro, cobrancas, provisao, loading, onNova, onTogglePago, onEditar, onRemover }: {
   membro: FamiliaMembro;
   cobrancas: CobrancaDetalhada[];
+  provisao: ProvisaoMembro | null;
   loading: boolean;
   onNova: () => void;
   onTogglePago: (c: Cobranca) => void;
@@ -445,70 +538,80 @@ function DetalheMembro({ membro, cobrancas, loading, onNova, onTogglePago, onEdi
   onRemover: (id: string) => void;
 }): React.ReactElement {
   const t = useTokens();
-  const pendente = cobrancas.filter((c) => c.status !== 'pago').reduce((s, c) => s + Number(c.valor || 0), 0);
-  const pago = cobrancas.filter((c) => c.status === 'pago').reduce((s, c) => s + Number(c.valor || 0), 0);
+  const [modo, setModo] = useState<'mes' | 'lista'>('mes');
+  const pendente = provisao?.totalPendente ?? cobrancas.filter((c) => c.status !== 'pago').reduce((s, c) => s + Number(c.valor || 0), 0);
+  const esteMes = provisao?.totalEsteMes ?? 0;
+  const futuro = provisao?.totalFuturo ?? 0;
+  const atrasado = provisao?.totalAtrasado ?? 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ display: 'flex', gap: 12 }}>
-        <div style={{ flex: 1, background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 12, padding: 14 }}>
-          <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary }}>A receber · em aberto</div>
-          <div style={{ fontFamily: FONTS.display, fontSize: 22, fontWeight: 600, color: pendente > 0 ? t.accents.peach : t.textTertiary, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(pendente)}</div>
+      {/* Resumo: total em aberto + recorte este mês × futuro (parcelas) */}
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <StatMembro label="A receber · em aberto" valor={formatBRL(pendente)} cor={pendente > 0 ? t.accents.peach : t.textTertiary} destaque />
+        <StatMembro label="Este mês" valor={formatBRL(esteMes)} cor={t.text} />
+        <StatMembro label="Futuro · parcelas" valor={formatBRL(futuro)} cor={futuro > 0 ? t.accents.lavender : t.textTertiary} />
+      </div>
+      {atrasado > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: `${t.accents.rose}14`, border: `1px solid ${t.accents.rose}40`, borderRadius: 10, fontFamily: FONTS.ui, fontSize: 12.5, color: t.accents.rose }}>
+          <AlertCircle size={14} /> {formatBRL(atrasado)} em atraso (meses anteriores)
         </div>
-        <div style={{ flex: 1, background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 12, padding: 14 }}>
-          <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary }}>Recebido</div>
-          <div style={{ fontFamily: FONTS.display, fontSize: 22, fontWeight: 600, color: t.accents.sage, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(pago)}</div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
+        <Button type="primary" size="small" icon={<Plus size={14} />} onClick={onNova} style={{ background: membro.cor, borderColor: membro.cor }}>
+          Nova cobrança
+        </Button>
+        {/* Toggle Por mês × Lista */}
+        <div style={{ display: 'inline-flex', background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 9, padding: 3, gap: 3 }}>
+          {([['mes', 'Por mês', CalendarRange], ['lista', 'Lista', ListChecks]] as const).map(([op, label, Ico]) => {
+            const on = modo === op;
+            return (
+              <button key={op} onClick={() => setModo(op)} style={{
+                border: 'none', cursor: 'pointer', fontFamily: FONTS.ui, fontSize: 11.5,
+                padding: '4px 11px', borderRadius: 6, transition: 'all 0.15s',
+                background: on ? membro.cor : 'transparent', color: on ? '#fff' : t.textSecondary,
+                fontWeight: on ? 600 : 500, display: 'inline-flex', alignItems: 'center', gap: 5,
+              }}>
+                <Ico size={12} /> {label}
+              </button>
+            );
+          })}
         </div>
       </div>
-
-      <Button type="primary" icon={<Plus size={15} />} onClick={onNova} style={{ background: membro.cor, borderColor: membro.cor }}>
-        Nova cobrança pra {membro.nome.split(' ')[0]}
-      </Button>
 
       {loading ? (
         <div style={{ color: t.textTertiary, fontSize: 13, textAlign: 'center', padding: 20 }}>Carregando…</div>
       ) : cobrancas.length === 0 ? (
         <Empty description="Sem cobranças ainda" />
-      ) : (
+      ) : modo === 'lista' || !provisao ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {cobrancas.map((c) => {
-            const pgto = c.status === 'pago';
+          {cobrancas.map((c) => (
+            <LinhaCobranca key={c.id} c={c} onTogglePago={onTogglePago} onEditar={onEditar} onRemover={onRemover} />
+          ))}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {provisao.porMes.map((m) => {
+            const tudoPago = m.pendente <= 0.01 && m.pago > 0;
+            const corMes = m.atrasado ? t.accents.rose : m.futuro ? t.accents.lavender : t.accents.peach;
+            const etiqueta = m.atrasado ? 'em atraso' : m.competencia === provisao.mesAtual ? 'este mês' : m.futuro ? 'previsto' : '';
             return (
-              <div key={c.id} style={{
-                display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
-                background: t.surface, border: `1px solid ${t.borderSoft}`, borderRadius: 10,
-                opacity: pgto ? 0.72 : 1,
-              }}>
-                <Tooltip title={pgto ? 'Marcar como pendente' : 'Marcar como pago'}>
-                  <Button
-                    size="small" type="text"
-                    icon={pgto ? <CheckCircle2 size={18} color={t.accents.sage} /> : <Clock size={18} color={t.accents.peach} />}
-                    onClick={() => onTogglePago(c)}
-                  />
-                </Tooltip>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontFamily: FONTS.ui, fontSize: 13.5, color: t.text, textDecoration: pgto ? 'line-through' : 'none', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {c.descricao}
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 2, flexWrap: 'wrap' }}>
-                    {c.competencia && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: t.surfaceMuted, color: t.textSecondary }}>{compToLabel(String(c.competencia))}</Tag>}
-                    {c.cartaoNome && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.accents.blue}1a`, color: t.accents.blue }}><CreditCard size={9} style={{ marginRight: 3 }} />{c.cartaoNome}</Tag>}
-                    {!c.cartaoNome && c.origem === 'lancamento' && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.accents.blue}1a`, color: t.accents.blue }}><CreditCard size={9} style={{ marginRight: 3 }} />no cartão</Tag>}
-                    {c.origem === 'assinatura' && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.accents.lavender}1a`, color: t.accents.lavender }}>assinatura</Tag>}
-                    {c.recorrente === 'sim' && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.accents.sage}1a`, color: t.accents.sage }}><Repeat size={9} style={{ marginRight: 3 }} />mensal</Tag>}
-                  </div>
-                  {(c.dataCompra || c.vencimentoFatura) && (
-                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 3, fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary }}>
-                      {c.dataCompra && <span>Compra {dayjs(String(c.dataCompra)).format('DD/MM/YY')}</span>}
-                      {c.vencimentoFatura && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><CalendarClock size={10} /> vence {dayjs(String(c.vencimentoFatura)).format('DD/MM')}</span>}
-                    </div>
-                  )}
+              <div key={m.competencia} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: 600, color: t.text, textTransform: 'capitalize' }}>{compToLabel(m.competencia)}</span>
+                    {etiqueta && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${corMes}1f`, color: corMes }}>{etiqueta}</Tag>}
+                  </span>
+                  <span style={{ fontFamily: FONTS.display, fontSize: 14, fontWeight: 600, color: tudoPago ? t.accents.sage : corMes, fontVariantNumeric: 'tabular-nums' }}>
+                    {tudoPago ? '✓ pago' : formatBRL(m.pendente)}
+                  </span>
                 </div>
-                <div style={{ fontFamily: FONTS.display, fontSize: 14.5, fontWeight: 600, color: t.text, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(c.valor)}</div>
-                <Button size="small" type="text" icon={<Pencil size={13} />} onClick={() => onEditar(c)} />
-                <Popconfirm title="Remover cobrança?" onConfirm={() => onRemover(c.id)} okText="Remover" cancelText="Cancelar" okButtonProps={{ danger: true }}>
-                  <Button size="small" type="text" icon={<Trash2 size={13} />} danger />
-                </Popconfirm>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {m.itens.map((c) => (
+                    <LinhaCobranca key={c.id} c={c} onTogglePago={onTogglePago} onEditar={onEditar} onRemover={onRemover} />
+                  ))}
+                </div>
               </div>
             );
           })}

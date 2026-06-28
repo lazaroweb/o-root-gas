@@ -326,7 +326,11 @@ const SCHEMA: SheetSchema[] = [
   // 'lancamento'|'assinatura' e `origemId` rastreia o item que caiu na sua
   // fatura (visibilidade "veio no meu cartão"). `recorrente` 'sim' replica todo
   // mês (ex: assinatura de stream que o membro paga).
-  { name: 'FinPessoalCobrancas', columns: ['id', 'membroId', 'descricao', 'valor', 'competencia', 'status', 'origem', 'origemId', 'recorrente', 'dataPagamento', 'notas', 'criadoEm', 'atualizadoEm'] },
+  // v1.199: + parcelaGrupoId (append-only) — quando a cobrança nasce de uma
+  // parcela de cartão, carimba o grupo da compra parcelada. Permite propagar a
+  // atribuição pras parcelas futuras e montar a visão de provisionamento do
+  // membro por mês (quanto ele deve a longo prazo).
+  { name: 'FinPessoalCobrancas', columns: ['id', 'membroId', 'descricao', 'valor', 'competencia', 'status', 'origem', 'origemId', 'recorrente', 'dataPagamento', 'notas', 'criadoEm', 'atualizadoEm', 'parcelaGrupoId'] },
   // FinPerfilIdeal (v1.53): "Perfil familiar ideal" — o orçamento-ALVO. Cada
   // linha é uma despesa que a família PRECISA pra viver bem (aluguel, mercado,
   // saúde, educação...), com o valor mensal ideal. Comparado com o gasto REAL
@@ -10178,13 +10182,35 @@ function getAtribuicoesLancamentos(): ServerResult {
   }
 }
 
+// Dado o lançamento de origem, devolve os lançamentos-ALVO da atribuição:
+// a própria parcela + (quando for compra parcelada e `propagar`) as parcelas
+// IRMÃS dali pra frente ainda NÃO pagas (mesmo parcelaGrupoId, parcelaAtual >=
+// a da origem, status != 'pago'). Sem parcelaGrupoId → só a própria. Assim
+// "associei a parcela 3/12 ao membro" leva a associação até a 12/12.
+function _alvosAtribuicaoParcelas(origem: Record<string, unknown>, propagar: boolean, todos?: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const grupo = String(origem['parcelaGrupoId'] || '').trim();
+  if (!propagar || !grupo) return [origem];
+  const linhas = todos || (dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>);
+  const atual = Number(origem['parcelaAtual'] || 1);
+  const alvos = linhas.filter((l) =>
+    String(l['parcelaGrupoId'] || '') === grupo &&
+    Number(l['parcelaAtual'] || 1) >= atual &&
+    String(l['status'] || '') !== 'pago');
+  // A própria origem entra sempre (mesmo se já estiver paga — o user clicou nela).
+  if (!alvos.some((l) => String(l['id']) === String(origem['id']))) alvos.push(origem);
+  alvos.sort((a, b) => Number(a['parcelaAtual'] || 0) - Number(b['parcelaAtual'] || 0));
+  return alvos;
+}
+
 // Atribui um lançamento a um ou mais membros (rateio). Substitui (replace) as
 // cobranças anteriores desse lançamento pelas novas — idempotente, então pode
 // reabrir e reeditar à vontade. `atribuicoesJson` = [{membroId, valor}].
-// `competencia` (YYYY-MM): mês em que a cobrança aparece na aba Família. Passar
-// o mês ATIVO da UI — senão um gasto de mês passado caía numa competência que a
-// Família (que mostra o mês ativo) não exibia, e a atribuição "sumia".
-function atribuirLancamentoMembros(lancamentoId: string, atribuicoesJson: string, competencia?: string): ServerResult {
+// `competencia` (YYYY-MM): fallback; a competência real de cada cobrança é a da
+// FATURA daquela parcela (via _competenciaLancamento), pra cair no mês certo da
+// Família. `propagarParcelas` (default true): se a compra for parcelada, replica
+// a atribuição (mantendo a proporção do rateio) em todas as parcelas futuras
+// ainda não pagas — assim o membro já fica devendo o longo prazo.
+function atribuirLancamentoMembros(lancamentoId: string, atribuicoesJson: string, competencia?: string, propagarParcelas?: boolean): ServerResult {
   try {
     const alvo = String(lancamentoId || '').trim();
     if (!alvo) return { ok: false, error: 'Lançamento não informado.' };
@@ -10194,39 +10220,57 @@ function atribuirLancamentoMembros(lancamentoId: string, atribuicoesJson: string
 
     const lanc = dbGetById('FinPessoalLancamentos', alvo);
     if (!lanc) return { ok: false, error: 'Lançamento não encontrado.' };
-    const descricao = String(lanc['descricao'] || 'Lançamento');
-    const competenciaFinal = String(competencia || '').match(/^\d{4}-\d{2}$/)
-      ? String(competencia)
-      : (_toYYYYMM(lanc['vencimento'] || lanc['data']) || _toYYYYMM(new Date()));
 
-    // Remove as cobranças antigas desse lançamento (replace limpo).
-    const antigas = (dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>)
-      .filter((c) => String(c['origem']) === 'lancamento' && String(c['origemId']) === alvo);
-    for (const c of antigas) dbDelete('FinPessoalCobrancas', String(c['id']));
+    const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    const cartoesMap = _cartoesMap();
+    const propagar = propagarParcelas !== false; // default propaga
+    const alvos = _alvosAtribuicaoParcelas(lanc, propagar, todos);
 
-    let criadas = 0;
+    // Proporção de cada membro sobre o valor da ORIGEM — replicada em cada
+    // parcela (parcelas costumam ter o mesmo valor; a proporção preserva rateios
+    // parciais tipo 50/50 mesmo se alguma parcela tiver valor diferente).
+    const valorOrigem = Math.abs(Number(lanc['valor'] || 0)) || 1;
+    const compFallback = String(competencia || '').match(/^\d{4}-\d{2}$/) ? String(competencia) : _toYYYYMM(new Date());
+    const todasCobr = dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>;
     const agora = new Date().toISOString();
-    for (const a of atribuicoes) {
-      const membroId = String(a.membroId || '').trim();
-      const valor = Math.abs(Number(a.valor || 0));
-      if (!membroId || valor <= 0) continue;
-      dbCreate('FinPessoalCobrancas', {
-        membroId,
-        descricao,
-        valor,
-        competencia: competenciaFinal,
-        status: 'pendente',
-        origem: 'lancamento',
-        origemId: alvo,
-        recorrente: 'nao',
-        dataPagamento: '',
-        notas: '',
-        criadoEm: agora,
-        atualizadoEm: agora,
-      });
-      criadas++;
+    let criadas = 0;
+    let parcelasAfetadas = 0;
+
+    for (const t of alvos) {
+      const tid = String(t['id']);
+      const valorParcela = Math.abs(Number(t['valor'] || 0));
+      const compParcela = _competenciaLancamento(t, cartoesMap) || compFallback;
+      const grupo = String(t['parcelaGrupoId'] || '');
+      // Replace limpo das cobranças dessa parcela.
+      const antigas = todasCobr.filter((c) => String(c['origem']) === 'lancamento' && String(c['origemId']) === tid);
+      for (const c of antigas) dbDelete('FinPessoalCobrancas', String(c['id']));
+      let algumaCriada = false;
+      for (const a of atribuicoes) {
+        const membroId = String(a.membroId || '').trim();
+        const proporcao = Math.abs(Number(a.valor || 0)) / valorOrigem;
+        const valor = Math.round(valorParcela * proporcao * 100) / 100;
+        if (!membroId || valor <= 0) continue;
+        dbCreate('FinPessoalCobrancas', {
+          membroId,
+          descricao: String(t['descricao'] || 'Lançamento'),
+          valor,
+          competencia: compParcela,
+          status: 'pendente',
+          origem: 'lancamento',
+          origemId: tid,
+          recorrente: 'nao',
+          dataPagamento: '',
+          notas: '',
+          criadoEm: agora,
+          atualizadoEm: agora,
+          parcelaGrupoId: grupo,
+        });
+        criadas++;
+        algumaCriada = true;
+      }
+      if (algumaCriada) parcelasAfetadas++;
     }
-    return { ok: true, data: { criadas } };
+    return { ok: true, data: { criadas, parcelasAfetadas, propagou: propagar && alvos.length > 1 } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atribuir lançamento' };
   }
@@ -10236,7 +10280,7 @@ function atribuirLancamentoMembros(lancamentoId: string, atribuicoesJson: string
 // Pra "essa fatura toda é do fulano" ou "esses itens são do fulano". Faz replace
 // limpo das cobranças de cada lançamento (idempotente). `competencia` (YYYY-MM)
 // = mês ativo da UI (cai na Família desse mês); se vazio, usa o do lançamento.
-function atribuirLancamentosLote(idsJson: string, membroId: string, competencia?: string): ServerResult {
+function atribuirLancamentosLote(idsJson: string, membroId: string, competencia?: string, propagarParcelas?: boolean): ServerResult {
   try {
     const membro = String(membroId || '').trim();
     if (!membro) return { ok: false, error: 'Membro não informado.' };
@@ -10245,37 +10289,47 @@ function atribuirLancamentosLote(idsJson: string, membroId: string, competencia?
     catch { return { ok: false, error: 'Lista de lançamentos inválida.' }; }
     if (!Array.isArray(ids) || ids.length === 0) return { ok: false, error: 'Nenhum lançamento selecionado.' };
 
+    const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    const cartoesMap = _cartoesMap();
+    const propagar = propagarParcelas !== false; // default propaga
+    const compFallback = String(competencia || '').match(/^\d{4}-\d{2}$/) ? String(competencia) : _toYYYYMM(new Date());
     const todasCobr = dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>;
     let criadas = 0;
     const agora = new Date().toISOString();
+    const processados = new Set<string>(); // evita reprocessar parcela já coberta por propagação
     for (const rawId of ids) {
       const alvo = String(rawId || '').trim();
       if (!alvo) continue;
       const lanc = dbGetById('FinPessoalLancamentos', alvo);
       if (!lanc) continue;
-      const valor = Math.abs(Number(lanc['valor'] || 0));
-      if (valor <= 0) continue;
-      const competenciaFinal = String(competencia || '').match(/^\d{4}-\d{2}$/)
-        ? String(competencia)
-        : (_toYYYYMM(lanc['vencimento'] || lanc['data']) || _toYYYYMM(new Date()));
-      // Replace limpo: remove cobranças antigas desse lançamento.
-      const antigas = todasCobr.filter((c) => String(c['origem']) === 'lancamento' && String(c['origemId']) === alvo);
-      for (const c of antigas) dbDelete('FinPessoalCobrancas', String(c['id']));
-      dbCreate('FinPessoalCobrancas', {
-        membroId: membro,
-        descricao: String(lanc['descricao'] || 'Lançamento'),
-        valor,
-        competencia: competenciaFinal,
-        status: 'pendente',
-        origem: 'lancamento',
-        origemId: alvo,
-        recorrente: 'nao',
-        dataPagamento: '',
-        notas: '',
-        criadoEm: agora,
-        atualizadoEm: agora,
-      });
-      criadas++;
+      const alvos = _alvosAtribuicaoParcelas(lanc, propagar, todos);
+      for (const t of alvos) {
+        const tid = String(t['id']);
+        if (processados.has(tid)) continue;
+        processados.add(tid);
+        const valor = Math.abs(Number(t['valor'] || 0));
+        if (valor <= 0) continue;
+        const compParcela = _competenciaLancamento(t, cartoesMap) || compFallback;
+        // Replace limpo: remove cobranças antigas dessa parcela.
+        const antigas = todasCobr.filter((c) => String(c['origem']) === 'lancamento' && String(c['origemId']) === tid);
+        for (const c of antigas) dbDelete('FinPessoalCobrancas', String(c['id']));
+        dbCreate('FinPessoalCobrancas', {
+          membroId: membro,
+          descricao: String(t['descricao'] || 'Lançamento'),
+          valor,
+          competencia: compParcela,
+          status: 'pendente',
+          origem: 'lancamento',
+          origemId: tid,
+          recorrente: 'nao',
+          dataPagamento: '',
+          notas: '',
+          criadoEm: agora,
+          atualizadoEm: agora,
+          parcelaGrupoId: String(t['parcelaGrupoId'] || ''),
+        });
+        criadas++;
+      }
     }
     return { ok: true, data: { criadas } };
   } catch (e: unknown) {
@@ -10305,6 +10359,11 @@ function getCobrancasMembroDetalhado(membroId: string): ServerResult {
           base['metodo'] = String(lanc['metodo'] || '');
           base['categoria'] = String(lanc['categoria'] || base['categoria'] || '');
           base['lancamentoValor'] = Math.abs(Number(lanc['valor'] || 0));
+          // Info de parcela: alimenta o badge "3/12" e a visão de provisionamento.
+          const totParc = Number(lanc['parcelas'] || 0);
+          base['parcelasTotal'] = totParc;
+          base['parcelaAtual'] = totParc > 1 ? Number(lanc['parcelaAtual'] || 0) : 0;
+          base['parcelaGrupoId'] = String(lanc['parcelaGrupoId'] || base['parcelaGrupoId'] || '');
           if (cartao) {
             const diaFech = Number(cartao['diaFechamento'] || 1);
             const diaVenc = Number(cartao['diaVencimento'] || 0);
@@ -10327,6 +10386,52 @@ function getCobrancasMembroDetalhado(membroId: string): ServerResult {
     return { ok: true, data: rows };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao detalhar cobranças do membro' };
+  }
+}
+
+// Provisionamento do membro: o que ele te deve nos cartões organizado POR MÊS
+// (competência da fatura), incluindo as parcelas futuras já atribuídas — assim
+// dá pra ver o compromisso de longo prazo, não só o acumulado solto. Reaproveita
+// o detalhamento (já enriquecido com cartão/parcela) e agrupa por competência.
+function getProvisaoMembro(membroId: string): ServerResult {
+  try {
+    const alvo = String(membroId || '').trim();
+    if (!alvo) return { ok: false, error: 'Membro não informado.' };
+    const det = getCobrancasMembroDetalhado(alvo);
+    if (!det.ok) return det;
+    const itens = (det.data as Array<Record<string, unknown>>) || [];
+    const mesAtual = _toYYYYMM(new Date());
+
+    const mapMes: Record<string, {
+      competencia: string; total: number; pendente: number; pago: number;
+      futuro: boolean; atrasado: boolean; itens: Array<Record<string, unknown>>;
+    }> = {};
+    let totalPendente = 0, totalPago = 0, totalFuturo = 0, totalEsteMes = 0, totalAtrasado = 0;
+    for (const it of itens) {
+      const comp = String(it['competencia'] || '');
+      if (!comp) continue;
+      if (!mapMes[comp]) mapMes[comp] = {
+        competencia: comp, total: 0, pendente: 0, pago: 0,
+        futuro: comp > mesAtual, atrasado: false, itens: [],
+      };
+      const v = Math.abs(Number(it['valor'] || 0));
+      const pago = String(it['status']) === 'pago';
+      mapMes[comp].total += v;
+      mapMes[comp].itens.push(it);
+      if (pago) { mapMes[comp].pago += v; totalPago += v; continue; }
+      mapMes[comp].pendente += v;
+      totalPendente += v;
+      if (comp > mesAtual) totalFuturo += v;
+      else if (comp === mesAtual) totalEsteMes += v;
+      else { totalAtrasado += v; mapMes[comp].atrasado = true; }
+    }
+    const porMes = Object.values(mapMes).sort((a, b) => a.competencia.localeCompare(b.competencia));
+    return {
+      ok: true,
+      data: { mesAtual, totalPendente, totalPago, totalEsteMes, totalFuturo, totalAtrasado, porMes },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao montar provisão do membro' };
   }
 }
 

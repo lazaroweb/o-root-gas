@@ -36,6 +36,28 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.199.0] — 2026-06-28
+
+### Adicionado
+- **Cartões × Família · atribuição inteligente de parcelas**: ao atribuir uma
+  compra parcelada a um membro, a associação agora se propaga para as próximas
+  parcelas (a atual + todas as futuras ainda não pagas), cada uma na competência
+  da SUA fatura. Mantém a proporção do rateio. Toggle "Aplicar nas próximas
+  parcelas" no modal (ligado por padrão); a atribuição da fatura em lote também
+  propaga. Reatribuir/trocar de membro propaga a mudança para as futuras.
+- **Provisionamento do membro por mês**: a gaveta do membro ganhou a visão
+  "Por mês" — o que ele deve organizado por competência (este mês × futuro ×
+  atraso), com badge de parcela (3/12) e total de longo prazo. Novos recortes no
+  topo: "A receber em aberto", "Este mês" e "Futuro · parcelas". Toggle Por mês ×
+  Lista. Novo RPC `getProvisaoMembro`.
+
+### Técnico
+- `FinPessoalCobrancas` ganhou a coluna `parcelaGrupoId` (append-only) pra
+  vincular a cobrança ao grupo da compra parcelada.
+- `atribuirLancamentoMembros` e `atribuirLancamentosLote` agora aceitam
+  `propagarParcelas` e derivam a competência por fatura (via
+  `_competenciaLancamento`) em vez do mês ativo da tela.
+
 ## [1.198.1] — 2026-06-28
 
 ### Corrigido
