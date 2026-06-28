@@ -3147,6 +3147,11 @@ function ModalLancamento({ open, onClose, lancamento, cartoes, categoriasUsadas,
       };
       const res = await callServer<ServerResponse<unknown>>('salvarLancamentoPessoal', payload);
       if (res.ok) {
+        // Lançamento novo e recorrente: gera já os clones pendentes (mesma regra
+        // do cadastro de receita), pra aparecer no mês e nos próximos.
+        if (!lancamento && rec !== 'unica') {
+          try { await callServer<ServerResponse<unknown>>('gerarRecorrenciasPendentes'); } catch { /* best-effort */ }
+        }
         message.success(lancamento ? 'Lançamento atualizado' : 'Lançamento criado');
         onSaved();
       } else {
@@ -3261,9 +3266,10 @@ function ModalLancamento({ open, onClose, lancamento, cartoes, categoriasUsadas,
           </div>
         )}
 
-        {/* Recorrência — sempre aparece pra despesa (não só cartão) */}
-        {tipo === 'despesa' && !lancamento && (
-          <Form.Item name="recorrencia" label="Recorrência" tooltip="Se mensal/semanal/anual, o sistema gera automaticamente o próximo período quando chegar a data.">
+        {/* Recorrência — pra despesa OU entrada (ex.: salário recorrente). Só em
+            lançamento novo; a origem se gerencia depois na aba Recorrências. */}
+        {!lancamento && (
+          <Form.Item name="recorrencia" label="Recorrência" tooltip={`Se mensal/semanal/anual, o sistema gera automaticamente ${tipo === 'entrada' ? 'a próxima entrada' : 'o próximo período'} quando chegar a data.`}>
             <Select onChange={(v) => setRecorrencia(v)}>
               <Select.Option value="unica">Única (não repete)</Select.Option>
               <Select.Option value="mensal">Mensal (toda data)</Select.Option>
@@ -3273,8 +3279,8 @@ function ModalLancamento({ open, onClose, lancamento, cartoes, categoriasUsadas,
           </Form.Item>
         )}
 
-        {/* Duração da recorrência (pra despesa) */}
-        {tipo === 'despesa' && !lancamento && recorrencia !== 'unica' && (
+        {/* Duração da recorrência */}
+        {!lancamento && recorrencia !== 'unica' && (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <Form.Item name="duracao" label="Repetir por quanto tempo" tooltip="Por padrão repete pra sempre. Você pode limitar por uma data final ou por um número de vezes.">
               <Select
@@ -3300,7 +3306,7 @@ function ModalLancamento({ open, onClose, lancamento, cartoes, categoriasUsadas,
         )}
 
         {/* Feedback dinâmico do impacto */}
-        {!lancamento && (parcelas > 1 || (recorrencia !== 'unica' && tipo === 'despesa')) && (
+        {!lancamento && (parcelas > 1 || recorrencia !== 'unica') && (
           <Alert
             type="info"
             showIcon
@@ -3308,7 +3314,7 @@ function ModalLancamento({ open, onClose, lancamento, cartoes, categoriasUsadas,
             message={
               parcelas > 1
                 ? `Vai criar ${parcelas} lançamentos (um por mês), agrupados.`
-                : `Vai recorrer automaticamente todo período (${recorrencia}). Você pode pausar depois na aba Recorrências.`
+                : `${tipo === 'entrada' ? 'Essa entrada' : 'Esse gasto'} vai recorrer automaticamente (${recorrencia}). Você pode pausar ou concluir depois na aba Recorrências.`
             }
             style={{ marginBottom: 12 }}
           />

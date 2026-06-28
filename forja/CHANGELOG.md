@@ -36,6 +36,10 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.198.0] — 2026-06-28
+
+- **Entradas também podem ser recorrentes no "Novo lançamento"** — antes o seletor de Recorrência (mensal/semanal/anual) só aparecia pra despesa; agora aparece também quando o tipo é **Entrada**. Dá pra cadastrar salário e outras receitas recorrentes direto pelo "Novo lançamento", com duração opcional (até uma data / por N vezes). Ao salvar uma entrada recorrente, o sistema já gera os lançamentos pendentes e ela passa a projetar nos próximos meses — e segue gerenciável (pausar/concluir/reabrir) na aba Recorrências.
+
 ## [1.197.2] — 2026-06-28
 
 - **Fix: recorrências não apareciam nos meses futuros** — a projeção lia a data da origem com `String(data)`, e como o Sheets grava `data` como `Date`, virava `"Sun Jun 28 2026 ..."`; aí o "mês da origem" saía `"Sun Jun"` e a comparação de mês descartava TODA projeção futura (salário, contas fixas, etc. sumiam dos próximos meses). Agora normaliza a data (`_valorJsonSafe` → `YYYY-MM-DD`) em `_recorrenciasProjetadasDoMes` e em `gerarRecorrenciasPendentes` (isso também conserta os clones com data errada / "Invalid Date").
