@@ -36,6 +36,17 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.198.1] — 2026-06-28
+
+### Corrigido
+- **Recorrências · "Invalid Date" nos lançamentos**: clones gerados pelo bug antigo
+  de data (que gravava `NaN-NaN-NaN`) ficavam "perdidos" (não entravam em nenhum mês)
+  e apareciam como `último: Invalid Date`. `gerarRecorrenciasPendentes` agora faz uma
+  limpeza automática (one-time, idempotente): apaga clones com data inválida e os
+  recria com a data correta na própria geração. Roda sozinho ao abrir o app.
+- **Texto mais claro**: "X clone(s) gerado(s)" virou "X já lançado(s)" e a exibição
+  da última data é blindada contra valores inválidos (nunca mostra "Invalid Date").
+
 ## [1.198.0] — 2026-06-28
 
 - **Entradas também podem ser recorrentes no "Novo lançamento"** — antes o seletor de Recorrência (mensal/semanal/anual) só aparecia pra despesa; agora aparece também quando o tipo é **Entrada**. Dá pra cadastrar salário e outras receitas recorrentes direto pelo "Novo lançamento", com duração opcional (até uma data / por N vezes). Ao salvar uma entrada recorrente, o sistema já gera os lançamentos pendentes e ela passa a projetar nos próximos meses — e segue gerenciável (pausar/concluir/reabrir) na aba Recorrências.

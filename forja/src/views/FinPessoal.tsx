@@ -5099,7 +5099,7 @@ function PainelRecorrencias({ recorrencias, cartoes, onEditar, onRecarregar }: P
                     {cartao && ` · 💳 ${cartao.apelido || cartao.nome}`}
                   </div>
                   <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginTop: 4 }}>
-                    {r.totalGerados} clone(s) gerado(s){r.ultimoGeradoEm && ` · último: ${dayjs(r.ultimoGeradoEm).format('DD/MM/YYYY')}`}
+                    {r.totalGerados} já lançado(s){r.ultimoGeradoEm && dayjs(r.ultimoGeradoEm).isValid() ? ` · último: ${dayjs(r.ultimoGeradoEm).format('DD/MM/YYYY')}` : ''}
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>

@@ -11160,7 +11160,21 @@ function deletarLancamentosImportadosCartao(cartaoId: string): ServerResult {
 // Idempotente: rodar 2x no mesmo dia gera no máximo um clone por origem.
 function gerarRecorrenciasPendentes(): ServerResult {
   try {
-    const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    let todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+
+    // Limpeza one-time: clones gerados pelo bug antigo (que lia String(Date) e
+    // gravava data tipo "NaN-NaN-NaN") têm data inválida e apareciam como
+    // "último: Invalid Date". Apaga esses clones quebrados — a geração logo
+    // abaixo os recria com a data certa. Idempotente (só age se houver lixo).
+    const ehDataValida = (v: unknown) => /^\d{4}-\d{2}-\d{2}$/.test(String(_valorJsonSafe(v || '')));
+    const clonesQuebrados = todos.filter((l) =>
+      String(l['recorrenciaOrigemId'] || '') && !ehDataValida(l['data']));
+    if (clonesQuebrados.length > 0) {
+      dbDeleteMany('FinPessoalLancamentos', clonesQuebrados.map((l) => String(l['id'])));
+      const quebradosIds = new Set(clonesQuebrados.map((l) => String(l['id'])));
+      todos = todos.filter((l) => !quebradosIds.has(String(l['id'])));
+    }
+
     // Origens ativas: tem recorrencia != 'unica' E recorrenciaAtiva = 'sim' E
     // não é um clone (recorrenciaOrigemId vazio).
     const origens = todos.filter((l) =>
