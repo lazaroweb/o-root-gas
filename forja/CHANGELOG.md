@@ -36,6 +36,15 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.200.0] — 2026-06-28
+
+### Adicionado
+- **Família · régua dos próximos 12 meses**: novo painel que sumariza o total a
+  receber mês a mês (a partir do mês corrente), preenchendo cada mês com o que
+  existir — compras parceladas já caem na competência da sua fatura. Cada mês é
+  clicável pra focá-lo na tela (além do navegador global no topo). Barra de
+  proporção, marcador "este mês" e total previsto do período.
+
 ## [1.199.0] — 2026-06-28
 
 ### Adicionado

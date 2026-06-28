@@ -74,9 +74,10 @@ interface FinFamiliaProps {
   lancamentos: LancamentoPessoal[];
   assinaturas: AssinaturaPessoal[];
   onRecarregar: () => void;
+  onSelecionarMes?: (comp: string) => void;
 }
 
-export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinaturas, onRecarregar }: FinFamiliaProps): React.ReactElement {
+export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinaturas, onRecarregar, onSelecionarMes }: FinFamiliaProps): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [resumo, setResumo] = useState<ResumoFamilia | null>(null);
@@ -208,6 +209,11 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
         {!semMembros && <PizzaGastosMembros membros={listaMembros} />}
       </div>
 
+      {/* Régua de 12 meses — a receber por competência, preenchendo cada mês */}
+      {!semMembros && (
+        <Resumo12Meses cobrancas={cobrancas} mesAtivo={mes} onSelecionar={onSelecionarMes} />
+      )}
+
       {/* Membros */}
       {semMembros ? (
         <Panel title="Família">
@@ -327,6 +333,94 @@ function MiniStat({ label, valor, cor }: { label: string; valor: string; cor: st
 }
 function DivV({ t }: { t: ReturnType<typeof useTokens> }): React.ReactElement {
   return <div style={{ width: 1, alignSelf: 'stretch', background: t.borderSoft }} />;
+}
+
+// ─── Régua dos próximos 12 meses ────────────────────────────────────────────────
+// Sumariza, mês a mês (a partir do mês corrente), o total A RECEBER (cobranças
+// pendentes) de toda a família. Cada compra parcelada já cai no seu respectivo
+// mês — então dá pra "bater o olho" no compromisso do ano todo. Clicar foca o mês.
+function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar }: {
+  cobrancas: Cobranca[];
+  mesAtivo: string;
+  onSelecionar?: (comp: string) => void;
+}): React.ReactElement {
+  const t = useTokens();
+  const hoje = new Date();
+  const mesHoje = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
+
+  const meses = useMemo(() => {
+    // Soma pendente/pago por competência.
+    const porComp: Record<string, { pendente: number; pago: number; qtd: number }> = {};
+    for (const c of cobrancas) {
+      const comp = String(c.competencia || '');
+      if (!comp) continue;
+      if (!porComp[comp]) porComp[comp] = { pendente: 0, pago: 0, qtd: 0 };
+      const v = Math.abs(Number(c.valor || 0));
+      if (String(c.status) === 'pago') porComp[comp].pago += v;
+      else { porComp[comp].pendente += v; porComp[comp].qtd++; }
+    }
+    // 12 meses a partir do mês corrente.
+    const out: Array<{ comp: string; pendente: number; pago: number; qtd: number }> = [];
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(hoje.getFullYear(), hoje.getMonth() + i, 1);
+      const comp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      out.push({ comp, pendente: porComp[comp]?.pendente || 0, pago: porComp[comp]?.pago || 0, qtd: porComp[comp]?.qtd || 0 });
+    }
+    return out;
+  }, [cobrancas]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const maxV = Math.max(1, ...meses.map((m) => m.pendente));
+  const totalFuturo = meses.reduce((s, m) => s + m.pendente, 0);
+  const fmtMesCurto = (comp: string) => {
+    const [y, mm] = comp.split('-').map(Number);
+    return new Date(y, mm - 1, 1).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
+  };
+
+  return (
+    <Panel
+      title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CalendarRange size={16} color={t.accents.lavender} /> Próximos 12 meses · a receber</span>}
+      extra={<span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>Total previsto: <strong style={{ color: t.text }}>{formatBRL(totalFuturo)}</strong></span>}
+    >
+      <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, marginBottom: 12 }}>
+        Cada compra parcelada já cai no mês da sua fatura. Clique num mês pra focá-lo na tela.
+      </div>
+      <div className="forja-scroll-x" style={{ display: 'flex', gap: 8, paddingBottom: 4 }}>
+        {meses.map((m) => {
+          const ativo = m.comp === mesAtivo;
+          const ehHoje = m.comp === mesHoje;
+          const temValor = m.pendente > 0.01;
+          const cor = ehHoje ? t.accents.peach : t.accents.lavender;
+          return (
+            <button
+              key={m.comp}
+              onClick={() => onSelecionar?.(m.comp)}
+              style={{
+                flex: '0 0 auto', width: 96, cursor: onSelecionar ? 'pointer' : 'default',
+                textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 6,
+                background: ativo ? `${cor}14` : t.surfaceMuted,
+                border: `1.5px solid ${ativo ? cor : t.borderSoft}`,
+                borderRadius: 11, padding: '10px 11px', transition: 'all 0.15s',
+              }}
+            >
+              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, fontWeight: 600, color: ehHoje ? t.accents.peach : t.textSecondary, textTransform: 'capitalize' }}>
+                  {fmtMesCurto(m.comp)}/{m.comp.slice(2, 4)}
+                </span>
+                {ehHoje && <span style={{ width: 6, height: 6, borderRadius: '50%', background: t.accents.peach }} />}
+              </span>
+              <span style={{ fontFamily: FONTS.display, fontSize: 14, fontWeight: 600, color: temValor ? t.text : t.textTertiary, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                {temValor ? formatBRL(m.pendente) : '—'}
+              </span>
+              <span style={{ height: 4, borderRadius: 3, background: t.borderSoft, overflow: 'hidden' }}>
+                <span style={{ display: 'block', height: '100%', width: `${(m.pendente / maxV) * 100}%`, background: cor, borderRadius: 3, transition: 'width 0.3s' }} />
+              </span>
+              <span style={{ fontFamily: FONTS.ui, fontSize: 10, color: t.textTertiary }}>{m.qtd > 0 ? `${m.qtd} cobr.` : 'livre'}</span>
+            </button>
+          );
+        })}
+      </div>
+    </Panel>
+  );
 }
 
 // ─── Pizza: % de gastos por membro ───────────────────────────────────────────

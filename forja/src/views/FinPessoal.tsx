@@ -667,6 +667,7 @@ export default function FinPessoal(): React.ReactElement {
           lancamentos={lancamentos}
           assinaturas={assinaturas}
           onRecarregar={recarregar}
+          onSelecionarMes={setMes}
         />
       )}
       {view === 'cartoes' && (
