@@ -10613,6 +10613,7 @@ function getMesExecutivo(mes?: string): ServerResult {
     for (const g of composicao.cartoes) {
       if (g.key === 'outros') {
         for (const l of g.itens) {
+          const recorrencia = String(l['recorrencia'] || 'unica');
           avulsas.push({
             id: String(l['id'] || ''),
             descricao: String(l['descricao'] || 'Despesa'),
@@ -10622,6 +10623,11 @@ function getMesExecutivo(mes?: string): ServerResult {
             status: String(l['status'] || 'pendente'),
             vencimento: String(_valorJsonSafe(l['vencimento'] || l['data'] || '')),
             projecao: ehProjecao(l),
+            recorrencia,
+            // Fixa = compromisso recorrente (assinatura, conta mensal). Variável =
+            // gasto avulso. Cartões entram sempre como variável (igual à planilha
+            // que o usuário ama). Projeção de recorrência também é fixa.
+            fixo: recorrencia !== 'unica' || ehProjecao(l),
           });
         }
         continue;
@@ -10692,6 +10698,17 @@ function getMesExecutivo(mes?: string): ServerResult {
     const previsto = despesasFlat
       .filter(ehProjecao)
       .reduce((s, l) => s + Number(l['valor'] || 0), 0);
+    // Investido: despesas na categoria 'investimento' — bucket próprio (como na
+    // planilha do usuário), pra distinguir "guardado" de "gasto".
+    const investido = despesasFlat
+      .filter((l) => String(l['categoria'] || '') === 'investimento')
+      .reduce((s, l) => s + Number(l['valor'] || 0), 0);
+    // Fixas × Variáveis: fixas = avulsas recorrentes; variáveis = o resto
+    // (cartões + avulsas únicas). Espelha "Gastos Fixos" vs "Gastos Variáveis".
+    const fixas = avulsas
+      .filter((a) => a['fixo'] === true)
+      .reduce((s, a) => s + Number(a['valor'] || 0), 0);
+    const variaveis = totalDespesas - fixas;
 
     return {
       ok: true,
@@ -10711,6 +10728,9 @@ function getMesExecutivo(mes?: string): ServerResult {
           pago,
           aPagar,
           previsto,
+          investido,
+          fixas,
+          variaveis,
         },
       },
     };

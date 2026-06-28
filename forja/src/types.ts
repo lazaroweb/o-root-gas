@@ -997,6 +997,8 @@ export interface MesExecutivoItem {
   data?: string;
   vencimento?: string;
   projecao: boolean;
+  recorrencia?: string; // 'unica' | 'mensal' | ... (presente nas avulsas)
+  fixo?: boolean; // true = gasto fixo (recorrente); false = variável
 }
 
 export interface MesExecutivoCartao {
@@ -1038,6 +1040,9 @@ export interface MesExecutivo {
     pago: number;
     aPagar: number;
     previsto: number;
+    investido: number;
+    fixas: number;
+    variaveis: number;
   };
 }
 

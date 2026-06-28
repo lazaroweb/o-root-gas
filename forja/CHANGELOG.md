@@ -36,6 +36,11 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.194.0] — 2026-06-27
+
+- **"Meu mês" ganha Fixas × Variáveis e Investido** — inspirado na planilha que o Lázaro ama: o topo agora mostra uma barra de split **Fixas × Variáveis** (quanto do mês é compromisso recorrente vs gasto livre) e a lista de Despesas se agrupa em **Fixas** (contas/assinaturas recorrentes) e **Variáveis** (cartões + avulsos), com subtotal por grupo — os rótulos só aparecem quando há os dois tipos, pra meses simples seguirem como lista limpa. Quando há despesas na categoria **Investimento**, surge um selo **"investido"** no topo (dinheiro guardado, não gasto). Tudo opcional e sem ruído.
+- Backend: `getMesExecutivo` passou a devolver `totais.fixas`, `totais.variaveis`, `totais.investido` e a marcar cada despesa avulsa com `fixo` (recorrente) — reaproveitando a mesma composição do mês, sem migração.
+
 ## [1.193.0] — 2026-06-27
 
 - **"Meu mês" — visão executiva do Financeiro Pessoal** — nova tela inicial do Financeiro → Pessoal: tudo que entra e sai num só lugar, enxuto e de alto nível. Receitas individuais, cada **cartão como UMA linha** (nome + total da fatura) e despesas avulsas (pix/débito/dinheiro) individuais — com um **toggle de pago** ao lado de cada item (e da fatura inteira do cartão). Faixa de topo com **Entradas · Saídas · Sobra do mês** + barra "pago de X". Widgets compactos **Por categoria** e **Como você pagou** (método), além de **Cabe no orçamento?** (limite × gasto por categoria). Clicar num cartão abre direto a fatura daquele cartão.

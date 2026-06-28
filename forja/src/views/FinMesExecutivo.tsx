@@ -9,8 +9,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { App as AntApp, Spin, Empty, Button, Tooltip } from 'antd';
 import {
-  TrendingUp, TrendingDown, Wallet, CreditCard, Check, Clock, ChevronRight,
+  TrendingUp, TrendingDown, Wallet, CreditCard, Check, Clock,
   Smartphone, Banknote, FileText, ArrowLeftRight, Target, Sparkles, Plus, CalendarClock,
+  PiggyBank, RefreshCw,
 } from 'lucide-react';
 import { Panel, formatBRL } from '../components/ui';
 import { useTokens } from '../themeContext';
@@ -125,17 +126,47 @@ export default function FinMesExecutivo({ mes, categorias, onRecarregar, onAbrir
         <HeroNum icon={<TrendingUp size={18} />} label="Entradas" valor={totais.entradas} cor={t.accents.sage} />
         <HeroNum icon={<TrendingDown size={18} />} label="Saídas" valor={totais.despesas} cor={t.accents.rose} />
         <div style={{ gridColumn: '1 / -1', marginTop: 2 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5, gap: 10, flexWrap: 'wrap' }}>
             <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>
               Pago <strong style={{ color: t.text }}>{formatBRL(totais.pago)}</strong> de {formatBRL(totais.despesas)}
             </span>
-            <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.accents.peach }}>
-              {formatBRL(totais.aPagar)} a pagar
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+              {totais.investido > 0 && (
+                <Tooltip title="Despesas na categoria Investimento — dinheiro guardado, não gasto.">
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: FONTS.ui, fontSize: 11.5, fontWeight: 600, color: t.accents.blue, background: `${t.accents.blue}14`, border: `1px solid ${t.accents.blue}33`, padding: '2px 9px', borderRadius: 999 }}>
+                    <PiggyBank size={12} /> {formatBRL(totais.investido)} investido
+                  </span>
+                </Tooltip>
+              )}
+              <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.accents.peach }}>
+                {formatBRL(totais.aPagar)} a pagar
+              </span>
             </span>
           </div>
           <div style={{ height: 8, borderRadius: 999, background: t.surfaceMuted, overflow: 'hidden' }}>
             <div style={{ width: `${pctPago}%`, height: '100%', background: t.accents.sage, transition: 'width 0.3s' }} />
           </div>
+
+          {/* Fixas × Variáveis: a leitura que a planilha amada faz — quanto do mês
+              é compromisso recorrente vs gasto livre. Só aparece quando há os dois. */}
+          {totais.fixas > 0 && totais.variaveis > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5 }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 3, background: t.accents.lavender }} />
+                  Fixas <strong style={{ color: t.text }}>{formatBRL(totais.fixas)}</strong>
+                </span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>
+                  Variáveis <strong style={{ color: t.text }}>{formatBRL(totais.variaveis)}</strong>
+                  <span style={{ width: 9, height: 9, borderRadius: 3, background: t.accents.peach }} />
+                </span>
+              </div>
+              <div style={{ display: 'flex', height: 8, borderRadius: 999, overflow: 'hidden', background: t.surfaceMuted }}>
+                <div style={{ width: `${totais.despesas > 0 ? (totais.fixas / totais.despesas) * 100 : 0}%`, background: t.accents.lavender, transition: 'width 0.3s' }} />
+                <div style={{ width: `${totais.despesas > 0 ? (totais.variaveis / totais.despesas) * 100 : 0}%`, background: t.accents.peach, transition: 'width 0.3s' }} />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -205,50 +236,69 @@ export default function FinMesExecutivo({ mes, categorias, onRecarregar, onAbrir
             >
               {data.cartoes.length === 0 && data.avulsas.length === 0 ? (
                 <Vazio texto="Nenhuma despesa neste mês." t={t} />
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {/* Cartões (1 linha cada — clique abre a fatura) */}
-                  {data.cartoes.map((c) => (
+              ) : (() => {
+                const fixasItens = data.avulsas.filter((a) => a.fixo);
+                const variaveisAvulsas = data.avulsas.filter((a) => !a.fixo);
+                const temVariaveis = data.cartoes.length > 0 || variaveisAvulsas.length > 0;
+                // Só mostra os rótulos Fixas/Variáveis quando há de fato os dois
+                // tipos — em meses simples, fica uma lista limpa sem cabeçalhos.
+                const agrupar = fixasItens.length > 0 && temVariaveis;
+                const renderAvulsa = (a: MesExecutivoItem) => {
+                  const m = METODO_META[a.metodo || 'pix'] || METODO_META.pix;
+                  return (
                     <Linha
-                      key={c.cartaoId}
+                      key={a.id}
                       t={t}
-                      cor={c.cor || t.accents.lavender}
-                      icon={<CreditCard size={15} color={c.cor || t.accents.lavender} />}
-                      titulo={c.nome}
-                      sub={`${c.qtdItens} lançamento${c.qtdItens === 1 ? '' : 's'} · ver fatura`}
-                      valor={c.total}
-                      projecao={c.projecao}
-                      pago={c.pago}
-                      labelPago="Paga"
-                      labelPendente="Em aberto"
-                      loading={!!flight[c.cartaoId]}
-                      onToggle={() => toggleCartao(c)}
-                      onAbrir={() => onAbrirCartao(c.cartaoId)}
+                      cor={m.cor}
+                      icon={<span style={{ color: m.cor, display: 'inline-flex' }}>{m.icon}</span>}
+                      titulo={a.descricao}
+                      sub={`${m.label}${a.categoria ? ` · ${labelCategoria(a.categoria)}` : ''}`}
+                      valor={a.valor}
+                      projecao={a.projecao}
+                      pago={a.status === 'pago'}
+                      labelPago="Pago"
+                      labelPendente="Pendente"
+                      loading={!!flight[a.id]}
+                      onToggle={() => toggleItem(a)}
                     />
-                  ))}
-                  {/* Avulsas (pix, débito, dinheiro, boleto) — individuais */}
-                  {data.avulsas.map((a) => {
-                    const m = METODO_META[a.metodo || 'pix'] || METODO_META.pix;
-                    return (
-                      <Linha
-                        key={a.id}
-                        t={t}
-                        cor={m.cor}
-                        icon={<span style={{ color: m.cor, display: 'inline-flex' }}>{m.icon}</span>}
-                        titulo={a.descricao}
-                        sub={`${m.label}${a.categoria ? ` · ${labelCategoria(a.categoria)}` : ''}`}
-                        valor={a.valor}
-                        projecao={a.projecao}
-                        pago={a.status === 'pago'}
-                        labelPago="Pago"
-                        labelPendente="Pendente"
-                        loading={!!flight[a.id]}
-                        onToggle={() => toggleItem(a)}
-                      />
-                    );
-                  })}
-                </div>
-              )}
+                  );
+                };
+                const renderCartao = (c: MesExecutivoCartao) => (
+                  <Linha
+                    key={c.cartaoId}
+                    t={t}
+                    cor={c.cor || t.accents.lavender}
+                    icon={<CreditCard size={15} color={c.cor || t.accents.lavender} />}
+                    titulo={c.nome}
+                    sub={`${c.qtdItens} lançamento${c.qtdItens === 1 ? '' : 's'} · ver fatura`}
+                    valor={c.total}
+                    projecao={c.projecao}
+                    pago={c.pago}
+                    labelPago="Paga"
+                    labelPendente="Em aberto"
+                    loading={!!flight[c.cartaoId]}
+                    onToggle={() => toggleCartao(c)}
+                    onAbrir={() => onAbrirCartao(c.cartaoId)}
+                  />
+                );
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: agrupar ? 16 : 8 }}>
+                    {agrupar && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <SubGrupo t={t} icon={<RefreshCw size={12} color={t.accents.lavender} />} titulo="Fixas" subtotal={totais.fixas} hint="Contas e assinaturas que se repetem todo mês." />
+                        {fixasItens.map(renderAvulsa)}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {agrupar && (
+                        <SubGrupo t={t} icon={<Sparkles size={12} color={t.accents.peach} />} titulo="Variáveis" subtotal={totais.variaveis} hint="Cartões e gastos avulsos do mês." />
+                      )}
+                      {data.cartoes.map(renderCartao)}
+                      {(agrupar ? variaveisAvulsas : data.avulsas).map(renderAvulsa)}
+                    </div>
+                  </div>
+                );
+              })()}
             </Panel>
           </div>
 
@@ -330,6 +380,19 @@ function Contador({ n, t }: { n: number; t: Tokens }): React.ReactElement {
 
 function Vazio({ texto, t }: { texto: string; t: Tokens }): React.ReactElement {
   return <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textTertiary, padding: '6px 2px' }}>{texto}</div>;
+}
+
+// Cabeçalho de subgrupo (Fixas / Variáveis) com subtotal à direita.
+function SubGrupo({ t, icon, titulo, subtotal, hint }: { t: Tokens; icon: React.ReactNode; titulo: string; subtotal: number; hint: string }): React.ReactElement {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 2px 0' }}>
+      {icon}
+      <span style={{ fontFamily: FONTS.ui, fontSize: 11, fontWeight: 700, color: t.textTertiary, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{titulo}</span>
+      <Tooltip title={hint}><span style={{ width: 5, height: 5, borderRadius: 999, background: t.borderSoft, cursor: 'help' }} /></Tooltip>
+      <div style={{ flex: 1, height: 1, background: t.borderSoft }} />
+      <span style={{ fontFamily: FONTS.display, fontSize: 12.5, fontWeight: 600, color: t.textSecondary }}>{formatBRL(subtotal)}</span>
+    </div>
+  );
 }
 
 // Linha de item: ícone · título/sub · valor · toggle de pago. Linha de cartão
