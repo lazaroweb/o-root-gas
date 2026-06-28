@@ -10089,12 +10089,19 @@ function deletarMembro(id: string): ServerResult {
 function getCobrancas(competencia?: string): ServerResult {
   try {
     let rows = dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>;
-    if (competencia) rows = rows.filter((c) => String(c['competencia']) === competencia);
-    rows.sort((a, b) => String(b['competencia'] || '').localeCompare(String(a['competencia'] || '')));
-    // Sanitiza: cobranças têm competencia/dataPagamento que o Sheets pode
-    // devolver como Date → google.script.run falhava em silêncio e o drawer do
-    // membro aparecia vazio mesmo com cobrança existindo.
-    return { ok: true, data: rows.map(_sanitizarLinha) };
+    // IMPORTANTE: a competência ('2026-06') às vezes é convertida pelo Sheets em
+    // Date e volta como '2026-06-01'. Normalizamos pra 'YYYY-MM' (via _toYYYYMM)
+    // pra comparações exatas (régua de 12 meses, visão "por mês") não furarem.
+    if (competencia) rows = rows.filter((c) => _toYYYYMM(c['competencia']) === competencia.substring(0, 7));
+    rows.sort((a, b) => _toYYYYMM(b['competencia']).localeCompare(_toYYYYMM(a['competencia'])));
+    return {
+      ok: true,
+      data: rows.map((c) => {
+        const s = _sanitizarLinha(c) as Record<string, unknown>;
+        s['competencia'] = _toYYYYMM(c['competencia']);
+        return s;
+      }),
+    };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar cobranças' };
   }
@@ -10352,6 +10359,8 @@ function getCobrancasMembroDetalhado(membroId: string): ServerResult {
       .filter((c) => String(c['membroId']) === alvo)
       .map((c) => {
         const base = _sanitizarLinha(c) as Record<string, unknown>;
+        // Normaliza competência ('2026-06-01' → '2026-06') pra agrupamento por mês.
+        base['competencia'] = _toYYYYMM(c['competencia']);
         const lanc = String(c['origem']) === 'lancamento' && c['origemId'] ? lancMap[String(c['origemId'])] : null;
         if (lanc) {
           const cartao = lanc['cartaoId'] ? cartoesMap[String(lanc['cartaoId'])] : null;
@@ -10965,7 +10974,7 @@ function getResumoFamilia(competencia?: string): ServerResult {
     // Recebido é por mês (o que entrou neste mês); o "a receber" é CUMULATIVO —
     // o que o membro deve em QUALQUER mês ainda não pago. Antes filtrávamos tudo
     // por competência e uma atribuição lançada em outro mês "sumia" do card.
-    const cobrMes = todasCobr.filter((c) => String(c['competencia']) === comp);
+    const cobrMes = todasCobr.filter((c) => _toYYYYMM(c['competencia']) === comp);
 
     let totalAReceber = 0;
     let totalRecebido = 0;

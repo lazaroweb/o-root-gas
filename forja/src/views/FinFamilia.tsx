@@ -352,7 +352,7 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar }: {
     // Soma pendente/pago por competência.
     const porComp: Record<string, { pendente: number; pago: number; qtd: number }> = {};
     for (const c of cobrancas) {
-      const comp = String(c.competencia || '');
+      const comp = String(c.competencia || '').substring(0, 7); // '2026-06-01' → '2026-06'
       if (!comp) continue;
       if (!porComp[comp]) porComp[comp] = { pendente: 0, pago: 0, qtd: 0 };
       const v = Math.abs(Number(c.valor || 0));
@@ -384,9 +384,9 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar }: {
       <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, marginBottom: 12 }}>
         Cada compra parcelada já cai no mês da sua fatura. Clique num mês pra focá-lo na tela.
       </div>
-      <div className="forja-scroll-x" style={{ display: 'flex', gap: 8, paddingBottom: 4 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(96px, 1fr))', gap: 8 }}>
         {meses.map((m) => {
-          const ativo = m.comp === mesAtivo;
+          const ativo = m.comp === mesAtivo.substring(0, 7);
           const ehHoje = m.comp === mesHoje;
           const temValor = m.pendente > 0.01;
           const cor = ehHoje ? t.accents.peach : t.accents.lavender;
@@ -395,7 +395,7 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar }: {
               key={m.comp}
               onClick={() => onSelecionar?.(m.comp)}
               style={{
-                flex: '0 0 auto', width: 96, cursor: onSelecionar ? 'pointer' : 'default',
+                cursor: onSelecionar ? 'pointer' : 'default',
                 textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 6,
                 background: ativo ? `${cor}14` : t.surfaceMuted,
                 border: `1.5px solid ${ativo ? cor : t.borderSoft}`,

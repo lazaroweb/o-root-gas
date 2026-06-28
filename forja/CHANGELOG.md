@@ -36,6 +36,17 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.200.1] — 2026-06-28
+
+### Corrigido
+- **Régua de 12 meses zerada / mês sem valor**: a competência das cobranças às
+  vezes era convertida pelo Sheets em data (`2026-06-01`), quebrando as
+  comparações exatas por mês (régua e visão "Por mês" zeravam, mesmo com valor a
+  receber no topo). Normalizada pra `YYYY-MM` em todas as leituras
+  (`getCobrancas`, `getCobrancasMembroDetalhado`, `getResumoFamilia`).
+- **Régua cortando o último mês**: trocada a rolagem horizontal por um grid que
+  quebra linha — os 12 meses ficam sempre visíveis.
+
 ## [1.200.0] — 2026-06-28
 
 ### Adicionado
