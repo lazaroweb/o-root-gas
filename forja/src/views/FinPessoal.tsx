@@ -40,6 +40,7 @@ import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import { gerarEbaixarPdf } from '../pdf-client';
+import FinMesExecutivo from './FinMesExecutivo';
 import FinAssinaturas from './FinAssinaturas';
 import FinInteligencia from './FinInteligencia';
 import FinPerfil from './FinPerfil';
@@ -255,7 +256,14 @@ export default function FinPessoal(): React.ReactElement {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   });
-  const [view, setView] = useState<'visao' | 'painel' | 'inteligencia' | 'perfil' | 'lancamentos' | 'receitas' | 'familia' | 'cartoes' | 'pagar' | 'orcamentos' | 'recorrencias' | 'assinaturas' | 'categorias' | 'plano' | 'imposto-renda'>('visao');
+  const [view, setView] = useState<'mes' | 'visao' | 'painel' | 'inteligencia' | 'perfil' | 'lancamentos' | 'receitas' | 'familia' | 'cartoes' | 'pagar' | 'orcamentos' | 'recorrencias' | 'assinaturas' | 'categorias' | 'plano' | 'imposto-renda'>('mes');
+  // Deep-link: clicar num cartão na visão "Meu mês" leva pra aba Cartões já
+  // abrindo a fatura daquele cartão.
+  const [cartaoParaAbrir, setCartaoParaAbrir] = useState<string | null>(null);
+  const abrirCartaoNoPainel = useCallback((cartaoId: string) => {
+    setCartaoParaAbrir(cartaoId);
+    setView('cartoes');
+  }, []);
 
   // Estado compartilhado entre as sub-views
   const [resumo, setResumo] = useState<ResumoFinPessoal | null>(null);
@@ -489,6 +497,7 @@ export default function FinPessoal(): React.ReactElement {
     key: ViewKey; icon: LucideIcon; label: string;
     count?: number; accent: keyof typeof t.accents; ia?: boolean; desc: string; group?: string;
   }> = [
+    { key: 'mes', icon: Wallet, label: 'Meu mês', accent: 'peach', group: 'Panorama', desc: 'Visão executiva: tudo que entra e sai, cartões por nome com toggle de pago, e o que sobra (com previstos dos próximos meses).' },
     { key: 'visao', icon: LayoutDashboard, label: 'Visão geral', accent: 'peach', group: 'Panorama', desc: 'Panorama do mês: gastos, entradas, saldo e orçamentos.' },
     { key: 'painel', icon: CalendarRange, label: 'Painel 12 meses', accent: 'sage', group: 'Panorama', desc: 'O ano inteiro: receita, despesa por cartão e saldo acumulado.' },
     { key: 'inteligencia', icon: Compass, label: 'Norte', accent: 'lavender', ia: true, group: 'Panorama', desc: 'Diagnóstico financeiro e plano de abundância com IA.' },
@@ -614,6 +623,16 @@ export default function FinPessoal(): React.ReactElement {
       <SubNav items={NAV} value={view} onChange={(k) => setView(k)} ariaLabel="Áreas do Financeiro Pessoal">
 
       {/* Sub-views */}
+      {view === 'mes' && (
+        <FinMesExecutivo
+          mes={mes}
+          categorias={categorias}
+          onRecarregar={recarregar}
+          onAbrirCartao={abrirCartaoNoPainel}
+          onNovoLancamento={abrirNovoLancamento}
+          onIrParaOrcamentos={() => setView('orcamentos')}
+        />
+      )}
       {view === 'visao' && (
         <VisaoMensal resumo={resumo} loading={loading} orcamentos={orcamentosProgresso}
           lancamentos={lancamentos} cartoes={cartoes} mes={mes} onRecarregar={recarregar} onEditar={abrirEditarLancamento}
@@ -661,6 +680,8 @@ export default function FinPessoal(): React.ReactElement {
           onImportar={abrirImport}
           onEditarLancamento={abrirEditarLancamento}
           onAtribuir={setAtribuirLanc}
+          abrirCartaoId={cartaoParaAbrir}
+          onConsumirAbrir={() => setCartaoParaAbrir(null)}
         />
       )}
       {view === 'pagar' && (
@@ -1844,7 +1865,7 @@ function ListaLancamentos({ lancamentos, cartoes, loading, onEditar, onRecarrega
 
 // ─── Sub-view: cartões ─────────────────────────────────────────────────────────
 
-function PainelCartoes({ cartoes, mes, membros, membrosDe, onRecarregar, onImportar, onEditarLancamento, onAtribuir }: { cartoes: CartaoPessoal[]; mes: string; membros: FamiliaMembro[]; membrosDe: (lancId: string) => FamiliaMembro[]; onRecarregar: () => void; onImportar: (cartaoId?: string) => void; onEditarLancamento: (l: LancamentoPessoal) => void; onAtribuir: (l: LancamentoPessoal) => void }): React.ReactElement {
+function PainelCartoes({ cartoes, mes, membros, membrosDe, onRecarregar, onImportar, onEditarLancamento, onAtribuir, abrirCartaoId, onConsumirAbrir }: { cartoes: CartaoPessoal[]; mes: string; membros: FamiliaMembro[]; membrosDe: (lancId: string) => FamiliaMembro[]; onRecarregar: () => void; onImportar: (cartaoId?: string) => void; onEditarLancamento: (l: LancamentoPessoal) => void; onAtribuir: (l: LancamentoPessoal) => void; abrirCartaoId?: string | null; onConsumirAbrir?: () => void }): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [modalOpen, setModalOpen] = useState(false);
@@ -1889,6 +1910,15 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, onRecarregar, onImpor
     setFaturaOpen(true);
     carregarFatura(c);
   };
+
+  // Deep-link vindo da visão "Meu mês": abre direto a fatura do cartão pedido.
+  useEffect(() => {
+    if (!abrirCartaoId) return;
+    const alvo = cartoes.find((c) => c.id === abrirCartaoId);
+    if (alvo) verFatura(alvo);
+    onConsumirAbrir?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [abrirCartaoId, cartoes]);
 
   // Apagar um lançamento já "baixa" de tudo (fatura, a pagar, resumo, mês).
   const removerLancamento = (id: string) => {

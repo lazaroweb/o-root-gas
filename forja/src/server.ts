@@ -8119,6 +8119,40 @@ function marcarLancamentosPagos(idsJson: string): ServerResult {
   }
 }
 
+// Toggle bidirecional de status (v1.192.x): a visão "Meu mês" liga/desliga o
+// "pago" de cada item, então precisa ir tanto pra 'pago' quanto de volta pra
+// 'pendente'. Mantém marcarLancamentoPago/marcarLancamentosPagos intactos.
+function marcarLancamentoStatus(id: string, status: string): ServerResult {
+  try {
+    const st = String(status || '').trim();
+    if (st !== 'pago' && st !== 'pendente' && st !== 'agendado') return { ok: false, error: 'Status inválido.' };
+    const upd = dbUpdate('FinPessoalLancamentos', String(id || ''), {
+      status: st,
+      atualizadoEm: new Date().toISOString(),
+    });
+    return upd ? { ok: true, data: upd } : { ok: false, error: 'Lançamento não encontrado' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao mudar status' };
+  }
+}
+
+// Mesma ideia, em lote — usado pelo toggle de uma fatura inteira (cartão) na
+// visão "Meu mês".
+function marcarLancamentosStatus(idsJson: string, status: string): ServerResult {
+  try {
+    const st = String(status || '').trim();
+    if (st !== 'pago' && st !== 'pendente' && st !== 'agendado') return { ok: false, error: 'Status inválido.' };
+    let ids: string[];
+    try { ids = JSON.parse(String(idsJson || '[]')) as string[]; }
+    catch { return { ok: false, error: 'Lista de ids inválida.' }; }
+    if (!Array.isArray(ids) || ids.length === 0) return { ok: false, error: 'Nenhum lançamento informado.' };
+    const atualizados = dbUpdateMany('FinPessoalLancamentos', ids.map(String), { status: st, atualizadoEm: new Date().toISOString() });
+    return { ok: true, data: { atualizados } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao mudar status em lote' };
+  }
+}
+
 // ─── Cartões pessoais ──────────────────────────────────────────────────────────
 function getCartoesPessoais(mes?: string): ServerResult {
   try {
@@ -10535,6 +10569,153 @@ function getComposicaoMes(comp: string): ServerResult {
     return { ok: true, data: _composicaoMes(c, true) };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao detalhar o mês' };
+  }
+}
+
+// Visão executiva do mês (v1.192.x): um único agregador que devolve o mês pronto
+// pra leitura rápida — receitas individuais, cartões COLAPSADOS (1 linha por
+// cartão com o total da fatura), despesas avulsas (pix/débito/dinheiro/boleto)
+// individuais, breakdown por categoria e por método ("como paguei"), e checagem
+// de orçamento. Projeta meses futuros (parcelas reais + recorrências + salário)
+// pra você ver se ainda cabe e quanto sobra. Reaproveita _composicaoMes.
+function getMesExecutivo(mes?: string): ServerResult {
+  try {
+    const agora = new Date();
+    const hojeComp = `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
+    const comp = String(mes || hojeComp).substring(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(comp)) return { ok: false, error: 'Mês inválido.' };
+    const futuro = comp > hojeComp;
+
+    const composicao = _composicaoMes(comp, true) as unknown as {
+      entradas: Array<Record<string, unknown>>;
+      cartoes: Array<{ key: string; nome: string; bandeira: string; cor: string; total: number; itens: Array<Record<string, unknown>> }>;
+      totalEntradas: number;
+      totalDespesas: number;
+      saldo: number;
+    };
+
+    const ehProjecao = (l: Record<string, unknown>) => l['projecao'] === true || String(l['status']) === 'projetado';
+
+    // Receitas (entradas) individuais.
+    const receitas = composicao.entradas.map((l) => ({
+      id: String(l['id'] || ''),
+      descricao: String(l['descricao'] || 'Entrada'),
+      valor: Number(l['valor'] || 0),
+      status: String(l['status'] || 'pendente'),
+      data: String(_valorJsonSafe(l['data'] || '')),
+      categoria: String(l['categoria'] || ''),
+      projecao: ehProjecao(l),
+    }));
+
+    // Cartões colapsados (1 linha por cartão) + grupo "outros" individualizado.
+    const cartoes: Array<Record<string, unknown>> = [];
+    const avulsas: Array<Record<string, unknown>> = [];
+    for (const g of composicao.cartoes) {
+      if (g.key === 'outros') {
+        for (const l of g.itens) {
+          avulsas.push({
+            id: String(l['id'] || ''),
+            descricao: String(l['descricao'] || 'Despesa'),
+            valor: Number(l['valor'] || 0),
+            metodo: String(l['metodo'] || 'pix'),
+            categoria: String(l['categoria'] || 'outros'),
+            status: String(l['status'] || 'pendente'),
+            vencimento: String(_valorJsonSafe(l['vencimento'] || l['data'] || '')),
+            projecao: ehProjecao(l),
+          });
+        }
+        continue;
+      }
+      const reais = g.itens.filter((l) => !ehProjecao(l));
+      const lancamentoIds = reais.map((l) => String(l['id'] || '')).filter((x) => x);
+      const temReais = reais.length > 0;
+      const todosPagos = temReais && reais.every((l) => String(l['status']) === 'pago');
+      const temProjecao = g.itens.some((l) => ehProjecao(l));
+      cartoes.push({
+        cartaoId: g.key,
+        nome: g.nome,
+        bandeira: g.bandeira,
+        cor: g.cor,
+        total: g.total,
+        qtdItens: g.itens.length,
+        lancamentoIds,
+        pago: todosPagos,
+        projecao: !temReais && temProjecao,
+      });
+    }
+    avulsas.sort((a, b) => Number(b['valor']) - Number(a['valor']));
+    cartoes.sort((a, b) => Number(b['total']) - Number(a['total']));
+
+    // Flat de TODAS as despesas (cartões + avulsas) pra breakdowns e totais.
+    const despesasFlat: Array<Record<string, unknown>> = [];
+    for (const g of composicao.cartoes) for (const l of g.itens) despesasFlat.push(l);
+
+    const porCategoria: Record<string, number> = {};
+    const porMetodo: Record<string, number> = {};
+    for (const l of despesasFlat) {
+      const cat = String(l['categoria'] || 'outros');
+      const met = String(l['metodo'] || 'pix');
+      const v = Number(l['valor'] || 0);
+      porCategoria[cat] = (porCategoria[cat] || 0) + v;
+      porMetodo[met] = (porMetodo[met] || 0) + v;
+    }
+
+    // Orçamentos: limite × gasto (projetado) do mês por categoria → cabe?
+    const orcamentos = (dbGetAll('FinPessoalOrcamentos') as Array<Record<string, unknown>>)
+      .filter((o) => String(o['ativo'] || 'sim') === 'sim')
+      .map((o) => {
+        const cat = String(o['categoria'] || '');
+        const limite = Number(o['limiteMensal'] || 0);
+        const gasto = porCategoria[cat] || 0;
+        const pct = limite > 0 ? (gasto / limite) * 100 : 0;
+        return {
+          id: String(o['id'] || ''),
+          categoria: cat,
+          cor: String(o['cor'] || ''),
+          limite,
+          gasto,
+          restante: limite - gasto,
+          pct,
+          cabe: gasto <= limite,
+        };
+      })
+      .sort((a, b) => b.pct - a.pct);
+
+    const totalEntradas = Number(composicao.totalEntradas || 0);
+    const totalDespesas = Number(composicao.totalDespesas || 0);
+    const pago = despesasFlat
+      .filter((l) => String(l['status']) === 'pago')
+      .reduce((s, l) => s + Number(l['valor'] || 0), 0);
+    const aPagar = despesasFlat
+      .filter((l) => { const st = String(l['status']); return st === 'pendente' || st === 'agendado'; })
+      .reduce((s, l) => s + Number(l['valor'] || 0), 0);
+    const previsto = despesasFlat
+      .filter(ehProjecao)
+      .reduce((s, l) => s + Number(l['valor'] || 0), 0);
+
+    return {
+      ok: true,
+      data: {
+        mes: comp,
+        futuro,
+        receitas,
+        cartoes,
+        avulsas,
+        porCategoria,
+        porMetodo,
+        orcamentos,
+        totais: {
+          entradas: totalEntradas,
+          despesas: totalDespesas,
+          sobra: totalEntradas - totalDespesas,
+          pago,
+          aPagar,
+          previsto,
+        },
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao montar a visão do mês' };
   }
 }
 

@@ -36,6 +36,12 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.193.0] — 2026-06-27
+
+- **"Meu mês" — visão executiva do Financeiro Pessoal** — nova tela inicial do Financeiro → Pessoal: tudo que entra e sai num só lugar, enxuto e de alto nível. Receitas individuais, cada **cartão como UMA linha** (nome + total da fatura) e despesas avulsas (pix/débito/dinheiro) individuais — com um **toggle de pago** ao lado de cada item (e da fatura inteira do cartão). Faixa de topo com **Entradas · Saídas · Sobra do mês** + barra "pago de X". Widgets compactos **Por categoria** e **Como você pagou** (método), além de **Cabe no orçamento?** (limite × gasto por categoria). Clicar num cartão abre direto a fatura daquele cartão.
+- **Seletor de mês pra frente com previstos** — navegando pros próximos meses, a visão mostra os lançamentos **previstos** (parcelas futuras do cartão, despesas e receitas recorrentes, salário) pra você ver se ainda cabe no orçamento e quanto sobraria. Itens previstos aparecem marcados e não podem ser pagos.
+- Novo RPC `getMesExecutivo(mes)` (agregador único que reaproveita a composição do mês já existente e projeta o futuro) + `marcarLancamentoStatus`/`marcarLancamentosStatus` (toggle de pago ↔ pendente, individual e em lote). O "Painel 12 meses" segue intacto.
+
 ## [1.192.0] — 2026-06-26
 
 - **Histórico de auditorias Forja IA dentro de cada sistema** — nova aba "Auditorias" no detalhe do sistema com a linha do tempo de todas as rodadas que você já rodou: sparkline da evolução do score (delta desde a primeira), lista de rodadas (data, score, nº de achados, resolvidos, modelo, commit, duração) e badge com o total de auditorias. Clicar numa rodada reabre o drill-down completo daquela auditoria — estado geral, resumo de severidades, achados (problema/evidência/solução/prompt via `FindingCard`) e o que foi resolvido. "Nova auditoria" abre o drawer de auditoria. A aba recarrega sozinha quando uma nova auditoria roda.

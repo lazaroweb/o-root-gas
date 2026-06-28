@@ -984,6 +984,63 @@ export interface ResumoFinPessoal {
   totalLancamentos: number;
 }
 
+// v1.192.x — "Meu mês": visão executiva do mês (getMesExecutivo). Cartões vêm
+// colapsados (1 linha por cartão com o total da fatura); despesas avulsas e
+// receitas vêm individualizadas. `projecao` marca itens previstos (mês futuro).
+export interface MesExecutivoItem {
+  id: string;
+  descricao: string;
+  valor: number;
+  status: StatusLancamento | 'projetado';
+  categoria: string;
+  metodo?: MetodoPagamento;
+  data?: string;
+  vencimento?: string;
+  projecao: boolean;
+}
+
+export interface MesExecutivoCartao {
+  cartaoId: string;
+  nome: string;
+  bandeira: string;
+  cor: string;
+  total: number;
+  qtdItens: number;
+  lancamentoIds: string[]; // ids reais (não projetados) — alvo do toggle de pago
+  pago: boolean; // true = todos os itens reais da fatura estão pagos
+  projecao: boolean; // true = mês futuro só com projeção (sem itens reais)
+}
+
+export interface MesExecutivoOrcamento {
+  id: string;
+  categoria: string;
+  cor: string;
+  limite: number;
+  gasto: number;
+  restante: number;
+  pct: number;
+  cabe: boolean;
+}
+
+export interface MesExecutivo {
+  mes: string; // YYYY-MM
+  futuro: boolean;
+  receitas: MesExecutivoItem[];
+  cartoes: MesExecutivoCartao[];
+  avulsas: MesExecutivoItem[];
+  porCategoria: Record<string, number>;
+  porMetodo: Record<string, number>;
+  orcamentos: MesExecutivoOrcamento[];
+  totais: {
+    entradas: number;
+    despesas: number;
+    sobra: number;
+    pago: number;
+    aPagar: number;
+    previsto: number;
+  };
+}
+
 // Fatura aberta de um cartão: janela atual + lançamentos contabilizados.
 export interface FaturaAberta {
   cartao: CartaoPessoal;
