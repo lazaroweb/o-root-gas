@@ -36,6 +36,14 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.197.0] — 2026-06-28
+
+- **Financeiro Pessoal mais limpo (menos redundância)** — no "Meu mês" o topo deixou de repetir o que a própria tela já mostra:
+  - **Cards de resumo escondidos no "Meu mês"** (Gasto/Entradas/Saldo/A pagar/Pago/Assinaturas) — a tela já traz Sobra · Entradas · Saídas · Pago/A pagar. Nas outras abas (Lançamentos, Cartões, etc.) os cards continuam como resumo do mês.
+  - **Seletor de mês do topo some no "Meu mês"** — a tela já tem o próprio navegador de mês, então acaba o seletor duplicado.
+  - **"Importar fatura" e "Lançar fatura" mudaram pra aba Cartões** — fatura é coisa de cartão; saíram do topo e agora ficam no cabeçalho de Cartões, junto de "Novo cartão".
+  - **"Novo lançamento"** continua como a única ação primária do topo (criar é a ação mais comum; a aba Lançamentos segue pra ver/gerenciar a lista).
+
 ## [1.196.0] — 2026-06-28
 
 - **Recorrências: "Concluir" sem perder histórico + recuperação do que sumiu** — o botão antigo "Cancelar" era destrutivo: zerava a periodicidade (`recorrencia` → `unica`) e a recorrência **sumia da lista** (foi o que aconteceu com o salário, apesar do texto prometer "histórico fica"). Agora:

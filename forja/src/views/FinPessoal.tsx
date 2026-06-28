@@ -518,7 +518,9 @@ export default function FinPessoal(): React.ReactElement {
   return (
     <CategoriasContext.Provider value={categorias}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      {/* Header: seletor de mês + ação de novo lançamento */}
+      {/* Header: seletor de mês + ação de novo lançamento. No "Meu mês" o
+          seletor de mês fica escondido (a própria tela já tem o dela), evitando
+          dois navegadores de mês na mesma página. */}
       <div
         style={{
           display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
@@ -526,40 +528,30 @@ export default function FinPessoal(): React.ReactElement {
           padding: '14px 18px', boxShadow: t.shadowSoft,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Button size="small" icon={<ChevronLeft size={14} />} onClick={() => navegarMes(-1)} />
-          <div style={{
-            minWidth: 180, textAlign: 'center', fontFamily: FONTS.display,
-            fontSize: 15, fontWeight: 500, color: t.text, textTransform: 'capitalize',
-          }}>
-            {labelMes}
+        {view !== 'mes' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Button size="small" icon={<ChevronLeft size={14} />} onClick={() => navegarMes(-1)} />
+            <div style={{
+              minWidth: 180, textAlign: 'center', fontFamily: FONTS.display,
+              fontSize: 15, fontWeight: 500, color: t.text, textTransform: 'capitalize',
+            }}>
+              {labelMes}
+            </div>
+            <Button size="small" icon={<ChevronRight size={14} />} onClick={() => navegarMes(1)} />
+            <Button
+              size="small"
+              type="text"
+              onClick={() => {
+                const d = new Date();
+                setMes(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+              }}
+              style={{ marginLeft: 4, fontSize: 12, color: t.textTertiary }}
+            >
+              hoje
+            </Button>
           </div>
-          <Button size="small" icon={<ChevronRight size={14} />} onClick={() => navegarMes(1)} />
-          <Button
-            size="small"
-            type="text"
-            onClick={() => {
-              const d = new Date();
-              setMes(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-            }}
-            style={{ marginLeft: 4, fontSize: 12, color: t.textTertiary }}
-          >
-            hoje
-          </Button>
-        </div>
+        )}
         <div style={{ flex: 1 }} />
-        <Button
-          icon={<Sparkles size={16} />}
-          onClick={() => abrirImport()}
-        >
-          Importar fatura
-        </Button>
-        <Button
-          icon={<FileText size={16} />}
-          onClick={() => setModalFaturaOpen(true)}
-        >
-          Lançar fatura
-        </Button>
         <Button
           type="primary"
           icon={<Plus size={16} />}
@@ -570,54 +562,56 @@ export default function FinPessoal(): React.ReactElement {
         </Button>
       </div>
 
-      {/* Cards de resumo — minmax enxuto pra os 6 caberem numa linha só em
-          telas normais; quebra com elegância em telas estreitas. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
-        <CardResumo
-          icon={<TrendingDown size={20} />}
-          label="Gasto do mês"
-          valor={resumo?.totalDespesas || 0}
-          cor={t.accents.rose}
-          delta={resumo?.deltaPct}
-          subtitle={resumo ? `${resumo.totalLancamentos} lançamentos` : ''}
-        />
-        <CardResumo
-          icon={<TrendingUp size={20} />}
-          label="Entradas do mês"
-          valor={resumo?.totalEntradas || 0}
-          cor={t.accents.sage}
-        />
-        <CardResumo
-          icon={<Wallet size={20} />}
-          label="Saldo do mês"
-          valor={resumo?.saldo || 0}
-          cor={resumo && resumo.saldo >= 0 ? t.accents.sage : t.accents.rose}
-          highlightSign
-        />
-        <CardResumo
-          icon={<Clock size={20} />}
-          label="A pagar no mês"
-          valor={resumo?.aPagarMes || 0}
-          cor={t.accents.peach}
-          subtitle={resumo ? `${resumo.qtdAPagarMes} item(s) · ${resumo.qtdProximos7d} em 7d` : ''}
-          highlight={!!resumo && resumo.qtdProximos7d > 0}
-        />
-        <CardResumo
-          icon={<CheckCircle2 size={20} />}
-          label="Pago no mês"
-          valor={resumo?.pagoMes || 0}
-          cor={t.accents.sage}
-          subtitle={resumo ? `${resumo.qtdPagoMes} item(s)` : ''}
-        />
-        <CardResumo
-          icon={<Repeat size={20} />}
-          label="Assinaturas/mês"
-          valor={resumoAssinaturas?.totalMensal || 0}
-          cor={t.accents.lavender}
-          subtitle={resumoAssinaturas ? `${resumoAssinaturas.qtdAtivas} ativa(s) · ${formatBRL(resumoAssinaturas.totalAnual)}/ano` : 'clique pra gerenciar'}
-          onClick={() => setView('assinaturas')}
-        />
-      </div>
+      {/* Cards de resumo — escondidos no "Meu mês" (que já traz Sobra/Entradas/
+          Saídas/Pago/A pagar). Nas outras abas seguem como resumo do mês. */}
+      {view !== 'mes' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+          <CardResumo
+            icon={<TrendingDown size={20} />}
+            label="Gasto do mês"
+            valor={resumo?.totalDespesas || 0}
+            cor={t.accents.rose}
+            delta={resumo?.deltaPct}
+            subtitle={resumo ? `${resumo.totalLancamentos} lançamentos` : ''}
+          />
+          <CardResumo
+            icon={<TrendingUp size={20} />}
+            label="Entradas do mês"
+            valor={resumo?.totalEntradas || 0}
+            cor={t.accents.sage}
+          />
+          <CardResumo
+            icon={<Wallet size={20} />}
+            label="Saldo do mês"
+            valor={resumo?.saldo || 0}
+            cor={resumo && resumo.saldo >= 0 ? t.accents.sage : t.accents.rose}
+            highlightSign
+          />
+          <CardResumo
+            icon={<Clock size={20} />}
+            label="A pagar no mês"
+            valor={resumo?.aPagarMes || 0}
+            cor={t.accents.peach}
+            subtitle={resumo ? `${resumo.qtdAPagarMes} item(s) · ${resumo.qtdProximos7d} em 7d` : ''}
+            highlight={!!resumo && resumo.qtdProximos7d > 0}
+          />
+          <CardResumo
+            icon={<CheckCircle2 size={20} />}
+            label="Pago no mês"
+            valor={resumo?.pagoMes || 0}
+            cor={t.accents.sage}
+            subtitle={resumo ? `${resumo.qtdPagoMes} item(s)` : ''}
+          />
+          <CardResumo
+            icon={<Repeat size={20} />}
+            label="Assinaturas/mês"
+            valor={resumoAssinaturas?.totalMensal || 0}
+            cor={t.accents.lavender}
+            subtitle={resumoAssinaturas ? `${resumoAssinaturas.qtdAtivas} ativa(s) · ${formatBRL(resumoAssinaturas.totalAnual)}/ano` : 'clique pra gerenciar'}
+            onClick={() => setView('assinaturas')}
+          />
+        </div>
+      )}
 
       {/* Navegação interna — sub-nav vertical reutilizável (list-detail) */}
       <SubNav items={NAV} value={view} onChange={(k) => setView(k)} ariaLabel="Áreas do Financeiro Pessoal">
@@ -685,6 +679,7 @@ export default function FinPessoal(): React.ReactElement {
           onImportar={abrirImport}
           onEditarLancamento={abrirEditarLancamento}
           onAtribuir={setAtribuirLanc}
+          onLancarFatura={() => setModalFaturaOpen(true)}
           abrirCartaoId={cartaoParaAbrir}
           onConsumirAbrir={() => setCartaoParaAbrir(null)}
         />
@@ -1870,7 +1865,7 @@ function ListaLancamentos({ lancamentos, cartoes, loading, onEditar, onRecarrega
 
 // ─── Sub-view: cartões ─────────────────────────────────────────────────────────
 
-function PainelCartoes({ cartoes, mes, membros, membrosDe, onRecarregar, onImportar, onEditarLancamento, onAtribuir, abrirCartaoId, onConsumirAbrir }: { cartoes: CartaoPessoal[]; mes: string; membros: FamiliaMembro[]; membrosDe: (lancId: string) => FamiliaMembro[]; onRecarregar: () => void; onImportar: (cartaoId?: string) => void; onEditarLancamento: (l: LancamentoPessoal) => void; onAtribuir: (l: LancamentoPessoal) => void; abrirCartaoId?: string | null; onConsumirAbrir?: () => void }): React.ReactElement {
+function PainelCartoes({ cartoes, mes, membros, membrosDe, onRecarregar, onImportar, onEditarLancamento, onAtribuir, onLancarFatura, abrirCartaoId, onConsumirAbrir }: { cartoes: CartaoPessoal[]; mes: string; membros: FamiliaMembro[]; membrosDe: (lancId: string) => FamiliaMembro[]; onRecarregar: () => void; onImportar: (cartaoId?: string) => void; onEditarLancamento: (l: LancamentoPessoal) => void; onAtribuir: (l: LancamentoPessoal) => void; onLancarFatura: () => void; abrirCartaoId?: string | null; onConsumirAbrir?: () => void }): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [modalOpen, setModalOpen] = useState(false);
@@ -1991,7 +1986,9 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, onRecarregar, onImpor
     <Panel
       title={`Cartões cadastrados${cartoes.length > 0 ? ` (${cartoes.length})` : ''}`}
       extra={
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <Button icon={<Sparkles size={14} />} onClick={() => onImportar()}>Importar fatura</Button>
+          <Button icon={<FileText size={14} />} onClick={onLancarFatura}>Lançar fatura</Button>
           <Button type="primary" icon={<Plus size={14} />} onClick={abrirNovo}>Novo cartão</Button>
         </div>
       }
