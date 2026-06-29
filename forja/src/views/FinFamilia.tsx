@@ -257,6 +257,9 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
         </div>
       )}
 
+      {/* Mini-relatório: quanto cada um já me devolveu no ano */}
+      {!semMembros && <RelatorioReembolsos cobrancas={cobrancas} membros={membrosLista} />}
+
       {/* Não atribuídos: veio na fatura e não cobrei */}
       {resumo && resumo.naoAtribuidos.length > 0 && (
         <Panel
@@ -460,6 +463,119 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar, onReorganizar, reorg
           );
         })}
       </div>
+    </Panel>
+  );
+}
+
+// ─── Mini-relatório: reembolsos no ano ──────────────────────────────────────────
+// Consultivo: soma o que cada membro JÁ TE DEVOLVEU (cobranças marcadas como
+// reembolsadas) no ano, com tira de 12 meses por membro. Calculado no cliente a
+// partir das cobranças já carregadas — fica em sincronia com o toggle de reembolso.
+function RelatorioReembolsos({ cobrancas, membros }: { cobrancas: Cobranca[]; membros: FamiliaMembro[] }): React.ReactElement {
+  const t = useTokens();
+  const membroMap = useMemo(() => {
+    const m: Record<string, FamiliaMembro> = {};
+    membros.forEach((x) => { m[x.id] = x; });
+    return m;
+  }, [membros]);
+
+  // Pagos com mês de reembolso resolvido (dataPagamento > competência).
+  const pagos = useMemo(() => cobrancas
+    .filter((c) => String(c.status) === 'pago')
+    .map((c) => {
+      const dp = String(c.dataPagamento || '');
+      const yyyymm = /^\d{4}-\d{2}/.test(dp) ? dp.substring(0, 7) : String(c.competencia || '').substring(0, 7);
+      return { membroId: c.membroId, valor: c.valor, yyyymm };
+    })
+    .filter((c) => /^\d{4}-\d{2}$/.test(c.yyyymm)), [cobrancas]);
+
+  const anosDisponiveis = useMemo(() => {
+    const s = new Set<number>();
+    pagos.forEach((c) => s.add(Number(c.yyyymm.substring(0, 4))));
+    s.add(new Date().getFullYear());
+    return Array.from(s).sort((a, b) => b - a);
+  }, [pagos]);
+
+  const [ano, setAno] = useState<number>(new Date().getFullYear());
+
+  const { lista, totalGeral, maxMes } = useMemo(() => {
+    const porMembro: Record<string, { total: number; porMes: number[] }> = {};
+    let total = 0;
+    for (const c of pagos) {
+      const [y, mm] = c.yyyymm.split('-').map(Number);
+      if (y !== ano) continue;
+      const mid = c.membroId;
+      if (!mid) continue;
+      if (!porMembro[mid]) porMembro[mid] = { total: 0, porMes: new Array(12).fill(0) };
+      const v = Math.abs(Number(c.valor || 0));
+      porMembro[mid].total += v;
+      porMembro[mid].porMes[mm - 1] += v;
+      total += v;
+    }
+    const lista = Object.keys(porMembro)
+      .map((mid) => ({ membro: membroMap[mid], total: porMembro[mid].total, porMes: porMembro[mid].porMes }))
+      .filter((x) => x.membro)
+      .sort((a, b) => b.total - a.total);
+    const maxMes = Math.max(1, ...lista.flatMap((x) => x.porMes));
+    return { lista, totalGeral: total, maxMes };
+  }, [pagos, ano, membroMap]);
+
+  const MESES_CURTOS = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+  const MESES_LONGOS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+
+  return (
+    <Panel
+      title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><HandCoins size={16} color={t.accents.sage} /> Reembolsos recebidos</span>}
+      extra={
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>
+            No ano: <strong style={{ color: t.accents.sage }}>{formatBRL(totalGeral)}</strong>
+          </span>
+          <Select
+            size="small"
+            value={ano}
+            onChange={setAno}
+            style={{ width: 92 }}
+            options={anosDisponiveis.map((a) => ({ value: a, label: String(a) }))}
+          />
+        </span>
+      }
+    >
+      <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, marginBottom: 14 }}>
+        Quanto cada um já te devolveu em {ano} — some os itens marcados como reembolsados no detalhe do membro.
+      </div>
+      {lista.length === 0 ? (
+        <Empty description={`Nenhum reembolso marcado em ${ano}. Marque um item como reembolsado no detalhe do membro pra ele aparecer aqui.`} />
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {lista.map((x) => (
+            <div key={x.membro.id} style={{
+              display: 'flex', alignItems: 'center', gap: 14, padding: '10px 12px',
+              background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 12,
+            }}>
+              <MembroAvatar membro={x.membro} size={34} radius={10} />
+              <div style={{ minWidth: 110, flexShrink: 0 }}>
+                <div style={{ fontFamily: FONTS.ui, fontSize: 13.5, fontWeight: 500, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{x.membro.nome}</div>
+                <div style={{ fontFamily: FONTS.display, fontSize: 16, fontWeight: 600, color: t.accents.sage, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(x.total)}</div>
+              </div>
+              {/* Tira de 12 meses (sparkline) */}
+              <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', gap: 3, height: 38, minWidth: 150 }}>
+                {x.porMes.map((v, i) => {
+                  const h = v > 0 ? Math.max(4, (v / maxMes) * 36) : 2;
+                  return (
+                    <Tooltip key={i} title={`${MESES_LONGOS[i]}/${String(ano).slice(2)}: ${v > 0 ? formatBRL(v) : 'sem reembolso'}`}>
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, cursor: 'default' }}>
+                        <div style={{ width: '100%', maxWidth: 14, height: h, borderRadius: 3, background: v > 0 ? t.accents.sage : t.borderSoft, transition: 'height 0.3s' }} />
+                        <span style={{ fontFamily: FONTS.ui, fontSize: 8.5, color: t.textTertiary }}>{MESES_CURTOS[i]}</span>
+                      </div>
+                    </Tooltip>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </Panel>
   );
 }

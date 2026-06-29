@@ -36,6 +36,15 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.204.0] — 2026-06-29
+
+### Adicionado
+- **Mini-relatório "Reembolsos recebidos" na Família**: novo painel consultivo que
+  soma quanto cada membro JÁ te devolveu no ano (itens marcados como reembolsados),
+  com seletor de ano e uma tira de 12 meses por membro (sparkline com tooltip mês a
+  mês). Calculado no cliente a partir das cobranças já carregadas — fica em
+  sincronia automática com o toggle de reembolso, sem chamada extra ao servidor.
+
 ## [1.203.0] — 2026-06-29
 
 ### Mudado
