@@ -36,6 +36,29 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.209.0] — 2026-06-29
+
+### Adicionado
+- **Atribuir vários lançamentos da fatura de uma vez**: o modo "Atribuir a membro"
+  agora mostra checkbox em cada linha (faltava ligar). Marque vários itens "do
+  Lazaro", atribua; troque o membro, marque o resto, atribua. Vale na janela atual
+  e em "Todos os lançamentos".
+- **Promover uma compra da fatura a Assinatura**: compras que "cheiram" a serviço
+  recorrente (Netflix, Prime, Spotify, Disney, ChatGPT, iCloud…) ganham um botão
+  "+ Assinatura" que abre um modal já preenchido (nome, valor, ciclo, dia,
+  categoria, cartão). Você só confirma.
+- **Espelho consultivo (anti-dupla-contagem)**: a assinatura promovida nasce como
+  "espelho" — aparece na aba Assinaturas com o selo **"na fatura"** pra gestão/visão
+  recorrente, mas **NÃO soma de novo** em nenhum total (a fatura do cartão já
+  contabiliza). Excluída do total mensal/anual de Assinaturas, das despesas fixas
+  do Norte e das próximas cobranças.
+
+### Detalhes técnicos
+- `FinPessoalAssinaturas` ganhou colunas `espelho` e `origemLancamentoId`.
+- `getResumoAssinaturas` separa contáveis × espelhos (novos campos `qtdEspelho`,
+  `totalEspelhoMensal`); inteligência/Norte ignora espelhos nas despesas fixas.
+- Editar uma assinatura-espelho preserva o vínculo (não vira contável por engano).
+
 ## [1.208.0] — 2026-06-29
 
 ### Adicionado

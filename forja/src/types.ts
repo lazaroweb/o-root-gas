@@ -1097,6 +1097,11 @@ export interface AssinaturaPessoal {
   icone?: string; // nome lucide kebab-case
   plano?: string; // ex: "Premium 4K", "Família"
   notas?: string;
+  // Espelho consultivo: assinatura criada a partir de uma compra da fatura. Serve
+  // pra gestão/visão recorrente, mas NÃO soma de novo nos totais (o lançamento do
+  // cartão já conta). `origemLancamentoId` liga ao lançamento que a originou.
+  espelho?: 'sim' | 'nao';
+  origemLancamentoId?: string;
   criadoEm?: string;
   atualizadoEm?: string;
 }
@@ -1272,9 +1277,11 @@ export interface ProximaCobranca {
 
 // Resumo agregado das assinaturas: alimenta os KPIs e gráficos da aba.
 export interface ResumoAssinaturas {
-  totalMensal: number; // custo mensal equivalente das ativas
+  totalMensal: number; // custo mensal equivalente das ativas (sem espelhos)
   totalAnual: number; // totalMensal * 12
   qtdAtivas: number;
+  qtdEspelho?: number; // assinaturas-espelho (na fatura), não somadas
+  totalEspelhoMensal?: number; // custo mensal equivalente dos espelhos (informativo)
   qtdPausadas: number;
   qtdCanceladas: number;
   mediaPorAssinatura: number;

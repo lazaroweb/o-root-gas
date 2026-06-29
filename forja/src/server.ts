@@ -311,7 +311,7 @@ const SCHEMA: SheetSchema[] = [
   // `diaCobranca`: 1-31 (dia que cai a cobrança). `metodo`/`cartaoId`: como paga.
   // `status`: 'ativa'|'pausada'|'cancelada' (só ativa entra no custo mensal).
   // `cor`: hex da marca (Netflix vermelho, Spotify verde...) pra UI rica.
-  { name: 'FinPessoalAssinaturas', columns: ['id', 'nome', 'categoria', 'valor', 'ciclo', 'diaCobranca', 'metodo', 'cartaoId', 'status', 'dataInicio', 'cor', 'icone', 'plano', 'notas', 'criadoEm', 'atualizadoEm'] },
+  { name: 'FinPessoalAssinaturas', columns: ['id', 'nome', 'categoria', 'valor', 'ciclo', 'diaCobranca', 'metodo', 'cartaoId', 'status', 'dataInicio', 'cor', 'icone', 'plano', 'notas', 'espelho', 'origemLancamentoId', 'criadoEm', 'atualizadoEm'] },
   // FinPlanoContas (v1.11): plano de contas / centros de custo. Estrutura
   // hierárquica leve (grupo → conta) usada pra classificar lançamentos de forma
   // contábil. `codigo` é o código do centro de custo (ex: '3.01'); `grupo` é o
@@ -8262,6 +8262,8 @@ function salvarAssinatura(payload: Record<string, unknown>): ServerResult {
       icone: String(payload['icone'] || 'tv'),
       plano: String(payload['plano'] || ''),
       notas: String(payload['notas'] || ''),
+      espelho: String(payload['espelho']) === 'sim' ? 'sim' : 'nao',
+      origemLancamentoId: String(payload['origemLancamentoId'] || ''),
       atualizadoEm: new Date().toISOString(),
     };
     if (id) {
@@ -8311,21 +8313,27 @@ function getResumoAssinaturas(): ServerResult {
       return String(a['ciclo']) === 'anual' ? v / 12 : v;
     };
 
-    const ativas = todas.filter((a) => String(a['status']) === 'ativa');
+    // Espelho consultivo (criado a partir de uma compra da fatura) NÃO entra em
+    // nenhum somatório — o lançamento do cartão já contabiliza esse gasto. Mas
+    // continua na lista (getAssinaturas) pra gestão/visão recorrente.
+    const ehEspelho = (a: Record<string, unknown>): boolean => String(a['espelho']) === 'sim';
+    const ativas = todas.filter((a) => String(a['status']) === 'ativa' && !ehEspelho(a));
+    const espelhos = todas.filter((a) => String(a['status']) === 'ativa' && ehEspelho(a));
     const pausadas = todas.filter((a) => String(a['status']) === 'pausada');
     const canceladas = todas.filter((a) => String(a['status']) === 'cancelada');
 
     const totalMensal = ativas.reduce((s, a) => s + custoMensalDe(a), 0);
     const totalAnual = totalMensal * 12;
+    const totalEspelhoMensal = espelhos.reduce((s, a) => s + custoMensalDe(a), 0);
 
-    // Por categoria (só ativas) — custo mensal equivalente
+    // Por categoria (só ativas contáveis) — custo mensal equivalente
     const porCategoria: Record<string, number> = {};
     for (const a of ativas) {
       const cat = String(a['categoria'] || 'outros');
       porCategoria[cat] = (porCategoria[cat] || 0) + custoMensalDe(a);
     }
 
-    // Próximas cobranças do mês corrente (ordenadas por dia) — só ativas
+    // Próximas cobranças do mês corrente (ordenadas por dia) — só ativas contáveis
     const hoje = new Date();
     const diaHoje = hoje.getDate();
     const proximasCobrancas = ativas
@@ -8356,6 +8364,8 @@ function getResumoAssinaturas(): ServerResult {
         totalMensal,
         totalAnual,
         qtdAtivas: ativas.length,
+        qtdEspelho: espelhos.length,
+        totalEspelhoMensal,
         qtdPausadas: pausadas.length,
         qtdCanceladas: canceladas.length,
         mediaPorAssinatura: ativas.length > 0 ? totalMensal / ativas.length : 0,
@@ -8612,7 +8622,7 @@ function getInteligenciaFinanceira(): ServerResult {
 
     const lancs = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
     const assinaturas = (dbGetAll('FinPessoalAssinaturas') as Array<Record<string, unknown>>)
-      .filter((a) => String(a['status']) === 'ativa');
+      .filter((a) => String(a['status']) === 'ativa' && String(a['espelho']) !== 'sim');
     const cartoes = dbGetAll('FinPessoalCartoes') as Array<Record<string, unknown>>;
 
     const mensalRec = (l: Record<string, unknown>): number => {

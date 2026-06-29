@@ -486,6 +486,11 @@ function AssinaturaCard({ ass, cartaoNome, onEditar, onAlternar, onRemover }: {
             {info.label}{ass.plano ? ` · ${ass.plano}` : ''}
           </div>
         </div>
+        {ass.espelho === 'sim' && (
+          <Tooltip title="Veio de uma compra da fatura. Aparece aqui pra gestão/visão recorrente, mas NÃO soma de novo no total — a fatura do cartão já contabiliza.">
+            <Tag bordered={false} style={{ marginInlineEnd: 0, fontSize: 10, background: `${t.accents.lavender}1f`, color: t.accents.lavender }}>na fatura</Tag>
+          </Tooltip>
+        )}
         {pausada && <Tag color="default" style={{ marginInlineEnd: 0, fontSize: 10 }}>pausada</Tag>}
         {cancelada && <Tag color="default" style={{ marginInlineEnd: 0, fontSize: 10 }}>cancelada</Tag>}
       </div>
@@ -609,6 +614,9 @@ function ModalAssinatura({ open, onClose, assinatura, cartoes, onSaved }: {
         ...v,
         id: assinatura?.id,
         cor, icone,
+        // Preserva o vínculo de espelho ao editar (senão o save zeraria o flag).
+        espelho: assinatura?.espelho === 'sim' ? 'sim' : 'nao',
+        origemLancamentoId: assinatura?.origemLancamentoId || '',
         dataInicio: v.dataInicio ? (v.dataInicio as Dayjs).format('YYYY-MM-DD') : '',
       };
       const res = await callServer<ServerResponse<unknown>>('salvarAssinatura', payload);

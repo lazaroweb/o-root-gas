@@ -1414,6 +1414,7 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, onRecarregar, onImpor
   // Cartão aberto na gaveta + todos os seus lançamentos (qualquer mês/status),
   // pra achar/remover itens fora da janela da fatura atual.
   const [cartaoAberto, setCartaoAberto] = useState<CartaoPessoal | null>(null);
+  const [promoverLanc, setPromoverLanc] = useState<LancamentoPessoal | null>(null);
   const [itensCartao, setItensCartao] = useState<LancamentoPessoal[]>([]);
   const [removendoImportados, setRemovendoImportados] = useState(false);
   const [pagandoFatura, setPagandoFatura] = useState(false);
@@ -1579,8 +1580,18 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, onRecarregar, onImpor
           pagandoFatura={pagandoFatura}
           onAtribuir={onAtribuir}
           onAtribuirLote={atribuirLote}
+          onPromoverAssinatura={(l) => setPromoverLanc(l)}
         />
       </Drawer>
+
+      <PromoverAssinaturaModal
+        open={!!promoverLanc}
+        lancamento={promoverLanc}
+        cartao={cartaoAberto}
+        cartoes={cartoes}
+        onClose={() => setPromoverLanc(null)}
+        onSaved={() => { setPromoverLanc(null); onRecarregar(); }}
+      />
     </Panel>
   );
 }
@@ -1698,6 +1709,7 @@ interface DetalheFaturaProps {
   pagandoFatura?: boolean;
   onAtribuir: (l: LancamentoPessoal) => void;
   onAtribuirLote: (ids: string[], membroId: string) => Promise<boolean>;
+  onPromoverAssinatura?: (l: LancamentoPessoal) => void;
 }
 
 // 'YYYY-MM' → "junho de 2026" (pt-BR). Usado em notas que citam a competência.
@@ -1744,7 +1756,147 @@ function BotaoAtribuirMembro({ atribuidos, onClick }: { atribuidos: FamiliaMembr
 
 // Linha de lançamento com ações (editar / excluir / atribuir). Reusada na janela
 // da fatura e na lista completa do cartão.
-function LinhaLancamentoFatura({ l, membros, atribuidos, onRemover, onEditar, onAtribuir, mostrarMes, selecionavel, selecionado, onToggleSel }: { l: LancamentoPessoal; membros?: FamiliaMembro[]; atribuidos?: FamiliaMembro[]; onRemover: (id: string) => void; onEditar: (l: LancamentoPessoal) => void; onAtribuir?: (l: LancamentoPessoal) => void; mostrarMes?: boolean; selecionavel?: boolean; selecionado?: boolean; onToggleSel?: (id: string) => void }): React.ReactElement {
+// Heurística: a compra "cheira" a assinatura/serviço recorrente? Cruza a descrição
+// com um catálogo de serviços comuns (streaming, música, IA, software, jogos…).
+const ASSINATURA_KEYWORDS = [
+  'netflix', 'prime video', 'amazon prime', 'prime canais', 'prime channels', 'disney', 'star+',
+  'hbo', 'globoplay', 'paramount', 'apple tv', 'apple.com/bill', 'youtube premium', 'youtube',
+  'spotify', 'deezer', 'tidal', 'crunchyroll', 'claro tv', 'telecine', 'mubi', 'looke',
+  'chatgpt', 'openai', 'anthropic', 'claude', 'gemini', 'google one', 'icloud', 'dropbox',
+  'notion', 'canva', 'adobe', 'microsoft', 'office 365', 'office365', 'github', 'figma', 'linkedin',
+  'midjourney', 'perplexity', 'gympass', 'totalpass', 'kindle unlimited', 'audible', 'amazon music',
+  'apple music', 'amazon ad free', 'playstation', 'xbox', 'game pass', 'nintendo', 'twitch',
+];
+function pareceAssinatura(l: LancamentoPessoal): boolean {
+  const d = String(l.descricao || '').toLowerCase();
+  return !!d && ASSINATURA_KEYWORDS.some((k) => d.indexOf(k) >= 0);
+}
+function inferirCategoriaAssinatura(desc: string): { categoria: string; cor: string; icone: string } {
+  const d = String(desc || '').toLowerCase();
+  const has = (...ks: string[]) => ks.some((k) => d.indexOf(k) >= 0);
+  if (has('spotify', 'deezer', 'tidal', 'apple music', 'amazon music')) return { categoria: 'musica', cor: '#1DB954', icone: 'music' };
+  if (has('chatgpt', 'openai', 'anthropic', 'claude', 'gemini', 'midjourney', 'perplexity')) return { categoria: 'ia', cor: '#10a37f', icone: 'sparkles' };
+  if (has('icloud', 'google one', 'dropbox')) return { categoria: 'cloud', cor: '#3b82f6', icone: 'cloud' };
+  if (has('notion', 'canva', 'adobe', 'microsoft', 'office', 'github', 'figma', 'linkedin')) return { categoria: 'software', cor: '#6366f1', icone: 'laptop' };
+  if (has('playstation', 'xbox', 'game pass', 'nintendo', 'twitch')) return { categoria: 'jogos', cor: '#7c3aed', icone: 'gamepad-2' };
+  return { categoria: 'streaming', cor: '#8b5cf6', icone: 'tv' };
+}
+
+const CATEGORIAS_ASSINATURA = [
+  { value: 'streaming', label: 'Streaming' },
+  { value: 'musica', label: 'Música' },
+  { value: 'ia', label: 'IA' },
+  { value: 'software', label: 'Software' },
+  { value: 'cloud', label: 'Cloud / Armazenamento' },
+  { value: 'jogos', label: 'Jogos' },
+  { value: 'servicos', label: 'Serviços' },
+  { value: 'outros', label: 'Outros' },
+];
+
+// Modal enxuto pra "promover" uma compra da fatura a Assinatura (espelho
+// consultivo: não soma de novo nos totais). Prefilled a partir do lançamento.
+function PromoverAssinaturaModal({ open, lancamento, cartao, cartoes, onClose, onSaved }: {
+  open: boolean;
+  lancamento: LancamentoPessoal | null;
+  cartao: CartaoPessoal | null;
+  cartoes: CartaoPessoal[];
+  onClose: () => void;
+  onSaved: () => void;
+}): React.ReactElement {
+  const t = useTokens();
+  const { message } = AntApp.useApp();
+  const [form] = Form.useForm();
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open && lancamento) {
+      const inf = inferirCategoriaAssinatura(lancamento.descricao || '');
+      const dia = lancamento.data ? Math.max(1, Math.min(31, dayjs(lancamento.data).date())) : 5;
+      const nome = String(lancamento.descricao || '')
+        .replace(/\(?\d{1,2}\s*\/\s*\d{1,2}\)?/g, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim() || 'Assinatura';
+      form.setFieldsValue({
+        nome,
+        categoria: inf.categoria,
+        valor: Math.abs(Number(lancamento.valor || 0)),
+        ciclo: 'mensal',
+        diaCobranca: dia,
+        cartaoId: cartao?.id || lancamento.cartaoId || undefined,
+      });
+    }
+  }, [open, lancamento, cartao, form]);
+
+  const salvar = async (v: Record<string, unknown>) => {
+    if (!lancamento) return;
+    setSaving(true);
+    try {
+      const inf = inferirCategoriaAssinatura(String(v['nome'] || lancamento.descricao || ''));
+      const payload = {
+        nome: String(v['nome'] || '').trim(),
+        categoria: String(v['categoria'] || inf.categoria),
+        valor: Number(v['valor'] || 0),
+        ciclo: String(v['ciclo'] || 'mensal'),
+        diaCobranca: Number(v['diaCobranca'] || 5),
+        metodo: 'cartao',
+        cartaoId: String(v['cartaoId'] || ''),
+        status: 'ativa',
+        espelho: 'sim',
+        origemLancamentoId: lancamento.id,
+        dataInicio: lancamento.data || '',
+        cor: inf.cor,
+        icone: inf.icone,
+      };
+      const res = await callServer<ServerResponse<unknown>>('salvarAssinatura', payload);
+      if (res.ok) { message.success('Adicionada às Assinaturas (espelho — não soma de novo)'); onSaved(); }
+      else message.error(res.error || 'Erro ao salvar');
+    } catch { message.error('Erro ao salvar'); } finally { setSaving(false); }
+  };
+
+  return (
+    <Modal
+      title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Repeat size={16} /> Adicionar às Assinaturas</span>}
+      open={open}
+      onCancel={onClose}
+      onOk={() => form.submit()}
+      confirmLoading={saving}
+      okText="Adicionar"
+      cancelText="Cancelar"
+      width={520}
+      destroyOnClose
+    >
+      <div style={{ background: `${t.accents.lavender}14`, border: `1px solid ${t.borderSoft}`, borderRadius: 10, padding: '10px 12px', marginBottom: 16, fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>
+        Vira um <strong style={{ color: t.text }}>espelho consultivo</strong>: aparece na aba Assinaturas pra gestão, mas <strong style={{ color: t.text }}>não soma de novo</strong> no total do mês — a fatura do cartão já contabiliza esse gasto.
+      </div>
+      <Form form={form} layout="vertical" onFinish={salvar}>
+        <Form.Item name="nome" label="Nome" rules={[{ required: true, message: 'Informe o nome' }]}>
+          <Input placeholder="Ex: Amazon Prime" />
+        </Form.Item>
+        <div style={{ display: 'flex', gap: 12 }}>
+          <Form.Item name="valor" label="Valor (por ciclo)" style={{ flex: 1 }} rules={[{ required: true, message: 'Informe o valor' }]}>
+            <InputNumber min={0} step={0.01} precision={2} prefix="R$" style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="ciclo" label="Ciclo" style={{ width: 120 }}>
+            <Select options={[{ value: 'mensal', label: 'Mensal' }, { value: 'anual', label: 'Anual' }]} />
+          </Form.Item>
+          <Form.Item name="diaCobranca" label="Dia" style={{ width: 86 }}>
+            <InputNumber min={1} max={31} style={{ width: '100%' }} />
+          </Form.Item>
+        </div>
+        <div style={{ display: 'flex', gap: 12 }}>
+          <Form.Item name="categoria" label="Categoria" style={{ flex: 1 }}>
+            <Select options={CATEGORIAS_ASSINATURA} />
+          </Form.Item>
+          <Form.Item name="cartaoId" label="Cartão" style={{ flex: 1 }}>
+            <Select allowClear placeholder="Cartão" options={cartoes.map((c) => ({ value: c.id, label: c.apelido || c.nome }))} />
+          </Form.Item>
+        </div>
+      </Form>
+    </Modal>
+  );
+}
+
+function LinhaLancamentoFatura({ l, membros, atribuidos, onRemover, onEditar, onAtribuir, onPromoverAssinatura, mostrarMes, selecionavel, selecionado, onToggleSel }: { l: LancamentoPessoal; membros?: FamiliaMembro[]; atribuidos?: FamiliaMembro[]; onRemover: (id: string) => void; onEditar: (l: LancamentoPessoal) => void; onAtribuir?: (l: LancamentoPessoal) => void; onPromoverAssinatura?: (l: LancamentoPessoal) => void; mostrarMes?: boolean; selecionavel?: boolean; selecionado?: boolean; onToggleSel?: (id: string) => void }): React.ReactElement {
   const t = useTokens();
   const labelCategoria = useLabelCategoria();
   const importado = String(l.tags || '').indexOf('fatura-importada') >= 0;
@@ -1771,6 +1923,11 @@ function LinhaLancamentoFatura({ l, membros, atribuidos, onRemover, onEditar, on
         {formatBRL(l.valor)}
       </div>
       <div style={{ display: 'flex', gap: 2, flexShrink: 0, alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
+        {!selecionavel && onPromoverAssinatura && pareceAssinatura(l) && (
+          <Tooltip title="Adicionar às Assinaturas (espelho — não soma de novo)">
+            <Button size="small" type="text" icon={<Repeat size={13} />} onClick={() => onPromoverAssinatura(l)} style={{ color: t.accents.lavender }} />
+          </Tooltip>
+        )}
         {onAtribuir && membros && membros.length > 0 && (
           <BotaoAtribuirMembro atribuidos={atribuidos || []} onClick={() => onAtribuir(l)} />
         )}
@@ -1946,7 +2103,7 @@ function ProvisaoFaturas({ itens }: { itens: LancamentoPessoal[] }): React.React
   );
 }
 
-function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, removendoImportados, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote }: DetalheFaturaProps): React.ReactElement {
+function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, removendoImportados, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura }: DetalheFaturaProps): React.ReactElement {
   const t = useTokens();
   // Modo de atribuição em lote: escolhe um membro e marca itens (ou a fatura
   // toda) pra dizer "isso é do fulano". 100% do valor de cada item vai pro membro.
@@ -2109,7 +2266,7 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
             LANÇAMENTOS DA FATURA (JANELA ATUAL)
           </div>
           {fatura.lancamentos.map((l) => (
-            <LinhaLancamentoFatura key={l.id} l={l} membros={membros} atribuidos={membrosDe(l.id)} onRemover={onRemover} onEditar={onEditar} onAtribuir={onAtribuir} />
+            <LinhaLancamentoFatura key={l.id} l={l} membros={membros} atribuidos={membrosDe(l.id)} onRemover={onRemover} onEditar={onEditar} onAtribuir={onAtribuir} onPromoverAssinatura={onPromoverAssinatura} selecionavel={modoLote} selecionado={selecionados.has(l.id)} onToggleSel={toggleSel} />
           ))}
         </div>
       )}
@@ -2127,7 +2284,7 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
           <Empty description="Nenhum lançamento neste cartão" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
           todosItens.map((l) => (
-            <LinhaLancamentoFatura key={l.id} l={l} membros={membros} atribuidos={membrosDe(l.id)} onRemover={onRemover} onEditar={onEditar} onAtribuir={onAtribuir} mostrarMes
+            <LinhaLancamentoFatura key={l.id} l={l} membros={membros} atribuidos={membrosDe(l.id)} onRemover={onRemover} onEditar={onEditar} onAtribuir={onAtribuir} onPromoverAssinatura={onPromoverAssinatura} mostrarMes
               selecionavel={modoLote} selecionado={selecionados.has(l.id)} onToggleSel={toggleSel} />
           ))
         )}
