@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.209.5] — 2026-06-29
+
+### Corrigido
+- **RAIZ: lista de Assinaturas sumia inteira (e o selo da fatura junto)**: o
+  `getAssinaturas` devolvia as linhas cruas do Sheets. A assinatura-espelho é salva
+  com `dataInicio` = a data do lançamento, que o Sheets converte em `Date` real; ao
+  ler de volta, um único `Date` cru na resposta faz o `google.script.run` retornar
+  `null` **silenciosamente** — a lista inteira somia (mostrava "0 assinaturas"
+  mesmo com o resumo apontando "1 ativa") e, como o selo da fatura deriva dessa
+  lista, ele também não aparecia. Agora `getAssinaturas` passa cada linha por
+  `_sanitizarLinha` (datas viram `YYYY-MM-DD`), tornando a resposta serializável —
+  mesmo padrão já usado nos demais endpoints. Esse era o motivo real de tudo.
+
 ## [1.209.4] — 2026-06-29
 
 ### Corrigido

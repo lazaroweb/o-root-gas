@@ -8307,7 +8307,14 @@ function deletarCartaoPessoal(id: string): ServerResult {
 function getAssinaturas(): ServerResult {
   try {
     initDatabase();
-    const assinaturas = dbGetAll('FinPessoalAssinaturas') as Array<Record<string, unknown>>;
+    // IMPORTANTE: sanitizar antes de devolver. O Sheets converte valores tipo
+    // data (ex: `dataInicio` = data do lançamento na assinatura-espelho) em
+    // objetos `Date` reais. Um único `Date` cru na resposta faz o
+    // `google.script.run` devolver `null` silenciosamente — a lista some inteira
+    // (e o selo da fatura também, pois deriva daqui). _sanitizarLinha vira tudo
+    // em string/number/boolean serializável.
+    const assinaturas = (dbGetAll('FinPessoalAssinaturas') as Array<Record<string, unknown>>)
+      .map(_sanitizarLinha);
     return { ok: true, data: assinaturas };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar assinaturas' };
