@@ -1,0 +1,25 @@
+---
+description: Fluxo de git da Forja — sempre que fizer commit, dar push pro GitHub na sequência (o remoto é o backup do usuário).
+alwaysApply: true
+---
+
+# Git workflow — Forja
+
+O usuário usa o repositório remoto (`origin`, no GitHub) como **backup permanente** do seu trabalho. Trabalho que fica só na máquina é risco.
+
+## Regra principal
+
+- **Sempre que criar um commit a pedido do usuário, dar `git push origin master` logo em seguida**, no mesmo fluxo, sem precisar pedir confirmação extra pro push.
+- Após o push, rodar `git status -sb` e confirmar que o branch está sincronizado (sem "ahead").
+
+## Continua valendo
+
+- Só commitar quando o usuário pedir (não commitar proativamente).
+- Nunca alterar `git config`.
+- Não usar `--force`/`push --force` em `master` sem o usuário pedir explicitamente.
+- Não usar `--amend` em commits já enviados ao remoto.
+- Mensagens de commit no padrão do repositório (ex.: `feat(forja): ... (vX.Y.Z)`), via HEREDOC.
+
+## Relação com deploy
+
+`git push` (código → GitHub, backup) é **independente** do deploy (`npm run deploy`, app → Google Apps Script). Fazer os dois: deploy publica o app, push protege o código.
