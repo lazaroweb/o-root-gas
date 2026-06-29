@@ -9581,7 +9581,20 @@ function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPa
       reclassificados = ((aplicarRegrasCategoria(temCompFat ? compFat : undefined, true).data as { alterados: number } | undefined)?.alterados) || 0;
     } catch { /* segue baile */ }
 
-    return { ok: true, data: { criados, parcelasFuturas, gruposNovos, duplicados, reclassificados } };
+    // Reorganiza as cobranças de família automaticamente: garante que, se uma
+    // compra parcelada já estava atribuída a alguém, as parcelas recém-importadas
+    // (ou já materializadas) fiquem com a competência certa e a atribuição
+    // propagada pras futuras. Best-effort e silencioso — não quebra a importação.
+    let cobrancasReorganizadas = 0;
+    try {
+      const rr = reorganizarCobrancasParcelas();
+      if (rr.ok) {
+        const d = (rr.data as { corrigidas?: number; criadas?: number; removidas?: number } | undefined) || {};
+        cobrancasReorganizadas = (d.corrigidas || 0) + (d.criadas || 0) + (d.removidas || 0);
+      }
+    } catch { /* segue baile */ }
+
+    return { ok: true, data: { criados, parcelasFuturas, gruposNovos, duplicados, reclassificados, cobrancasReorganizadas } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao importar fatura' };
   }

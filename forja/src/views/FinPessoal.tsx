@@ -3911,7 +3911,7 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [etapa, setEtapa] = useState<'upload' | 'revisao' | 'importando' | 'concluido'>('upload');
-  const [resultado, setResultado] = useState<{ criados: number; total: number; cartaoNome: string; parcelasFuturas: number; gruposNovos: number; duplicados: number } | null>(null);
+  const [resultado, setResultado] = useState<{ criados: number; total: number; cartaoNome: string; parcelasFuturas: number; gruposNovos: number; duplicados: number; cobrancasReorganizadas?: number } | null>(null);
   const [cartaoId, setCartaoId] = useState<string | undefined>();
   const [statusImport, setStatusImport] = useState('pendente');
   // Mês em que ESTA fatura vence (= mês em que você paga). Todos os itens da
@@ -4120,18 +4120,19 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
     setEtapa('importando');
     try {
       const payload = incluidos.map((it) => ({ data: it.data, descricao: it.descricao, valor: it.valor, categoria: it.categoria }));
-      const res = await callServer<ServerResponse<{ criados: number; parcelasFuturas?: number; gruposNovos?: number; duplicados?: number }>>('importarFaturaLancamentos', cartaoId, JSON.stringify(payload), statusImport, faturaMes.format('YYYY-MM'));
+      const res = await callServer<ServerResponse<{ criados: number; parcelasFuturas?: number; gruposNovos?: number; duplicados?: number; cobrancasReorganizadas?: number }>>('importarFaturaLancamentos', cartaoId, JSON.stringify(payload), statusImport, faturaMes.format('YYYY-MM'));
       // `res?.ok` com optional chaining: o google.script.run pode devolver null
       // (resposta truncada/erro silencioso) — sem isso a tela ficava "importando"
       // pra sempre. Agora cai no else e volta pra revisão sem perder os dados.
       if (res?.ok) {
-        const d = (res.data as { criados: number; parcelasFuturas?: number; gruposNovos?: number; duplicados?: number } | undefined);
+        const d = (res.data as { criados: number; parcelasFuturas?: number; gruposNovos?: number; duplicados?: number; cobrancasReorganizadas?: number } | undefined);
         const n = d?.criados ?? incluidos.length;
         setResultado({
           criados: n, total: totalEnviado, cartaoNome,
           parcelasFuturas: d?.parcelasFuturas ?? 0,
           gruposNovos: d?.gruposNovos ?? 0,
           duplicados: d?.duplicados ?? 0,
+          cobrancasReorganizadas: d?.cobrancasReorganizadas ?? 0,
         });
         setEtapa('concluido');
       } else {
@@ -4280,6 +4281,11 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
               {resultado.duplicados > 0 && (
                 <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, maxWidth: 380 }}>
                   {resultado.duplicados} item(ns) já existiam e foram ignorados (sem duplicar).
+                </div>
+              )}
+              {(resultado.cobrancasReorganizadas ?? 0) > 0 && (
+                <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, maxWidth: 380 }}>
+                  Família atualizada: {resultado.cobrancasReorganizadas} cobrança(s) reorganizada(s) automaticamente.
                 </div>
               )}
               <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textTertiary, maxWidth: 380 }}>

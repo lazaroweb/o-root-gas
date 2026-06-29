@@ -470,6 +470,7 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar, onReorganizar, reorg
 function PizzaGastosMembros({ membros }: { membros: MembroResumo[] }): React.ReactElement {
   const t = useTokens();
   const [modo, setModo] = useState<'mes' | 'total'>('mes');
+  const [hover, setHover] = useState<number | null>(null);
   const PALETA = [t.accents.lavender, t.accents.sage, t.accents.peach, t.accents.rose, t.accents.clay, t.accents.blue];
   const dados = membros
     .map((mr, i) => ({
@@ -483,15 +484,20 @@ function PizzaGastosMembros({ membros }: { membros: MembroResumo[] }): React.Rea
     .sort((a, b) => b.total - a.total);
   const totalGeral = dados.reduce((s, d) => s + d.total, 0);
 
-  let acc = 0;
-  const stops: string[] = [];
-  for (const d of dados) {
-    const ini = (acc / totalGeral) * 100;
-    acc += d.total;
-    const fim = (acc / totalGeral) * 100;
-    stops.push(`${d.cor} ${ini}% ${fim}%`);
-  }
-  const grad = stops.length ? `conic-gradient(${stops.join(', ')})` : '';
+  // Donut SVG (mesmo estilo premium da Visão geral): anel fino + hover por fatia.
+  const size = 176;
+  const r = 42; const C = 2 * Math.PI * r;
+  let accF = 0;
+  const segs = dados.map((d) => {
+    const frac = totalGeral > 0 ? d.total / totalGeral : 0;
+    const seg = { ...d, frac, offset: accF };
+    accF += frac;
+    return seg;
+  });
+  const hov = hover !== null ? segs[hover] : null;
+  const centroLabel = hov ? hov.membro.nome : (modo === 'mes' ? 'Este mês' : 'Total');
+  const centroValor = hov ? hov.total : totalGeral;
+  const centroPct = hov ? hov.frac * 100 : null;
 
   return (
     <div style={{
@@ -526,18 +532,47 @@ function PizzaGastosMembros({ membros }: { membros: MembroResumo[] }): React.Rea
         </div>
       ) : (
         <div style={{ display: 'flex', gap: 26, alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* Anel mais fino (inset 30 → furo de ~104px) pra o valor central não
-              encostar na cor. */}
-          <div style={{ position: 'relative', width: 164, height: 164, borderRadius: '50%', background: grad, flexShrink: 0 }}>
+          {/* Donut SVG com anel fino — fatia destaca no hover e o centro reflete
+              o membro apontado (mesmo padrão da Visão geral). */}
+          <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+            <svg width={size} height={size} viewBox="0 0 100 100" style={{ transform: 'rotate(-90deg)' }}>
+              {segs.length === 0 && (
+                <circle cx={50} cy={50} r={r} fill="none" stroke={t.surfaceMuted} strokeWidth={11} />
+              )}
+              {segs.map((s, i) => {
+                const len = s.frac * C;
+                const active = hover === i;
+                return (
+                  <circle
+                    key={s.membro.id}
+                    cx={50} cy={50} r={r} fill="none"
+                    stroke={s.cor}
+                    strokeWidth={active ? 15 : 11}
+                    strokeDasharray={`${len} ${C - len}`}
+                    strokeDashoffset={-s.offset * C}
+                    opacity={hover === null || active ? 1 : 0.38}
+                    style={{ transition: 'opacity 0.15s, stroke-width 0.15s', cursor: 'pointer' }}
+                    onMouseEnter={() => setHover(i)}
+                    onMouseLeave={() => setHover(null)}
+                  >
+                    <title>{`${s.membro.nome}: ${formatBRL(s.total)} (${(s.frac * 100).toFixed(0)}%)`}</title>
+                  </circle>
+                );
+              })}
+            </svg>
             <div style={{
-              position: 'absolute', inset: 30, borderRadius: '50%', background: t.surface,
-              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+              position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+              alignItems: 'center', justifyContent: 'center', pointerEvents: 'none',
+              padding: '0 32px', textAlign: 'center',
             }}>
-              <div style={{ fontFamily: FONTS.ui, fontSize: 10, color: t.textTertiary, letterSpacing: 0.3, marginBottom: 1 }}>{modo === 'mes' ? 'Este mês' : 'Total'}</div>
-              <div style={{ fontFamily: FONTS.display, fontSize: 17, fontWeight: 600, color: t.text, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{formatBRL(totalGeral)}</div>
+              <span style={{ fontFamily: FONTS.ui, fontSize: 9.5, color: hov ? hov.cor : t.textTertiary, textTransform: 'uppercase', letterSpacing: 0.4, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{centroLabel}</span>
+              <span style={{ fontFamily: FONTS.display, fontSize: 14.5, fontWeight: 600, color: t.text, fontVariantNumeric: 'tabular-nums', marginTop: 2, whiteSpace: 'nowrap' }}>{formatBRL(centroValor)}</span>
+              {centroPct !== null && (
+                <span style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary, marginTop: 1 }}>{centroPct.toFixed(0)}%</span>
+              )}
             </div>
           </div>
-          <div style={{ flex: 1, minWidth: 180, display: 'flex', flexDirection: 'column', gap: 11, maxHeight: 164, overflowY: 'auto' }}>
+          <div style={{ flex: 1, minWidth: 180, display: 'flex', flexDirection: 'column', gap: 11, maxHeight: 176, overflowY: 'auto' }}>
             {dados.map((d) => {
               const pct = (d.total / totalGeral) * 100;
               return (

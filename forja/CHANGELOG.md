@@ -36,6 +36,21 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.203.0] — 2026-06-29
+
+### Mudado
+- **Donut "Custo por membro" (Família) no estilo premium da Visão geral**: trocado
+  o anel grosso (conic-gradient) pelo donut SVG de anel fino, com fatia que
+  destaca no hover e centro que reflete o membro apontado (nome, valor e %). Valor
+  central enxuto — não fica gigante com um único membro.
+
+### Adicionado
+- **Reorganização automática de parcelas após importar fatura**: ao importar uma
+  fatura, o sistema já reorganiza as cobranças de família (corrige competência,
+  propaga parcelas futuras já atribuídas e limpa duplicatas) sem precisar do botão
+  manual. O resultado da importação informa quantas cobranças foram reorganizadas.
+  O botão manual continua disponível como reforço.
+
 ## [1.202.0] — 2026-06-29
 
 ### Adicionado
