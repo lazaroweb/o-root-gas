@@ -243,7 +243,7 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
   const reset = () => {
     setLotes([]);
     setCategoriaDefault('');
-    setFonteDefault('');
+    setSegmento('');
     setResumoFinal(null);
     setProgGlobal({ loteAtual: 0, totalLotes: 0, itensFeitos: 0, totalItens: 0 });
   };

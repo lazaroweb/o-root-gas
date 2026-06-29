@@ -7,6 +7,7 @@ import { App as AntApp, Drawer, Segmented, Input, Button, Tag, Skeleton, Alert, 
 import {
   FileText, Landmark, Building2, Building, KeyRound, ExternalLink, Zap, ShieldCheck, ServerCog,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { Panel } from './ui';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -28,7 +29,7 @@ interface IntegData {
   categorias: Array<{ key: string; label: string }>; conectores: IntegConector[];
 }
 
-const ICONE_CAT: Record<string, React.ComponentType<{ size?: number; strokeWidth?: number; color?: string }>> = {
+const ICONE_CAT: Record<string, LucideIcon> = {
   emissao: FileText, federal: Landmark, estadual: Building2, municipal: Building,
 };
 

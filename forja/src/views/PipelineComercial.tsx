@@ -297,7 +297,7 @@ function CardOportunidade({ p, isDragging, onDragStart, onDragEnd, onClick }: {
             </div>
           )}
         </div>
-        <GripVertical size={12} style={{ color: t.borderStrong, flexShrink: 0, marginTop: 2 }} />
+        <GripVertical size={12} style={{ color: t.border, flexShrink: 0, marginTop: 2 }} />
       </div>
 
       {/* Valor */}

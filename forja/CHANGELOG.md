@@ -36,6 +36,18 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.205.1] — 2026-06-29
+
+### Corrigido
+- **Erros antigos de TypeScript zerados** (type-check limpo): token inexistente
+  `t.bg` → `t.appBg` (DividaTecnicaPanel) e `t.borderStrong` → `t.border`
+  (PipelineComercial); chamada órfã `setFonteDefault` → `setSegmento`
+  (ImportarLoteModal); tipagem dos ícones lucide via `LucideIcon`
+  (IntegracoesFiscaisPanel); indexação implícita `any` no Códex (server.ts).
+- **Atalhos/deep-links**: verificado — nenhum atalho de teclado ou deep-link
+  apontava pra antiga "Visão geral" (os atalhos param em "Financeiro" via G+F),
+  então não havia o que mover. O destino padrão do Financeiro Pessoal segue "Meu mês".
+
 ## [1.205.0] — 2026-06-29
 
 ### Mudado

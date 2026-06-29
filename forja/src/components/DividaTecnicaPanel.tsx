@@ -710,7 +710,7 @@ function DebitoDrawer({ d, contexto, carregando, erro, prompt, carregandoPrompt,
       onClose={onClose}
       width={680}
       destroyOnClose
-      styles={{ body: { padding: 0, background: t.bg } }}
+      styles={{ body: { padding: 0, background: t.appBg } }}
       title={
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{

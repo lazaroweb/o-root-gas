@@ -12203,7 +12203,7 @@ function getCodex(): ServerResult {
       const cardsDaSecao = cards
         .filter((c) => String(c['secaoId']) === String(s['id']))
         // Coalesce: cards antigos (sem `projeto`) viram "Forja" — eram todos deste app.
-        .map((c) => ({ ...c, projeto: String(c['projeto'] || '').trim() || _CODEX_PROJETO_PADRAO }))
+        .map((c) => ({ ...c, projeto: String(c['projeto'] || '').trim() || _CODEX_PROJETO_PADRAO }) as Record<string, unknown>)
         .sort((a, b) => Number(a['ordem'] || 99) - Number(b['ordem'] || 99));
       return { ...s, cards: cardsDaSecao, qtdCards: cardsDaSecao.length };
     });
