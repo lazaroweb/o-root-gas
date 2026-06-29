@@ -2045,7 +2045,7 @@ function LinhaLancamentoFatura({ l, membros, atribuidos, onRemover, onEditar, on
           <Tooltip title="Já está em Assinaturas (espelho) · gerencie na aba Assinaturas">
             <span style={{
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              width: 24, height: 24, flexShrink: 0, color: t.accents.lavender,
+              width: 24, height: 24, flexShrink: 0, color: t.accents.sage,
             }}>
               <BadgeCheck size={15} strokeWidth={2.25} />
             </span>

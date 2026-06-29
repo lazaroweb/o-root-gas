@@ -36,6 +36,15 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.209.12] — 2026-06-29
+
+### Alterado
+- **Verde = "já teve ação" no selo de assinatura**: o selo de "já é assinatura"
+  (`BadgeCheck`) passou de lilás para **verde sálvia**, criando um padrão mental
+  consistente com a atribuição a membro (também verde): verde sinaliza que aquela
+  linha já foi associada a algum critério. O "+" (marcar assinatura) segue lilás
+  como ação ainda disponível. Some a confusão de tudo ser lilás.
+
 ## [1.209.11] — 2026-06-29
 
 ### Alterado

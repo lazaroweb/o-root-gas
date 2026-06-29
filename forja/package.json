@@ -1,6 +1,6 @@
 {
   "name": "forja",
-  "version": "1.209.11",
+  "version": "1.209.12",
   "private": true,
   "scripts": {
     "build": "node esbuild.mjs",
