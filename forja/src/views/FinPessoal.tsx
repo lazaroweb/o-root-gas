@@ -23,7 +23,7 @@ import {
   CreditCard, Smartphone, Banknote, FileText, ArrowLeftRight, AlertCircle,
   Pencil, Trash2, Calendar, CheckCircle2, Clock, ArrowDownRight, ArrowUpRight,
   RotateCcw, Layers as LayersIcon, Target, Sparkles, PauseCircle, PlayCircle, Repeat,
-  Upload, FileUp, Compass, Users, CalendarRange, FileDown, BadgeCheck,
+  Upload, FileUp, Compass, Users, CalendarRange, FileDown, BadgeCheck, BadgePlus,
   // Ícones de categoria — outline lucide, mesmo padrão da sidebar
   ShoppingCart, Car, Utensils, Gamepad2, Pill, Home, Lightbulb, Tv, BookOpen, Shirt,
   PawPrint, Plane, Briefcase, Laptop, Package, Tag as TagIcon,
@@ -2045,30 +2045,21 @@ function LinhaLancamentoFatura({ l, membros, atribuidos, onRemover, onEditar, on
           <Tooltip title="Já está em Assinaturas (espelho) · gerencie na aba Assinaturas">
             <span style={{
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              width: 24, height: 24, borderRadius: 7, flexShrink: 0,
-              background: `${t.accents.lavender}24`, border: `1px solid ${t.accents.lavender}55`,
-              color: t.accents.lavender,
+              width: 24, height: 24, flexShrink: 0, color: t.accents.lavender,
             }}>
-              <BadgeCheck size={14} />
+              <BadgeCheck size={15} strokeWidth={2.25} />
             </span>
           </Tooltip>
         )}
         {!selecionavel && !temAssinatura && onPromoverAssinatura && (
           <Tooltip title="Marcar como assinatura (espelho — não soma de novo)">
-            <button
-              type="button"
+            <Button
+              size="small"
+              type="text"
+              icon={<BadgePlus size={15} />}
               onClick={() => onPromoverAssinatura(l)}
-              aria-label="Marcar como assinatura"
-              style={{
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                width: 24, height: 24, borderRadius: 7, flexShrink: 0, cursor: 'pointer',
-                background: `${t.accents.lavender}1a`,
-                border: `1px dashed ${t.accents.lavender}77`,
-                color: t.accents.lavender, padding: 0,
-              }}
-            >
-              <Plus size={14} />
-            </button>
+              style={{ color: t.accents.lavender }}
+            />
           </Tooltip>
         )}
         {onAtribuir && membros && membros.length > 0 && (

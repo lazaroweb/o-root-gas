@@ -36,6 +36,15 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.209.11] — 2026-06-29
+
+### Alterado
+- **Ícones de assinatura mais premium e harmônicos na fatura**: removida a caixa
+  (retângulo tracejado) em volta do "+", que destoava dos demais ícones de ação.
+  Agora usa o par combinado lucide `BadgePlus` (marcar como assinatura) e
+  `BadgeCheck` (já é assinatura), ambos no mesmo peso visual de editar/excluir, com o
+  lilás dando o destaque — limpo, coeso e com identidade.
+
 ## [1.209.10] — 2026-06-29
 
 ### Alterado
