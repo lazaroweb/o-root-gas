@@ -33,7 +33,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import dayjs, { Dayjs } from 'dayjs';
-import { Panel, formatBRL } from '../components/ui';
+import { Panel, formatBRL, Skeleton } from '../components/ui';
 import { MembroChipAvatar, membroIconeComponent } from '../components/membroIcone';
 import SubNav from '../components/SubNav';
 import { useTokens } from '../themeContext';
@@ -244,6 +244,44 @@ async function extrairTextoPdf(file: File): Promise<string> {
     texto += content.items.map((it) => it.str || '').join(' ') + '\n';
   }
   return texto.trim();
+}
+
+// ─── Skeletons de carregamento ────────────────────────────────────────────────
+// Mostrados na PRIMEIRA carga (antes de os dados do mês chegarem), pra nenhuma
+// aba aparecer "sem dados"/zerada parecendo quebrada. Padrão compartilhado.
+function SkeletonCardsResumo(): React.ReactElement {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+      {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} height={92} radius={14} />)}
+    </div>
+  );
+}
+
+function SkeletonConteudoFin(): React.ReactElement {
+  const t = useTokens();
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: FONTS.ui, fontSize: 12.5, color: t.textTertiary }}>
+        <Clock size={13} className="forja-spin" /> Carregando…
+      </div>
+      <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 16, padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Skeleton width={200} height={16} />
+          <Skeleton width={120} height={30} radius={8} />
+        </div>
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Skeleton width={36} height={36} radius={10} />
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <Skeleton width={`${50 + (i % 3) * 12}%`} height={12} />
+              <Skeleton width={`${28 + (i % 4) * 8}%`} height={10} />
+            </div>
+            <Skeleton width={70} height={14} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 // ─── Componente principal ─────────────────────────────────────────────────────
@@ -514,6 +552,11 @@ export default function FinPessoal(): React.ReactElement {
     { key: 'imposto-renda', icon: Coins, label: 'Imposto de Renda', accent: 'clay', group: 'Impostos', desc: 'IRPF: rendimentos, deduções, carnê-leão mensal e ajuste anual da declaração.' },
   ];
 
+  // Primeira carga: dados do mês ainda não chegaram (resumo nulo). Mostra
+  // esqueleto em vez de abas zeradas/"sem dados". Refreshes seguintes (troca de
+  // mês, ações) não piscam, porque resumo já está preenchido.
+  const primeiraCarga = loading && !resumo;
+
   return (
     <CategoriasContext.Provider value={categorias}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -562,8 +605,11 @@ export default function FinPessoal(): React.ReactElement {
       </div>
 
       {/* Cards de resumo — escondidos no "Meu mês" (que já traz Sobra/Entradas/
-          Saídas/Pago/A pagar). Nas outras abas seguem como resumo do mês. */}
-      {view !== 'mes' && (
+          Saídas/Pago/A pagar). Nas outras abas seguem como resumo do mês. Na
+          primeira carga, viram esqueleto. */}
+      {primeiraCarga ? (
+        <SkeletonCardsResumo />
+      ) : view !== 'mes' ? (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
           <CardResumo
             icon={<TrendingDown size={20} />}
@@ -610,12 +656,16 @@ export default function FinPessoal(): React.ReactElement {
             onClick={() => setView('assinaturas')}
           />
         </div>
-      )}
+      ) : null}
 
       {/* Navegação interna — sub-nav vertical reutilizável (list-detail) */}
       <SubNav items={NAV} value={view} onChange={(k) => setView(k)} ariaLabel="Áreas do Financeiro Pessoal">
 
-      {/* Sub-views */}
+      {/* Sub-views — na primeira carga, esqueleto pra nenhuma aba aparecer vazia */}
+      {primeiraCarga ? (
+        <SkeletonConteudoFin />
+      ) : (
+      <>
       {view === 'mes' && (
         <FinMesExecutivo
           mes={mes}
@@ -755,6 +805,8 @@ export default function FinPessoal(): React.ReactElement {
       )}
       {view === 'imposto-renda' && (
         <FinIR />
+      )}
+      </>
       )}
       </SubNav>
 

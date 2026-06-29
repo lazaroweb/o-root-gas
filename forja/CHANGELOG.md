@@ -36,6 +36,17 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.209.1] — 2026-06-29
+
+### Corrigido
+- **Skeleton de carregamento em todas as abas do Financeiro Pessoal**: na primeira
+  carga (antes dos dados do mês chegarem), abas como Cartões, Lançamentos, Receitas,
+  A pagar, Orçamentos, Recorrências, Plano, Categorias e Assinaturas mostravam
+  "sem dados"/zeradas, parecendo quebradas. Agora exibem esqueleto shimmer (cards
+  de resumo + conteúdo) + "Carregando…". Refreshes (troca de mês, ações) não piscam
+  o esqueleto. As abas que buscam dados próprios (Norte, Painel 12 meses, IR,
+  Família) já tinham seu próprio estado de carregamento.
+
 ## [1.209.0] — 2026-06-29
 
 ### Adicionado
