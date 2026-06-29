@@ -13,7 +13,7 @@ import {
 import {
   Plus, Pencil, Trash2, Users, CheckCircle2, Clock, CreditCard,
   Link2, AlertCircle, Repeat, HandCoins, FileDown, CalendarClock,
-  CalendarRange, Layers, ListChecks,
+  CalendarRange, Layers, ListChecks, Wand2,
 } from 'lucide-react';
 import dayjs, { Dayjs } from 'dayjs';
 import { Panel, formatBRL } from '../components/ui';
@@ -140,6 +140,21 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
 
   const refreshTudo = () => { recarregarFamilia(); onRecarregar(); };
 
+  const [reorganizando, setReorganizando] = useState(false);
+  const reorganizar = () => {
+    setReorganizando(true);
+    callServer<ServerResponse<{ removidas: number; corrigidas: number; criadas: number }>>('reorganizarCobrancasParcelas')
+      .then((res) => {
+        if (res?.ok) {
+          const d = res.data || { removidas: 0, corrigidas: 0, criadas: 0 };
+          message.success(`Pronto — ${d.corrigidas} ajustada(s), ${d.criadas} parcela(s) futura(s) criada(s), ${d.removidas} duplicata(s) removida(s).`);
+          refreshTudo();
+        } else message.error(res?.error || 'Erro ao reorganizar');
+      })
+      .catch(() => message.error('Erro ao reorganizar'))
+      .finally(() => setReorganizando(false));
+  };
+
   const abrirNovaCobranca = (prefill?: Partial<Cobranca>) => {
     setCobrEdit(null);
     setCobrPrefill(prefill || null);
@@ -209,9 +224,15 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
         {!semMembros && <PizzaGastosMembros membros={listaMembros} />}
       </div>
 
-      {/* Régua de 12 meses — a receber por competência, preenchendo cada mês */}
+      {/* Régua de 12 meses — custo da família por competência */}
       {!semMembros && (
-        <Resumo12Meses cobrancas={cobrancas} mesAtivo={mes} onSelecionar={onSelecionarMes} />
+        <Resumo12Meses
+          cobrancas={cobrancas}
+          mesAtivo={mes}
+          onSelecionar={onSelecionarMes}
+          onReorganizar={reorganizar}
+          reorganizando={reorganizando}
+        />
       )}
 
       {/* Membros */}
@@ -339,10 +360,12 @@ function DivV({ t }: { t: ReturnType<typeof useTokens> }): React.ReactElement {
 // Sumariza, mês a mês (a partir do mês corrente), o total A RECEBER (cobranças
 // pendentes) de toda a família. Cada compra parcelada já cai no seu respectivo
 // mês — então dá pra "bater o olho" no compromisso do ano todo. Clicar foca o mês.
-function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar }: {
+function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar, onReorganizar, reorganizando }: {
   cobrancas: Cobranca[];
   mesAtivo: string;
   onSelecionar?: (comp: string) => void;
+  onReorganizar?: () => void;
+  reorganizando?: boolean;
 }): React.ReactElement {
   const t = useTokens();
   const hoje = new Date();
@@ -381,7 +404,23 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar }: {
   return (
     <Panel
       title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CalendarRange size={16} color={t.accents.lavender} /> Próximos 12 meses · custo da família</span>}
-      extra={<span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>Total no período: <strong style={{ color: t.text }}>{formatBRL(totalPeriodo)}</strong></span>}
+      extra={
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>Total no período: <strong style={{ color: t.text }}>{formatBRL(totalPeriodo)}</strong></span>
+          {onReorganizar && (
+            <Tooltip title="Conserta atribuições antigas: remove duplicatas, joga cada parcela no mês da sua fatura e espalha as parcelas futuras. Pode rodar sempre que quiser.">
+              <Popconfirm
+                title="Reorganizar parcelas?"
+                description="Vai limpar duplicatas e distribuir as parcelas pelos meses corretos."
+                okText="Reorganizar" cancelText="Cancelar"
+                onConfirm={onReorganizar}
+              >
+                <Button size="small" icon={<Wand2 size={13} />} loading={reorganizando}>Reorganizar parcelas</Button>
+              </Popconfirm>
+            </Tooltip>
+          )}
+        </span>
+      }
     >
       <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, marginBottom: 12 }}>
         Quanto do seu cartão é da família em cada mês — cada parcela já cai no mês da sua fatura. Clique num mês pra focá-lo.
@@ -593,7 +632,9 @@ function LinhaCobranca({ c, onTogglePago, onEditar, onRemover }: {
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 2, flexWrap: 'wrap' }}>
           {temParcela && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.accents.lavender}1f`, color: t.accents.lavender }}><Layers size={9} style={{ marginRight: 3 }} />{c.parcelaAtual}/{c.parcelasTotal}</Tag>}
           {c.cartaoNome && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.accents.blue}1a`, color: t.accents.blue }}><CreditCard size={9} style={{ marginRight: 3 }} />{c.cartaoNome}</Tag>}
-          {!c.cartaoNome && c.origem === 'lancamento' && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.accents.blue}1a`, color: t.accents.blue }}><CreditCard size={9} style={{ marginRight: 3 }} />no cartão</Tag>}
+          {!c.cartaoNome && c.origem === 'lancamento' && c.metodo && c.metodo !== 'credito' && (
+            <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.surfaceMuted}`, color: t.textSecondary, textTransform: 'capitalize' }}>{c.metodo}</Tag>
+          )}
           {c.origem === 'assinatura' && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.accents.lavender}1a`, color: t.accents.lavender }}>assinatura</Tag>}
           {c.recorrente === 'sim' && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.accents.sage}1a`, color: t.accents.sage }}><Repeat size={9} style={{ marginRight: 3 }} />mensal</Tag>}
         </div>
@@ -694,16 +735,25 @@ function DetalheMembro({ membro, cobrancas, provisao, loading, onNova, onToggleP
             const tudoReembolsado = m.pendente <= 0.01 && m.pago > 0;
             const corMes = m.futuro ? t.accents.lavender : m.competencia === provisao.mesAtual ? t.accents.peach : t.textSecondary;
             const etiqueta = m.competencia === provisao.mesAtual ? 'este mês' : m.futuro ? 'previsto' : '';
+            const qtd = m.itens.length;
             return (
-              <div key={m.competencia} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div key={m.competencia} style={{
+                display: 'flex', flexDirection: 'column', gap: 10,
+                padding: '12px 14px 14px', borderRadius: 14,
+                background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
+                borderLeft: `3px solid ${corMes}`,
+              }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: 600, color: t.text, textTransform: 'capitalize' }}>{compToLabel(m.competencia)}</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: FONTS.ui, fontSize: 13, fontWeight: 700, color: t.text, textTransform: 'capitalize' }}>{compToLabel(m.competencia)}</span>
                     {etiqueta && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${corMes}1f`, color: corMes }}>{etiqueta}</Tag>}
                     {tudoReembolsado && <Tag bordered={false} style={{ fontSize: 10, margin: 0, background: `${t.accents.sage}1a`, color: t.accents.sage }}><CheckCircle2 size={9} style={{ marginRight: 3 }} />reembolsado</Tag>}
                   </span>
-                  <span style={{ fontFamily: FONTS.display, fontSize: 14, fontWeight: 600, color: t.text, fontVariantNumeric: 'tabular-nums' }}>
-                    {formatBRL(m.total)}
+                  <span style={{ textAlign: 'right' }}>
+                    <span style={{ display: 'block', fontFamily: FONTS.display, fontSize: 15, fontWeight: 700, color: t.text, fontVariantNumeric: 'tabular-nums' }}>
+                      {formatBRL(m.total)}
+                    </span>
+                    <span style={{ fontFamily: FONTS.ui, fontSize: 10, color: t.textTertiary }}>{qtd} {qtd === 1 ? 'item' : 'itens'}</span>
                   </span>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

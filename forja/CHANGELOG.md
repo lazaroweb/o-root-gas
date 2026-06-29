@@ -36,6 +36,32 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.202.0] — 2026-06-29
+
+### Adicionado
+- **Botão "Reorganizar parcelas" (Família)**: na régua de 12 meses, um único clique
+  sana as atribuições antigas — remove cobranças órfãs/duplicadas (aquelas que
+  apareciam "no cartão" sem nome/parcela/data), corrige a competência de cada
+  parcela pro **mês da fatura** e **propaga as parcelas futuras** pro mesmo membro
+  (mantendo a proporção do rateio). Idempotente: pode rodar quantas vezes quiser.
+  Backend `reorganizarCobrancasParcelas`.
+
+### Corrigido
+- **Duplicatas no detalhe do membro**: compras parceladas apareciam duas vezes
+  (uma completa com cartão/parcela, outra "no cartão" sem detalhe) por causa de
+  cobranças órfãs de atribuições antigas. A reorganização limpa isso.
+- **Nome do cartão ausente**: itens sem cartão resolvido deixaram de mostrar o
+  confuso "no cartão"; agora mostram o método (Pix, etc.) quando aplicável.
+- **Parcelas presas em junho**: atribuições antigas ficavam todas no mês atual e
+  não espalhavam pela régua de 12 meses nem pela visão "Por mês". A reorganização
+  distribui pelas competências corretas, refletindo decréscimo das parcelas que
+  terminam e acréscimo das novas.
+
+### Mudado
+- **Visão "Por mês" do membro mais premium**: cada mês virou um bloco com barra
+  de destaque lateral, total e contagem de itens, deixando a leitura por
+  competência mais clara.
+
 ## [1.201.0] — 2026-06-28
 
 ### Mudado

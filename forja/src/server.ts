@@ -10344,6 +10344,104 @@ function atribuirLancamentosLote(idsJson: string, membroId: string, competencia?
   }
 }
 
+// Migração/saneamento das cobranças de cartão (botão "Reorganizar parcelas").
+// Resolve a bagunça das atribuições feitas ANTES da propagação de parcelas:
+//   1. Remove cobranças órfãs (origem=lancamento cujo lançamento não existe mais)
+//      — são as que apareciam "no cartão" sem nome/parcela/data (duplicatas).
+//   2. Dedupe por (membro|lançamento) — mantém uma só.
+//   3. Corrige a competência pro mês da FATURA e carimba o parcelaGrupoId.
+//   4. Propaga a atribuição pras parcelas futuras não pagas do mesmo membro
+//      (mantendo a proporção), pra cada compra parcelada já atribuída.
+// Idempotente: rodar de novo não duplica nada.
+function reorganizarCobrancasParcelas(): ServerResult {
+  try {
+    const cartoesMap = _cartoesMap();
+    const lancMapDe = () => {
+      const m: Record<string, Record<string, unknown>> = {};
+      for (const l of dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>) m[String(l['id'])] = l;
+      return m;
+    };
+    let lancMap = lancMapDe();
+    let removidas = 0, corrigidas = 0, criadas = 0;
+
+    // 1. Órfãs: origem=lancamento com origemId que não resolve.
+    let cobr = dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>;
+    for (const c of cobr) {
+      if (String(c['origem']) === 'lancamento' && c['origemId'] && !lancMap[String(c['origemId'])]) {
+        dbDelete('FinPessoalCobrancas', String(c['id']));
+        removidas++;
+      }
+    }
+
+    // 2. Dedupe por (membro|origemId).
+    cobr = dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>;
+    const vistos: Record<string, boolean> = {};
+    for (const c of cobr) {
+      if (String(c['origem']) !== 'lancamento' || !c['origemId']) continue;
+      const key = `${String(c['membroId'])}|${String(c['origemId'])}`;
+      if (vistos[key]) { dbDelete('FinPessoalCobrancas', String(c['id'])); removidas++; }
+      else vistos[key] = true;
+    }
+
+    // 3. Corrige competência (mês da fatura) + parcelaGrupoId.
+    lancMap = lancMapDe();
+    cobr = dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>;
+    for (const c of cobr) {
+      if (String(c['origem']) !== 'lancamento') continue;
+      const lanc = lancMap[String(c['origemId'])];
+      if (!lanc) continue;
+      const comp = _competenciaLancamento(lanc, cartoesMap);
+      const grupo = String(lanc['parcelaGrupoId'] || '');
+      if (_toYYYYMM(c['competencia']) !== comp || String(c['parcelaGrupoId'] || '') !== grupo) {
+        dbUpdate('FinPessoalCobrancas', String(c['id']), {
+          competencia: comp, parcelaGrupoId: grupo, atualizadoEm: new Date().toISOString(),
+        });
+        corrigidas++;
+      }
+    }
+
+    // 4. Propaga parcelas futuras pro mesmo membro (mantendo proporção).
+    const todos = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+    cobr = dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>;
+    const existe: Record<string, boolean> = {};
+    for (const c of cobr) if (c['origemId']) existe[`${String(c['membroId'])}|${String(c['origemId'])}`] = true;
+    const agora = new Date().toISOString();
+    for (const c of cobr) {
+      if (String(c['origem']) !== 'lancamento' || !String(c['parcelaGrupoId'] || '')) continue;
+      const lanc = lancMap[String(c['origemId'])];
+      if (!lanc) continue;
+      const valorLanc = Math.abs(Number(lanc['valor'] || 0)) || 1;
+      const prop = Math.abs(Number(c['valor'] || 0)) / valorLanc;
+      const alvos = _alvosAtribuicaoParcelas(lanc, true, todos);
+      for (const t of alvos) {
+        const key = `${String(c['membroId'])}|${String(t['id'])}`;
+        if (existe[key]) continue;
+        dbCreate('FinPessoalCobrancas', {
+          membroId: String(c['membroId']),
+          descricao: String(t['descricao'] || 'Lançamento'),
+          valor: Math.round(Math.abs(Number(t['valor'] || 0)) * prop * 100) / 100,
+          competencia: _competenciaLancamento(t, cartoesMap),
+          status: 'pendente',
+          origem: 'lancamento',
+          origemId: String(t['id']),
+          recorrente: 'nao',
+          dataPagamento: '',
+          notas: '',
+          criadoEm: agora,
+          atualizadoEm: agora,
+          parcelaGrupoId: String(t['parcelaGrupoId'] || ''),
+        });
+        existe[key] = true;
+        criadas++;
+      }
+    }
+
+    return { ok: true, data: { removidas, corrigidas, criadas } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao reorganizar parcelas' };
+  }
+}
+
 // Cobranças de um membro (todos os meses) ENRIQUECIDAS com o detalhe do
 // lançamento de origem: cartão, data da compra, categoria e vencimento da
 // fatura. Alimenta o drawer detalhado e o PDF que o usuário envia ao membro.
