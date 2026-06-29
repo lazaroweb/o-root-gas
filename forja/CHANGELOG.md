@@ -36,6 +36,15 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.207.1] — 2026-06-29
+
+### Corrigido
+- **Aba Família não parece mais "quebrada" ao abrir**: no primeiro carregamento,
+  antes do resumo chegar do servidor, a tela mostrava R$ 0,00 e "nenhum membro"
+  (com a ilustração de vazio), dando falsa sensação de erro. Agora exibe um
+  esqueleto shimmer (hero, régua de 12 meses e cards) + "Carregando família…"
+  enquanto busca os dados. Refreshes posteriores não piscam o esqueleto.
+
 ## [1.207.0] — 2026-06-29
 
 ### Mudado

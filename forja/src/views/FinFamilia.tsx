@@ -16,7 +16,7 @@ import {
   CalendarRange, Layers, ListChecks, Wand2, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import dayjs, { Dayjs } from 'dayjs';
-import { Panel, formatBRL } from '../components/ui';
+import { Panel, formatBRL, Skeleton } from '../components/ui';
 import { MembroAvatar, MEMBRO_ICONES, MEMBRO_ICONE_KEYS, membroIconeComponent } from '../components/membroIcone';
 import { gerarEbaixarPdf } from '../pdf-client';
 import { useTokens } from '../themeContext';
@@ -187,6 +187,46 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
     : membros.map((m) => ({ membro: m, totalPendente: 0, totalPago: 0, qtdCobrancas: 0, qtdPendentes: 0 }));
   const membrosLista: FamiliaMembro[] = listaMembros.map((mr) => mr.membro);
   const semMembros = listaMembros.length === 0;
+  // Primeira carga (ainda sem resumo do servidor): mostra esqueleto em vez de
+  // zeros/"sem membros", que passavam a falsa sensação de tela quebrada.
+  const primeiraCarga = loading && !resumo;
+
+  if (primeiraCarga) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: FONTS.ui, fontSize: 12.5, color: t.textTertiary }}>
+          <Clock size={13} className="forja-spin" /> Carregando família…
+        </div>
+        {/* Hero */}
+        <div style={{ background: `linear-gradient(135deg, ${t.accents.lavender}14, ${t.surface})`, border: `1px solid ${t.borderSoft}`, borderRadius: 16, padding: 22, display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 260px', minWidth: 240, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Skeleton width={150} height={12} />
+            <Skeleton width={200} height={36} radius={8} />
+            <div style={{ display: 'flex', gap: 18, marginTop: 4 }}>
+              <Skeleton width={90} height={28} />
+              <Skeleton width={70} height={28} />
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+              <Skeleton width={130} height={32} radius={9} />
+              <Skeleton width={130} height={32} radius={9} />
+            </div>
+          </div>
+          <Skeleton width={150} height={150} radius={75} />
+        </div>
+        {/* Régua 12 meses */}
+        <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 16, padding: 20 }}>
+          <Skeleton width={240} height={16} style={{ marginBottom: 16 }} />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(96px, 1fr))', gap: 8 }}>
+            {Array.from({ length: 12 }).map((_, i) => <Skeleton key={i} height={78} radius={11} />)}
+          </div>
+        </div>
+        {/* Cards de membros */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
+          {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} height={120} radius={16} />)}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
