@@ -425,7 +425,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.88-assinatura-espelho';
+const SCHEMA_VERSION = 'v1.89-espelho-shift-repair';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -527,7 +527,75 @@ function _executarMigracoes(): void {
       } catch { /* segue baile — não bloqueia init */ }
       props.setProperty('MIGRATION_V189_CONEXOES_EMPRESA', 'done');
     }
+    // v1.209.3 — Repara assinaturas-espelho com colunas DESLOCADAS (ver doc da
+    // função). Roda depois do getOrCreateSheet ter normalizado o header pra ordem
+    // append-only, então o dbGetAll já lê as colunas com os nomes certos.
+    if (props.getProperty('MIGRATION_V209_ESPELHO_SHIFT') !== 'done') {
+      try { _migrarAssinaturasEspelhoShift(); } catch { /* segue baile */ }
+      props.setProperty('MIGRATION_V209_ESPELHO_SHIFT', 'done');
+    }
   } catch { /* PropertiesService pode falhar em contextos limitados */ }
+}
+
+// v1.209.3 — Repara assinaturas-espelho que ficaram com colunas DESLOCADAS.
+// Histórico: numa versão intermediária as colunas `espelho`/`origemLancamentoId`
+// foram criadas no MEIO do schema de FinPessoalAssinaturas (antes de
+// criadoEm/atualizadoEm). Quando o schema voltou pro padrão append-only (colunas
+// no fim), o header foi reescrito e as linhas gravadas naquela janela ficaram com
+// os VALORES nas posições físicas antigas — ou seja, `criadoEm` passou a conter o
+// 'sim'/'nao' do espelho e `atualizadoEm` o id do lançamento de origem. Sem
+// conserto, essas linhas viram "assinatura normal" (espelho='nao' → contam 2x no
+// total e não mostram o selo na fatura).
+//
+// Detecção robusta e inequívoca: uma coluna de timestamp (criadoEm) nunca deveria
+// conter literalmente 'sim'/'nao'. Quando contém, é uma linha deslocada — devolve
+// cada valor pra coluna certa. Idempotente (rodar de novo não muda nada) e só
+// toca linhas com a assinatura do shift. Também de-duplica espelhos que apontem
+// pro MESMO lançamento de origem (sobra de tentativas repetidas).
+function _migrarAssinaturasEspelhoShift(): { corrigidas: number; duplicadasRemovidas: number } {
+  let corrigidas = 0;
+  const rows = dbGetAll('FinPessoalAssinaturas') as Array<Record<string, unknown>>;
+  for (const r of rows) {
+    const criadoEm = String(r['criadoEm'] || '');
+    if (criadoEm === 'sim' || criadoEm === 'nao') {
+      const id = String(r['id'] || '');
+      if (!id) continue;
+      dbUpdate('FinPessoalAssinaturas', id, {
+        espelho: criadoEm,                                    // estava em criadoEm
+        origemLancamentoId: String(r['atualizadoEm'] || ''),  // estava em atualizadoEm
+        criadoEm: String(r['espelho'] || ''),                 // ISO real estava em espelho
+        atualizadoEm: String(r['origemLancamentoId'] || ''),  // ISO real estava em origemLancamentoId
+      });
+      corrigidas++;
+    }
+  }
+  // De-dup: mantém 1 espelho por lançamento de origem.
+  let duplicadasRemovidas = 0;
+  const frescas = dbGetAll('FinPessoalAssinaturas') as Array<Record<string, unknown>>;
+  const vistos: Record<string, boolean> = {};
+  const remover: string[] = [];
+  for (const r of frescas) {
+    if (String(r['espelho']) !== 'sim') continue;
+    const origem = String(r['origemLancamentoId'] || '');
+    if (!origem) continue;
+    if (vistos[origem]) remover.push(String(r['id'] || ''));
+    else vistos[origem] = true;
+  }
+  const idsRemover = remover.filter(Boolean);
+  if (idsRemover.length > 0) duplicadasRemovidas = dbDeleteMany('FinPessoalAssinaturas', idsRemover);
+  return { corrigidas, duplicadasRemovidas };
+}
+
+// RPC manual de segurança: roda o reparo on-demand (caso a migração já tenha sido
+// marcada como 'done' antes de uma linha deslocada surgir).
+function repararAssinaturasEspelho(): ServerResult {
+  try {
+    initDatabase();
+    const r = _migrarAssinaturasEspelhoShift();
+    return { ok: true, data: r };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao reparar assinaturas' };
+  }
 }
 
 // ─── Backup das abas de conexões (rede de segurança da Fase 3) ────────────────

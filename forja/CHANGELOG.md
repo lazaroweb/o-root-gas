@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.209.4] — 2026-06-29
+
+### Corrigido
+- **Selo da fatura sumido + assinatura-espelho duplicada / sem flag**: as linhas
+  gravadas na janela do schema "no meio" ficaram com as colunas deslocadas após a
+  re-migração append-only (`criadoEm` segurando o `'sim'`/`'nao'`, `atualizadoEm`
+  segurando o id do lançamento). Resultado: viravam "assinatura normal" (contavam
+  2x e não exibiam o selo na fatura). Adicionada migração idempotente
+  `_migrarAssinaturasEspelhoShift` que detecta o shift (coluna de timestamp com
+  valor literal `sim`/`nao`), devolve cada valor pra coluna certa e de-duplica
+  espelhos que apontem pro mesmo lançamento. Também exposta a RPC manual
+  `repararAssinaturasEspelho`. `SCHEMA_VERSION` → `v1.89-espelho-shift-repair`.
+
 ## [1.209.3] — 2026-06-29
 
 ### Corrigido
