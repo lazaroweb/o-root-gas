@@ -345,6 +345,17 @@ export default function FinPessoal(): React.ReactElement {
       .filter((m): m is FamiliaMembro => Boolean(m));
   }, [atribuicoes, membros]);
 
+  // Lançamentos que já viraram assinatura-espelho (pra marcar a linha da fatura
+  // com um ícone "ativo", como os avatares quando atribuído a um membro).
+  const lancAssinaturaIds = useMemo(
+    () => new Set(
+      assinaturas
+        .filter((a) => String(a.espelho) === 'sim' && a.origemLancamentoId)
+        .map((a) => String(a.origemLancamentoId)),
+    ),
+    [assinaturas],
+  );
+
   // Flag pra rodar a auto-geração apenas uma vez por sessão (no primeiro mount).
   // Rodar de novo ao mudar de mês não faz sentido — o gerador é global, não por mês.
   const [autoGerouUmaVez, setAutoGerouUmaVez] = useState(false);
@@ -723,6 +734,7 @@ export default function FinPessoal(): React.ReactElement {
           mes={mes}
           membros={membros}
           membrosDe={membrosDeLancamento}
+          lancAssinaturaIds={lancAssinaturaIds}
           onRecarregar={recarregar}
           onImportar={abrirImport}
           onEditarLancamento={abrirEditarLancamento}
@@ -1455,7 +1467,7 @@ function ListaLancamentos({ lancamentos, cartoes, loading, onEditar, onRecarrega
 
 // ─── Sub-view: cartões ─────────────────────────────────────────────────────────
 
-function PainelCartoes({ cartoes, mes, membros, membrosDe, onRecarregar, onImportar, onEditarLancamento, onAtribuir, onLancarFatura, abrirCartaoId, onConsumirAbrir }: { cartoes: CartaoPessoal[]; mes: string; membros: FamiliaMembro[]; membrosDe: (lancId: string) => FamiliaMembro[]; onRecarregar: () => void; onImportar: (cartaoId?: string) => void; onEditarLancamento: (l: LancamentoPessoal) => void; onAtribuir: (l: LancamentoPessoal) => void; onLancarFatura: () => void; abrirCartaoId?: string | null; onConsumirAbrir?: () => void }): React.ReactElement {
+function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, onRecarregar, onImportar, onEditarLancamento, onAtribuir, onLancarFatura, abrirCartaoId, onConsumirAbrir }: { cartoes: CartaoPessoal[]; mes: string; membros: FamiliaMembro[]; membrosDe: (lancId: string) => FamiliaMembro[]; lancAssinaturaIds?: Set<string>; onRecarregar: () => void; onImportar: (cartaoId?: string) => void; onEditarLancamento: (l: LancamentoPessoal) => void; onAtribuir: (l: LancamentoPessoal) => void; onLancarFatura: () => void; abrirCartaoId?: string | null; onConsumirAbrir?: () => void }): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [modalOpen, setModalOpen] = useState(false);
@@ -1633,6 +1645,7 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, onRecarregar, onImpor
           onAtribuir={onAtribuir}
           onAtribuirLote={atribuirLote}
           onPromoverAssinatura={(l) => setPromoverLanc(l)}
+          lancAssinaturaIds={lancAssinaturaIds}
         />
       </Drawer>
 
@@ -1762,6 +1775,7 @@ interface DetalheFaturaProps {
   onAtribuir: (l: LancamentoPessoal) => void;
   onAtribuirLote: (ids: string[], membroId: string) => Promise<boolean>;
   onPromoverAssinatura?: (l: LancamentoPessoal) => void;
+  lancAssinaturaIds?: Set<string>;
 }
 
 // 'YYYY-MM' → "junho de 2026" (pt-BR). Usado em notas que citam a competência.
@@ -1948,7 +1962,7 @@ function PromoverAssinaturaModal({ open, lancamento, cartao, cartoes, onClose, o
   );
 }
 
-function LinhaLancamentoFatura({ l, membros, atribuidos, onRemover, onEditar, onAtribuir, onPromoverAssinatura, mostrarMes, selecionavel, selecionado, onToggleSel }: { l: LancamentoPessoal; membros?: FamiliaMembro[]; atribuidos?: FamiliaMembro[]; onRemover: (id: string) => void; onEditar: (l: LancamentoPessoal) => void; onAtribuir?: (l: LancamentoPessoal) => void; onPromoverAssinatura?: (l: LancamentoPessoal) => void; mostrarMes?: boolean; selecionavel?: boolean; selecionado?: boolean; onToggleSel?: (id: string) => void }): React.ReactElement {
+function LinhaLancamentoFatura({ l, membros, atribuidos, onRemover, onEditar, onAtribuir, onPromoverAssinatura, temAssinatura, mostrarMes, selecionavel, selecionado, onToggleSel }: { l: LancamentoPessoal; membros?: FamiliaMembro[]; atribuidos?: FamiliaMembro[]; onRemover: (id: string) => void; onEditar: (l: LancamentoPessoal) => void; onAtribuir?: (l: LancamentoPessoal) => void; onPromoverAssinatura?: (l: LancamentoPessoal) => void; temAssinatura?: boolean; mostrarMes?: boolean; selecionavel?: boolean; selecionado?: boolean; onToggleSel?: (id: string) => void }): React.ReactElement {
   const t = useTokens();
   const labelCategoria = useLabelCategoria();
   const importado = String(l.tags || '').indexOf('fatura-importada') >= 0;
@@ -1975,7 +1989,19 @@ function LinhaLancamentoFatura({ l, membros, atribuidos, onRemover, onEditar, on
         {formatBRL(l.valor)}
       </div>
       <div style={{ display: 'flex', gap: 2, flexShrink: 0, alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
-        {!selecionavel && onPromoverAssinatura && pareceAssinatura(l) && (
+        {!selecionavel && temAssinatura && (
+          <Tooltip title="Já está em Assinaturas (espelho) · gerencie na aba Assinaturas">
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              width: 24, height: 24, borderRadius: 7, flexShrink: 0,
+              background: `${t.accents.lavender}24`, border: `1px solid ${t.accents.lavender}55`,
+              color: t.accents.lavender,
+            }}>
+              <Repeat size={13} />
+            </span>
+          </Tooltip>
+        )}
+        {!selecionavel && !temAssinatura && onPromoverAssinatura && pareceAssinatura(l) && (
           <Tooltip title="Adicionar às Assinaturas (espelho — não soma de novo)">
             <Button size="small" type="text" icon={<Repeat size={13} />} onClick={() => onPromoverAssinatura(l)} style={{ color: t.accents.lavender }} />
           </Tooltip>
@@ -2155,7 +2181,7 @@ function ProvisaoFaturas({ itens }: { itens: LancamentoPessoal[] }): React.React
   );
 }
 
-function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, removendoImportados, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura }: DetalheFaturaProps): React.ReactElement {
+function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, removendoImportados, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds }: DetalheFaturaProps): React.ReactElement {
   const t = useTokens();
   // Modo de atribuição em lote: escolhe um membro e marca itens (ou a fatura
   // toda) pra dizer "isso é do fulano". 100% do valor de cada item vai pro membro.
@@ -2318,7 +2344,7 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
             LANÇAMENTOS DA FATURA (JANELA ATUAL)
           </div>
           {fatura.lancamentos.map((l) => (
-            <LinhaLancamentoFatura key={l.id} l={l} membros={membros} atribuidos={membrosDe(l.id)} onRemover={onRemover} onEditar={onEditar} onAtribuir={onAtribuir} onPromoverAssinatura={onPromoverAssinatura} selecionavel={modoLote} selecionado={selecionados.has(l.id)} onToggleSel={toggleSel} />
+            <LinhaLancamentoFatura key={l.id} l={l} membros={membros} atribuidos={membrosDe(l.id)} onRemover={onRemover} onEditar={onEditar} onAtribuir={onAtribuir} onPromoverAssinatura={onPromoverAssinatura} temAssinatura={!!lancAssinaturaIds?.has(l.id)} selecionavel={modoLote} selecionado={selecionados.has(l.id)} onToggleSel={toggleSel} />
           ))}
         </div>
       )}
@@ -2336,7 +2362,7 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
           <Empty description="Nenhum lançamento neste cartão" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
           todosItens.map((l) => (
-            <LinhaLancamentoFatura key={l.id} l={l} membros={membros} atribuidos={membrosDe(l.id)} onRemover={onRemover} onEditar={onEditar} onAtribuir={onAtribuir} onPromoverAssinatura={onPromoverAssinatura} mostrarMes
+            <LinhaLancamentoFatura key={l.id} l={l} membros={membros} atribuidos={membrosDe(l.id)} onRemover={onRemover} onEditar={onEditar} onAtribuir={onAtribuir} onPromoverAssinatura={onPromoverAssinatura} temAssinatura={!!lancAssinaturaIds?.has(l.id)} mostrarMes
               selecionavel={modoLote} selecionado={selecionados.has(l.id)} onToggleSel={toggleSel} />
           ))
         )}

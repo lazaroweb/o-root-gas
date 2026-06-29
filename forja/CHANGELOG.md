@@ -36,6 +36,15 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.209.2] — 2026-06-29
+
+### Adicionado
+- **Indicador visual de "já em Assinaturas" na linha da fatura**: depois de promover
+  uma compra a assinatura-espelho, a linha passa a mostrar um ícone ativo (selo
+  lilás com o símbolo de repetição) no lugar do botão "+ Assinatura" — igual aos
+  avatares quando o lançamento é atribuído a um membro. Some o risco de promover a
+  mesma compra duas vezes; pra gerenciar, a aba Assinaturas.
+
 ## [1.209.1] — 2026-06-29
 
 ### Corrigido
