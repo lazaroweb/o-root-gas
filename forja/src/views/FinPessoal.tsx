@@ -355,6 +355,16 @@ export default function FinPessoal(): React.ReactElement {
     ),
     [assinaturas],
   );
+  // Assinaturas estáveis (valor+nome) das espelhos — fallback robusto pro selo
+  // quando o id do lançamento de origem mudou (ex: fatura reimportada).
+  const assinaturaEspelhoSigs = useMemo(
+    () => new Set(
+      assinaturas
+        .filter((a) => String(a.espelho) === 'sim')
+        .map((a) => sigEspelho(String(a.nome || ''), Number(a.valor || 0))),
+    ),
+    [assinaturas],
+  );
 
   // Flag pra rodar a auto-geração apenas uma vez por sessão (no primeiro mount).
   // Rodar de novo ao mudar de mês não faz sentido — o gerador é global, não por mês.
@@ -735,6 +745,7 @@ export default function FinPessoal(): React.ReactElement {
           membros={membros}
           membrosDe={membrosDeLancamento}
           lancAssinaturaIds={lancAssinaturaIds}
+          assinaturaEspelhoSigs={assinaturaEspelhoSigs}
           onRecarregar={recarregar}
           onImportar={abrirImport}
           onEditarLancamento={abrirEditarLancamento}
@@ -1467,7 +1478,7 @@ function ListaLancamentos({ lancamentos, cartoes, loading, onEditar, onRecarrega
 
 // ─── Sub-view: cartões ─────────────────────────────────────────────────────────
 
-function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, onRecarregar, onImportar, onEditarLancamento, onAtribuir, onLancarFatura, abrirCartaoId, onConsumirAbrir }: { cartoes: CartaoPessoal[]; mes: string; membros: FamiliaMembro[]; membrosDe: (lancId: string) => FamiliaMembro[]; lancAssinaturaIds?: Set<string>; onRecarregar: () => void; onImportar: (cartaoId?: string) => void; onEditarLancamento: (l: LancamentoPessoal) => void; onAtribuir: (l: LancamentoPessoal) => void; onLancarFatura: () => void; abrirCartaoId?: string | null; onConsumirAbrir?: () => void }): React.ReactElement {
+function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, assinaturaEspelhoSigs, onRecarregar, onImportar, onEditarLancamento, onAtribuir, onLancarFatura, abrirCartaoId, onConsumirAbrir }: { cartoes: CartaoPessoal[]; mes: string; membros: FamiliaMembro[]; membrosDe: (lancId: string) => FamiliaMembro[]; lancAssinaturaIds?: Set<string>; assinaturaEspelhoSigs?: Set<string>; onRecarregar: () => void; onImportar: (cartaoId?: string) => void; onEditarLancamento: (l: LancamentoPessoal) => void; onAtribuir: (l: LancamentoPessoal) => void; onLancarFatura: () => void; abrirCartaoId?: string | null; onConsumirAbrir?: () => void }): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [modalOpen, setModalOpen] = useState(false);
@@ -1646,6 +1657,7 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, on
           onAtribuirLote={atribuirLote}
           onPromoverAssinatura={(l) => setPromoverLanc(l)}
           lancAssinaturaIds={lancAssinaturaIds}
+          assinaturaEspelhoSigs={assinaturaEspelhoSigs}
         />
       </Drawer>
 
@@ -1776,6 +1788,7 @@ interface DetalheFaturaProps {
   onAtribuirLote: (ids: string[], membroId: string) => Promise<boolean>;
   onPromoverAssinatura?: (l: LancamentoPessoal) => void;
   lancAssinaturaIds?: Set<string>;
+  assinaturaEspelhoSigs?: Set<string>;
 }
 
 // 'YYYY-MM' → "junho de 2026" (pt-BR). Usado em notas que citam a competência.
@@ -1836,6 +1849,23 @@ const ASSINATURA_KEYWORDS = [
 function pareceAssinatura(l: LancamentoPessoal): boolean {
   const d = String(l.descricao || '').toLowerCase();
   return !!d && ASSINATURA_KEYWORDS.some((k) => d.indexOf(k) >= 0);
+}
+
+// Assinatura de uma descrição/valor — chave ESTÁVEL pra casar uma compra da fatura
+// com a assinatura-espelho criada a partir dela, mesmo que o id do lançamento mude
+// (reimportar a fatura recria os lançamentos com ids novos, deixando o
+// `origemLancamentoId` da espelho apontando pro id antigo). Combina valor (em
+// centavos) + primeiras palavras do nome normalizado. Tolerante ao marcador de
+// parcela "x/y" e a acentos/caixa.
+function sigEspelho(nome: string, valor: number): string {
+  const n = String(nome || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\(?\d{1,2}\s*\/\s*\d{1,2}\)?/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(' ').filter(Boolean).slice(0, 4).join(' ');
+  return `${Math.round(Math.abs(Number(valor) || 0) * 100)}|${n}`;
 }
 function inferirCategoriaAssinatura(desc: string): { categoria: string; cor: string; icone: string } {
   const d = String(desc || '').toLowerCase();
@@ -2181,7 +2211,12 @@ function ProvisaoFaturas({ itens }: { itens: LancamentoPessoal[] }): React.React
   );
 }
 
-function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, removendoImportados, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds }: DetalheFaturaProps): React.ReactElement {
+function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, removendoImportados, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs }: DetalheFaturaProps): React.ReactElement {
+  // Selo "já é assinatura": casa por id (rápido) OU por assinatura estável
+  // valor+nome (sobrevive a reimportação que troca o id do lançamento).
+  const temAssinaturaDe = (l: LancamentoPessoal): boolean =>
+    !!lancAssinaturaIds?.has(l.id) ||
+    !!assinaturaEspelhoSigs?.has(sigEspelho(String(l.descricao || ''), Number(l.valor || 0)));
   const t = useTokens();
   // Modo de atribuição em lote: escolhe um membro e marca itens (ou a fatura
   // toda) pra dizer "isso é do fulano". 100% do valor de cada item vai pro membro.
@@ -2344,7 +2379,7 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
             LANÇAMENTOS DA FATURA (JANELA ATUAL)
           </div>
           {fatura.lancamentos.map((l) => (
-            <LinhaLancamentoFatura key={l.id} l={l} membros={membros} atribuidos={membrosDe(l.id)} onRemover={onRemover} onEditar={onEditar} onAtribuir={onAtribuir} onPromoverAssinatura={onPromoverAssinatura} temAssinatura={!!lancAssinaturaIds?.has(l.id)} selecionavel={modoLote} selecionado={selecionados.has(l.id)} onToggleSel={toggleSel} />
+            <LinhaLancamentoFatura key={l.id} l={l} membros={membros} atribuidos={membrosDe(l.id)} onRemover={onRemover} onEditar={onEditar} onAtribuir={onAtribuir} onPromoverAssinatura={onPromoverAssinatura} temAssinatura={temAssinaturaDe(l)} selecionavel={modoLote} selecionado={selecionados.has(l.id)} onToggleSel={toggleSel} />
           ))}
         </div>
       )}
@@ -2362,7 +2397,7 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
           <Empty description="Nenhum lançamento neste cartão" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
           todosItens.map((l) => (
-            <LinhaLancamentoFatura key={l.id} l={l} membros={membros} atribuidos={membrosDe(l.id)} onRemover={onRemover} onEditar={onEditar} onAtribuir={onAtribuir} onPromoverAssinatura={onPromoverAssinatura} temAssinatura={!!lancAssinaturaIds?.has(l.id)} mostrarMes
+            <LinhaLancamentoFatura key={l.id} l={l} membros={membros} atribuidos={membrosDe(l.id)} onRemover={onRemover} onEditar={onEditar} onAtribuir={onAtribuir} onPromoverAssinatura={onPromoverAssinatura} temAssinatura={temAssinaturaDe(l)} mostrarMes
               selecionavel={modoLote} selecionado={selecionados.has(l.id)} onToggleSel={toggleSel} />
           ))
         )}

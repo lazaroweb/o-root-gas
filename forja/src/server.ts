@@ -425,7 +425,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.89-espelho-shift-repair';
+const SCHEMA_VERSION = 'v1.90-espelho-dedup-sig';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -534,6 +534,12 @@ function _executarMigracoes(): void {
       try { _migrarAssinaturasEspelhoShift(); } catch { /* segue baile */ }
       props.setProperty('MIGRATION_V209_ESPELHO_SHIFT', 'done');
     }
+    // v1.209.6 — re-roda o reparo com de-dup por assinatura estável (valor+nome),
+    // que colapsa espelhos duplicados que escaparam da de-dup por origemLancamentoId.
+    if (props.getProperty('MIGRATION_V209_ESPELHO_DEDUP_SIG') !== 'done') {
+      try { _migrarAssinaturasEspelhoShift(); } catch { /* segue baile */ }
+      props.setProperty('MIGRATION_V209_ESPELHO_DEDUP_SIG', 'done');
+    }
   } catch { /* PropertiesService pode falhar em contextos limitados */ }
 }
 
@@ -569,21 +575,36 @@ function _migrarAssinaturasEspelhoShift(): { corrigidas: number; duplicadasRemov
       corrigidas++;
     }
   }
-  // De-dup: mantém 1 espelho por lançamento de origem.
+  // De-dup: mantém 1 espelho por SERVIÇO. Chaveia pela assinatura estável
+  // valor+nome (não por origemLancamentoId, que pode mudar/ficar vazio quando a
+  // fatura é reimportada) — assim duas "Amazon Prime 19,99" no mesmo cartão
+  // colapsam em uma só.
   let duplicadasRemovidas = 0;
   const frescas = dbGetAll('FinPessoalAssinaturas') as Array<Record<string, unknown>>;
   const vistos: Record<string, boolean> = {};
   const remover: string[] = [];
   for (const r of frescas) {
     if (String(r['espelho']) !== 'sim') continue;
-    const origem = String(r['origemLancamentoId'] || '');
-    if (!origem) continue;
-    if (vistos[origem]) remover.push(String(r['id'] || ''));
-    else vistos[origem] = true;
+    const chave = _sigEspelho(String(r['nome'] || ''), Number(r['valor'] || 0));
+    if (vistos[chave]) remover.push(String(r['id'] || ''));
+    else vistos[chave] = true;
   }
   const idsRemover = remover.filter(Boolean);
   if (idsRemover.length > 0) duplicadasRemovidas = dbDeleteMany('FinPessoalAssinaturas', idsRemover);
   return { corrigidas, duplicadasRemovidas };
+}
+
+// Assinatura estável (valor em centavos + primeiras palavras do nome normalizado).
+// Espelho do helper homônimo no front (FinPessoal.tsx) — mantenha os dois em sincronia.
+function _sigEspelho(nome: string, valor: number): string {
+  const n = String(nome || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\(?\d{1,2}\s*\/\s*\d{1,2}\)?/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(' ').filter(Boolean).slice(0, 4).join(' ');
+  return `${Math.round(Math.abs(Number(valor) || 0) * 100)}|${n}`;
 }
 
 // RPC manual de segurança: roda o reparo on-demand (caso a migração já tenha sido

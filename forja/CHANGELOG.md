@@ -36,6 +36,18 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.209.6] — 2026-06-29
+
+### Corrigido
+- **Selo da fatura não acendia + espelhos duplicados**: depois que a lista voltou a
+  carregar (v1.209.5), o selo ainda não aparecia porque o `origemLancamentoId` salvo
+  ficava obsoleto quando a fatura era reimportada (os lançamentos são recriados com
+  ids novos). Agora o selo casa por **assinatura estável** (valor + nome
+  normalizado) além do id — sobrevive à reimportação e acende nas linhas existentes
+  sem precisar re-adicionar. A de-duplicação de espelhos passou a usar a mesma
+  assinatura estável, colapsando duplicatas que escapavam da chave por id (re-roda
+  via migração `MIGRATION_V209_ESPELHO_DEDUP_SIG`, `SCHEMA_VERSION` → `v1.90`).
+
 ## [1.209.5] — 2026-06-29
 
 ### Corrigido
