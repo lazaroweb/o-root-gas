@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.209.3] — 2026-06-29
+
+### Corrigido
+- **Assinaturas-espelho não apareciam (nem o selo na fatura)**: as colunas novas
+  `espelho`/`origemLancamentoId` tinham sido inseridas **no meio** do schema de
+  `FinPessoalAssinaturas` (antes de `criadoEm`/`atualizadoEm`) e o `SCHEMA_VERSION`
+  não foi incrementado. Isso quebrava a regra append-only do schema: deslocava as
+  colunas de timestamp das linhas existentes e deixava os campos novos inconsistentes
+  entre os caminhos de leitura/escrita. Movidas para o fim (append-only) e
+  `SCHEMA_VERSION` bumpado (`v1.88-assinatura-espelho`) — todo cliente re-migra o
+  header de forma limpa no próximo acesso, restaurando os timestamps e fazendo as
+  promoções persistirem corretamente.
+
 ## [1.209.2] — 2026-06-29
 
 ### Adicionado

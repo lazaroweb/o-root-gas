@@ -311,7 +311,9 @@ const SCHEMA: SheetSchema[] = [
   // `diaCobranca`: 1-31 (dia que cai a cobrança). `metodo`/`cartaoId`: como paga.
   // `status`: 'ativa'|'pausada'|'cancelada' (só ativa entra no custo mensal).
   // `cor`: hex da marca (Netflix vermelho, Spotify verde...) pra UI rica.
-  { name: 'FinPessoalAssinaturas', columns: ['id', 'nome', 'categoria', 'valor', 'ciclo', 'diaCobranca', 'metodo', 'cartaoId', 'status', 'dataInicio', 'cor', 'icone', 'plano', 'notas', 'espelho', 'origemLancamentoId', 'criadoEm', 'atualizadoEm'] },
+  // espelho/origemLancamentoId são APPEND-ONLY (no fim, depois de atualizadoEm).
+  // Inserir no meio quebra linhas existentes — ver doc do schema mais abaixo.
+  { name: 'FinPessoalAssinaturas', columns: ['id', 'nome', 'categoria', 'valor', 'ciclo', 'diaCobranca', 'metodo', 'cartaoId', 'status', 'dataInicio', 'cor', 'icone', 'plano', 'notas', 'criadoEm', 'atualizadoEm', 'espelho', 'origemLancamentoId'] },
   // FinPlanoContas (v1.11): plano de contas / centros de custo. Estrutura
   // hierárquica leve (grupo → conta) usada pra classificar lançamentos de forma
   // contábil. `codigo` é o código do centro de custo (ex: '3.01'); `grupo` é o
@@ -423,7 +425,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.87-conexoes-empresa';
+const SCHEMA_VERSION = 'v1.88-assinatura-espelho';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
