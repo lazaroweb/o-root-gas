@@ -36,6 +36,21 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.205.0] — 2026-06-29
+
+### Mudado
+- **"Por categoria" do Meu mês virou clicável (drill-down)**: clicar numa categoria
+  abre o detalhamento com TODAS as compras daquela categoria no mês — em todos os
+  cartões e avulsos — com cartão de origem, data, status, recategorizar inline
+  (que vira regra e se repete em itens iguais) e atalho pra editar. Categoria
+  "Outros" ganha o botão de reclassificar com IA. Era o melhor recurso da antiga
+  Visão geral, agora no lugar onde você de fato olha o mês.
+
+### Removido
+- **Seção "Visão geral"**: redundante com o "Meu mês". Removida do menu e do código
+  (componentes `VisaoMensal`, `DonutGastos` e `MiniBarraOrcamento`). Tudo que ela
+  oferecia de útil foi incorporado ao "Meu mês".
+
 ## [1.204.0] — 2026-06-29
 
 ### Adicionado

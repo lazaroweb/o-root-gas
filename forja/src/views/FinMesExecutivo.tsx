@@ -7,27 +7,31 @@
 // mostra os lançamentos PREVISTOS (parcelas, recorrências, salário) pra você ver
 // se ainda cabe e quanto sobra. Dados: getMesExecutivo (projeta o futuro).
 import React, { useState, useEffect, useCallback } from 'react';
-import { App as AntApp, Spin, Empty, Button, Tooltip } from 'antd';
+import { App as AntApp, Spin, Empty, Button, Tooltip, Modal, Select, Tag } from 'antd';
 import {
   TrendingUp, TrendingDown, Wallet, CreditCard, Check, Clock,
   Smartphone, Banknote, FileText, ArrowLeftRight, Target, Sparkles, Plus, CalendarClock,
-  PiggyBank, RefreshCw, ChevronLeft, ChevronRight, Undo2,
+  PiggyBank, RefreshCw, ChevronLeft, ChevronRight, Undo2, Pencil,
 } from 'lucide-react';
+import dayjs from 'dayjs';
 import { Panel, formatBRL } from '../components/ui';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
-import type { MesExecutivo, MesExecutivoItem, MesExecutivoCartao, CategoriaPessoal, ServerResponse } from '../types';
+import type { MesExecutivo, MesExecutivoItem, MesExecutivoCartao, CategoriaPessoal, LancamentoPessoal, CartaoPessoal, ServerResponse } from '../types';
 
 interface Props {
   mes: string;
   categorias: CategoriaPessoal[];
+  lancamentos: LancamentoPessoal[];
+  cartoes: CartaoPessoal[];
   onRecarregar: () => void;
   onAbrirCartao: (cartaoId: string) => void;
   onNovoLancamento: () => void;
   onIrParaOrcamentos: () => void;
   onNavegarMes: (delta: number) => void;
   onMesHoje: () => void;
+  onEditar: (l: LancamentoPessoal) => void;
 }
 
 const METODO_META: Record<string, { label: string; cor: string; icon: React.ReactNode }> = {
@@ -39,12 +43,17 @@ const METODO_META: Record<string, { label: string; cor: string; icon: React.Reac
   transferencia: { label: 'Transferência', cor: '#06b6d4', icon: <ArrowLeftRight size={13} /> },
 };
 
-export default function FinMesExecutivo({ mes, categorias, onRecarregar, onAbrirCartao, onNovoLancamento, onIrParaOrcamentos, onNavegarMes, onMesHoje }: Props): React.ReactElement {
+export default function FinMesExecutivo({ mes, categorias, lancamentos, cartoes, onRecarregar, onAbrirCartao, onNovoLancamento, onIrParaOrcamentos, onNavegarMes, onMesHoje, onEditar }: Props): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [data, setData] = useState<MesExecutivo | null>(null);
   const [loading, setLoading] = useState(true);
   const [flight, setFlight] = useState<Record<string, boolean>>({});
+  // Drill-down de categoria: lista os lançamentos do mês daquela categoria
+  // (em TODOS os cartões + avulsos), com recategorizar inline e editar.
+  const [catDetalhe, setCatDetalhe] = useState<string | null>(null);
+  const [salvandoId, setSalvandoId] = useState<string | null>(null);
+  const [reclassificando, setReclassificando] = useState(false);
 
   const carregar = useCallback(() => {
     setLoading(true);
@@ -61,6 +70,43 @@ export default function FinMesExecutivo({ mes, categorias, onRecarregar, onAbrir
     const c = categorias.find((x) => x.nome === nome);
     return c ? (c.emoji ? `${c.emoji} ${c.label}` : c.label) : (nome || 'Outros');
   };
+
+  // Recategoriza um lançamento e ENSINA a regra (comércio → categoria), que é
+  // reaplicada nos itens iguais do mês — igual à classificação da antiga Visão geral.
+  const recategorizar = async (l: LancamentoPessoal, novaCat: string) => {
+    if (!novaCat || novaCat === (l.categoria || 'outros')) return;
+    setSalvandoId(l.id);
+    const res = await callServer<ServerResponse<unknown>>('salvarLancamentoPessoal', { ...l, categoria: novaCat });
+    if (res?.ok) {
+      await callServer<ServerResponse<unknown>>('salvarRegraCategoria', l.descricao || '', novaCat);
+      await callServer<ServerResponse<unknown>>('aplicarRegrasCategoria', mes, true);
+      message.success('Recategorizado — vou repetir isso em lançamentos iguais');
+      carregar(); onRecarregar();
+    } else {
+      message.error((res && res.error) || 'Erro ao recategorizar');
+    }
+    setSalvandoId(null);
+  };
+
+  const reclassificarIA = async () => {
+    setReclassificando(true);
+    const res = await callServer<ServerResponse<{ porRegra: number; porIA: number; restantes: number }>>('reclassificarCategoriasIA', mes);
+    setReclassificando(false);
+    if (res?.ok) {
+      const d = (res.data as { porRegra: number; porIA: number } | undefined) || { porRegra: 0, porIA: 0 };
+      const tot = (d.porRegra || 0) + (d.porIA || 0);
+      message.success(tot > 0 ? `${tot} lançamento(s) reclassificado(s)` : 'Nada pra reclassificar');
+      carregar(); onRecarregar();
+    } else {
+      message.error((res && res.error) || 'Erro ao reclassificar com IA');
+    }
+  };
+
+  // Lançamentos (despesa) do mês na categoria aberta — em todos os cartões/avulsos.
+  const itensCat = catDetalhe
+    ? lancamentos.filter((l) => l.tipo === 'despesa' && (l.categoria || 'outros') === catDetalhe)
+    : [];
+  const totalCat = itensCat.reduce((s, l) => s + Math.abs(Number(l.valor || 0)), 0);
 
   // Toggle de pago de um item (receita ou despesa avulsa).
   const toggleItem = (item: MesExecutivoItem) => {
@@ -310,7 +356,7 @@ export default function FinMesExecutivo({ mes, categorias, onRecarregar, onAbrir
           {/* Coluna direita: por categoria, como paguei, orçamento */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <Panel title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Wallet size={16} color={t.accents.peach} /> Por categoria</span>}>
-              <Breakdown dados={data.porCategoria} total={totais.despesas} t={t} corDe={corCategoria} labelDe={labelCategoria} />
+              <Breakdown dados={data.porCategoria} total={totais.despesas} t={t} corDe={corCategoria} labelDe={labelCategoria} onSelecionar={(k) => setCatDetalhe(k)} />
             </Panel>
 
             <Panel title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CreditCard size={16} color={t.accents.blue} /> Como você pagou</span>}>
@@ -359,6 +405,103 @@ export default function FinMesExecutivo({ mes, categorias, onRecarregar, onAbrir
           </div>
         </div>
       )}
+
+      {/* Modal de composição da categoria — lançamentos do mês em todos os
+          cartões/avulsos, com recategorizar inline e editar. */}
+      <Modal
+        open={!!catDetalhe}
+        onCancel={() => setCatDetalhe(null)}
+        footer={null}
+        width={640}
+        title={catDetalhe ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ width: 32, height: 32, borderRadius: 9, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: `${corCategoria(catDetalhe)}1f`, border: `1px solid ${corCategoria(catDetalhe)}40`, color: corCategoria(catDetalhe) }}>
+              <Wallet size={15} />
+            </span>
+            <div>
+              <div style={{ fontFamily: FONTS.display, fontSize: 16, fontWeight: 600, color: t.text, textTransform: 'capitalize' }}>{labelCategoria(catDetalhe)}</div>
+              <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary }}>
+                {itensCat.length} lançamento{itensCat.length === 1 ? '' : 's'} · {formatBRL(totalCat)}
+              </div>
+            </div>
+          </div>
+        ) : 'Categoria'}
+      >
+        {catDetalhe === 'outros' && itensCat.length > 0 && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+            background: `${t.accents.lavender}14`, border: `1px solid ${t.accents.lavender}40`,
+            borderRadius: 10, padding: '10px 12px', marginBottom: 12,
+          }}>
+            <span style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary }}>
+              A IA tenta encaixar esses itens nas suas categorias e aprende com o que você corrige.
+            </span>
+            <Button
+              size="small" type="primary" icon={<Sparkles size={14} />} loading={reclassificando}
+              onClick={() => void reclassificarIA()}
+              style={{ background: t.accents.lavender, borderColor: t.accents.lavender, flexShrink: 0 }}
+            >
+              {reclassificando ? 'Reclassificando…' : 'Reclassificar com IA'}
+            </Button>
+          </div>
+        )}
+        {itensCat.length === 0 ? (
+          <Empty description="Nenhum lançamento nesta categoria neste mês" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 460, overflowY: 'auto', paddingRight: 4 }}>
+            {itensCat.map((l) => {
+              const cartao = cartoes.find((c) => c.id === l.cartaoId);
+              return (
+                <div key={l.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
+                  borderRadius: 10, padding: '10px 12px',
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.text, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {l.descricao || '(sem descrição)'}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
+                      {cartao ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary }}>
+                          <span style={{ width: 8, height: 8, borderRadius: '50%', background: cartao.cor }} />
+                          {cartao.apelido || cartao.nome}
+                        </span>
+                      ) : (
+                        l.metodo && <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, textTransform: 'capitalize' }}>{l.metodo}</span>
+                      )}
+                      <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary }}>
+                        {dayjs(l.data).format('DD/MM/YYYY')}
+                      </span>
+                      {l.status && l.status !== 'pago' && (
+                        <Tag bordered={false} style={{ marginInlineEnd: 0, background: `${t.accents.peach}22`, color: t.accents.peach, fontSize: 10 }}>
+                          {l.status}
+                        </Tag>
+                      )}
+                    </div>
+                  </div>
+                  <span style={{ fontFamily: FONTS.display, fontSize: 14, color: t.text, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+                    {formatBRL(Math.abs(Number(l.valor || 0)))}
+                  </span>
+                  <Select
+                    size="small"
+                    value={l.categoria || 'outros'}
+                    loading={salvandoId === l.id}
+                    disabled={salvandoId === l.id}
+                    onChange={(v) => void recategorizar(l, v)}
+                    style={{ width: 150, flexShrink: 0 }}
+                    options={categorias.filter((c) => c.ativo !== 'nao').map((c) => ({ value: c.nome, label: c.label || c.nome }))}
+                  />
+                  <Tooltip title="Editar lançamento">
+                    <Button size="small" type="text" icon={<Pencil size={13} />}
+                      onClick={() => { setCatDetalhe(null); onEditar(l); }} />
+                  </Tooltip>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
@@ -508,9 +651,11 @@ function Linha({
 }
 
 // Mini-breakdown: barras horizontais proporcionais (categoria ou método).
-function Breakdown({ dados, total, t, corDe, labelDe }: {
+// Com `onSelecionar`, cada linha vira clicável (drill-down) com chevron e hover.
+function Breakdown({ dados, total, t, corDe, labelDe, onSelecionar }: {
   dados: Record<string, number>; total: number; t: Tokens;
   corDe: (k: string) => string; labelDe: (k: string) => string;
+  onSelecionar?: (k: string) => void;
 }): React.ReactElement {
   const itens = Object.keys(dados)
     .map((k) => ({ k, valor: dados[k] }))
@@ -522,15 +667,31 @@ function Breakdown({ dados, total, t, corDe, labelDe }: {
       {itens.map(({ k, valor }) => {
         const pct = total > 0 ? (valor / total) * 100 : 0;
         const cor = corDe(k);
+        const clicavel = !!onSelecionar;
         return (
-          <div key={k}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4, gap: 8 }}>
-              <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, textTransform: 'capitalize', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{labelDe(k)}</span>
-              <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.text, fontWeight: 600, flexShrink: 0 }}>{formatBRL(valor)} <span style={{ color: t.textTertiary, fontWeight: 400 }}>· {pct.toFixed(0)}%</span></span>
+          <div
+            key={k}
+            onClick={clicavel ? () => onSelecionar(k) : undefined}
+            title={clicavel ? 'Ver lançamentos desta categoria' : undefined}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              cursor: clicavel ? 'pointer' : 'default',
+              borderRadius: 9, padding: clicavel ? 6 : 0, margin: clicavel ? -6 : 0,
+              transition: 'background 0.15s',
+            }}
+            onMouseEnter={clicavel ? (e) => { (e.currentTarget as HTMLDivElement).style.background = t.surfaceMuted; } : undefined}
+            onMouseLeave={clicavel ? (e) => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; } : undefined}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4, gap: 8 }}>
+                <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, textTransform: 'capitalize', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{labelDe(k)}</span>
+                <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.text, fontWeight: 600, flexShrink: 0 }}>{formatBRL(valor)} <span style={{ color: t.textTertiary, fontWeight: 400 }}>· {pct.toFixed(0)}%</span></span>
+              </div>
+              <div style={{ height: 6, borderRadius: 999, background: t.surfaceMuted, overflow: 'hidden' }}>
+                <div style={{ width: `${pct}%`, height: '100%', background: cor, transition: 'width 0.3s' }} />
+              </div>
             </div>
-            <div style={{ height: 6, borderRadius: 999, background: t.surfaceMuted, overflow: 'hidden' }}>
-              <div style={{ width: `${pct}%`, height: '100%', background: cor, transition: 'width 0.3s' }} />
-            </div>
+            {clicavel && <ChevronRight size={15} color={t.textTertiary} style={{ flexShrink: 0 }} />}
           </div>
         );
       })}
