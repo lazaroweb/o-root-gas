@@ -23,7 +23,7 @@ import {
   CreditCard, Smartphone, Banknote, FileText, ArrowLeftRight, AlertCircle,
   Pencil, Trash2, Calendar, CheckCircle2, Clock, ArrowDownRight, ArrowUpRight,
   RotateCcw, Layers as LayersIcon, Target, Sparkles, PauseCircle, PlayCircle, Repeat,
-  Upload, FileUp, Compass, Users, CalendarRange, FileDown,
+  Upload, FileUp, Compass, Users, CalendarRange, FileDown, BadgeCheck,
   // Ícones de categoria — outline lucide, mesmo padrão da sidebar
   ShoppingCart, Car, Utensils, Gamepad2, Pill, Home, Lightbulb, Tv, BookOpen, Shirt,
   PawPrint, Plane, Briefcase, Laptop, Package, Tag as TagIcon,
@@ -2027,7 +2027,7 @@ function LinhaLancamentoFatura({ l, membros, atribuidos, onRemover, onEditar, on
               background: `${t.accents.lavender}24`, border: `1px solid ${t.accents.lavender}55`,
               color: t.accents.lavender,
             }}>
-              <Repeat size={13} />
+              <BadgeCheck size={14} />
             </span>
           </Tooltip>
         )}

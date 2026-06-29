@@ -36,6 +36,14 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.209.7] — 2026-06-29
+
+### Alterado
+- **Ícone do selo "já é assinatura" na fatura**: trocado de `Repeat` (igual ao botão
+  de ação "+ Assinatura", o que confundia) para `BadgeCheck` — um selo de
+  confirmação distinto, deixando claro num relance que a compra já virou
+  assinatura-espelho.
+
 ## [1.209.6] — 2026-06-29
 
 ### Corrigido
