@@ -36,7 +36,20 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
-## [1.207.1] — 2026-06-29
+## [1.208.0] — 2026-06-29
+
+### Adicionado
+- **Filtro de cartão no detalhe do familiar (adaptativo)**: quando o membro tem
+  mais de um cartão/origem, aparece uma linha de chips (Todos · Nubank · Itaú · Pix…)
+  que filtra **a régua de 12 meses e a lista ao mesmo tempo** — dá pra isolar
+  "o que a pessoa tem no Nubank no ano". Com um cartão só, nada muda (sem ruído).
+- **Agrupamento por cartão dentro de cada mês (com subtotal)**: na visão "Por mês",
+  quando há vários cartões, os itens do mês vêm agrupados por cartão com subtotal,
+  pra leitura rápida. Some quando você filtra por um cartão específico ou quando
+  só existe um.
+
+### Detalhes
+- Tudo client-side sobre as cobranças já carregadas — sem chamada extra ao servidor.
 
 ### Corrigido
 - **Aba Família não parece mais "quebrada" ao abrir**: no primeiro carregamento,

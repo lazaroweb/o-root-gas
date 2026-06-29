@@ -881,6 +881,16 @@ function StatMembro({ label, valor, cor, destaque }: { label: string; valor: str
 }
 
 // ─── Detalhe do membro (drawer) ─────────────────────────────────────────────────
+// Identifica a "origem" de uma cobrança pra filtro/agrupamento: cartão (quando
+// tem nome) ou método de pagamento avulso (Pix, Débito…). Tudo o mais cai em "Avulso".
+function origemDaCobranca(c: CobrancaDetalhada): { key: string; label: string } {
+  if (c.cartaoNome) return { key: `c:${c.cartaoNome}`, label: c.cartaoNome };
+  if (c.origem === 'lancamento' && c.metodo && c.metodo !== 'credito') {
+    return { key: `m:${c.metodo}`, label: c.metodo.charAt(0).toUpperCase() + c.metodo.slice(1) };
+  }
+  return { key: 'avulso', label: 'Avulso' };
+}
+
 function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, onPdf, onNova, onTogglePago, onEditar, onRemover }: {
   membro: FamiliaMembro;
   mes: string;
@@ -896,10 +906,28 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
 }): React.ReactElement {
   const t = useTokens();
   const [modo, setModo] = useState<'mes' | 'lista'>('mes');
+  const [cartaoFiltro, setCartaoFiltro] = useState<string | null>(null);
   const custoTotal = provisao?.totalCusto ?? cobrancas.reduce((s, c) => s + Number(c.valor || 0), 0);
   const esteMes = provisao?.custoEsteMes ?? 0;
   const futuro = provisao?.custoFuturo ?? 0;
   const reembolsado = provisao?.totalPago ?? 0;
+
+  // Origens (cartões/métodos) presentes nas cobranças do membro, ordenadas por
+  // custo. O filtro/agrupamento só "liga" quando há mais de uma — com 1 cartão
+  // a tela fica idêntica à de antes (sem ruído).
+  const origens = useMemo(() => {
+    const mapa: Record<string, { key: string; label: string; total: number }> = {};
+    for (const c of cobrancas) {
+      const o = origemDaCobranca(c);
+      if (!mapa[o.key]) mapa[o.key] = { key: o.key, label: o.label, total: 0 };
+      mapa[o.key].total += Math.abs(Number(c.valor || 0));
+    }
+    return Object.values(mapa).sort((a, b) => b.total - a.total);
+  }, [cobrancas]);
+  const multiplos = origens.length > 1;
+  const filtroAtivo = multiplos ? cartaoFiltro : null;
+  const passaFiltro = (c: CobrancaDetalhada) => !filtroAtivo || origemDaCobranca(c).key === filtroAtivo;
+  const cobrFiltradas = useMemo(() => cobrancas.filter(passaFiltro), [cobrancas, filtroAtivo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Clicar num mês da régua do membro foca o grupo correspondente na visão "Por mês".
   const focarMes = (comp: string) => {
@@ -923,10 +951,34 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
         </div>
       )}
 
-      {/* Linha do tempo do PRÓPRIO membro — próximos 12 meses, só o que é dele. */}
-      {!loading && cobrancas.length > 0 && (
+      {/* Filtro por cartão — só aparece quando o membro tem mais de uma origem.
+          Filtra a régua E a lista ao mesmo tempo. */}
+      {!loading && multiplos && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, marginRight: 2 }}>Cartão:</span>
+          {([{ key: null, label: 'Todos' }, ...origens] as Array<{ key: string | null; label: string }>).map((o) => {
+            const on = (filtroAtivo ?? null) === o.key;
+            return (
+              <button key={o.key ?? 'todos'} onClick={() => setCartaoFiltro(o.key)} style={{
+                border: `1px solid ${on ? membro.cor : t.borderSoft}`, cursor: 'pointer',
+                fontFamily: FONTS.ui, fontSize: 11.5, fontWeight: on ? 600 : 500,
+                padding: '3px 11px', borderRadius: 999, transition: 'all 0.15s',
+                background: on ? `${membro.cor}1f` : t.surfaceMuted, color: on ? membro.cor : t.textSecondary,
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+              }}>
+                {o.key && o.key.startsWith('c:') && <CreditCard size={11} />}
+                {o.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Linha do tempo do PRÓPRIO membro — ano-calendário, só o que é dele
+          (respeitando o filtro de cartão acima). */}
+      {!loading && cobrFiltradas.length > 0 && (
         <Resumo12Meses
-          cobrancas={cobrancas}
+          cobrancas={cobrFiltradas}
           mesAtivo={mes}
           onSelecionar={focarMes}
           titulo={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CalendarRange size={16} color={membro.cor} /> {membro.nome} · 12 meses</span>}
@@ -967,19 +1019,37 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
         <div style={{ color: t.textTertiary, fontSize: 13, textAlign: 'center', padding: 20 }}>Carregando…</div>
       ) : cobrancas.length === 0 ? (
         <Empty description="Sem cobranças ainda" />
+      ) : cobrFiltradas.length === 0 ? (
+        <Empty description="Nada nesse cartão" />
       ) : modo === 'lista' || !provisao ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {cobrancas.map((c) => (
+          {cobrFiltradas.map((c) => (
             <LinhaCobranca key={c.id} c={c} onTogglePago={onTogglePago} onEditar={onEditar} onRemover={onRemover} />
           ))}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-          {provisao.porMes.map((m) => {
-            const tudoReembolsado = m.pendente <= 0.01 && m.pago > 0;
+          {provisao.porMes
+            .map((m) => ({ ...m, itens: m.itens.filter(passaFiltro) }))
+            .filter((m) => m.itens.length > 0)
+            .map((m) => {
+            const total = m.itens.reduce((s, c) => s + Math.abs(Number(c.valor || 0)), 0);
+            const pago = m.itens.filter((c) => String(c.status) === 'pago').reduce((s, c) => s + Math.abs(Number(c.valor || 0)), 0);
+            const tudoReembolsado = total - pago <= 0.01 && pago > 0;
             const corMes = m.futuro ? t.accents.lavender : m.competencia === provisao.mesAtual ? t.accents.peach : t.textSecondary;
             const etiqueta = m.competencia === provisao.mesAtual ? 'este mês' : m.futuro ? 'previsto' : '';
             const qtd = m.itens.length;
+            // Agrupa por cartão dentro do mês só quando o membro usa vários.
+            const grupos = multiplos && !filtroAtivo
+              ? Object.values(m.itens.reduce((acc, c) => {
+                  const o = origemDaCobranca(c);
+                  if (!acc[o.key]) acc[o.key] = { key: o.key, label: o.label, total: 0, itens: [] as CobrancaDetalhada[] };
+                  acc[o.key].total += Math.abs(Number(c.valor || 0));
+                  acc[o.key].itens.push(c);
+                  return acc;
+                }, {} as Record<string, { key: string; label: string; total: number; itens: CobrancaDetalhada[] }>))
+                  .sort((a, b) => b.total - a.total)
+              : null;
             return (
               <div key={m.competencia} id={`mesgrupo-${m.competencia}`} style={{
                 display: 'flex', flexDirection: 'column', gap: 10,
@@ -995,16 +1065,34 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
                   </span>
                   <span style={{ textAlign: 'right' }}>
                     <span style={{ display: 'block', fontFamily: FONTS.display, fontSize: 15, fontWeight: 700, color: t.text, fontVariantNumeric: 'tabular-nums' }}>
-                      {formatBRL(m.total)}
+                      {formatBRL(total)}
                     </span>
                     <span style={{ fontFamily: FONTS.ui, fontSize: 10, color: t.textTertiary }}>{qtd} {qtd === 1 ? 'item' : 'itens'}</span>
                   </span>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {m.itens.map((c) => (
-                    <LinhaCobranca key={c.id} c={c} onTogglePago={onTogglePago} onEditar={onEditar} onRemover={onRemover} />
-                  ))}
-                </div>
+                {grupos ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {grupos.map((g) => (
+                      <div key={g.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '0 2px' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: FONTS.ui, fontSize: 11, fontWeight: 600, color: t.textSecondary }}>
+                            {g.key.startsWith('c:') && <CreditCard size={11} color={t.accents.blue} />}{g.label}
+                          </span>
+                          <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(g.total)}</span>
+                        </div>
+                        {g.itens.map((c) => (
+                          <LinhaCobranca key={c.id} c={c} onTogglePago={onTogglePago} onEditar={onEditar} onRemover={onRemover} />
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {m.itens.map((c) => (
+                      <LinhaCobranca key={c.id} c={c} onTogglePago={onTogglePago} onEditar={onEditar} onRemover={onRemover} />
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}
