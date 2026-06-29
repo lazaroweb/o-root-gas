@@ -36,6 +36,24 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.210.0] — 2026-06-29
+
+### Corrigido
+- **Avatares dos membros agora têm cores distintas**: um bug antigo no
+  `salvarMembro` recalculava a cor por índice de contagem a cada **edição**,
+  colando a **mesma cor** em todos os membros editados (por isso Lazaro e Malu
+  apareciam ambos verdes). Agora a cor é **preservada** na edição e, quando
+  ausente, escolhe-se a primeira cor **livre** da paleta — mantendo cada membro
+  com uma cor única.
+
+### Adicionado
+- **Seletor de cor no editor de membro**: a modal de novo/editar membro ganhou
+  uma fileira de swatches (mesma paleta do backend) com preview do ícone, pra
+  você escolher e diferenciar visualmente cada pessoa.
+- **Migração v1.210.0 + RPC `redistribuirCoresMembros`**: redistribui cores
+  distintas pros membros existentes que ficaram em colisão, mantendo quem já tem
+  cor única. Roda automática no init e pode ser re-disparada manualmente.
+
 ## [1.209.12] — 2026-06-29
 
 ### Alterado

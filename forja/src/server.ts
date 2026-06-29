@@ -425,7 +425,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.90-espelho-dedup-sig';
+const SCHEMA_VERSION = 'v1.91-cores-membros';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -540,6 +540,14 @@ function _executarMigracoes(): void {
       try { _migrarAssinaturasEspelhoShift(); } catch { /* segue baile */ }
       props.setProperty('MIGRATION_V209_ESPELHO_DEDUP_SIG', 'done');
     }
+    // v1.210.0 — Re-distribui cores DISTINTAS pros membros. Um bug antigo no
+    // salvarMembro recalculava a cor por índice de contagem a cada edição, colando
+    // a MESMA cor em vários membros. Reatribui por ordem de criação, mantendo a
+    // cor de quem já tem uma cor única.
+    if (props.getProperty('MIGRATION_V210_CORES_MEMBROS') !== 'done') {
+      try { _migrarCoresMembros(); } catch { /* segue baile */ }
+      props.setProperty('MIGRATION_V210_CORES_MEMBROS', 'done');
+    }
   } catch { /* PropertiesService pode falhar em contextos limitados */ }
 }
 
@@ -616,6 +624,16 @@ function repararAssinaturasEspelho(): ServerResult {
     return { ok: true, data: r };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao reparar assinaturas' };
+  }
+}
+
+function redistribuirCoresMembros(): ServerResult {
+  try {
+    initDatabase();
+    const r = _migrarCoresMembros();
+    return { ok: true, data: r };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao redistribuir cores' };
   }
 }
 
@@ -10169,14 +10187,68 @@ function getMembros(): ServerResult {
   }
 }
 
+// Primeira cor da paleta ainda NÃO usada por outro membro (mantém os avatares
+// distintos). `excluirId` pula o próprio membro no caso de edição. Se todas já
+// estiverem em uso, cai num índice por contagem (cicla a paleta).
+function _corMembroLivre(existentes: Array<Record<string, unknown>>, excluirId: string): string {
+  const usadas: Record<string, boolean> = {};
+  for (const m of existentes) {
+    if (excluirId && String(m['id']) === excluirId) continue;
+    const c = String(m['cor'] || '').toLowerCase();
+    if (c) usadas[c] = true;
+  }
+  for (const c of _PALETA_MEMBROS) if (!usadas[c.toLowerCase()]) return c;
+  return _PALETA_MEMBROS[existentes.length % _PALETA_MEMBROS.length];
+}
+
+// Reatribui cores DISTINTAS aos membros (ver migração v1.210.0). Mantém a cor de
+// quem já tem uma cor única na paleta; para membros sem cor, fora da paleta ou em
+// colisão com um membro anterior, pega a próxima cor livre. Idempotente.
+function _migrarCoresMembros(): { ajustados: number } {
+  const membros = dbGetAll('FinPessoalMembros') as Array<Record<string, unknown>>;
+  membros.sort((a, b) => String(a['criadoEm'] || '').localeCompare(String(b['criadoEm'] || '')));
+  const paletaLower = _PALETA_MEMBROS.map((c) => c.toLowerCase());
+  const usadas: Record<string, boolean> = {};
+  let ajustados = 0;
+  for (const m of membros) {
+    const atual = String(m['cor'] || '').toLowerCase();
+    const naPaleta = paletaLower.indexOf(atual) >= 0;
+    if (atual && naPaleta && !usadas[atual]) {
+      usadas[atual] = true;
+      continue;
+    }
+    let nova = '';
+    for (const c of _PALETA_MEMBROS) if (!usadas[c.toLowerCase()]) { nova = c; break; }
+    if (!nova) nova = _PALETA_MEMBROS[Object.keys(usadas).length % _PALETA_MEMBROS.length];
+    usadas[nova.toLowerCase()] = true;
+    if (nova.toLowerCase() !== atual) {
+      dbUpdate('FinPessoalMembros', String(m['id']), { cor: nova });
+      ajustados++;
+    }
+  }
+  return { ajustados };
+}
+
 function salvarMembro(payload: Record<string, unknown>): ServerResult {
   try {
     const id = payload['id'] ? String(payload['id']) : '';
     const existentes = dbGetAll('FinPessoalMembros') as Array<Record<string, unknown>>;
+    // Cor: usa a informada; senão preserva a atual (edição) e, por fim, escolhe uma
+    // cor livre da paleta. Antes recalculava sempre por índice de contagem — o que
+    // colava a MESMA cor em todo membro editado.
+    let cor = String(payload['cor'] || '').trim();
+    if (!cor) {
+      if (id) {
+        const atual = existentes.find((m) => String(m['id']) === id);
+        cor = String(atual?.['cor'] || '') || _corMembroLivre(existentes, id);
+      } else {
+        cor = _corMembroLivre(existentes, '');
+      }
+    }
     const data: Record<string, unknown> = {
       nome: String(payload['nome'] || '').trim(),
       relacao: String(payload['relacao'] || '').trim(),
-      cor: String(payload['cor'] || _PALETA_MEMBROS[existentes.length % _PALETA_MEMBROS.length]),
+      cor,
       emoji: String(payload['emoji'] || ''),
       pix: String(payload['pix'] || '').trim(),
       telefone: String(payload['telefone'] || '').trim(),

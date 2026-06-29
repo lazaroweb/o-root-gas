@@ -137,6 +137,13 @@ export const MEMBRO_ICONES: Record<string, MembroIconComp> = {
   flower: Icones.heart,
 };
 
+// Paleta de cores dos membros — DEVE espelhar `_PALETA_MEMBROS` no server.ts, que
+// é quem atribui a cor padrão na criação. Mantê-las iguais garante que o seletor
+// do editor ofereça exatamente as cores que o backend distribui.
+export const PALETA_MEMBROS: string[] = [
+  '#ec4899', '#8b5cf6', '#06b6d4', '#f59e0b', '#10b981', '#ef4444', '#3b82f6', '#a855f7',
+];
+
 export function membroIconeComponent(valor?: string): MembroIconComp | null {
   if (!valor) return null;
   return MEMBRO_ICONES[valor] || null;

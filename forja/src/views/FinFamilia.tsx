@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import dayjs, { Dayjs } from 'dayjs';
 import { Panel, formatBRL, Skeleton } from '../components/ui';
-import { MembroAvatar, MEMBRO_ICONES, MEMBRO_ICONE_KEYS, membroIconeComponent } from '../components/membroIcone';
+import { MembroAvatar, MEMBRO_ICONES, MEMBRO_ICONE_KEYS, membroIconeComponent, PALETA_MEMBROS } from '../components/membroIcone';
 import { gerarEbaixarPdf } from '../pdf-client';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -1114,19 +1114,20 @@ function ModalMembro({ open, membro, onClose, onSaved }: {
   const [form] = Form.useForm();
   const [saving, setSaving] = useState(false);
   const [emoji, setEmoji] = useState('');
+  const [cor, setCor] = useState(PALETA_MEMBROS[0]);
 
   useEffect(() => {
     if (open) {
       form.resetFields();
-      if (membro) { form.setFieldsValue(membro); setEmoji(membro.emoji || 'user'); }
-      else { form.setFieldsValue({ ativo: 'sim' }); setEmoji('user'); }
+      if (membro) { form.setFieldsValue(membro); setEmoji(membro.emoji || 'user'); setCor(membro.cor || PALETA_MEMBROS[0]); }
+      else { form.setFieldsValue({ ativo: 'sim' }); setEmoji('user'); setCor(PALETA_MEMBROS[0]); }
     }
   }, [open, membro, form]);
 
   const salvar = async (v: Record<string, unknown>) => {
     setSaving(true);
     try {
-      const res = await callServer<ServerResponse<unknown>>('salvarMembro', { ...v, emoji, id: membro?.id });
+      const res = await callServer<ServerResponse<unknown>>('salvarMembro', { ...v, emoji, cor, id: membro?.id });
       if (res.ok) { message.success(membro ? 'Membro atualizado' : 'Membro adicionado'); onSaved(); }
       else message.error(res.error || 'Erro');
     } catch { message.error('Erro ao salvar'); }
@@ -1172,6 +1173,28 @@ function ModalMembro({ open, membro, onClose, onSaved }: {
                   }}
                 >
                   <Icone size={19} strokeWidth={1.8} />
+                </div>
+              );
+            })}
+          </div>
+        </Form.Item>
+        <Form.Item label="Cor" tooltip="Diferencia o avatar do membro na fatura e nos gráficos.">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {PALETA_MEMBROS.map((c) => {
+              const ativo = cor.toLowerCase() === c.toLowerCase();
+              const IconePrev = MEMBRO_ICONES[emoji] || MEMBRO_ICONES['user'];
+              return (
+                <div
+                  key={c}
+                  onClick={() => setCor(c)}
+                  style={{
+                    width: 34, height: 34, borderRadius: '50%', cursor: 'pointer', background: c,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    boxShadow: ativo ? `0 0 0 2px ${t.surface}, 0 0 0 4px ${c}` : 'none',
+                    transition: 'box-shadow 0.15s',
+                  }}
+                >
+                  {ativo && IconePrev && <IconePrev size={17} strokeWidth={2} color="#fff" />}
                 </div>
               );
             })}
