@@ -36,6 +36,16 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.209.10] — 2026-06-29
+
+### Alterado
+- **Botão "+" claro para marcar assinatura em qualquer linha**: o affordance era um
+  ícone de loop (↻) — confundia com "recorrência" e, nas linhas não detectadas,
+  ficava num cinza quase invisível. Agora é um **"+" lilás com borda tracejada**,
+  visível em **todas** as linhas da fatura, deixando óbvio que dá pra marcar
+  qualquer compra como assinatura. Distinto do selo sólido `BadgeCheck` (já
+  adicionado).
+
 ## [1.209.9] — 2026-06-29
 
 ### Alterado
