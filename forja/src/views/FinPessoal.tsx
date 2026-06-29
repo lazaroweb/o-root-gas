@@ -365,6 +365,22 @@ export default function FinPessoal(): React.ReactElement {
     ),
     [assinaturas],
   );
+  // Atualização OTIMISTA ao promover uma compra a assinatura-espelho: insere no
+  // estado local na hora (o selo da fatura e a aba Assinaturas derivam daqui), sem
+  // esperar o `recarregar` pesado (~12 RPCs). Em seguida reconcilia só o resumo de
+  // assinaturas em background — barato e não bloqueia a UI.
+  const onAssinaturaCriada = useCallback((nova?: AssinaturaPessoal) => {
+    if (nova) {
+      // id real vem do servidor; se faltar (resposta sem corpo), usa um temporário
+      // só pra render — o selo deriva de espelho/origem/sig, não do id. O próximo
+      // recarregar reconcilia com a linha definitiva.
+      const comId: AssinaturaPessoal = nova.id ? nova : { ...nova, id: `tmp-${Date.now()}` };
+      setAssinaturas((prev) => (prev.some((a) => a.id === comId.id) ? prev : [...prev, comId]));
+    }
+    callServer<ServerResponse<ResumoAssinaturas>>('getResumoAssinaturas')
+      .then((r) => { if (r?.ok && r.data) setResumoAssinaturas(r.data as ResumoAssinaturas); })
+      .catch(() => { /* silencioso — o otimista já cobriu a UI */ });
+  }, []);
 
   // Flag pra rodar a auto-geração apenas uma vez por sessão (no primeiro mount).
   // Rodar de novo ao mudar de mês não faz sentido — o gerador é global, não por mês.
@@ -747,6 +763,7 @@ export default function FinPessoal(): React.ReactElement {
           lancAssinaturaIds={lancAssinaturaIds}
           assinaturaEspelhoSigs={assinaturaEspelhoSigs}
           onRecarregar={recarregar}
+          onAssinaturaCriada={onAssinaturaCriada}
           onImportar={abrirImport}
           onEditarLancamento={abrirEditarLancamento}
           onAtribuir={setAtribuirLanc}
@@ -1478,7 +1495,7 @@ function ListaLancamentos({ lancamentos, cartoes, loading, onEditar, onRecarrega
 
 // ─── Sub-view: cartões ─────────────────────────────────────────────────────────
 
-function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, assinaturaEspelhoSigs, onRecarregar, onImportar, onEditarLancamento, onAtribuir, onLancarFatura, abrirCartaoId, onConsumirAbrir }: { cartoes: CartaoPessoal[]; mes: string; membros: FamiliaMembro[]; membrosDe: (lancId: string) => FamiliaMembro[]; lancAssinaturaIds?: Set<string>; assinaturaEspelhoSigs?: Set<string>; onRecarregar: () => void; onImportar: (cartaoId?: string) => void; onEditarLancamento: (l: LancamentoPessoal) => void; onAtribuir: (l: LancamentoPessoal) => void; onLancarFatura: () => void; abrirCartaoId?: string | null; onConsumirAbrir?: () => void }): React.ReactElement {
+function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, assinaturaEspelhoSigs, onRecarregar, onAssinaturaCriada, onImportar, onEditarLancamento, onAtribuir, onLancarFatura, abrirCartaoId, onConsumirAbrir }: { cartoes: CartaoPessoal[]; mes: string; membros: FamiliaMembro[]; membrosDe: (lancId: string) => FamiliaMembro[]; lancAssinaturaIds?: Set<string>; assinaturaEspelhoSigs?: Set<string>; onRecarregar: () => void; onAssinaturaCriada?: (nova?: AssinaturaPessoal) => void; onImportar: (cartaoId?: string) => void; onEditarLancamento: (l: LancamentoPessoal) => void; onAtribuir: (l: LancamentoPessoal) => void; onLancarFatura: () => void; abrirCartaoId?: string | null; onConsumirAbrir?: () => void }): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [modalOpen, setModalOpen] = useState(false);
@@ -1667,7 +1684,7 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
         cartao={cartaoAberto}
         cartoes={cartoes}
         onClose={() => setPromoverLanc(null)}
-        onSaved={() => { setPromoverLanc(null); onRecarregar(); }}
+        onSaved={(nova) => { setPromoverLanc(null); onAssinaturaCriada?.(nova); }}
       />
     </Panel>
   );
@@ -1897,7 +1914,7 @@ function PromoverAssinaturaModal({ open, lancamento, cartao, cartoes, onClose, o
   cartao: CartaoPessoal | null;
   cartoes: CartaoPessoal[];
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (nova?: AssinaturaPessoal) => void;
 }): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
@@ -1944,8 +1961,13 @@ function PromoverAssinaturaModal({ open, lancamento, cartao, cartoes, onClose, o
         icone: inf.icone,
       };
       const res = await callServer<ServerResponse<unknown>>('salvarAssinatura', payload);
-      if (res.ok) { message.success('Adicionada às Assinaturas (espelho — não soma de novo)'); onSaved(); }
-      else message.error(res.error || 'Erro ao salvar');
+      if (res.ok) {
+        message.success('Adicionada às Assinaturas (espelho — não soma de novo)');
+        // Devolve a linha criada pro pai aplicar de forma OTIMISTA (selo na hora),
+        // sem esperar o recarregar pesado. Fallback: monta o objeto do payload.
+        const nova = (res.data as AssinaturaPessoal | undefined) || ({ ...payload } as unknown as AssinaturaPessoal);
+        onSaved(nova);
+      } else message.error(res.error || 'Erro ao salvar');
     } catch { message.error('Erro ao salvar'); } finally { setSaving(false); }
   };
 

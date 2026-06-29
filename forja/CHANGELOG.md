@@ -36,6 +36,15 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.209.8] — 2026-06-29
+
+### Alterado
+- **Selo aparece na hora ao promover (update otimista)**: antes, ao adicionar uma
+  compra às Assinaturas, o `onSaved` disparava o `recarregar` completo (~12 chamadas
+  ao GAS) só pra o selo acender — daí a demora. Agora a assinatura criada é inserida
+  no estado local imediatamente (o selo e a aba Assinaturas derivam daí), e só o
+  resumo de assinaturas é reconciliado em background. Resposta instantânea.
+
 ## [1.209.7] — 2026-06-29
 
 ### Alterado
