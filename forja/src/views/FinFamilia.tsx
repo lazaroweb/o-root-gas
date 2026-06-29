@@ -13,7 +13,7 @@ import {
 import {
   Plus, Pencil, Trash2, Users, CheckCircle2, Clock, CreditCard,
   Link2, AlertCircle, Repeat, HandCoins, FileDown, CalendarClock,
-  CalendarRange, Layers, ListChecks, Wand2,
+  CalendarRange, Layers, ListChecks, Wand2, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import dayjs, { Dayjs } from 'dayjs';
 import { Panel, formatBRL } from '../components/ui';
@@ -377,7 +377,14 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar, onReorganizar, reorg
 }): React.ReactElement {
   const t = useTokens();
   const hoje = new Date();
-  const mesHoje = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
+  const anoAtual = hoje.getFullYear();
+  const mesAtualIdx = hoje.getMonth(); // 0-11
+  // Ano-calendário fechado (Jan→Dez). Começa no ano em que está o mês ativo,
+  // pra que abrir um mês futuro já mostre o ano certo. Navegável por seta.
+  const [ano, setAno] = useState(() => {
+    const a = Number((mesAtivo || '').substring(0, 4));
+    return a >= 2000 ? a : anoAtual;
+  });
 
   const meses = useMemo(() => {
     // Soma pendente/pago por competência.
@@ -391,16 +398,15 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar, onReorganizar, reorg
       if (String(c.status) === 'pago') porComp[comp].pago += v;
       else porComp[comp].pendente += v;
     }
-    // 12 meses a partir do mês corrente.
-    const out: Array<{ comp: string; total: number; qtd: number }> = [];
-    for (let i = 0; i < 12; i++) {
-      const d = new Date(hoje.getFullYear(), hoje.getMonth() + i, 1);
-      const comp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    // 12 meses fixos: Jan→Dez do ano selecionado.
+    const out: Array<{ comp: string; mesIdx: number; total: number; qtd: number }> = [];
+    for (let m = 0; m < 12; m++) {
+      const comp = `${ano}-${String(m + 1).padStart(2, '0')}`;
       const reg = porComp[comp];
-      out.push({ comp, total: (reg?.pendente || 0) + (reg?.pago || 0), qtd: reg?.qtd || 0 });
+      out.push({ comp, mesIdx: m, total: (reg?.pendente || 0) + (reg?.pago || 0), qtd: reg?.qtd || 0 });
     }
     return out;
-  }, [cobrancas]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cobrancas, ano]);
 
   const maxV = Math.max(1, ...meses.map((m) => m.total));
   const totalPeriodo = meses.reduce((s, m) => s + m.total, 0);
@@ -411,10 +417,10 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar, onReorganizar, reorg
 
   return (
     <Panel
-      title={titulo ?? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CalendarRange size={16} color={t.accents.lavender} /> Próximos 12 meses · custo da família</span>}
+      title={titulo ?? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CalendarRange size={16} color={t.accents.lavender} /> Custo da família · 12 meses</span>}
       extra={
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>Total no período: <strong style={{ color: t.text }}>{formatBRL(totalPeriodo)}</strong></span>
+          <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>Total em {ano}: <strong style={{ color: t.text }}>{formatBRL(totalPeriodo)}</strong></span>
           {onReorganizar && (
             <Tooltip title="Conserta atribuições antigas: remove duplicatas, joga cada parcela no mês da sua fatura e espalha as parcelas futuras. Pode rodar sempre que quiser.">
               <Popconfirm
@@ -430,13 +436,25 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar, onReorganizar, reorg
         </span>
       }
     >
-      <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, marginBottom: 12 }}>
-        {descricao ?? 'Quanto do seu cartão é da família em cada mês — cada parcela já cai no mês da sua fatura. Clique num mês pra focá-lo.'}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+        <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, flex: 1, minWidth: 220 }}>
+          {descricao ?? 'Quanto do seu cartão é da família em cada mês do ano — cada parcela já cai no mês da sua fatura. Clique num mês pra focá-lo.'}
+        </div>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 9, padding: '2px 3px' }}>
+          <button onClick={() => setAno((a) => a - 1)} title="Ano anterior" style={{ border: 'none', background: 'transparent', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', padding: 4, borderRadius: 6, color: t.textSecondary }}>
+            <ChevronLeft size={15} />
+          </button>
+          <span style={{ fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: 600, color: t.text, minWidth: 40, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>{ano}</span>
+          <button onClick={() => setAno((a) => a + 1)} title="Próximo ano" style={{ border: 'none', background: 'transparent', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', padding: 4, borderRadius: 6, color: t.textSecondary }}>
+            <ChevronRight size={15} />
+          </button>
+        </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(96px, 1fr))', gap: 8 }}>
         {meses.map((m) => {
           const ativo = m.comp === mesAtivo.substring(0, 7);
-          const ehHoje = m.comp === mesHoje;
+          const ehHoje = ano === anoAtual && m.mesIdx === mesAtualIdx;
+          const passado = ano < anoAtual || (ano === anoAtual && m.mesIdx < mesAtualIdx);
           const temValor = m.total > 0.01;
           const cor = ehHoje ? t.accents.peach : t.accents.lavender;
           return (
@@ -449,6 +467,7 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar, onReorganizar, reorg
                 background: ativo ? `${cor}14` : t.surfaceMuted,
                 border: `1.5px solid ${ativo ? cor : t.borderSoft}`,
                 borderRadius: 11, padding: '10px 11px', transition: 'all 0.15s',
+                opacity: passado && !temValor ? 0.5 : 1,
               }}
             >
               <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -870,8 +889,8 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
           cobrancas={cobrancas}
           mesAtivo={mes}
           onSelecionar={focarMes}
-          titulo={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CalendarRange size={16} color={membro.cor} /> Próximos 12 meses · {membro.nome}</span>}
-          descricao={`O que ${membro.nome.split(' ')[0]} tem no seu cartão mês a mês — cada parcela já cai no mês da fatura. Clique num mês pra ir até ele.`}
+          titulo={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CalendarRange size={16} color={membro.cor} /> {membro.nome} · 12 meses</span>}
+          descricao={`O que ${membro.nome.split(' ')[0]} tem no cartão mês a mês no ano — cada parcela já cai no mês da fatura. Clique num mês pra ir até ele.`}
         />
       )}
 

@@ -36,6 +36,17 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.207.0] — 2026-06-29
+
+### Mudado
+- **Régua de 12 meses virou ano-calendário fechado (Jan→Dez)**: em vez de "12 meses
+  a partir de hoje", agora mostra o ano inteiro como padrão fixo. Meses já passados
+  sem lançamento ficam discretos/em branco; o mês atual segue destacado. Vale pros
+  dois lugares (panorama da família e linha do tempo de cada membro).
+- **Navegação de ano (◀ 2026 ▶)**: setas pra avançar/voltar o ano e enxergar
+  parcelas que caem no ano seguinte sem perder o padrão visual. Total do topo
+  passou a ser "Total em {ano}".
+
 ## [1.206.0] — 2026-06-29
 
 ### Mudado
