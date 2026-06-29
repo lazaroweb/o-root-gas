@@ -2053,9 +2053,17 @@ function LinhaLancamentoFatura({ l, membros, atribuidos, onRemover, onEditar, on
             </span>
           </Tooltip>
         )}
-        {!selecionavel && !temAssinatura && onPromoverAssinatura && pareceAssinatura(l) && (
-          <Tooltip title="Adicionar às Assinaturas (espelho — não soma de novo)">
-            <Button size="small" type="text" icon={<Repeat size={13} />} onClick={() => onPromoverAssinatura(l)} style={{ color: t.accents.lavender }} />
+        {!selecionavel && !temAssinatura && onPromoverAssinatura && (
+          <Tooltip title={pareceAssinatura(l)
+            ? 'Adicionar às Assinaturas (espelho — não soma de novo)'
+            : 'Marcar como assinatura (espelho — não soma de novo)'}>
+            <Button
+              size="small"
+              type="text"
+              icon={<Repeat size={13} />}
+              onClick={() => onPromoverAssinatura(l)}
+              style={{ color: pareceAssinatura(l) ? t.accents.lavender : t.textTertiary }}
+            />
           </Tooltip>
         )}
         {onAtribuir && membros && membros.length > 0 && (

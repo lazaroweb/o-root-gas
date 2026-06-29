@@ -36,6 +36,16 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.209.9] — 2026-06-29
+
+### Alterado
+- **Promover qualquer compra a assinatura**: antes o botão "+ Assinatura" só
+  aparecia quando a descrição batia com a heurística de palavras-chave — então itens
+  como "Amazon Kindle Unltd" ficavam sem ação. Agora a ação está disponível em
+  **qualquer linha** da fatura: as detectadas automaticamente seguem com o destaque
+  lilás, e as demais ganham o mesmo botão num tom discreto (tooltip "Marcar como
+  assinatura"). Você nunca mais fica sem como promover uma assinatura.
+
 ## [1.209.8] — 2026-06-29
 
 ### Alterado
