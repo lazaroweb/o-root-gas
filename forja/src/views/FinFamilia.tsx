@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Button, Modal, Form, Input, InputNumber, Select, DatePicker, Tag, Switch,
-  App as AntApp, Popconfirm, Empty, Tooltip, Drawer,
+  App as AntApp, Popconfirm, Empty, Tooltip,
 } from 'antd';
 import {
   Plus, Pencil, Trash2, Users, CheckCircle2, Clock, CreditCard,
@@ -311,36 +311,39 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
         onSaved={() => { setModalCobr(false); refreshTudo(); }}
       />
 
-      <Drawer
+      <Modal
         title={drawerMembro ? (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-            <MembroAvatar membro={drawerMembro} size={26} radius={8} />
-            {drawerMembro.nome}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+            <MembroAvatar membro={drawerMembro} size={32} radius={9} />
+            <span>
+              <span style={{ display: 'block', fontFamily: FONTS.display, fontSize: 16, fontWeight: 600, color: t.text, lineHeight: 1.1 }}>{drawerMembro.nome}</span>
+              {drawerMembro.relacao && <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, textTransform: 'capitalize' }}>{drawerMembro.relacao}</span>}
+            </span>
           </span>
         ) : 'Membro'}
         open={!!drawerMembro}
-        onClose={() => setDrawerMembro(null)}
-        width={480}
+        onCancel={() => setDrawerMembro(null)}
+        footer={null}
+        width={920}
         destroyOnClose
-        extra={drawerMembro ? (
-          <Button size="small" icon={<FileDown size={14} />} loading={pdfLoading} onClick={() => baixarPdfMembro(drawerMembro)}>
-            PDF
-          </Button>
-        ) : null}
+        styles={{ body: { maxHeight: '74vh', overflowY: 'auto', paddingRight: 6 } }}
       >
         {drawerMembro && (
           <DetalheMembro
             membro={drawerMembro}
+            mes={mes}
             cobrancas={(detalheCobr ?? cobrancasDoMembro(drawerMembro.id)) as CobrancaDetalhada[]}
             provisao={provisao}
             loading={detalheCobr === null}
+            pdfLoading={pdfLoading}
+            onPdf={() => baixarPdfMembro(drawerMembro)}
             onNova={() => abrirNovaCobranca({ membroId: drawerMembro.id, competencia: mes })}
             onTogglePago={togglePago}
             onEditar={abrirEditarCobranca}
             onRemover={removerCobranca}
           />
         )}
-      </Drawer>
+      </Modal>
     </div>
   );
 }
@@ -363,12 +366,14 @@ function DivV({ t }: { t: ReturnType<typeof useTokens> }): React.ReactElement {
 // Sumariza, mês a mês (a partir do mês corrente), o total A RECEBER (cobranças
 // pendentes) de toda a família. Cada compra parcelada já cai no seu respectivo
 // mês — então dá pra "bater o olho" no compromisso do ano todo. Clicar foca o mês.
-function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar, onReorganizar, reorganizando }: {
+function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar, onReorganizar, reorganizando, titulo, descricao }: {
   cobrancas: Cobranca[];
   mesAtivo: string;
   onSelecionar?: (comp: string) => void;
   onReorganizar?: () => void;
   reorganizando?: boolean;
+  titulo?: React.ReactNode;
+  descricao?: string;
 }): React.ReactElement {
   const t = useTokens();
   const hoje = new Date();
@@ -406,7 +411,7 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar, onReorganizar, reorg
 
   return (
     <Panel
-      title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CalendarRange size={16} color={t.accents.lavender} /> Próximos 12 meses · custo da família</span>}
+      title={titulo ?? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CalendarRange size={16} color={t.accents.lavender} /> Próximos 12 meses · custo da família</span>}
       extra={
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
           <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>Total no período: <strong style={{ color: t.text }}>{formatBRL(totalPeriodo)}</strong></span>
@@ -426,7 +431,7 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar, onReorganizar, reorg
       }
     >
       <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, marginBottom: 12 }}>
-        Quanto do seu cartão é da família em cada mês — cada parcela já cai no mês da sua fatura. Clique num mês pra focá-lo.
+        {descricao ?? 'Quanto do seu cartão é da família em cada mês — cada parcela já cai no mês da sua fatura. Clique num mês pra focá-lo.'}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(96px, 1fr))', gap: 8 }}>
         {meses.map((m) => {
@@ -817,11 +822,14 @@ function StatMembro({ label, valor, cor, destaque }: { label: string; valor: str
 }
 
 // ─── Detalhe do membro (drawer) ─────────────────────────────────────────────────
-function DetalheMembro({ membro, cobrancas, provisao, loading, onNova, onTogglePago, onEditar, onRemover }: {
+function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, onPdf, onNova, onTogglePago, onEditar, onRemover }: {
   membro: FamiliaMembro;
+  mes: string;
   cobrancas: CobrancaDetalhada[];
   provisao: ProvisaoMembro | null;
   loading: boolean;
+  pdfLoading?: boolean;
+  onPdf?: () => void;
   onNova: () => void;
   onTogglePago: (c: Cobranca) => void;
   onEditar: (c: Cobranca) => void;
@@ -833,6 +841,14 @@ function DetalheMembro({ membro, cobrancas, provisao, loading, onNova, onToggleP
   const esteMes = provisao?.custoEsteMes ?? 0;
   const futuro = provisao?.custoFuturo ?? 0;
   const reembolsado = provisao?.totalPago ?? 0;
+
+  // Clicar num mês da régua do membro foca o grupo correspondente na visão "Por mês".
+  const focarMes = (comp: string) => {
+    setModo('mes');
+    setTimeout(() => {
+      document.getElementById(`mesgrupo-${comp}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 60);
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -848,10 +864,28 @@ function DetalheMembro({ membro, cobrancas, provisao, loading, onNova, onToggleP
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
-        <Button type="primary" size="small" icon={<Plus size={14} />} onClick={onNova} style={{ background: membro.cor, borderColor: membro.cor }}>
-          Atribuir manual
-        </Button>
+      {/* Linha do tempo do PRÓPRIO membro — próximos 12 meses, só o que é dele. */}
+      {!loading && cobrancas.length > 0 && (
+        <Resumo12Meses
+          cobrancas={cobrancas}
+          mesAtivo={mes}
+          onSelecionar={focarMes}
+          titulo={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CalendarRange size={16} color={membro.cor} /> Próximos 12 meses · {membro.nome}</span>}
+          descricao={`O que ${membro.nome.split(' ')[0]} tem no seu cartão mês a mês — cada parcela já cai no mês da fatura. Clique num mês pra ir até ele.`}
+        />
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap' }}>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <Button type="primary" size="small" icon={<Plus size={14} />} onClick={onNova} style={{ background: membro.cor, borderColor: membro.cor }}>
+            Atribuir manual
+          </Button>
+          {onPdf && (
+            <Button size="small" icon={<FileDown size={14} />} loading={pdfLoading} onClick={onPdf}>
+              PDF
+            </Button>
+          )}
+        </div>
         {/* Toggle Por mês × Lista */}
         <div style={{ display: 'inline-flex', background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 9, padding: 3, gap: 3 }}>
           {([['mes', 'Por mês', CalendarRange], ['lista', 'Lista', ListChecks]] as const).map(([op, label, Ico]) => {
@@ -888,7 +922,7 @@ function DetalheMembro({ membro, cobrancas, provisao, loading, onNova, onToggleP
             const etiqueta = m.competencia === provisao.mesAtual ? 'este mês' : m.futuro ? 'previsto' : '';
             const qtd = m.itens.length;
             return (
-              <div key={m.competencia} style={{
+              <div key={m.competencia} id={`mesgrupo-${m.competencia}`} style={{
                 display: 'flex', flexDirection: 'column', gap: 10,
                 padding: '12px 14px 14px', borderRadius: 14,
                 background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,

@@ -36,6 +36,23 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.206.0] — 2026-06-29
+
+### Mudado
+- **Detalhe do familiar virou um modal central premium (antes era gaveta lateral)**:
+  900px+ no meio da tela, com cabeçalho (avatar, nome, relação), tiles de resumo
+  (custo total · este mês · futuro), ações (Atribuir manual + PDF) e a visão
+  "Por mês"/"Lista" — tudo num espaço que respira.
+- **Linha do tempo dos 12 meses agora também é por familiar**: dentro do modal de
+  cada membro tem a régua dos próximos 12 meses só com o que é dele — sem o
+  acumulado da família. Cada parcela cai no mês da fatura, e clicar num mês rola
+  até o grupo daquele mês na lista. A régua geral da família continua na tela
+  principal como panorama macro.
+
+### Detalhes técnicos
+- `Resumo12Meses` generalizado (props `titulo`/`descricao`) pra ser reusado tanto
+  no panorama da família quanto na linha do tempo individual de cada membro.
+
 ## [1.205.1] — 2026-06-29
 
 ### Corrigido
