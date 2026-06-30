@@ -142,8 +142,12 @@ export default function Configuracoes({ initialSecao }: ConfiguracoesProps = {})
       .then(res => {
         if (res.ok && res.data) {
           const n = res.data.mapeados.length;
-          if (n > 0) message.success(`${n} configuração(ões) sincronizada(s): ${res.data.mapeados.join('; ')}`);
-          else message.info(`Nada novo para sincronizar. Propriedades encontradas: ${res.data.encontradas.join(', ') || 'nenhuma'}`);
+          const total = res.data.encontradas.length;
+          if (n > 0) {
+            message.success({ content: `${n} configuração${n === 1 ? '' : 'ões'} sincronizada${n === 1 ? '' : 's'}.`, duration: 4 });
+          } else {
+            message.info({ content: `Tudo certo — nada novo pra sincronizar (${total} propriedade${total === 1 ? '' : 's'} no projeto).`, duration: 3 });
+          }
           load();
           validar();
         } else message.error(res.error || 'Erro ao sincronizar');

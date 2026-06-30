@@ -36,6 +36,15 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.231.1] — 2026-06-30
+
+### Corrigido
+- **"Sincronizar do Apps Script"** não despeja mais a lista inteira de
+  propriedades num balão gigante. Agora mostra uma mensagem enxuta (quantas
+  foram sincronizadas, ou "nada novo" com a contagem total).
+
+---
+
 ## [1.231.0] — 2026-06-30
 
 ### Adicionado (autenticação Bearer pra proxy de IA)
