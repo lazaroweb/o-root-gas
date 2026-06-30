@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.222.0] — 2026-06-30
+
+### Adicionado (Recebíveis → Caixa · automação total)
+- **"Registrar recebimento" agora lança a receita automaticamente**: ao informar
+  quanto o membro pagou, além de baixar o saldo, cria uma entrada em **Receitas**
+  (tipo receita, categoria "Reembolso família", método pix, data de hoje) com a
+  descrição "Reembolso {nome}". Um lançamento só, em vez de dois.
+- **Reversível**: excluir essa receita em Receitas **estorna a alocação** nas
+  cobranças (o saldo a receber do membro volta ao que era). Snapshot da
+  distribuição é guardado no próprio lançamento.
+- Schema `FinPessoalLancamentos` +`reembolsoMembroId` / `reembolsoMeta`
+  (append-only) → `SCHEMA_VERSION` v1.93-lancamento-reembolso.
+
 ## [1.221.0] — 2026-06-30
 
 ### Adicionado (Recebíveis · Recebimento geral)

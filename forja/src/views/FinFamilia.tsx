@@ -196,12 +196,12 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
   // conflito com o ajuste item-a-item). Recarrega depois pra refletir a distribuição.
   const registrarRecebimento = (valor: number) => {
     if (!drawerMembro) return;
-    callServer<ServerResponse<{ aplicado: number; restante: number; itensAfetados: number }>>('registrarRecebimentoMembro', drawerMembro.id, valor)
+    callServer<ServerResponse<{ aplicado: number; restante: number; itensAfetados: number; receitaId?: string }>>('registrarRecebimentoMembro', drawerMembro.id, valor)
       .then((res) => {
         if (res?.ok && res.data) {
           const d = res.data;
           const itens = d.itensAfetados;
-          let msg = `Recebido ${formatBRL(d.aplicado)} distribuído em ${itens} ${itens === 1 ? 'item' : 'itens'}.`;
+          let msg = `Recebido ${formatBRL(d.aplicado)} em ${itens} ${itens === 1 ? 'item' : 'itens'} · lançado em Receitas.`;
           if (d.restante > 0.005) msg += ` Sobrou ${formatBRL(d.restante)} (sem itens em aberto pra alocar).`;
           message.success(msg);
         } else {
@@ -209,6 +209,7 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
         }
         if (drawerMembro) carregarDetalheMembro(drawerMembro, true);
         recarregarFamilia();
+        onRecarregar();
       })
       .catch(() => message.error('Erro ao registrar recebimento'));
   };
@@ -1059,7 +1060,7 @@ function PopoverRecebimento({ nome, emAberto, cor, onRegistrar, onClose }: {
         <Button size="small" style={{ flex: 1 }} onClick={() => setInput(emAberto / 2)}>Metade</Button>
       </div>
       <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, lineHeight: 1.4 }}>
-        Quitamos das cobranças mais antigas pras mais novas. {restara > 0.005 ? <>Restará <strong style={{ color: t.accents.peach }}>{formatBRL(restara)}</strong> em aberto.</> : <span style={{ color: t.accents.sage }}>Zera o saldo dele. 🎉</span>}
+        Quita das cobranças mais antigas pras mais novas e <strong style={{ color: t.text }}>lança uma receita</strong> no caixa de hoje. {restara > 0.005 ? <>Restará <strong style={{ color: t.accents.peach }}>{formatBRL(restara)}</strong> em aberto.</> : <span style={{ color: t.accents.sage }}>Zera o saldo dele. 🎉</span>}
       </div>
       <Button type="primary" size="small" block disabled={input <= 0.005} onClick={() => { onRegistrar(input); onClose(); }} style={{ background: cor, borderColor: cor }}>
         Registrar recebimento

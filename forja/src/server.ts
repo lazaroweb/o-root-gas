@@ -281,7 +281,10 @@ const SCHEMA: SheetSchema[] = [
   // controla se o agendador continua replicando ou se o usuário pausou).
   // v1.84: + recorrenciaFim (YYYY-MM-DD opcional — última data em que a recorrência
   // vale; vazio = repete até cancelar). Controla materialização e projeção futura.
-  { name: 'FinPessoalLancamentos', columns: ['id', 'data', 'descricao', 'valor', 'tipo', 'categoria', 'metodo', 'cartaoId', 'status', 'vencimento', 'parcelas', 'parcelaAtual', 'recorrencia', 'tags', 'notas', 'parcelaGrupoId', 'recorrenciaOrigemId', 'recorrenciaAtiva', 'criadoEm', 'atualizadoEm', 'recorrenciaFim'] },
+  // v1.93: + reembolsoMembroId / reembolsoMeta — quando uma receita é criada
+  // automaticamente a partir de um "Registrar recebimento" da Família, guarda o
+  // membro e um snapshot da alocação (JSON) pra permitir reverter ao excluir.
+  { name: 'FinPessoalLancamentos', columns: ['id', 'data', 'descricao', 'valor', 'tipo', 'categoria', 'metodo', 'cartaoId', 'status', 'vencimento', 'parcelas', 'parcelaAtual', 'recorrencia', 'tags', 'notas', 'parcelaGrupoId', 'recorrenciaOrigemId', 'recorrenciaAtiva', 'criadoEm', 'atualizadoEm', 'recorrenciaFim', 'reembolsoMembroId', 'reembolsoMeta'] },
   // FinPessoalCartoes: cartões de crédito cadastrados pra calcular fatura aberta.
   // `diaFechamento` e `diaVencimento`: 1-31 (a UI lida com meses curtos).
   // `cor`: hex pra UI (ex: '#8b5cf6'). `ativo`: 'sim'|'nao'.
@@ -439,7 +442,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.92-cobranca-valorpago';
+const SCHEMA_VERSION = 'v1.93-lancamento-reembolso';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -8208,6 +8211,33 @@ function deletarParcelasDoGrupo(parcelaGrupoId: string): ServerResult {
 
 function deletarLancamentoPessoal(id: string): ServerResult {
   try {
+    // Se for uma receita de reembolso (criada pelo "Registrar recebimento"),
+    // REVERTE a alocação nas cobranças antes de excluir — assim o saldo a receber
+    // do membro volta a contabilizar o que tinha sido baixado.
+    const row = dbGetById('FinPessoalLancamentos', String(id || ''));
+    if (row && String(row['reembolsoMeta'] || '')) {
+      try {
+        const meta = JSON.parse(String(row['reembolsoMeta'])) as { alloc?: Array<[string, number]> };
+        const agora = new Date().toISOString();
+        for (const par of (meta.alloc || [])) {
+          const cobrId = String(par[0]);
+          const add = Math.max(0, Number(par[1]) || 0);
+          if (!cobrId || add <= 0.005) continue;
+          const cob = dbGetById('FinPessoalCobrancas', cobrId);
+          if (!cob) continue;
+          const valor = Math.abs(Number(cob['valor'] || 0));
+          const pagoAtual = Math.max(0, Math.min(valor, Number(cob['valorPago'] || 0)));
+          const novoPago = Math.max(0, pagoAtual - add);
+          const status = novoPago <= 0.005 ? 'pendente' : novoPago >= valor - 0.005 ? 'pago' : 'parcial';
+          dbUpdate('FinPessoalCobrancas', cobrId, {
+            valorPago: novoPago,
+            status,
+            dataPagamento: novoPago > 0.005 ? String(cob['dataPagamento'] || '') : '',
+            atualizadoEm: agora,
+          });
+        }
+      } catch { /* meta corrompida: segue e só apaga o lançamento */ }
+    }
     return dbDelete('FinPessoalLancamentos', id)
       ? { ok: true }
       : { ok: false, error: 'Lançamento não encontrado' };
@@ -10398,7 +10428,7 @@ function registrarPagamentoCobranca(id: string, valorPago: number): ServerResult
 // mesmo campo `valorPago` por item — então convive sem conflito com o ajuste
 // item-a-item (chip). `competencia` (YYYY-MM) opcional restringe a um mês.
 // Devolve { aplicado, restante, itensAfetados } pra feedback no cliente.
-function registrarRecebimentoMembro(membroId: string, valor: number, competencia?: string): ServerResult {
+function registrarRecebimentoMembro(membroId: string, valor: number, competencia?: string, criarReceita?: boolean): ServerResult {
   try {
     const alvo = String(membroId || '').trim();
     if (!alvo) return { ok: false, error: 'Membro inválido.' };
@@ -10428,6 +10458,7 @@ function registrarRecebimentoMembro(membroId: string, valor: number, competencia
 
     let aplicado = 0;
     let afetados = 0;
+    const alloc: Array<[string, number]> = [];
     const agora = new Date().toISOString();
     const hoje = agora.substring(0, 10);
     for (const x of abertos) {
@@ -10444,9 +10475,43 @@ function registrarRecebimentoMembro(membroId: string, valor: number, competencia
       restante -= add;
       aplicado += add;
       afetados += 1;
+      alloc.push([String(x.c['id']), Math.round(add * 100) / 100]);
     }
 
-    return { ok: true, data: { aplicado, restante, itensAfetados: afetados } };
+    // Cria automaticamente a RECEITA no fluxo de caixa (entrada de fato na conta).
+    // Guarda membro + snapshot da alocação pra reverter no delete. `criarReceita`
+    // default true; só não cria quando aplicado ≈ 0.
+    let receitaId = '';
+    if (criarReceita !== false && aplicado > 0.005) {
+      const membro = dbGetById('FinPessoalMembros', alvo);
+      const nomeMembro = membro ? String(membro['nome'] || 'Membro') : 'Membro';
+      const rec = dbCreate('FinPessoalLancamentos', {
+        data: hoje,
+        descricao: 'Reembolso ' + nomeMembro,
+        valor: Math.round(aplicado * 100) / 100,
+        tipo: 'receita',
+        categoria: 'Reembolso família',
+        metodo: 'pix',
+        status: 'pago',
+        vencimento: '',
+        parcelas: 1,
+        parcelaAtual: 1,
+        recorrencia: 'unica',
+        tags: 'reembolso-membro',
+        notas: '',
+        parcelaGrupoId: '',
+        recorrenciaOrigemId: '',
+        recorrenciaAtiva: 'nao',
+        recorrenciaFim: '',
+        reembolsoMembroId: alvo,
+        reembolsoMeta: JSON.stringify({ membroId: alvo, alloc, competencia: comp || '' }),
+        criadoEm: agora,
+        atualizadoEm: agora,
+      }) as Record<string, unknown>;
+      receitaId = String(rec['id'] || '');
+    }
+
+    return { ok: true, data: { aplicado, restante, itensAfetados: afetados, receitaId } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao registrar recebimento' };
   }
