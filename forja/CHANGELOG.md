@@ -36,6 +36,21 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.228.0] — 2026-06-30
+
+### Redesenhado (PDF de cobrança premium)
+- **Layout premium** usando a folha timbrada padrão (logo/empresa + período) e
+  rodapé da Forja, no lugar do cabeçalho improvisado.
+- **KPIs no topo**: Total do mês · Recebido (conciliado) · Em aberto — sempre
+  refletindo o mês inteiro, mesmo quando o detalhe traz só os pendentes.
+- **Seções separadas**: "Em aberto" e "Já recebido / conciliado" deixam de ficar
+  misturados. No modo "Todos os meses" há um **Resumo por mês** (Total/Recebido/
+  Em aberto) antes do detalhe agrupado.
+- **Correções**: removido o emoji que saía como "woman" no título; bloco de PIX
+  só aparece com um valor real (ignora "sim/não" de campos booleanos).
+
+---
+
 ## [1.227.0] — 2026-06-30
 
 ### Adicionado (PDF de cobrança com itens pagos)

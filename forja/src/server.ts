@@ -10927,97 +10927,181 @@ function gerarPdfCobrancasMembro(membroId: string, apenasPendentes?: boolean, co
     const det = getCobrancasMembroDetalhado(String(membroId));
     if (!det.ok) return det;
     let itens = (det.data as Array<Record<string, unknown>>) || [];
-    if (apenasPendentes !== false) itens = itens.filter((c) => String(c['status']) !== 'pago');
     const comp = String(competencia || '').substring(0, 7);
     const filtrarMes = /^\d{4}-\d{2}$/.test(comp);
     if (filtrarMes) itens = itens.filter((c) => String(c['competencia'] || '').substring(0, 7) === comp);
-    // Saldo de um item = valor - já pago. O total do documento é o que ainda
-    // FALTA receber (soma dos saldos), não o valor bruto.
+    // `apenasPendentes` (default true) controla só o DETALHE dos já recebidos.
+    // Os KPIs e o resumo por mês sempre consideram o conjunto completo, pra
+    // mostrar com fidelidade: total do mês, o que entrou e o que ficou aberto.
+    const mostrarPagos = apenasPendentes === false;
+
     const valorDe = (c: Record<string, unknown>) => Math.abs(Number(c['valor'] || 0));
     const pagoDe = (c: Record<string, unknown>) => Math.max(0, Math.min(valorDe(c), Number(c['valorPago'] || 0)));
     const saldoDe = (c: Record<string, unknown>) => Math.max(0, valorDe(c) - pagoDe(c));
-    const total = itens.reduce((s, c) => s + saldoDe(c), 0);
-    const algumPago = itens.some((c) => pagoDe(c) > 0.005);
-    const emp = _empresaPerfil();
+    const ehPago = (c: Record<string, unknown>) => saldoDe(c) <= 0.005 && valorDe(c) > 0.005;
+
+    const abertos = itens.filter((c) => !ehPago(c));
+    const pagos = itens.filter(ehPago);
+    const totalMes = itens.reduce((s, c) => s + valorDe(c), 0);
+    const recebido = itens.reduce((s, c) => s + pagoDe(c), 0);
+    const emAberto = itens.reduce((s, c) => s + saldoDe(c), 0);
+
     const nomeMembro = String(membro['nome'] || 'Membro');
-    const emoji = String(membro['emoji'] || '');
-    const pixMembro = String(membro['pix'] || '').trim() || emp.pix;
     const telMembro = String(membro['telefone'] || '').trim();
     const relacaoMembro = String(membro['relacao'] || '').trim();
+    // PIX: ignora valores "lixo" (sim/não/true...) que vêm de campos booleanos.
+    const emp = _empresaPerfil();
+    const pixRaw = (String(membro['pix'] || '').trim() || String(emp.pix || '').trim());
+    const pixMembro = pixRaw && !/^(sim|s|n[aã]o|n|true|false|yes|no|0|1)$/i.test(pixRaw) ? pixRaw : '';
 
-    // Linha de um item. `comComp` controla a coluna de competência (redundante
-    // quando já há cabeçalho de mês — modo agrupado e modo mês único). Mostra
-    // Valor / Pago / Saldo; a coluna "Pago" só aparece quando houve pagamento.
-    const rowOf = (c: Record<string, unknown>, comComp: boolean): string => {
-      const detParts: string[] = [];
-      if (c['cartaoNome']) detParts.push('Cartão ' + _escHtml(c['cartaoNome']));
-      if (c['dataCompra']) detParts.push('Compra ' + _escHtml(_fmtDataBR(String(c['dataCompra']))));
-      if (c['vencimentoFatura']) detParts.push('Vence ' + _escHtml(_fmtDataBR(String(c['vencimentoFatura']))));
-      const sub = detParts.length ? '<br><span class="muted" style="font-size:10.5px;">' + detParts.join(' · ') + '</span>' : '';
-      const pago = pagoDe(c);
-      // Item quitado (saldo zero): linha em tom suave + selo "pago" pra separar
-      // visualmente do que ainda está em aberto.
-      const quitado = saldoDe(c) <= 0.005 && valorDe(c) > 0.005;
-      const selo = quitado ? ' <span style="font-size:9.5px;color:#3C8C5A;border:1px solid #BFE0CB;border-radius:5px;padding:1px 5px;vertical-align:middle;">pago</span>' : '';
-      const trStyle = quitado ? ' style="color:#9A938A;"' : '';
-      return '<tr' + trStyle + '><td><strong>' + _escHtml(c['descricao'] || '—') + '</strong>' + selo + sub + '</td>'
-        + (comComp ? '<td>' + _escHtml(_fmtCompetenciaBR(String(c['competencia'] || ''))) + '</td>' : '')
-        + '<td class="right mono">' + _fmtBRLpdf(valorDe(c)) + '</td>'
-        + (algumPago ? '<td class="right mono" style="color:#3C8C5A;">' + (pago > 0.005 ? _fmtBRLpdf(pago) : '—') + '</td>' : '')
-        + '<td class="right mono" style="font-weight:600;">' + _fmtBRLpdf(saldoDe(c)) + '</td></tr>';
+    // Subtexto (cartão · compra · vencimento) de uma linha.
+    const subOf = (c: Record<string, unknown>): string => {
+      const p: string[] = [];
+      if (c['cartaoNome']) p.push('Cartão ' + _escHtml(c['cartaoNome']));
+      if (c['dataCompra']) p.push('Compra ' + _escHtml(_fmtDataBR(String(c['dataCompra']))));
+      if (c['vencimentoFatura']) p.push('Vence ' + _escHtml(_fmtDataBR(String(c['vencimentoFatura']))));
+      return p.length ? '<br><span class="muted" style="font-size:10px;">' + p.join(' · ') + '</span>' : '';
     };
-    // Nº de colunas "de valor" (Valor [+ Pago] + Saldo) pra alinhar cabeçalhos/rodapés.
-    const colsValor = algumPago ? 3 : 2;
-    const thValores = '<th class="right">Valor</th>' + (algumPago ? '<th class="right">Pago</th>' : '') + '<th class="right">Saldo</th>';
 
-    let tabela: string;
+    // Linha "em aberto": Descrição | Valor | (Recebido, se houver parcial) | Em aberto.
+    const rowAberto = (c: Record<string, unknown>, comRec: boolean): string =>
+      '<tr><td><strong>' + _escHtml(c['descricao'] || '—') + '</strong>' + subOf(c) + '</td>'
+      + '<td class="right mono">' + _fmtBRLpdf(valorDe(c)) + '</td>'
+      + (comRec ? '<td class="right mono" style="color:#3C8C5A;">' + (pagoDe(c) > 0.005 ? _fmtBRLpdf(pagoDe(c)) : '—') + '</td>' : '')
+      + '<td class="right mono" style="font-weight:700;">' + _fmtBRLpdf(saldoDe(c)) + '</td></tr>';
+
+    // Linha "já recebido": Descrição | Valor | Recebido.
+    const rowPago = (c: Record<string, unknown>): string =>
+      '<tr><td><strong>' + _escHtml(c['descricao'] || '—') + '</strong>' + subOf(c) + '</td>'
+      + '<td class="right mono">' + _fmtBRLpdf(valorDe(c)) + '</td>'
+      + '<td class="right mono" style="color:#3C8C5A;font-weight:600;">' + _fmtBRLpdf(pagoDe(c)) + '</td></tr>';
+
+    const caixaVazia = (txt: string): string =>
+      '<div class="muted" style="padding:20px;text-align:center;border:1px dashed #E7E1D8;border-radius:12px;">' + txt + '</div>';
+
+    // Tabela "em aberto" (sem agrupar) — usada no modo mês único.
+    const tabelaAbertos = (lista: Array<Record<string, unknown>>, totalAberto: number): string => {
+      if (lista.length === 0) return caixaVazia('Nada em aberto — está tudo recebido. 🎉');
+      const comRec = lista.some((c) => pagoDe(c) > 0.005);
+      const cols = comRec ? 3 : 2;
+      const head = '<thead><tr><th>Descrição</th><th class="right">Valor</th>'
+        + (comRec ? '<th class="right">Recebido</th>' : '') + '<th class="right">Em aberto</th></tr></thead>';
+      return '<table>' + head + '<tbody>' + lista.map((c) => rowAberto(c, comRec)).join('') + '</tbody>'
+        + '<tfoot><tr><td colspan="' + cols + '" class="right">Total em aberto</td>'
+        + '<td class="right mono">' + _fmtBRLpdf(totalAberto) + '</td></tr></tfoot></table>';
+    };
+
+    // Tabela "já recebido" (sem agrupar).
+    const tabelaPagos = (lista: Array<Record<string, unknown>>): string =>
+      '<table><thead><tr><th>Descrição</th><th class="right">Valor</th><th class="right">Recebido</th></tr></thead>'
+      + '<tbody>' + lista.map(rowPago).join('') + '</tbody>'
+      + '<tfoot><tr><td colspan="2" class="right">Total recebido</td>'
+      + '<td class="right mono" style="color:#3C8C5A;">' + _fmtBRLpdf(lista.reduce((s, c) => s + pagoDe(c), 0)) + '</td></tr></tfoot></table>';
+
+    const porMes = (lista: Array<Record<string, unknown>>): Record<string, Array<Record<string, unknown>>> => {
+      const g: Record<string, Array<Record<string, unknown>>> = {};
+      for (const c of lista) {
+        const k = String(c['competencia'] || '').substring(0, 7) || '0000-00';
+        (g[k] = g[k] || []).push(c);
+      }
+      return g;
+    };
+
+    // KPIs sempre presentes: total do mês, o que entrou, o que ficou aberto.
+    const kpis = _pdfKpisHtml([
+      { l: filtrarMes ? 'Total do mês' : 'Total geral', v: _fmtBRLpdf(totalMes) },
+      { l: 'Recebido (conciliado)', v: _fmtBRLpdf(recebido) },
+      { l: 'Em aberto', v: _fmtBRLpdf(emAberto), accent: true },
+    ]);
+    const contagem = '<div class="muted" style="font-size:10.5px;margin:-2px 0 2px;">'
+      + abertos.length + ' em aberto · ' + pagos.length + ' já recebido' + (pagos.length === 1 ? '' : 's') + '</div>';
+
+    let secoes: string;
     if (itens.length === 0) {
-      tabela = '<div class="muted" style="padding:30px;text-align:center;">Nada a receber — está tudo em dia. 🎉</div>';
+      secoes = caixaVazia('Nada a receber neste período — está tudo em dia. 🎉');
     } else if (filtrarMes) {
-      // Mês único: tabela simples (a competência é o título do documento).
-      const linhas = itens.map((c) => rowOf(c, false)).join('');
-      tabela = '<table><thead><tr><th>Descrição</th>' + thValores + '</tr></thead>'
-        + '<tbody>' + linhas + '</tbody>'
-        + '<tfoot><tr><td colspan="' + colsValor + '" class="right" style="font-weight:600;border-top:2px solid #E7E1D8;">Total a pagar</td>'
-        + '<td class="right mono" style="font-weight:600;border-top:2px solid #E7E1D8;">' + _fmtBRLpdf(total) + '</td></tr></tfoot></table>';
+      secoes = '<div class="sec">Em aberto</div>' + tabelaAbertos(abertos, emAberto)
+        + ((mostrarPagos && pagos.length) ? '<div class="sec">Já recebido / conciliado</div>' + tabelaPagos(pagos) : '');
     } else {
-      // Todos os meses: agrupa por competência, subtotal por mês + total geral.
-      const grupos: Record<string, Array<Record<string, unknown>>> = {};
+      // Todos os meses: resumo por mês + detalhe agrupado.
+      const mesesMap: Record<string, { total: number; rec: number; ab: number }> = {};
       for (const c of itens) {
         const k = String(c['competencia'] || '').substring(0, 7) || '0000-00';
-        (grupos[k] = grupos[k] || []).push(c);
+        if (!mesesMap[k]) mesesMap[k] = { total: 0, rec: 0, ab: 0 };
+        mesesMap[k].total += valorDe(c); mesesMap[k].rec += pagoDe(c); mesesMap[k].ab += saldoDe(c);
       }
-      const keys = Object.keys(grupos).sort();
-      let linhas = '';
-      for (const k of keys) {
-        const its = grupos[k];
-        const subtotal = its.reduce((s, c) => s + saldoDe(c), 0);
-        linhas += '<tr><td colspan="' + colsValor + '" style="background:#F6F3EE;font-weight:600;border-top:1px solid #E7E1D8;">'
-          + _escHtml(_fmtCompetenciaBR(k)) + ' · ' + its.length + ' item(ns)</td>'
-          + '<td class="right mono" style="background:#F6F3EE;font-weight:600;border-top:1px solid #E7E1D8;">' + _fmtBRLpdf(subtotal) + '</td></tr>';
-        linhas += its.map((c) => rowOf(c, false)).join('');
-      }
-      tabela = '<table><thead><tr><th>Descrição</th>' + thValores + '</tr></thead>'
-        + '<tbody>' + linhas + '</tbody>'
-        + '<tfoot><tr><td colspan="' + colsValor + '" class="right" style="font-weight:600;border-top:2px solid #E7E1D8;">Total a pagar</td>'
-        + '<td class="right mono" style="font-weight:600;border-top:2px solid #E7E1D8;">' + _fmtBRLpdf(total) + '</td></tr></tfoot></table>';
+      const mk = Object.keys(mesesMap).sort();
+      const resumo = '<table><thead><tr><th>Mês</th><th class="right">Total</th><th class="right">Recebido</th><th class="right">Em aberto</th></tr></thead><tbody>'
+        + mk.map((k) => '<tr><td>' + _escHtml(_fmtCompetenciaBR(k)) + '</td>'
+          + '<td class="right mono">' + _fmtBRLpdf(mesesMap[k].total) + '</td>'
+          + '<td class="right mono" style="color:#3C8C5A;">' + _fmtBRLpdf(mesesMap[k].rec) + '</td>'
+          + '<td class="right mono" style="font-weight:700;">' + _fmtBRLpdf(mesesMap[k].ab) + '</td></tr>').join('')
+        + '</tbody><tfoot><tr><td class="right">Total</td>'
+        + '<td class="right mono">' + _fmtBRLpdf(totalMes) + '</td>'
+        + '<td class="right mono" style="color:#3C8C5A;">' + _fmtBRLpdf(recebido) + '</td>'
+        + '<td class="right mono">' + _fmtBRLpdf(emAberto) + '</td></tr></tfoot></table>';
+
+      // Detalhe "em aberto" agrupado por mês (3 colunas; parcial sai no subtexto).
+      const grupoAbertos = (): string => {
+        if (abertos.length === 0) return caixaVazia('Nada em aberto — está tudo recebido. 🎉');
+        const g = porMes(abertos); const ks = Object.keys(g).sort();
+        let linhas = '';
+        for (const k of ks) {
+          const its = g[k]; const sub = its.reduce((s, c) => s + saldoDe(c), 0);
+          linhas += '<tr><td colspan="2" style="background:#F6F3EE;font-weight:700;border-top:1px solid #E7E1D8;">' + _escHtml(_fmtCompetenciaBR(k)) + '</td>'
+            + '<td class="right mono" style="background:#F6F3EE;font-weight:700;border-top:1px solid #E7E1D8;">' + _fmtBRLpdf(sub) + '</td></tr>';
+          linhas += its.map((c) => {
+            const rec = pagoDe(c) > 0.005 ? ' <span style="color:#3C8C5A;font-size:10px;">· recebido ' + _fmtBRLpdf(pagoDe(c)) + '</span>' : '';
+            return '<tr><td><strong>' + _escHtml(c['descricao'] || '—') + '</strong>' + rec + subOf(c) + '</td>'
+              + '<td class="right mono">' + _fmtBRLpdf(valorDe(c)) + '</td>'
+              + '<td class="right mono" style="font-weight:700;">' + _fmtBRLpdf(saldoDe(c)) + '</td></tr>';
+          }).join('');
+        }
+        return '<table><thead><tr><th>Descrição</th><th class="right">Valor</th><th class="right">Em aberto</th></tr></thead>'
+          + '<tbody>' + linhas + '</tbody>'
+          + '<tfoot><tr><td colspan="2" class="right">Total em aberto</td><td class="right mono">' + _fmtBRLpdf(emAberto) + '</td></tr></tfoot></table>';
+      };
+
+      // Detalhe "já recebido" agrupado por mês.
+      const grupoPagos = (): string => {
+        const g = porMes(pagos); const ks = Object.keys(g).sort();
+        let linhas = '';
+        for (const k of ks) {
+          const its = g[k]; const sub = its.reduce((s, c) => s + pagoDe(c), 0);
+          linhas += '<tr><td colspan="2" style="background:#F6F3EE;font-weight:700;border-top:1px solid #E7E1D8;">' + _escHtml(_fmtCompetenciaBR(k)) + '</td>'
+            + '<td class="right mono" style="background:#F6F3EE;font-weight:700;border-top:1px solid #E7E1D8;color:#3C8C5A;">' + _fmtBRLpdf(sub) + '</td></tr>';
+          linhas += its.map(rowPago).join('');
+        }
+        return '<table><thead><tr><th>Descrição</th><th class="right">Valor</th><th class="right">Recebido</th></tr></thead>'
+          + '<tbody>' + linhas + '</tbody>'
+          + '<tfoot><tr><td colspan="2" class="right">Total recebido</td><td class="right mono" style="color:#3C8C5A;">' + _fmtBRLpdf(recebido) + '</td></tr></tfoot></table>';
+      };
+
+      secoes = '<div class="sec">Resumo por mês</div>' + resumo
+        + '<div class="sec">Em aberto — detalhado</div>' + grupoAbertos()
+        + ((mostrarPagos && pagos.length) ? '<div class="sec">Já recebido / conciliado — detalhado</div>' + grupoPagos() : '');
     }
 
-    const escopo = filtrarMes
-      ? 'Competência: ' + _escHtml(_fmtCompetenciaBR(comp))
-      : 'Todos os meses · separado por competência';
+    const periodo = filtrarMes ? _fmtCompetenciaBR(comp) : 'Todos os meses';
+    const paraLinha = [relacaoMembro, telMembro].filter(Boolean).map((x) => _escHtml(String(x))).join(' · ');
+    const paraBloco = '<div style="margin:2px 0 16px;padding:12px 16px;border:1px solid #E7E1D8;border-radius:12px;background:#FBF9F6;">'
+      + '<span class="muted" style="font-size:9px;letter-spacing:0.12em;text-transform:uppercase;">Cobrança para</span>'
+      + '<div style="font-size:16px;font-weight:700;margin-top:2px;">' + _escHtml(nomeMembro) + '</div>'
+      + (paraLinha ? '<div class="muted" style="font-size:11px;margin-top:1px;">' + paraLinha + '</div>' : '')
+      + '</div>';
 
-    const corpo = '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:26px;">'
-      + '<div><div class="muted" style="font-size:10px;letter-spacing:0.16em;text-transform:uppercase;">' + _escHtml(emp.nome) + ' — Cobrança</div>'
-      + '<h1 style="font-size:28px;margin-top:6px;">' + _escHtml((emoji ? emoji + ' ' : '') + nomeMembro) + '</h1>'
-      + ((relacaoMembro || telMembro) ? '<div class="muted" style="font-size:11.5px;margin-top:2px;">' + _escHtml([relacaoMembro, telMembro].filter(Boolean).join(' · ')) + '</div>' : '')
-      + '<div class="muted" style="font-size:11px;margin-top:4px;">' + escopo + ' · Gerado em ' + _escHtml(_fmtDataBR(new Date().toISOString())) + '</div></div>'
-      + '<div class="right"><div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;">Total a pagar</div>'
-      + '<div style="font-size:26px;font-weight:600;margin-top:2px;color:#B05A2A;">' + _fmtBRLpdf(total) + '</div>'
-      + '<div class="muted" style="font-size:11px;">' + itens.length + ' item(ns)</div></div></div>'
-      + tabela
-      + (pixMembro ? '<div style="margin-top:22px;padding:14px 16px;background:#F6F3EE;border:1px solid #E7E1D8;border-radius:10px;font-size:13px;">Pague via PIX: <strong>' + _escHtml(pixMembro) + '</strong></div>' : '')
-      + '<div style="border-top:1px solid #E7E1D8;padding-top:14px;margin-top:32px;" class="muted">Documento gerado pela FORJA · ' + _escHtml(_fmtDataBR(new Date().toISOString())) + '</div>';
+    const pixBloco = pixMembro
+      ? '<div style="margin-top:18px;padding:14px 16px;background:#F6F3EE;border:1px solid #E7E1D8;border-radius:12px;font-size:12.5px;">'
+        + 'Para acertar, pague via <strong>PIX</strong>: <strong class="accent">' + _escHtml(pixMembro) + '</strong></div>'
+      : '';
+
+    const corpo = _pdfTimbreHtml('Cobrança', periodo)
+      + paraBloco
+      + kpis
+      + contagem
+      + secoes
+      + pixBloco
+      + _pdfRodapeHtml();
 
     const sufixo = filtrarMes ? '_' + comp : '';
     const html = _pdfDoc('Cobrança — ' + nomeMembro, corpo);
