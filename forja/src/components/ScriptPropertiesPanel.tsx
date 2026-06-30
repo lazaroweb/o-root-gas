@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Input, Button, App as AntApp, Tooltip, Tag, Skeleton, Alert, Modal, Popconfirm, Empty } from 'antd';
-import { KeyRound, Plus, Search, RefreshCw, Save, Trash2, Eye, EyeOff, Copy, ExternalLink, Lock } from 'lucide-react';
+import { KeyRound, Plus, Search, RefreshCw, Pencil, Trash2, Eye, EyeOff, Copy, ExternalLink, Lock } from 'lucide-react';
 import { Panel } from './ui';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -234,7 +234,7 @@ export default function ScriptPropertiesPanel(): React.ReactElement {
                         />
                       </Tooltip>
                       <Tooltip title="Editar">
-                        <Button size="small" type="text" icon={<Save size={13} />} onClick={() => abrirEdicao(item)} />
+                        <Button size="small" type="text" icon={<Pencil size={13} />} onClick={() => abrirEdicao(item)} />
                       </Tooltip>
                       <Popconfirm
                         title={`Remover "${item.chave}"?`}

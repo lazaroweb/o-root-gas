@@ -36,6 +36,14 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.229.1] — 2026-06-30
+
+### Corrigido
+- **Ícone de editar** no painel de Script Properties trocado de disquete (que
+  parecia "salvar") para um **lápis**, deixando a ação mais clara.
+
+---
+
 ## [1.229.0] — 2026-06-30
 
 ### Adicionado (editor de Script Properties dentro do app)
