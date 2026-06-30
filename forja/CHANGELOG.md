@@ -36,6 +36,14 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.213.1] — 2026-06-30
+
+### Alterado
+- **Modal da fatura: topo travado, rola só a lista**: o resumo da fatura (números,
+  barra de limite, pagar) e a barra de abas agora ficam **fixos**; a rolagem
+  acontece **apenas no conteúdo das abas** (a lista de lançamentos). Saiu a
+  rolagem geral do corpo — fica mais premium e o contexto do topo nunca some.
+
 ## [1.213.0] — 2026-06-30
 
 ### Alterado

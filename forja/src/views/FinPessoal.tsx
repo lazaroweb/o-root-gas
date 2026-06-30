@@ -1672,9 +1672,11 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
         width="min(880px, 94vw)"
         destroyOnClose
         styles={{
-          content: { borderRadius: 22, boxShadow: t.shadowSoft, padding: '22px 26px 26px' },
+          content: { borderRadius: 22, boxShadow: t.shadowSoft, padding: '22px 26px 22px' },
           header: { marginBottom: 14 },
-          body: { maxHeight: '74vh', overflowY: 'auto', overflowX: 'hidden', paddingRight: 6 },
+          // Corpo de altura fixa SEM rolagem geral — quem rola é só a lista de
+          // lançamentos (ver DetalheFatura). Topo (resumo + abas) fica travado.
+          body: { height: '74vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0 },
         }}
       >
         <DetalheFatura
@@ -2451,10 +2453,19 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%', minHeight: 0 }}>
+      {/* Topo FIXO: resumo da fatura (números, barra de limite, pagar). A barra
+          de abas também fica travada; só o conteúdo das abas (a lista de
+          lançamentos) rola — ver o <style> da .forja-fatura-tabs abaixo. */}
+      <style>{`
+        .forja-fatura-tabs{display:flex;flex-direction:column;height:100%;min-height:0;}
+        .forja-fatura-tabs > .ant-tabs-nav{flex-shrink:0;margin-bottom:12px;}
+        .forja-fatura-tabs .ant-tabs-content-holder{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-right:6px;}
+        .forja-fatura-tabs .ant-tabs-content{height:100%;}
+      `}</style>
       <div style={{
         background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
-        borderRadius: 12, padding: 16,
+        borderRadius: 12, padding: 16, flexShrink: 0,
       }}>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           {blocoNumero(
@@ -2504,6 +2515,8 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
       </div>
 
       <Tabs
+        className="forja-fatura-tabs"
+        style={{ flex: 1, minHeight: 0 }}
         defaultActiveKey="lancamentos"
         items={[
           { key: 'lancamentos', label: 'Lançamentos', children: abaLancamentos },
