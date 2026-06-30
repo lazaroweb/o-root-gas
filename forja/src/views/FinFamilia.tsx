@@ -366,7 +366,7 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
         footer={null}
         width={920}
         destroyOnClose
-        styles={{ body: { maxHeight: '74vh', overflowY: 'auto', paddingRight: 6 } }}
+        styles={{ body: { height: '74vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' } }}
       >
         {drawerMembro && (
           <DetalheMembro
@@ -957,16 +957,44 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
     return items;
   }, [mesesPdf, onPdf]);
 
-  // Clicar num mês da régua do membro foca o grupo correspondente na visão "Por mês".
+  // Aba de mês ativa na visão "Por mês". null = "Todos" (mostra todos os meses).
+  const [mesAba, setMesAba] = useState<string | null>(null);
+
+  // Meses (competências) com cobranças, respeitando o filtro de cartão — viram
+  // as abas Jun/26 · Jul/26 · Ago/26 acima da lista.
+  const mesesAba = useMemo(() => {
+    const mapa: Record<string, number> = {};
+    for (const c of cobrFiltradas) {
+      const comp = String(c.competencia || '').substring(0, 7);
+      if (/^\d{4}-\d{2}$/.test(comp)) mapa[comp] = (mapa[comp] || 0) + Math.abs(Number(c.valor || 0));
+    }
+    return Object.keys(mapa).sort().map((comp) => ({ comp, total: mapa[comp] }));
+  }, [cobrFiltradas]);
+
+  const labelMesCurto = (comp: string) => {
+    const s = dayjs(`${comp}-01`).format('MMM/YY');
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  };
+
+  // Default da aba: o mês atual quando ele tem itens; senão "Todos". Mantém a
+  // seleção válida quando o filtro de cartão muda os meses disponíveis.
+  useEffect(() => {
+    if (mesesAba.length === 0) { setMesAba(null); return; }
+    setMesAba((prev) => {
+      if (prev && mesesAba.some((m) => m.comp === prev)) return prev;
+      if (mesesAba.some((m) => m.comp === mes)) return mes;
+      return null;
+    });
+  }, [mesesAba, mes]);
+
+  // Clicar num mês da régua seleciona a aba correspondente na visão "Por mês".
   const focarMes = (comp: string) => {
     setModo('mes');
-    setTimeout(() => {
-      document.getElementById(`mesgrupo-${comp}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 60);
+    setMesAba(comp);
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, height: '100%', minHeight: 0 }}>
       {/* Resumo consultivo: custo total + recorte este mês × futuro (parcelas) */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
         <StatMembro label="Custo total atribuído" valor={formatBRL(custoTotal)} cor={custoTotal > 0 ? t.accents.lavender : t.textTertiary} destaque />
@@ -1045,6 +1073,27 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
         </div>
       </div>
 
+      {/* Abas de mês — Todos · Jun/26 · Jul/26 · … — fixas acima dos lançamentos.
+          Clicar filtra a lista pra o mês escolhido (só na visão "Por mês"). */}
+      {!loading && modo === 'mes' && provisao && mesesAba.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 2, flexShrink: 0 }}>
+          {([{ comp: null as string | null, total: 0 }, ...mesesAba]).map((m) => {
+            const on = mesAba === m.comp;
+            return (
+              <button key={m.comp ?? 'todos'} onClick={() => setMesAba(m.comp)} style={{
+                border: `1px solid ${on ? membro.cor : t.borderSoft}`, cursor: 'pointer',
+                fontFamily: FONTS.ui, fontSize: 12, fontWeight: on ? 600 : 500,
+                padding: '5px 13px', borderRadius: 999, transition: 'all 0.15s', whiteSpace: 'nowrap',
+                background: on ? membro.cor : t.surfaceMuted, color: on ? '#fff' : t.textSecondary,
+              }}>
+                {m.comp ? labelMesCurto(m.comp) : 'Todos'}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
       {loading ? (
         <div style={{ color: t.textTertiary, fontSize: 13, textAlign: 'center', padding: 20 }}>Carregando…</div>
       ) : cobrancas.length === 0 ? (
@@ -1062,6 +1111,7 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
           {provisao.porMes
             .map((m) => ({ ...m, itens: m.itens.filter(passaFiltro) }))
             .filter((m) => m.itens.length > 0)
+            .filter((m) => !mesAba || m.competencia === mesAba)
             .map((m) => {
             const total = m.itens.reduce((s, c) => s + Math.abs(Number(c.valor || 0)), 0);
             const pago = m.itens.filter((c) => String(c.status) === 'pago').reduce((s, c) => s + Math.abs(Number(c.valor || 0)), 0);
@@ -1128,6 +1178,7 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
           })}
         </div>
       )}
+      </div>
     </div>
   );
 }

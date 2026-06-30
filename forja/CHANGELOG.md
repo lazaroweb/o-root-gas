@@ -36,6 +36,16 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.216.0] — 2026-06-30
+
+### Alterado
+- **Detalhe do membro: topo fixo + abas de mês.** O cabeçalho (custo total/este
+  mês/futuro, filtro de cartão, régua "12 meses" e as ações Atribuir/PDF) agora
+  fica **fixo** e só a lista de lançamentos rola — igual ao modal da fatura.
+- **Novas abas de mês** (Todos · Jun/26 · Jul/26 · Ago/26 …) acima da lista, na
+  visão "Por mês": clicar mostra só aquele mês abaixo. Clicar num mês da régua
+  também seleciona a aba. Default abre no mês atual quando ele tem itens.
+
 ## [1.215.0] — 2026-06-30
 
 ### Adicionado
