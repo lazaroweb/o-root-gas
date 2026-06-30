@@ -319,14 +319,17 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
       )}
       </>)}
 
-      {/* Recebíveis — quanto cada um já me devolveu no ano */}
+      {/* Recebíveis — saldo a receber acumulado + reembolsos por mês */}
       {secao === 'recebiveis' && (
         semMembros ? (
           <Panel title="Recebíveis">
             <Empty description="Cadastre membros na Família primeiro." image={Empty.PRESENTED_IMAGE_SIMPLE} />
           </Panel>
         ) : (
-          <RelatorioReembolsos cobrancas={cobrancas} membros={membrosLista} />
+          <>
+            <PainelRecebiveis cobrancas={cobrancas} membros={membrosLista} onAbrirMembro={(m) => setDrawerMembro(m)} />
+            <RelatorioReembolsos cobrancas={cobrancas} membros={membrosLista} />
+          </>
         )
       )}
 
@@ -572,6 +575,114 @@ function Resumo12Meses({ cobrancas, mesAtivo, onSelecionar, onReorganizar, reorg
 // Consultivo: soma o que cada membro JÁ TE DEVOLVEU (cobranças marcadas como
 // reembolsadas) no ano, com tira de 12 meses por membro. Calculado no cliente a
 // partir das cobranças já carregadas — fica em sincronia com o toggle de reembolso.
+// valorPago de uma cobrança, com fallback pra linhas legadas (sem o campo):
+// status 'pago' → valor cheio; senão 0. Clampa em [0, valor].
+function valorPagoDe(c: Cobranca): number {
+  const valor = Math.abs(Number(c.valor || 0));
+  const raw = (c as { valorPago?: unknown }).valorPago;
+  const vp = (raw === '' || raw === null || raw === undefined)
+    ? (String(c.status) === 'pago' ? valor : 0)
+    : Number(raw) || 0;
+  return Math.max(0, Math.min(valor, vp));
+}
+
+// Painel de Recebíveis — saldo a receber ACUMULADO (todas as competências, com
+// pagamentos parciais). Atribuído × Recebido × Em aberto por membro. Clicar abre
+// o detalhe do membro. É o "quanto cada um ainda me deve no total".
+function PainelRecebiveis({ cobrancas, membros, onAbrirMembro }: {
+  cobrancas: Cobranca[];
+  membros: FamiliaMembro[];
+  onAbrirMembro: (m: FamiliaMembro) => void;
+}): React.ReactElement {
+  const t = useTokens();
+  const membroMap = useMemo(() => {
+    const m: Record<string, FamiliaMembro> = {};
+    membros.forEach((x) => { m[x.id] = x; });
+    return m;
+  }, [membros]);
+
+  const { lista, totalAtribuido, totalRecebido, totalAberto } = useMemo(() => {
+    const porMembro: Record<string, { atribuido: number; recebido: number }> = {};
+    for (const c of cobrancas) {
+      const mid = c.membroId;
+      if (!mid) continue;
+      const valor = Math.abs(Number(c.valor || 0));
+      if (!porMembro[mid]) porMembro[mid] = { atribuido: 0, recebido: 0 };
+      porMembro[mid].atribuido += valor;
+      porMembro[mid].recebido += valorPagoDe(c);
+    }
+    const lista = Object.keys(porMembro)
+      .map((mid) => {
+        const r = porMembro[mid];
+        return { membro: membroMap[mid], atribuido: r.atribuido, recebido: r.recebido, aberto: Math.max(0, r.atribuido - r.recebido) };
+      })
+      .filter((x) => x.membro && x.atribuido > 0.005)
+      .sort((a, b) => b.aberto - a.aberto);
+    return {
+      lista,
+      totalAtribuido: lista.reduce((s, x) => s + x.atribuido, 0),
+      totalRecebido: lista.reduce((s, x) => s + x.recebido, 0),
+      totalAberto: lista.reduce((s, x) => s + x.aberto, 0),
+    };
+  }, [cobrancas, membroMap]);
+
+  return (
+    <Panel title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><HandCoins size={16} color={t.accents.peach} /> Saldo a receber</span>}>
+      <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, marginBottom: 14 }}>
+        Acumulado de todas as competências (inclui parcelas futuras e pagamentos parciais). É o que ainda falta cada um te devolver.
+      </div>
+      {lista.length === 0 ? (
+        <Empty description="Sem cobranças atribuídas ainda." image={Empty.PRESENTED_IMAGE_SIMPLE} />
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+            <StatMembro label="Total atribuído" valor={formatBRL(totalAtribuido)} cor={t.text} />
+            <StatMembro label="Já recebido" valor={formatBRL(totalRecebido)} cor={t.accents.sage} />
+            <StatMembro label="Em aberto" valor={formatBRL(totalAberto)} cor={totalAberto > 0.005 ? t.accents.peach : t.accents.sage} destaque />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {lista.map((x) => {
+              const pct = x.atribuido > 0 ? Math.min(100, (x.recebido / x.atribuido) * 100) : 0;
+              const quitado = x.aberto <= 0.005;
+              return (
+                <button key={x.membro.id} onClick={() => onAbrirMembro(x.membro)} style={{
+                  display: 'flex', alignItems: 'center', gap: 14, padding: '11px 13px', cursor: 'pointer',
+                  background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 12, textAlign: 'left', width: '100%',
+                }}>
+                  <MembroAvatar membro={x.membro} size={34} radius={10} />
+                  <div style={{ minWidth: 130, flexShrink: 0 }}>
+                    <div style={{ fontFamily: FONTS.ui, fontSize: 13.5, fontWeight: 500, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{x.membro.nome}</div>
+                    <div style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary }}>
+                      recebido {formatBRL(x.recebido)} de {formatBRL(x.atribuido)}
+                    </div>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 120 }}>
+                    <div style={{ height: 8, borderRadius: 999, background: t.borderSoft, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${pct}%`, background: quitado ? t.accents.sage : t.accents.peach, borderRadius: 999, transition: 'width 0.3s' }} />
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'right', minWidth: 96 }}>
+                    {quitado ? (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: 600, color: t.accents.sage }}>
+                        <CheckCircle2 size={13} /> Quitado
+                      </span>
+                    ) : (
+                      <>
+                        <div style={{ fontFamily: FONTS.display, fontSize: 16, fontWeight: 600, color: t.accents.peach, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(x.aberto)}</div>
+                        <div style={{ fontFamily: FONTS.ui, fontSize: 10, color: t.textTertiary }}>em aberto</div>
+                      </>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </Panel>
+  );
+}
+
 function RelatorioReembolsos({ cobrancas, membros }: { cobrancas: Cobranca[]; membros: FamiliaMembro[] }): React.ReactElement {
   const t = useTokens();
   const membroMap = useMemo(() => {
@@ -1017,6 +1128,7 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
   const esteMes = provisao?.custoEsteMes ?? 0;
   const futuro = provisao?.custoFuturo ?? 0;
   const reembolsado = provisao?.totalPago ?? 0;
+  const emAberto = Math.max(0, custoTotal - reembolsado);
 
   // Origens (cartões/métodos) presentes nas cobranças do membro, ordenadas por
   // custo. O filtro/agrupamento só "liga" quando há mais de uma — com 1 cartão
@@ -1112,9 +1224,15 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
         <StatMembro label="Este mês" valor={formatBRL(esteMes)} cor={t.text} />
         <StatMembro label="Futuro · parcelas" valor={formatBRL(futuro)} cor={futuro > 0 ? t.accents.peach : t.textTertiary} />
       </div>
-      {reembolsado > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 10, fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>
-          <CheckCircle2 size={13} color={t.accents.sage} /> Já reembolsado: <strong style={{ color: t.accents.sage }}>{formatBRL(reembolsado)}</strong> <span style={{ color: t.textTertiary }}>· opcional, não afeta o custo</span>
+      {custoTotal > 0.005 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 10, fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, flexWrap: 'wrap' }}>
+          <CheckCircle2 size={13} color={t.accents.sage} /> Recebido <strong style={{ color: t.accents.sage }}>{formatBRL(reembolsado)}</strong>
+          <span style={{ color: t.textTertiary }}>·</span>
+          {emAberto > 0.005 ? (
+            <span>Em aberto <strong style={{ color: t.accents.peach }}>{formatBRL(emAberto)}</strong></span>
+          ) : (
+            <span style={{ color: t.accents.sage }}>tudo quitado</span>
+          )}
         </div>
       )}
 

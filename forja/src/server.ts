@@ -10805,7 +10805,13 @@ function gerarPdfCobrancasMembro(membroId: string, apenasPendentes?: boolean, co
     const comp = String(competencia || '').substring(0, 7);
     const filtrarMes = /^\d{4}-\d{2}$/.test(comp);
     if (filtrarMes) itens = itens.filter((c) => String(c['competencia'] || '').substring(0, 7) === comp);
-    const total = itens.reduce((s, c) => s + Number(c['valor'] || 0), 0);
+    // Saldo de um item = valor - já pago. O total do documento é o que ainda
+    // FALTA receber (soma dos saldos), não o valor bruto.
+    const valorDe = (c: Record<string, unknown>) => Math.abs(Number(c['valor'] || 0));
+    const pagoDe = (c: Record<string, unknown>) => Math.max(0, Math.min(valorDe(c), Number(c['valorPago'] || 0)));
+    const saldoDe = (c: Record<string, unknown>) => Math.max(0, valorDe(c) - pagoDe(c));
+    const total = itens.reduce((s, c) => s + saldoDe(c), 0);
+    const algumPago = itens.some((c) => pagoDe(c) > 0.005);
     const emp = _empresaPerfil();
     const nomeMembro = String(membro['nome'] || 'Membro');
     const emoji = String(membro['emoji'] || '');
@@ -10814,28 +10820,34 @@ function gerarPdfCobrancasMembro(membroId: string, apenasPendentes?: boolean, co
     const relacaoMembro = String(membro['relacao'] || '').trim();
 
     // Linha de um item. `comComp` controla a coluna de competência (redundante
-    // quando já há cabeçalho de mês — modo agrupado e modo mês único).
+    // quando já há cabeçalho de mês — modo agrupado e modo mês único). Mostra
+    // Valor / Pago / Saldo; a coluna "Pago" só aparece quando houve pagamento.
     const rowOf = (c: Record<string, unknown>, comComp: boolean): string => {
       const detParts: string[] = [];
       if (c['cartaoNome']) detParts.push('Cartão ' + _escHtml(c['cartaoNome']));
       if (c['dataCompra']) detParts.push('Compra ' + _escHtml(_fmtDataBR(String(c['dataCompra']))));
       if (c['vencimentoFatura']) detParts.push('Vence ' + _escHtml(_fmtDataBR(String(c['vencimentoFatura']))));
       const sub = detParts.length ? '<br><span class="muted" style="font-size:10.5px;">' + detParts.join(' · ') + '</span>' : '';
+      const pago = pagoDe(c);
       return '<tr><td><strong>' + _escHtml(c['descricao'] || '—') + '</strong>' + sub + '</td>'
         + (comComp ? '<td>' + _escHtml(_fmtCompetenciaBR(String(c['competencia'] || ''))) + '</td>' : '')
-        + '<td style="text-transform:capitalize;">' + _escHtml(String(c['status'] || 'pendente')) + '</td>'
-        + '<td class="right mono">' + _fmtBRLpdf(Number(c['valor'] || 0)) + '</td></tr>';
+        + '<td class="right mono">' + _fmtBRLpdf(valorDe(c)) + '</td>'
+        + (algumPago ? '<td class="right mono" style="color:#3C8C5A;">' + (pago > 0.005 ? _fmtBRLpdf(pago) : '—') + '</td>' : '')
+        + '<td class="right mono" style="font-weight:600;">' + _fmtBRLpdf(saldoDe(c)) + '</td></tr>';
     };
+    // Nº de colunas "de valor" (Valor [+ Pago] + Saldo) pra alinhar cabeçalhos/rodapés.
+    const colsValor = algumPago ? 3 : 2;
+    const thValores = '<th class="right">Valor</th>' + (algumPago ? '<th class="right">Pago</th>' : '') + '<th class="right">Saldo</th>';
 
     let tabela: string;
     if (itens.length === 0) {
-      tabela = '<div class="muted" style="padding:30px;text-align:center;">Nada pendente — está tudo em dia. 🎉</div>';
+      tabela = '<div class="muted" style="padding:30px;text-align:center;">Nada a receber — está tudo em dia. 🎉</div>';
     } else if (filtrarMes) {
       // Mês único: tabela simples (a competência é o título do documento).
       const linhas = itens.map((c) => rowOf(c, false)).join('');
-      tabela = '<table><thead><tr><th>Descrição</th><th>Status</th><th class="right">Valor</th></tr></thead>'
+      tabela = '<table><thead><tr><th>Descrição</th>' + thValores + '</tr></thead>'
         + '<tbody>' + linhas + '</tbody>'
-        + '<tfoot><tr><td colspan="2" class="right" style="font-weight:600;border-top:2px solid #E7E1D8;">Total</td>'
+        + '<tfoot><tr><td colspan="' + colsValor + '" class="right" style="font-weight:600;border-top:2px solid #E7E1D8;">Total a pagar</td>'
         + '<td class="right mono" style="font-weight:600;border-top:2px solid #E7E1D8;">' + _fmtBRLpdf(total) + '</td></tr></tfoot></table>';
     } else {
       // Todos os meses: agrupa por competência, subtotal por mês + total geral.
@@ -10848,15 +10860,15 @@ function gerarPdfCobrancasMembro(membroId: string, apenasPendentes?: boolean, co
       let linhas = '';
       for (const k of keys) {
         const its = grupos[k];
-        const subtotal = its.reduce((s, c) => s + Number(c['valor'] || 0), 0);
-        linhas += '<tr><td colspan="2" style="background:#F6F3EE;font-weight:600;border-top:1px solid #E7E1D8;">'
+        const subtotal = its.reduce((s, c) => s + saldoDe(c), 0);
+        linhas += '<tr><td colspan="' + colsValor + '" style="background:#F6F3EE;font-weight:600;border-top:1px solid #E7E1D8;">'
           + _escHtml(_fmtCompetenciaBR(k)) + ' · ' + its.length + ' item(ns)</td>'
           + '<td class="right mono" style="background:#F6F3EE;font-weight:600;border-top:1px solid #E7E1D8;">' + _fmtBRLpdf(subtotal) + '</td></tr>';
         linhas += its.map((c) => rowOf(c, false)).join('');
       }
-      tabela = '<table><thead><tr><th>Descrição</th><th>Status</th><th class="right">Valor</th></tr></thead>'
+      tabela = '<table><thead><tr><th>Descrição</th>' + thValores + '</tr></thead>'
         + '<tbody>' + linhas + '</tbody>'
-        + '<tfoot><tr><td colspan="2" class="right" style="font-weight:600;border-top:2px solid #E7E1D8;">Total geral</td>'
+        + '<tfoot><tr><td colspan="' + colsValor + '" class="right" style="font-weight:600;border-top:2px solid #E7E1D8;">Total a pagar</td>'
         + '<td class="right mono" style="font-weight:600;border-top:2px solid #E7E1D8;">' + _fmtBRLpdf(total) + '</td></tr></tfoot></table>';
     }
 
@@ -10869,7 +10881,7 @@ function gerarPdfCobrancasMembro(membroId: string, apenasPendentes?: boolean, co
       + '<h1 style="font-size:28px;margin-top:6px;">' + _escHtml((emoji ? emoji + ' ' : '') + nomeMembro) + '</h1>'
       + ((relacaoMembro || telMembro) ? '<div class="muted" style="font-size:11.5px;margin-top:2px;">' + _escHtml([relacaoMembro, telMembro].filter(Boolean).join(' · ')) + '</div>' : '')
       + '<div class="muted" style="font-size:11px;margin-top:4px;">' + escopo + ' · Gerado em ' + _escHtml(_fmtDataBR(new Date().toISOString())) + '</div></div>'
-      + '<div class="right"><div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;">Total a receber</div>'
+      + '<div class="right"><div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;">Total a pagar</div>'
       + '<div style="font-size:26px;font-weight:600;margin-top:2px;color:#B05A2A;">' + _fmtBRLpdf(total) + '</div>'
       + '<div class="muted" style="font-size:11px;">' + itens.length + ' item(ns)</div></div></div>'
       + tabela

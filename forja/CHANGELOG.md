@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.219.0] — 2026-06-30
+
+### Adicionado (Recebíveis · Fase 2)
+- **Saldo a receber acumulado** na seção Recebíveis: painel com Total atribuído ×
+  Já recebido × **Em aberto**, e por membro uma barra de progresso (recebido/
+  atribuído) com o saldo — somando todas as competências (parcelas futuras e
+  pagamentos parciais). Clicar no membro abre o detalhe.
+- **Detalhe do membro** mostra agora **"Recebido · Em aberto"** (ou "tudo
+  quitado") no lugar do antigo "Já reembolsado".
+- **Extrato/PDF** ganhou colunas **Valor / Pago / Saldo** e o cabeçalho passou a
+  ser **"Total a pagar"** (soma dos saldos) — a coluna "Pago" só aparece quando
+  houve pagamento. Funciona no mês único e no agrupado por competência.
+
 ## [1.218.0] — 2026-06-30
 
 ### Alterado
