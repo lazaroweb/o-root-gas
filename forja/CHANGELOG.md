@@ -36,6 +36,21 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.230.0] — 2026-06-30
+
+### Corrigido (PDF — reconciliação do "recebido")
+- Esclarecida a diferença entre o KPI **Recebido (conciliado)** (tudo que entrou,
+  incluindo parcial de itens em aberto) e o **Total recebido** da tabela de
+  quitados (só itens 100% pagos).
+- Linha de reconciliação sob os KPIs: `Recebido = quitados X + parcial em itens
+  em aberto Y = Z`.
+- Seção **Em aberto** agora soma também o **recebido parcial** no rodapé.
+- Tabela de quitados renomeada para **"Total recebido (itens quitados)"**.
+- Fix: no modo "Todos os meses" o rodapé dos quitados somava o recebido total
+  (não batia com as linhas); agora soma só os quitados.
+
+---
+
 ## [1.229.1] — 2026-06-30
 
 ### Corrigido

@@ -10945,6 +10945,11 @@ function gerarPdfCobrancasMembro(membroId: string, apenasPendentes?: boolean, co
     const totalMes = itens.reduce((s, c) => s + valorDe(c), 0);
     const recebido = itens.reduce((s, c) => s + pagoDe(c), 0);
     const emAberto = itens.reduce((s, c) => s + saldoDe(c), 0);
+    // O "recebido" total se divide em: itens 100% quitados + o que já entrou
+    // como PARCIAL em itens que continuam em aberto. Separar os dois evita a
+    // confusão de "o KPI diz X mas a tabela de quitados soma menos".
+    const recebidoQuitado = pagos.reduce((s, c) => s + pagoDe(c), 0);
+    const recebidoParcial = abertos.reduce((s, c) => s + pagoDe(c), 0);
 
     const nomeMembro = String(membro['nome'] || 'Membro');
     const telMembro = String(membro['telefone'] || '').trim();
@@ -10986,16 +10991,23 @@ function gerarPdfCobrancasMembro(membroId: string, apenasPendentes?: boolean, co
       const cols = comRec ? 3 : 2;
       const head = '<thead><tr><th>Descrição</th><th class="right">Valor</th>'
         + (comRec ? '<th class="right">Recebido</th>' : '') + '<th class="right">Em aberto</th></tr></thead>';
-      return '<table>' + head + '<tbody>' + lista.map((c) => rowAberto(c, comRec)).join('') + '</tbody>'
-        + '<tfoot><tr><td colspan="' + cols + '" class="right">Total em aberto</td>'
-        + '<td class="right mono">' + _fmtBRLpdf(totalAberto) + '</td></tr></tfoot></table>';
+      // Quando há parcial, o rodapé mostra também quanto já entrou (parcial)
+      // nesses itens em aberto — fechando a conta com o KPI de recebido.
+      const recParcial = lista.reduce((s, c) => s + pagoDe(c), 0);
+      const tfoot = comRec
+        ? '<tfoot><tr><td colspan="2" class="right">Subtotais</td>'
+          + '<td class="right mono" style="color:#3C8C5A;">' + _fmtBRLpdf(recParcial) + '</td>'
+          + '<td class="right mono">' + _fmtBRLpdf(totalAberto) + '</td></tr></tfoot>'
+        : '<tfoot><tr><td colspan="2" class="right">Total em aberto</td>'
+          + '<td class="right mono">' + _fmtBRLpdf(totalAberto) + '</td></tr></tfoot>';
+      return '<table>' + head + '<tbody>' + lista.map((c) => rowAberto(c, comRec)).join('') + '</tbody>' + tfoot + '</table>';
     };
 
-    // Tabela "já recebido" (sem agrupar).
+    // Tabela "já recebido" (sem agrupar). Só itens 100% quitados.
     const tabelaPagos = (lista: Array<Record<string, unknown>>): string =>
       '<table><thead><tr><th>Descrição</th><th class="right">Valor</th><th class="right">Recebido</th></tr></thead>'
       + '<tbody>' + lista.map(rowPago).join('') + '</tbody>'
-      + '<tfoot><tr><td colspan="2" class="right">Total recebido</td>'
+      + '<tfoot><tr><td colspan="2" class="right">Total recebido (itens quitados)</td>'
       + '<td class="right mono" style="color:#3C8C5A;">' + _fmtBRLpdf(lista.reduce((s, c) => s + pagoDe(c), 0)) + '</td></tr></tfoot></table>';
 
     const porMes = (lista: Array<Record<string, unknown>>): Record<string, Array<Record<string, unknown>>> => {
@@ -11014,7 +11026,11 @@ function gerarPdfCobrancasMembro(membroId: string, apenasPendentes?: boolean, co
       { l: 'Em aberto', v: _fmtBRLpdf(emAberto), accent: true },
     ]);
     const contagem = '<div class="muted" style="font-size:10.5px;margin:-2px 0 2px;">'
-      + abertos.length + ' em aberto · ' + pagos.length + ' já recebido' + (pagos.length === 1 ? '' : 's') + '</div>';
+      + abertos.length + ' em aberto · ' + pagos.length + ' já recebido' + (pagos.length === 1 ? '' : 's') + '</div>'
+      // Reconciliação: explica o "recebido" do KPI quando parte dele é parcial.
+      + (recebidoParcial > 0.005
+        ? '<div class="muted" style="font-size:10.5px;margin:2px 0 2px;">Recebido = quitados <strong>' + _fmtBRLpdf(recebidoQuitado) + '</strong> + parcial em itens em aberto <strong>' + _fmtBRLpdf(recebidoParcial) + '</strong> = <strong>' + _fmtBRLpdf(recebido) + '</strong></div>'
+        : '');
 
     let secoes: string;
     if (itens.length === 0) {
@@ -11074,7 +11090,7 @@ function gerarPdfCobrancasMembro(membroId: string, apenasPendentes?: boolean, co
         }
         return '<table><thead><tr><th>Descrição</th><th class="right">Valor</th><th class="right">Recebido</th></tr></thead>'
           + '<tbody>' + linhas + '</tbody>'
-          + '<tfoot><tr><td colspan="2" class="right">Total recebido</td><td class="right mono" style="color:#3C8C5A;">' + _fmtBRLpdf(recebido) + '</td></tr></tfoot></table>';
+          + '<tfoot><tr><td colspan="2" class="right">Total recebido (itens quitados)</td><td class="right mono" style="color:#3C8C5A;">' + _fmtBRLpdf(recebidoQuitado) + '</td></tr></tfoot></table>';
       };
 
       secoes = '<div class="sec">Resumo por mês</div>' + resumo
