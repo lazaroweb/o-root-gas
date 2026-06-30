@@ -36,6 +36,17 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.223.0] — 2026-06-30
+
+### Corrigido / Adicionado (Receitas pessoais)
+- **Apagar/editar entradas avulsas**: a lista "Entradas avulsas do mês" agora tem
+  botões de editar e remover por linha (antes não dava pra excluir por ali). O
+  remover de uma entrada de reembolso avisa que o saldo do membro será estornado.
+- **Fix**: a receita criada pelo "Registrar recebimento" usava `tipo: 'receita'`
+  e não entrava no total de entradas; agora usa `tipo: 'entrada'` (padrão do
+  pessoal), some no caixa e na soma de "Entradas do mês".
+- Badge "reembolso" nas entradas avulsas geradas automaticamente.
+
 ## [1.222.0] — 2026-06-30
 
 ### Adicionado (Recebíveis → Caixa · automação total)

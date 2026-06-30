@@ -10489,7 +10489,7 @@ function registrarRecebimentoMembro(membroId: string, valor: number, competencia
         data: hoje,
         descricao: 'Reembolso ' + nomeMembro,
         valor: Math.round(aplicado * 100) / 100,
-        tipo: 'receita',
+        tipo: 'entrada',
         categoria: 'Reembolso família',
         metodo: 'pix',
         status: 'pago',

@@ -3636,6 +3636,13 @@ function PainelReceitas({ receitas, lancamentos, onNova, onEditar, onRecarregar 
     });
   };
 
+  const removerAvulsa = (id: string) => {
+    callServer<ServerResponse<unknown>>('deletarLancamentoPessoal', id).then((res) => {
+      if (res.ok) { message.success('Entrada removida'); onRecarregar(); }
+      else message.error(res.error || 'Erro ao remover');
+    }).catch(() => message.error('Erro ao remover'));
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       {/* Hero: total recorrente/mês + CTAs */}
@@ -3752,13 +3759,33 @@ function PainelReceitas({ receitas, lancamentos, onNova, onEditar, onRecarregar 
                 background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 10,
               }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontFamily: FONTS.ui, fontSize: 14, color: t.text }}>{l.descricao}</div>
+                  <div style={{ fontFamily: FONTS.ui, fontSize: 14, color: t.text, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {l.descricao}
+                    {String(l.tags || '').indexOf('reembolso-membro') >= 0 && (
+                      <Tag bordered={false} style={{ margin: 0, fontSize: 10, background: `${t.accents.peach}1f`, color: t.accents.peach }}>reembolso</Tag>
+                    )}
+                  </div>
                   <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary }}>
                     {l.data ? dayjs(l.data).format('DD/MM') : '—'} · {l.categoria}
                   </div>
                 </div>
-                <div style={{ fontFamily: FONTS.display, fontSize: 15, fontWeight: 600, color: t.accents.sage, fontVariantNumeric: 'tabular-nums' }}>
+                <div style={{ fontFamily: FONTS.display, fontSize: 15, fontWeight: 600, color: t.accents.sage, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
                   {formatBRL(Number(l.valor || 0))}
+                </div>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <Tooltip title="Editar">
+                    <Button size="small" type="text" icon={<Pencil size={13} />} onClick={() => onEditar(l)} />
+                  </Tooltip>
+                  <Popconfirm
+                    title="Remover esta entrada?"
+                    description={String(l.tags || '').indexOf('reembolso-membro') >= 0 ? 'Como é um reembolso, o saldo a receber do membro será estornado.' : undefined}
+                    onConfirm={() => removerAvulsa(l.id)}
+                    okText="Remover" cancelText="Cancelar" okButtonProps={{ danger: true }}
+                  >
+                    <Tooltip title="Remover">
+                      <Button size="small" type="text" danger icon={<Trash2 size={13} />} />
+                    </Tooltip>
+                  </Popconfirm>
                 </div>
               </div>
             ))}
