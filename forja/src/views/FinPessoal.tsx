@@ -2333,7 +2333,7 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
   );
 
   const abaLancamentos = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, height: '100%', minHeight: 0 }}>
       {/* Ações no TOPO do drawer — antes ficavam no cabeçalho de "Todos os
           lançamentos" e desciam pro meio quando a janela atual tinha itens.
           Agora ficam sempre acessíveis aqui em cima. */}
@@ -2417,6 +2417,10 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
         </div>
       )}
 
+      {/* SÓ esta área rola — as ações acima (Atribuir / Remover, barra de lote)
+          ficam fixas junto do topo, pra a ação nunca "sumir" enquanto você
+          percorre os lançamentos. */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', paddingRight: 6, display: 'flex', flexDirection: 'column', gap: 18 }}>
       {/* A janela atual costuma estar vazia logo após o fechamento — nesse caso
           não mostramos placeholder, porque a lista completa do cartão (com os
           itens em aberto) vem logo abaixo. Só renderiza se houver itens. */}
@@ -2449,6 +2453,7 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
           ))
         )}
       </div>
+      </div>
     </div>
   );
 
@@ -2460,8 +2465,9 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
       <style>{`
         .forja-fatura-tabs{display:flex;flex-direction:column;height:100%;min-height:0;}
         .forja-fatura-tabs > .ant-tabs-nav{flex-shrink:0;margin-bottom:12px;}
-        .forja-fatura-tabs .ant-tabs-content-holder{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-right:6px;}
+        .forja-fatura-tabs .ant-tabs-content-holder{flex:1;min-height:0;}
         .forja-fatura-tabs .ant-tabs-content{height:100%;}
+        .forja-fatura-tabs .ant-tabs-tabpane{height:100%;}
       `}</style>
       <div style={{
         background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
@@ -2523,7 +2529,11 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
           {
             key: 'provisao',
             label: 'Próximas faturas',
-            children: <ProvisaoFaturas itens={todosItens} />,
+            children: (
+              <div style={{ height: '100%', overflowY: 'auto', overflowX: 'hidden', paddingRight: 6 }}>
+                <ProvisaoFaturas itens={todosItens} />
+              </div>
+            ),
           },
         ]}
       />

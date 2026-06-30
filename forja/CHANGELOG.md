@@ -36,6 +36,15 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.213.2] — 2026-06-30
+
+### Corrigido
+- **Ações da fatura agora ficam fixas de verdade**: os botões "Atribuir a membro"
+  e "Remover importados" (e a barra de atribuição em lote) estavam rolando junto
+  com a lista — então sumiam e você perdia a ação de contexto. Agora a rolagem
+  acontece **só na área das listas de lançamentos**; resumo, abas e ações ficam
+  travados no topo.
+
 ## [1.213.1] — 2026-06-30
 
 ### Alterado
