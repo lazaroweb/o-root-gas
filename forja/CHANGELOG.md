@@ -36,6 +36,22 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.211.0] — 2026-06-30
+
+### Performance
+- **"Meu mês" abre muito mais rápido (especialmente no tablet)**: a carga do
+  Financeiro Pessoal foi quebrada em **2 ondas**. Antes, abrir disparava **12
+  chamadas concorrentes** ao Apps Script (que enfileira) + a chamada própria do
+  "Meu mês" (`getMesExecutivo`) — tudo competindo. Agora a **onda 1** traz só o
+  essencial (resumo, lançamentos, cartões, categorias) e libera a tela; a
+  **onda 2** (pendentes, orçamentos, recorrências, assinaturas, plano, membros e
+  atribuições) carrega em segundo plano, sem travar a primeira pintura nem
+  competir com o `getMesExecutivo`.
+- **Toggle de "pago" instantâneo no "Meu mês"**: marcar/desmarcar uma fatura ou
+  lançamento como pago agora atualiza a tela **na hora** (otimista) e reconcilia
+  com o servidor em segundo plano — sem o recarregamento pesado bloqueando o
+  toque.
+
 ## [1.210.0] — 2026-06-29
 
 ### Corrigido

@@ -108,31 +108,43 @@ export default function FinMesExecutivo({ mes, categorias, lancamentos, cartoes,
     : [];
   const totalCat = itensCat.reduce((s, l) => s + Math.abs(Number(l.valor || 0)), 0);
 
-  // Toggle de pago de um item (receita ou despesa avulsa).
+  // Toggle de pago de um item (receita ou despesa avulsa). OTIMISTA: vira o
+  // status no estado local na hora (feedback instantâneo no tablet), depois
+  // reconcilia com o servidor (`carregar` = 1 RPC) e atualiza o pai em segundo
+  // plano. Em caso de erro, o `carregar` desfaz o otimismo trazendo o real.
   const toggleItem = (item: MesExecutivoItem) => {
     if (item.projecao || !item.id || flight[item.id]) return;
     const novo = item.status === 'pago' ? 'pendente' : 'pago';
+    setData((prev) => (prev ? {
+      ...prev,
+      receitas: prev.receitas.map((x) => (x.id === item.id ? { ...x, status: novo } : x)),
+      avulsas: prev.avulsas.map((x) => (x.id === item.id ? { ...x, status: novo } : x)),
+    } : prev));
     setFlight((f) => ({ ...f, [item.id]: true }));
     callServer<ServerResponse<unknown>>('marcarLancamentoStatus', item.id, novo)
       .then((r) => {
         if (r?.ok) { carregar(); onRecarregar(); }
-        else message.error(r?.error || 'Erro ao mudar status');
+        else { message.error(r?.error || 'Erro ao mudar status'); carregar(); }
       })
-      .catch(() => message.error('Disponível apenas no app publicado'))
+      .catch(() => { message.error('Disponível apenas no app publicado'); carregar(); })
       .finally(() => setFlight((f) => { const n = { ...f }; delete n[item.id]; return n; }));
   };
 
-  // Toggle de pago de uma fatura inteira (cartão).
+  // Toggle de pago de uma fatura inteira (cartão). Mesma estratégia otimista.
   const toggleCartao = (c: MesExecutivoCartao) => {
     if (c.projecao || c.lancamentoIds.length === 0 || flight[c.cartaoId]) return;
     const novo = c.pago ? 'pendente' : 'pago';
+    setData((prev) => (prev ? {
+      ...prev,
+      cartoes: prev.cartoes.map((x) => (x.cartaoId === c.cartaoId ? { ...x, pago: novo === 'pago' } : x)),
+    } : prev));
     setFlight((f) => ({ ...f, [c.cartaoId]: true }));
     callServer<ServerResponse<unknown>>('marcarLancamentosStatus', JSON.stringify(c.lancamentoIds), novo)
       .then((r) => {
         if (r?.ok) { carregar(); onRecarregar(); }
-        else message.error(r?.error || 'Erro ao dar baixa na fatura');
+        else { message.error(r?.error || 'Erro ao dar baixa na fatura'); carregar(); }
       })
-      .catch(() => message.error('Disponível apenas no app publicado'))
+      .catch(() => { message.error('Disponível apenas no app publicado'); carregar(); })
       .finally(() => setFlight((f) => { const n = { ...f }; delete n[c.cartaoId]; return n; }));
   };
 

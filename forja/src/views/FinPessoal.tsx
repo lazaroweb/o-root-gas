@@ -394,24 +394,56 @@ export default function FinPessoal(): React.ReactElement {
     const preload = !autoGerouUmaVez
       ? callServer<ServerResponse<unknown>>('gerarRecorrenciasPendentes').then(() => setAutoGerouUmaVez(true))
       : Promise.resolve();
+    // Carga em 2 ONDAS pra "Meu mês" abrir rápido. O GAS (HTMLService) enfileira
+    // chamadas concorrentes — disparar 12 de uma vez fazia o getMesExecutivo do
+    // "Meu mês" esperar a fila inteira (sofrível no tablet). Agora:
+    //   • Onda 1 (essencial): resumo + lançamentos + cartões + categorias →
+    //     libera a UI e some o esqueleto.
+    //   • Onda 2 (secundária): o que SÓ as outras abas usam (pendentes dedicado,
+    //     orçamentos, recorrências, assinaturas, plano, membros, atribuições) →
+    //     roda em segundo plano, sem travar a primeira pintura.
+    const carregarSecundarios = (jaTemPendentes: boolean) => {
+      Promise.all([
+        jaTemPendentes
+          ? Promise.resolve(null)
+          : callServer<ServerResponse<LancamentoPessoal[]>>('getPendentesPessoais'),
+        callServer<ServerResponse<ProgressoOrcamentos>>('getProgressoOrcamentos', mes),
+        callServer<ServerResponse<RecorrenciaAtiva[]>>('getRecorrenciasAtivas'),
+        callServer<ServerResponse<AssinaturaPessoal[]>>('getAssinaturas'),
+        callServer<ServerResponse<ResumoAssinaturas>>('getResumoAssinaturas'),
+        callServer<ServerResponse<PlanoConta[]>>('getPlanoContas'),
+        callServer<ServerResponse<FamiliaMembro[]>>('getMembros'),
+        callServer<ServerResponse<Array<{ origemId: string; membroId: string }>>>('getAtribuicoesLancamentos'),
+      ])
+        .then(([pendR, orcR, recR, assR, resAssR, planoR, membrosR, atribR]) => {
+          const pend = pendR as ServerResponse<LancamentoPessoal[]> | null;
+          if (!jaTemPendentes && pend?.ok && pend.data) setPendentes(pend.data as LancamentoPessoal[]);
+          if (orcR?.ok && orcR.data) setOrcamentosProgresso(orcR.data as ProgressoOrcamentos);
+          if (recR?.ok && recR.data) setRecorrencias(recR.data as RecorrenciaAtiva[]);
+          if (assR?.ok && assR.data) setAssinaturas(assR.data as AssinaturaPessoal[]);
+          if (resAssR?.ok && resAssR.data) setResumoAssinaturas(resAssR.data as ResumoAssinaturas);
+          if (planoR?.ok && planoR.data) setPlanoContas(planoR.data as PlanoConta[]);
+          if (membrosR?.ok && membrosR.data) setMembros(membrosR.data as FamiliaMembro[]);
+          // Mapa lançamentoId → [membroId...] pra mostrar o avatar do membro no
+          // lugar do "boneco" genérico quando o lançamento já foi atribuído.
+          if (atribR?.ok && Array.isArray(atribR.data)) {
+            const mapa: Record<string, string[]> = {};
+            for (const a of atribR.data as Array<{ origemId: string; membroId: string }>) {
+              (mapa[a.origemId] = mapa[a.origemId] || []).push(a.membroId);
+            }
+            setAtribuicoes(mapa);
+          }
+        })
+        .catch((err) => { console.warn('[FinPessoal] falha na carga secundária:', err); });
+    };
+
     preload.then(() => Promise.all([
       callServer<ServerResponse<ResumoFinPessoal>>('getResumoFinPessoal', mes),
       callServer<ServerResponse<LancamentoPessoal[]>>('getLancamentosPessoais', mes),
       callServer<ServerResponse<CartaoPessoal[]>>('getCartoesPessoais', mes),
-      // Pendentes: endpoint dedicado que filtra no servidor. Antes chamávamos
-      // `getLancamentosPessoais` duas vezes em paralelo (com e sem mês), e o
-      // GAS estrangulava a duplicada — a aba "A pagar" ficava vazia.
-      callServer<ServerResponse<LancamentoPessoal[]>>('getPendentesPessoais'),
-      callServer<ServerResponse<ProgressoOrcamentos>>('getProgressoOrcamentos', mes),
-      callServer<ServerResponse<RecorrenciaAtiva[]>>('getRecorrenciasAtivas'),
       callServer<ServerResponse<CategoriaPessoal[]>>('getCategoriasPessoais', mes),
-      callServer<ServerResponse<AssinaturaPessoal[]>>('getAssinaturas'),
-      callServer<ServerResponse<ResumoAssinaturas>>('getResumoAssinaturas'),
-      callServer<ServerResponse<PlanoConta[]>>('getPlanoContas'),
-      callServer<ServerResponse<FamiliaMembro[]>>('getMembros'),
-      callServer<ServerResponse<Array<{ origemId: string; membroId: string }>>>('getAtribuicoesLancamentos'),
     ])
-      .then(([resR, lancR, cartR, pendR, orcR, recR, catR, assR, resAssR, planoR, membrosR, atribR]) => {
+      .then(([resR, lancR, cartR, catR]) => {
         // Cada resposta é checada com `?.` porque o GAS às vezes devolve null
         // (rate limit, erro silenciado, payload grande). Antes uma única
         // resposta null quebrava TODO o handler — a tela "A pagar" ficava vazia
@@ -431,34 +463,21 @@ export default function FinPessoal(): React.ReactElement {
           setCategoriasUsadas(Array.from(cats).sort());
         }
         if (cartR?.ok && cartR.data) setCartoes(cartR.data as CartaoPessoal[]);
+        if (catR?.ok && catR.data) setCategorias(catR.data as CategoriaPessoal[]);
         // Pendentes: fonte autoritativa é o próprio resumo (`pendentesLista`),
         // que é calculado no MESMO lugar que o contador `qtdPendentes` — então
-        // lista e contador nunca divergem. Se por algum motivo o resumo não
-        // trouxe a lista (versão antiga do servidor), cai pro endpoint dedicado.
+        // lista e contador nunca divergem. Se o resumo trouxe a lista, a onda 2
+        // nem chama o endpoint dedicado.
+        let temPendentes = false;
         if (resumoData && Array.isArray(resumoData.pendentesLista)) {
           setPendentes(resumoData.pendentesLista);
-        } else if (pendR?.ok && pendR.data) {
-          setPendentes(pendR.data as LancamentoPessoal[]);
+          temPendentes = true;
         }
-        if (orcR?.ok && orcR.data) setOrcamentosProgresso(orcR.data as ProgressoOrcamentos);
-        if (recR?.ok && recR.data) setRecorrencias(recR.data as RecorrenciaAtiva[]);
-        if (catR?.ok && catR.data) setCategorias(catR.data as CategoriaPessoal[]);
-        if (assR?.ok && assR.data) setAssinaturas(assR.data as AssinaturaPessoal[]);
-        if (resAssR?.ok && resAssR.data) setResumoAssinaturas(resAssR.data as ResumoAssinaturas);
-        if (planoR?.ok && planoR.data) setPlanoContas(planoR.data as PlanoConta[]);
-        if (membrosR?.ok && membrosR.data) setMembros(membrosR.data as FamiliaMembro[]);
-        // Mapa lançamentoId → [membroId...] pra mostrar o avatar do membro no
-        // lugar do "boneco" genérico quando o lançamento já foi atribuído.
-        if (atribR?.ok && Array.isArray(atribR.data)) {
-          const mapa: Record<string, string[]> = {};
-          for (const a of atribR.data as Array<{ origemId: string; membroId: string }>) {
-            (mapa[a.origemId] = mapa[a.origemId] || []).push(a.membroId);
-          }
-          setAtribuicoes(mapa);
-        }
+        return temPendentes;
       })
-      .catch((err) => { console.warn('[FinPessoal] falha ao recarregar:', err); })
-      .finally(() => setLoading(false)));
+      .catch((err) => { console.warn('[FinPessoal] falha ao recarregar:', err); return false; })
+      .finally(() => setLoading(false))
+      .then((temPendentes) => carregarSecundarios(!!temPendentes)));
   }, [mes, autoGerouUmaVez]);
 
   useEffect(recarregar, [recarregar]);
