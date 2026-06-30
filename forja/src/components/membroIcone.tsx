@@ -173,20 +173,29 @@ export function MembroAvatar({ membro, size = 38, radius = 12 }: { membro: Membr
   );
 }
 
+// Ícones tratados como "mascote de bicho" — só estes mantêm o desenho no chip
+// pequeno; pessoas (humanos) passam a mostrar a INICIAL do nome, que diferencia
+// melhor quem é quem na lista da fatura (P = Patricia, L = Lazaro, M = Malu).
+const PET_ICONE_KEYS = new Set(['dog', 'cat', 'paw']);
+
 // Versão circular pequena (sobre fundo sólido na cor do membro), usada em chips
 // e empilhamentos de avatares na atribuição.
 export function MembroChipAvatar({ membro, size = 20, style }: { membro: MembroLike; size?: number; style?: React.CSSProperties }): React.ReactElement {
-  const Icone = membroIconeComponent(membro.emoji);
+  // Humano → inicial do nome; pet (dog/cat/paw) → mantém o mascote.
+  const ehPet = !!membro.emoji && PET_ICONE_KEYS.has(membro.emoji);
+  const Icone = ehPet ? membroIconeComponent(membro.emoji) : null;
+  const inicial = membro.nome ? membro.nome.trim().charAt(0).toUpperCase() : '?';
   return (
     <span style={{
       width: size, height: size, borderRadius: '50%', background: membro.cor || '#bbb',
       color: '#fff', fontSize: Math.round(size * 0.55), lineHeight: `${size}px`, textAlign: 'center',
+      fontWeight: 600,
       display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
       border: '1.5px solid #fff', flexShrink: 0, ...style,
     }}>
       {Icone
         ? <Icone size={Math.round(size * 0.6)} strokeWidth={2} color="#fff" />
-        : (membro.emoji || (membro.nome ? membro.nome.charAt(0).toUpperCase() : '?'))}
+        : inicial}
     </span>
   );
 }

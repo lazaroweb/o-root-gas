@@ -36,6 +36,14 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.214.0] — 2026-06-30
+
+### Alterado
+- **Avatar de membro humano agora mostra a INICIAL do nome** (P = Patricia,
+  L = Lazaro, M = Malu) em vez do bonequinho genérico — diferencia melhor quem é
+  quem na lista da fatura. Pets (dog/cat/paw) mantêm o mascote. Vale pros chips
+  pequenos de atribuição em toda a fatura.
+
 ## [1.213.2] — 2026-06-30
 
 ### Corrigido
