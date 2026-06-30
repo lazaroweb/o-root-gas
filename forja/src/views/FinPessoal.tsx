@@ -1659,12 +1659,23 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
         onSaved={() => { setModalOpen(false); onRecarregar(); }}
       />
 
-      <Drawer
+      {/* Fatura do cartão: modal CENTRAL (antes era um drawer lateral). Centrado
+          vertical e horizontalmente, largo pra respirar, com rolagem interna no
+          corpo — assim as margens superior/inferior e laterais ficam harmônicas
+          em qualquer tela. Minimalista e premium. */}
+      <Modal
         title={faturaAtual ? `Fatura ${faturaAtual.cartao.apelido || faturaAtual.cartao.nome}` : 'Fatura'}
         open={faturaOpen}
-        onClose={() => setFaturaOpen(false)}
-        width={560}
+        onCancel={() => setFaturaOpen(false)}
+        footer={null}
+        centered
+        width="min(880px, 94vw)"
         destroyOnClose
+        styles={{
+          content: { borderRadius: 22, boxShadow: t.shadowSoft, padding: '22px 26px 26px' },
+          header: { marginBottom: 14 },
+          body: { maxHeight: '74vh', overflowY: 'auto', overflowX: 'hidden', paddingRight: 6 },
+        }}
       >
         <DetalheFatura
           fatura={faturaAtual}
@@ -1684,7 +1695,7 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
           lancAssinaturaIds={lancAssinaturaIds}
           assinaturaEspelhoSigs={assinaturaEspelhoSigs}
         />
-      </Drawer>
+      </Modal>
 
       <PromoverAssinaturaModal
         open={!!promoverLanc}

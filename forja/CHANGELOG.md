@@ -36,6 +36,16 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.213.0] — 2026-06-30
+
+### Alterado
+- **Fatura do cartão agora abre num modal CENTRAL premium** (antes era um drawer
+  que deslizava da lateral): centralizado vertical e horizontalmente, mais largo
+  (`min(880px, 94vw)`) pra respirar e aproveitar o espaço, com rolagem interna no
+  corpo (`maxHeight: 74vh`) — assim as margens superior/inferior e laterais ficam
+  harmônicas em qualquer tela. Cantos arredondados (22px) e sombra suave pra um
+  acabamento minimalista e premium.
+
 ## [1.212.0] — 2026-06-30
 
 ### Performance
