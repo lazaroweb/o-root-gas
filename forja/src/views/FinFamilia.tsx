@@ -366,7 +366,7 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
         footer={null}
         width={920}
         destroyOnClose
-        styles={{ body: { height: '74vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' } }}
+        styles={{ body: { height: '86vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' } }}
       >
         {drawerMembro && (
           <DetalheMembro
@@ -959,6 +959,9 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
 
   // Aba de mês ativa na visão "Por mês". null = "Todos" (mostra todos os meses).
   const [mesAba, setMesAba] = useState<string | null>(null);
+  // Régua "12 meses" recolhível — recolhida por padrão pra sobrar espaço pra
+  // lista; as abas de mês já fazem a navegação rápida.
+  const [reguaAberta, setReguaAberta] = useState(false);
 
   // Meses (competências) com cobranças, respeitando o filtro de cartão — viram
   // as abas Jun/26 · Jul/26 · Ago/26 acima da lista.
@@ -987,10 +990,12 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
     });
   }, [mesesAba, mes]);
 
-  // Clicar num mês da régua seleciona a aba correspondente na visão "Por mês".
+  // Clicar num mês da régua seleciona a aba correspondente e recolhe a régua,
+  // revelando os lançamentos daquele mês logo abaixo.
   const focarMes = (comp: string) => {
     setModo('mes');
     setMesAba(comp);
+    setReguaAberta(false);
   };
 
   return (
@@ -1030,16 +1035,33 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
         </div>
       )}
 
-      {/* Linha do tempo do PRÓPRIO membro — ano-calendário, só o que é dele
-          (respeitando o filtro de cartão acima). */}
+      {/* Linha do tempo do PRÓPRIO membro — recolhível. Recolhida por padrão pra
+          dar espaço à lista; as abas de mês abaixo fazem a navegação rápida. */}
       {!loading && cobrFiltradas.length > 0 && (
-        <Resumo12Meses
-          cobrancas={cobrFiltradas}
-          mesAtivo={mes}
-          onSelecionar={focarMes}
-          titulo={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CalendarRange size={16} color={membro.cor} /> {membro.nome} · 12 meses</span>}
-          descricao={`O que ${membro.nome.split(' ')[0]} tem no cartão mês a mês no ano — cada parcela já cai no mês da fatura. Clique num mês pra ir até ele.`}
-        />
+        <>
+          <button onClick={() => setReguaAberta((o) => !o)} style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+            width: '100%', cursor: 'pointer', border: `1px solid ${t.borderSoft}`,
+            background: t.surfaceMuted, borderRadius: 12, padding: '9px 13px',
+            fontFamily: FONTS.ui, color: t.textSecondary, transition: 'all 0.15s', flexShrink: 0,
+          }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <CalendarRange size={15} color={membro.cor} />
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: t.text }}>{membro.nome.split(' ')[0]} · 12 meses</span>
+              <span style={{ fontSize: 11.5, color: t.textTertiary }}>visão do ano</span>
+            </span>
+            <ChevronDown size={15} style={{ transform: reguaAberta ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+          </button>
+          {reguaAberta && (
+            <Resumo12Meses
+              cobrancas={cobrFiltradas}
+              mesAtivo={mes}
+              onSelecionar={focarMes}
+              titulo={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CalendarRange size={16} color={membro.cor} /> {membro.nome} · 12 meses</span>}
+              descricao={`O que ${membro.nome.split(' ')[0]} tem no cartão mês a mês no ano — cada parcela já cai no mês da fatura. Clique num mês pra ir até ele.`}
+            />
+          )}
+        </>
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap' }}>

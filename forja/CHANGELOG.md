@@ -36,6 +36,15 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.216.1] — 2026-06-30
+
+### Alterado
+- **Detalhe do membro com mais espaço pra lista.** A régua "12 meses" virou
+  **recolhível e fica recolhida por padrão** (um cabeçalho enxuto "Nome · 12
+  meses · visão do ano" com chevron) — a navegação do dia a dia fica nas abas de
+  mês. Modal mais alto (86vh). Clicar num mês da régua agora recolhe a régua e
+  revela os lançamentos daquele mês logo abaixo.
+
 ## [1.216.0] — 2026-06-30
 
 ### Alterado
