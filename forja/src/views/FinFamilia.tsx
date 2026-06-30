@@ -1069,8 +1069,8 @@ function PopoverRecebimento({ nome, emAberto, cor, abertos, onRegistrar, onClose
   }, [abertos, input, ordem]);
 
   return (
-    <div style={{ width: 312, display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>
+    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary }}>
         Quanto <strong style={{ color: t.text }}>{nome.split(' ')[0]}</strong> te pagou? <span style={{ color: t.textTertiary }}>· em aberto {formatBRL(emAberto)}</span>
       </div>
       <InputNumber
@@ -1457,20 +1457,12 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap' }}>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <Popover
-            open={recebPop}
-            onOpenChange={(o) => { if (emAberto > 0.005) setRecebPop(o); }}
-            trigger="click"
-            placement="bottomLeft"
-            destroyTooltipOnHide
-            content={recebPop ? <PopoverRecebimento nome={membro.nome} emAberto={emAberto} cor={t.accents.sage} abertos={itensAbertos} onRegistrar={onRegistrarRecebimento} onClose={() => setRecebPop(false)} /> : null}
-          >
-            <Button type="primary" size="small" icon={<HandCoins size={14} />} disabled={emAberto <= 0.005}
-              title={emAberto > 0.005 ? 'Lançar um valor que o membro pagou' : 'Nada em aberto pra receber'}
-              style={emAberto > 0.005 ? { background: t.accents.sage, borderColor: t.accents.sage } : undefined}>
-              Registrar recebimento
-            </Button>
-          </Popover>
+          <Button type="primary" size="small" icon={<HandCoins size={14} />} disabled={emAberto <= 0.005}
+            onClick={() => setRecebPop(true)}
+            title={emAberto > 0.005 ? 'Lançar um valor que o membro pagou' : 'Nada em aberto pra receber'}
+            style={emAberto > 0.005 ? { background: t.accents.sage, borderColor: t.accents.sage } : undefined}>
+            Registrar recebimento
+          </Button>
           <Button size="small" icon={<Plus size={14} />} onClick={onNova}>
             Atribuir manual
           </Button>
@@ -1633,6 +1625,18 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
         })()
       )}
       </div>
+
+      <Modal
+        open={recebPop}
+        onCancel={() => setRecebPop(false)}
+        footer={null}
+        centered
+        destroyOnClose
+        width={400}
+        title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><HandCoins size={17} color={t.accents.sage} /> Registrar recebimento · {membro.nome.split(' ')[0]}</span>}
+      >
+        <PopoverRecebimento nome={membro.nome} emAberto={emAberto} cor={t.accents.sage} abertos={itensAbertos} onRegistrar={onRegistrarRecebimento} onClose={() => setRecebPop(false)} />
+      </Modal>
     </div>
   );
 }

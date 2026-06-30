@@ -36,6 +36,13 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.224.1] — 2026-06-30
+
+### Corrigido
+- **"Registrar recebimento" não abria nada**: o popover não montava de forma
+  confiável dentro do modal do membro (conflito de portal/z-index). Trocado por um
+  **modal dedicado** — abre sempre, com mais espaço pra prévia da distribuição.
+
 ## [1.224.0] — 2026-06-30
 
 ### Corrigido / Melhorado (Registrar recebimento)
