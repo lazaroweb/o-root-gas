@@ -36,6 +36,31 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.233.0] — 2026-06-30
+
+### Adicionado (espelho do backup em outras contas Google + agendamento das conexões)
+- **Espelhar repositórios em outras contas Google:** o painel de Backup de
+  repositórios agora lista as contas conectadas no **Atelier → Driver** e permite
+  marcar em quais espelhar. Cada `.zip` é copiado também pra "Forja — Backups de
+  Repositórios" naquela conta, com a mesma retenção (janela rolante).
+- **Backup de conexões agendado:** mesmo esquema dos repos — trigger de tempo
+  diário/semanal (`backupConexoesAgendado`), ligável pelo painel.
+- **Retenção em janela rolante pras conexões:** agora as abas ocultas `_bkp_…`
+  **deixam de acumular pra sempre** — mantém só os últimos N snapshots (padrão 3;
+  ex.: guarda 3 datados e, no 4º, descarta o mais antigo) e o registro acompanha.
+
+### Alterado
+- O conector **Google Drive** (Driver) passou a pedir escopo `drive` (leitura +
+  escrita) no lugar de `drive.readonly`, pra permitir gravar o espelho. **Contas
+  já conectadas precisam reconectar uma vez** pra liberar a escrita; a leitura
+  (navegar arquivos) segue funcionando normalmente.
+
+### Nota
+- O espelho hoje cobre **contas Google** (provedor `google-drive`). OneDrive
+  continua via sincronização desktop (Graph nativo fica pra uma próxima).
+
+---
+
 ## [1.232.0] — 2026-06-30
 
 ### Adicionado (Backup de repositórios → Google Drive)

@@ -659,6 +659,7 @@ function redistribuirCoresMembros(): ServerResult {
 // restore é só copiar a aba de volta. Mantém um registro em ScriptProperties.
 
 const _CONEXOES_SHEETS = ['Apis', 'Servidores', 'Recursos'];
+const CONEXOES_BACKUP_MANTER_PADRAO = 3;
 
 function _bkpStamp(): string {
   const d = new Date();
@@ -684,12 +685,34 @@ function _backupConexoesSheets(motivo: string): { stamp: string; abas: Array<{ o
   }
   try {
     const props = PropertiesService.getScriptProperties();
+    const manter = Math.max(1, Number(props.getProperty('CONEXOES_BACKUP_MANTER') || CONEXOES_BACKUP_MANTER_PADRAO));
+    // Janela rolante: apaga as abas _bkp_ dos stamps mais antigos (mantém só N).
+    _conexoesRetencao(manter);
     const reg = JSON.parse(props.getProperty('FORJA_CONEXOES_BACKUPS') || '[]') as unknown[];
     reg.unshift({ stamp, motivo: String(motivo || ''), criadoEm: new Date().toISOString(), abas });
-    // Mantém só os 20 backups mais recentes no registro.
-    props.setProperty('FORJA_CONEXOES_BACKUPS', JSON.stringify(reg.slice(0, 20)));
+    // Registro acompanha a retenção das abas (mantém só os N mais recentes).
+    props.setProperty('FORJA_CONEXOES_BACKUPS', JSON.stringify(reg.slice(0, manter)));
   } catch { /* registro é best-effort */ }
   return { stamp, abas };
+}
+
+// Janela rolante das abas de backup: agrupa por stamp e apaga os mais antigos,
+// mantendo apenas os N stamps mais recentes (ex.: N=3 guarda 3 dias e, no 4º,
+// sobrescreve o primeiro — exatamente a rotação que faz sentido aqui).
+function _conexoesRetencao(manter: number): number {
+  const lim = Math.max(1, Number(manter || CONEXOES_BACKUP_MANTER_PADRAO));
+  const ss = getSpreadsheet();
+  const porStamp: Record<string, GoogleAppsScript.Spreadsheet.Sheet[]> = {};
+  ss.getSheets().forEach((sh) => {
+    const m = sh.getName().match(/^_bkp_.+__(\d{8}-\d{6})$/);
+    if (m) { (porStamp[m[1]] = porStamp[m[1]] || []).push(sh); }
+  });
+  const stamps = Object.keys(porStamp).sort().reverse(); // mais recente primeiro
+  let removidas = 0;
+  for (let i = lim; i < stamps.length; i++) {
+    porStamp[stamps[i]].forEach((sh) => { try { ss.deleteSheet(sh); removidas++; } catch { /* best-effort */ } });
+  }
+  return removidas;
 }
 
 function _stampEmpresaIdConexoes(defaultId: string): void {
@@ -724,14 +747,80 @@ function backupConexoes(): ServerResult {
   }
 }
 
-// RPC: lista backups registrados (mais recentes primeiro).
+// RPC: lista backups registrados (mais recentes primeiro) + configuração.
 function listarBackupsConexoes(): ServerResult {
   try {
     const props = PropertiesService.getScriptProperties();
     const reg = JSON.parse(props.getProperty('FORJA_CONEXOES_BACKUPS') || '[]') as unknown[];
-    return { ok: true, data: { backups: reg } };
+    const agenda = JSON.parse(props.getProperty('CONEXOES_BACKUP_AGENDA') || '{}') as Record<string, unknown>;
+    const agendaAtiva = ScriptApp.getProjectTriggers().some((tr) => tr.getHandlerFunction() === 'backupConexoesAgendado');
+    return {
+      ok: true,
+      data: {
+        backups: reg,
+        config: {
+          manter: Number(props.getProperty('CONEXOES_BACKUP_MANTER') || CONEXOES_BACKUP_MANTER_PADRAO),
+          ultimoRun: String(props.getProperty('CONEXOES_BACKUP_ULTIMO_RUN') || ''),
+          agendamento: {
+            ativo: agendaAtiva,
+            freq: String(agenda['freq'] || 'diario'),
+            hora: Number(agenda['hora'] != null ? agenda['hora'] : 3),
+            dia: Number(agenda['dia'] != null ? agenda['dia'] : 1),
+          },
+        },
+      },
+    };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar backups' };
+  }
+}
+
+// RPC: salva a retenção (janela rolante) dos backups de conexões.
+function setConexoesBackupConfig(input: Record<string, unknown>): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
+  try {
+    if (input['manter'] != null) {
+      const n = Math.max(1, Math.min(30, Math.round(Number(input['manter']) || CONEXOES_BACKUP_MANTER_PADRAO)));
+      PropertiesService.getScriptProperties().setProperty('CONEXOES_BACKUP_MANTER', String(n));
+      // Aplica a retenção já (pode reduzir o que está guardado).
+      try { _conexoesRetencao(n); } catch { /* best-effort */ }
+    }
+    return { ok: true, data: { salvo: true } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar configuração' };
+  }
+}
+
+// Handler do trigger agendado dos backups de conexões.
+function backupConexoesAgendado(): void {
+  initDatabase();
+  try { _backupConexoesSheets('agendado'); } catch { /* best-effort */ }
+  PropertiesService.getScriptProperties().setProperty('CONEXOES_BACKUP_ULTIMO_RUN', new Date().toISOString());
+}
+
+// RPC: liga/desliga o agendamento automático do backup de conexões.
+function configurarAgendamentoConexoes(input: Record<string, unknown>): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
+  try {
+    const sp = PropertiesService.getScriptProperties();
+    const ativo = !(input['ativo'] === false || String(input['ativo']).toLowerCase() === 'false');
+    const freq = String(input['freq'] || 'diario').toLowerCase() === 'semanal' ? 'semanal' : 'diario';
+    const hora = Math.max(0, Math.min(23, Math.round(Number(input['hora']) || 3)));
+    const dia = Math.max(1, Math.min(7, Math.round(Number(input['dia']) || 1)));
+
+    ScriptApp.getProjectTriggers().forEach((tr) => { if (tr.getHandlerFunction() === 'backupConexoesAgendado') ScriptApp.deleteTrigger(tr); });
+    if (ativo) {
+      if (freq === 'semanal') {
+        const SEM = [ScriptApp.WeekDay.SUNDAY, ScriptApp.WeekDay.MONDAY, ScriptApp.WeekDay.TUESDAY, ScriptApp.WeekDay.WEDNESDAY, ScriptApp.WeekDay.THURSDAY, ScriptApp.WeekDay.FRIDAY, ScriptApp.WeekDay.SATURDAY];
+        ScriptApp.newTrigger('backupConexoesAgendado').timeBased().onWeekDay(SEM[dia - 1]).atHour(hora).create();
+      } else {
+        ScriptApp.newTrigger('backupConexoesAgendado').timeBased().atHour(hora).everyDays(1).create();
+      }
+    }
+    sp.setProperty('CONEXOES_BACKUP_AGENDA', JSON.stringify({ freq, hora, dia }));
+    return { ok: true, data: { ativo, freq, hora, dia } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao configurar agendamento' };
   }
 }
 
@@ -14628,6 +14717,90 @@ function _reposRegistrarBackup(meta: Record<string, unknown>): void {
   } catch { /* registro é best-effort */ }
 }
 
+// ─── Espelho remoto: copia o mesmo .zip pras outras contas Google conectadas ──
+// (Atelier → Driver). Usa o token OAuth de cada conector (escopo 'drive') via REST.
+
+// Encontra/cria uma pasta por nome dentro de parentId (default 'root') na conta remota.
+function _remoteDriveEnsureFolder(token: string, nome: string, parentId: string): string {
+  const parent = parentId || 'root';
+  const nomeEsc = nome.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const q = "name='" + nomeEsc + "' and mimeType='application/vnd.google-apps.folder' and trashed=false and '" + parent + "' in parents";
+  const url = 'https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(q) + '&fields=' + encodeURIComponent('files(id,name)') + '&supportsAllDrives=true&includeItemsFromAllDrives=true';
+  const res = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
+  const code = res.getResponseCode();
+  if (code === 401 || code === 403) throw new Error('sem permissão de escrita — reconecte a conta no Driver');
+  if (code === 200) {
+    const arr = (JSON.parse(res.getContentText()).files || []) as Array<Record<string, unknown>>;
+    if (arr.length) return String(arr[0]['id']);
+  }
+  const meta = { name: nome, mimeType: 'application/vnd.google-apps.folder', parents: [parent] };
+  const cr = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files?fields=id&supportsAllDrives=true', {
+    method: 'post', contentType: 'application/json', payload: JSON.stringify(meta),
+    headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true,
+  });
+  if (cr.getResponseCode() !== 200) throw new Error('falha ao criar pasta remota (' + cr.getResponseCode() + ')');
+  return String(JSON.parse(cr.getContentText()).id || '');
+}
+
+// Upload multipart de um blob pra pasta da conta remota; devolve o fileId.
+function _remoteDriveUpload(token: string, blob: GoogleAppsScript.Base.Blob, nome: string, parentId: string): string {
+  const boundary = '-----forja' + Date.now();
+  const meta = JSON.stringify({ name: nome, parents: [parentId] });
+  const pre = '--' + boundary + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + meta + '\r\n'
+    + '--' + boundary + '\r\nContent-Type: application/zip\r\n\r\n';
+  const post = '\r\n--' + boundary + '--';
+  const bytes = Utilities.newBlob(pre).getBytes().concat(blob.getBytes()).concat(Utilities.newBlob(post).getBytes());
+  const res = UrlFetchApp.fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id', {
+    method: 'post', contentType: 'multipart/related; boundary=' + boundary, payload: bytes,
+    headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true,
+  });
+  const code = res.getResponseCode();
+  if (code === 401 || code === 403) throw new Error('sem permissão de escrita — reconecte a conta no Driver');
+  if (code !== 200) throw new Error('upload falhou (' + code + ')');
+  return String(JSON.parse(res.getContentText()).id || '');
+}
+
+// Janela rolante na conta remota: mantém os N .zip mais recentes da pasta do repo.
+function _remoteDriveRetencao(token: string, folderId: string, manter: number): void {
+  const q = "'" + folderId + "' in parents and trashed=false and name contains '.zip'";
+  const url = 'https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(q) + '&fields=' + encodeURIComponent('files(id,name)') + '&pageSize=200&orderBy=' + encodeURIComponent('name desc') + '&supportsAllDrives=true&includeItemsFromAllDrives=true';
+  const res = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) return;
+  const files = (JSON.parse(res.getContentText()).files || []) as Array<Record<string, unknown>>;
+  for (let i = Math.max(1, manter); i < files.length; i++) {
+    try { UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + files[i]['id'] + '?supportsAllDrives=true', { method: 'delete', headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true }); } catch { /* best-effort */ }
+  }
+}
+
+// Espelha o blob do repo em cada conta selecionada (REPOS_BACKUP_ESPELHOS).
+function _espelharRepoBlob(blob: GoogleAppsScript.Base.Blob, fullName: string, manter: number): Array<Record<string, unknown>> {
+  const sp = PropertiesService.getScriptProperties();
+  let ids: string[] = [];
+  try { ids = JSON.parse(sp.getProperty('REPOS_BACKUP_ESPELHOS') || '[]') as string[]; } catch { ids = []; }
+  if (!ids.length) return [];
+  const subNome = fullName.replace(/\//g, '__');
+  const out: Array<Record<string, unknown>> = [];
+  for (const id of ids) {
+    const conn = _findConnector(id);
+    const rotulo = conn ? String(conn['rotulo'] || conn['email'] || id) : id;
+    try {
+      if (!conn || String(conn['provedor'] || '') !== 'google-drive') { out.push({ id, rotulo, ok: false, erro: 'conta inválida' }); continue; }
+      const svc = _oauthService(id, 'google-drive');
+      if (!svc.hasAccess()) { out.push({ id, rotulo, ok: false, erro: 'não conectada' }); continue; }
+      const token = svc.getAccessToken();
+      if (!token) { out.push({ id, rotulo, ok: false, erro: 'sem token' }); continue; }
+      const root = _remoteDriveEnsureFolder(token, 'Forja — Backups de Repositórios', 'root');
+      const sub = _remoteDriveEnsureFolder(token, subNome, root);
+      const fileId = _remoteDriveUpload(token, blob, blob.getName() || (subNome + '.zip'), sub);
+      _remoteDriveRetencao(token, sub, manter);
+      out.push({ id, rotulo, ok: true, fileId });
+    } catch (e: unknown) {
+      out.push({ id, rotulo, ok: false, erro: e instanceof Error ? e.message : 'erro' });
+    }
+  }
+  return out;
+}
+
 // Baixa o zipball do repo e grava no Drive. Lança em caso de erro (quem chama trata).
 function _reposBackupZip(fullName: string, ref?: string): Record<string, unknown> {
   const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
@@ -14650,7 +14823,9 @@ function _reposBackupZip(fullName: string, ref?: string): Record<string, unknown
   const tamanho = file.getSize();
   const manter = Number(PropertiesService.getScriptProperties().getProperty('REPOS_BACKUP_MANTER') || REPOS_BACKUP_MANTER_PADRAO);
   _reposAplicarRetencao(folder, manter);
-  const meta = { fullName: full, nome: nomeCurto, stamp, criadoEm: new Date().toISOString(), tamanho, fileId: file.getId(), url: file.getUrl(), ok: true };
+  // Espelha o mesmo .zip nas outras contas Google conectadas (se houver seleção).
+  const espelhos = _espelharRepoBlob(blob, full, manter);
+  const meta = { fullName: full, nome: nomeCurto, stamp, criadoEm: new Date().toISOString(), tamanho, fileId: file.getId(), url: file.getUrl(), ok: true, espelhos };
   _reposRegistrarBackup(meta);
   return meta;
 }
@@ -14689,6 +14864,17 @@ function getReposBackupEstado(): ServerResult {
     let pastaUrl = '';
     try { const root = _reposBackupRoot(); destinoNome = root.getName(); pastaUrl = root.getUrl(); } catch { /* sem permissão ainda */ }
 
+    // Contas Google conectadas no Driver (Atelier) — candidatas a espelho.
+    const espelhosSel = (() => { try { return JSON.parse(sp.getProperty('REPOS_BACKUP_ESPELHOS') || '[]') as string[]; } catch { return []; } })();
+    const conectores = (dbGetAll('DriveConnectors') as Array<Record<string, unknown>>)
+      .filter((l) => String(l['provedor'] || '') === 'google-drive')
+      .map((l) => {
+        const id = String(l['id'] || '');
+        let conectado = false;
+        try { conectado = _oauthService(id, 'google-drive').hasAccess(); } catch { conectado = false; }
+        return { id, rotulo: String(l['rotulo'] || ''), email: String(l['email'] || ''), conectado, espelhar: espelhosSel.indexOf(id) >= 0 };
+      });
+
     let repos: Array<Record<string, unknown>> = [];
     let githubOk = true;
     let githubErro = '';
@@ -14719,11 +14905,13 @@ function getReposBackupEstado(): ServerResult {
         githubErro,
         total: repos.length,
         historico: hist.slice(0, 30),
+        conectores,
         config: {
           manter: Number(sp.getProperty('REPOS_BACKUP_MANTER') || REPOS_BACKUP_MANTER_PADRAO),
           destinoFolderId: String(sp.getProperty('REPOS_BACKUP_FOLDER_ID') || ''),
           destinoNome,
           pastaUrl,
+          espelhos: espelhosSel,
           ultimoRun: String(sp.getProperty('FORJA_REPOS_BACKUP_ULTIMO_RUN') || ''),
           agendamento: {
             ativo: agendaAtiva,
@@ -14763,6 +14951,10 @@ function setReposBackupConfig(input: Record<string, unknown>): ServerResult {
     if (input['manter'] != null) {
       const n = Math.max(1, Math.min(50, Math.round(Number(input['manter']) || REPOS_BACKUP_MANTER_PADRAO)));
       sp.setProperty('REPOS_BACKUP_MANTER', String(n));
+    }
+    if (input['espelhos'] != null && Array.isArray(input['espelhos'])) {
+      const ids = (input['espelhos'] as unknown[]).map((x) => String(x || '')).filter(Boolean);
+      sp.setProperty('REPOS_BACKUP_ESPELHOS', JSON.stringify(ids));
     }
     if (input['destinoFolderId'] != null) {
       const id = String(input['destinoFolderId'] || '').trim();
@@ -21850,7 +22042,10 @@ const _OAUTH_PROVIDERS: Record<string, OAuthProviderCfg> = {
   'google-drive': {
     authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
     tokenUrl: 'https://oauth2.googleapis.com/token',
-    scope: 'https://www.googleapis.com/auth/drive.readonly',
+    // 'drive' (não 'drive.readonly'): cobre leitura (navegar) E escrita (espelhar
+    // backups de repositório na conta). Quem já estava conectado precisa reconectar
+    // uma vez pra conceder a permissão de escrita — leitura segue funcionando.
+    scope: 'https://www.googleapis.com/auth/drive',
     extraAuthParams: { access_type: 'offline', prompt: 'consent' },
     callback: 'authCallbackGoogle',
   },

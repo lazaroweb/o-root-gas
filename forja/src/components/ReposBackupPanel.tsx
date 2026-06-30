@@ -25,8 +25,9 @@ interface RepoItem {
 }
 interface HistItem { fullName: string; nome: string; stamp: string; criadoEm: string; tamanho: number; ok?: boolean; erro?: string; url?: string }
 interface Agenda { ativo: boolean; freq: string; hora: number; dia: number }
-interface Config { manter: number; destinoFolderId: string; destinoNome: string; pastaUrl: string; ultimoRun: string; agendamento: Agenda }
-interface Estado { repos: RepoItem[]; githubOk: boolean; githubErro: string; total: number; historico: HistItem[]; config: Config }
+interface Conector { id: string; rotulo: string; email: string; conectado: boolean; espelhar: boolean }
+interface Config { manter: number; destinoFolderId: string; destinoNome: string; pastaUrl: string; espelhos: string[]; ultimoRun: string; agendamento: Agenda }
+interface Estado { repos: RepoItem[]; githubOk: boolean; githubErro: string; total: number; historico: HistItem[]; conectores: Conector[]; config: Config }
 
 function fmtBytes(b: number): string {
   if (!b) return '—';
@@ -122,6 +123,22 @@ export default function ReposBackupPanel(): React.ReactElement {
       else message.error(r.error || 'Erro ao salvar');
     } catch { message.error('Configuração só salva no app publicado'); }
     finally { setSalvandoCfg(false); }
+  };
+
+  const toggleEspelho = async (id: string, on: boolean) => {
+    if (!estado) return;
+    const atuais = estado.config.espelhos || [];
+    const novos = on ? Array.from(new Set([...atuais, id])) : atuais.filter((x) => x !== id);
+    setEstado({
+      ...estado,
+      config: { ...estado.config, espelhos: novos },
+      conectores: estado.conectores.map((c) => (c.id === id ? { ...c, espelhar: on } : c)),
+    });
+    try {
+      const r = await callServer<ServerResult>('setReposBackupConfig', { espelhos: novos });
+      if (r.ok) message.success(on ? 'Conta adicionada ao espelho' : 'Conta removida do espelho');
+      else message.error(r.error || 'Erro');
+    } catch { message.error('Só salva no app publicado'); }
   };
 
   const aplicarAgenda = async (patch: Partial<Agenda>) => {
@@ -229,6 +246,44 @@ export default function ReposBackupPanel(): React.ReactElement {
             <div style={{ fontSize: 11, color: t.textTertiary, marginTop: 8 }}>Última rodada automática: {fmtData(cfg.ultimoRun)}</div>
           ) : null}
         </div>
+      </div>
+
+      {/* ─── Espelho em outras contas Google ────────────────────────────── */}
+      <div style={{ border: `1px solid ${t.borderSoft}`, borderRadius: 12, padding: 14, marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <HardDrive size={15} color={t.accents.blue} />
+          <span style={{ fontWeight: 600, fontSize: 13.5, color: t.text }}>Espelhar em outras contas Google</span>
+        </div>
+        <div style={{ fontSize: 11.5, color: t.textTertiary, marginBottom: 10 }}>
+          Cada backup também é copiado pras contas marcadas (puxadas do <b>Atelier → Driver</b>). A cópia vai pra
+          “Forja — Backups de Repositórios” na conta, com a mesma retenção.
+        </div>
+        {(estado?.conectores.length || 0) === 0 ? (
+          <div style={{ fontSize: 12, color: t.textTertiary }}>
+            Nenhuma conta Google conectada ainda. Conecte em <b>Atelier → Driver → Contas &amp; nuvens</b>.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {(estado?.conectores || []).map((c) => (
+              <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <Switch
+                  size="small"
+                  checked={c.espelhar}
+                  disabled={!c.conectado}
+                  onChange={(v) => toggleEspelho(c.id, v)}
+                />
+                <span style={{ fontSize: 13, color: t.text, fontWeight: 500 }}>{c.rotulo || c.email || c.id}</span>
+                {c.email && c.rotulo ? <span style={{ fontSize: 11.5, color: t.textTertiary }}>{c.email}</span> : null}
+                {c.conectado
+                  ? <Tag bordered={false} color="green" style={{ marginLeft: 'auto', fontSize: 11 }}>conectada</Tag>
+                  : <Tooltip title="Reconecte a conta (com permissão de escrita) em Atelier → Driver"><Tag bordered={false} style={{ marginLeft: 'auto', fontSize: 11, background: `${t.accents.clay}1a`, color: t.accents.clay }}>reconectar</Tag></Tooltip>}
+              </div>
+            ))}
+            <div style={{ fontSize: 11, color: t.textTertiary, marginTop: 2, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <Lock size={11} /> Contas conectadas antes desta versão precisam <b>reconectar uma vez</b> pra liberar a escrita.
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ─── Progresso do lote ──────────────────────────────────────────── */}
