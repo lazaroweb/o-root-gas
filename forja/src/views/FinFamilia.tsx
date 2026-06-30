@@ -194,9 +194,9 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
   // Recebimento GERAL do membro: informa o quanto ele pagou e o servidor quita
   // das cobranças mais antigas pras mais novas (mesmo `valorPago` por item, sem
   // conflito com o ajuste item-a-item). Recarrega depois pra refletir a distribuição.
-  const registrarRecebimento = (valor: number, ordem: 'antigas' | 'recentes' = 'antigas') => {
+  const registrarRecebimento = (valor: number, ordem: 'antigas' | 'recentes' = 'antigas', competencia = '') => {
     if (!drawerMembro) return;
-    callServer<ServerResponse<{ aplicado: number; restante: number; itensAfetados: number; receitaId?: string }>>('registrarRecebimentoMembro', drawerMembro.id, valor, '', true, ordem)
+    callServer<ServerResponse<{ aplicado: number; restante: number; itensAfetados: number; receitaId?: string }>>('registrarRecebimentoMembro', drawerMembro.id, valor, competencia, true, ordem)
       .then((res) => {
         if (res?.ok && res.data) {
           const d = res.data;
@@ -1031,107 +1031,166 @@ function PopoverPagamento({ c, onRegistrar, onClose }: {
 // Item em aberto (saldo > 0) usado na prévia da distribuição do recebimento.
 interface ItemAberto { id: string; descricao: string; competencia: string; dataCompra: string; saldo: number; }
 
-// Popover do recebimento GERAL: informa quanto o membro pagou; o valor é
-// distribuído entre as cobranças em aberto. O usuário escolhe a ordem (mais
-// antigas / mais recentes) e VÊ a prévia exata do que será baixado antes de
-// confirmar — então nada é "adivinhado às cegas".
-function PopoverRecebimento({ nome, emAberto, cor, abertos, onRegistrar, onClose }: {
+function labelCompCurto(comp: string): string {
+  if (!/^\d{4}-\d{2}$/.test(comp)) return '—';
+  const s = dayjs(`${comp}-01`).format('MMM/YY');
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// Modal do recebimento: informa quanto o membro pagou, AMARRADO a um mês
+// (padrão: mês vigente; pode trocar ou usar "Todos os meses"). A distribuição só
+// ocorre dentro do escopo escolhido. Mostra a prévia do que será baixado E o que
+// continua em aberto — pra conferir o raciocínio antes de confirmar.
+function PopoverRecebimento({ nome, emAberto, cor, abertos, mesAtual, onRegistrar, onClose }: {
   nome: string;
   emAberto: number;
   cor: string;
   abertos: ItemAberto[];
-  onRegistrar: (valor: number, ordem: 'antigas' | 'recentes') => void;
+  mesAtual: string;
+  onRegistrar: (valor: number, ordem: 'antigas' | 'recentes', competencia: string) => void;
   onClose: () => void;
 }): React.ReactElement {
   const t = useTokens();
-  const [input, setInput] = useState<number>(emAberto);
+
+  // Meses com saldo em aberto (pra o seletor de escopo), do mais novo pro antigo.
+  const meses = useMemo(() => {
+    const mapa: Record<string, number> = {};
+    for (const it of abertos) mapa[it.competencia] = (mapa[it.competencia] || 0) + it.saldo;
+    return Object.keys(mapa).sort((a, b) => b.localeCompare(a)).map((comp) => ({ comp, emAberto: mapa[comp] }));
+  }, [abertos]);
+
+  // Escopo: '' = todos os meses; senão a competência. Default = mês vigente se
+  // tiver saldo; senão o mês mais recente com saldo.
+  const compInicial = meses.some((m) => m.comp === mesAtual) ? mesAtual : (meses[0]?.comp || '');
+  const [comp, setComp] = useState<string>(compInicial);
   const [ordem, setOrdem] = useState<'antigas' | 'recentes'>('antigas');
-  const restara = Math.max(0, emAberto - input);
 
-  const labelComp = (comp: string) => {
-    if (!/^\d{4}-\d{2}$/.test(comp)) return '—';
-    const s = dayjs(`${comp}-01`).format('MMM/YY');
-    return s.charAt(0).toUpperCase() + s.slice(1);
-  };
+  const itensEscopo = useMemo(
+    () => (comp ? abertos.filter((it) => it.competencia === comp) : abertos),
+    [abertos, comp],
+  );
+  const emAbertoEscopo = useMemo(() => itensEscopo.reduce((s, it) => s + it.saldo, 0), [itensEscopo]);
 
-  // Prévia: distribui `input` na ordem escolhida e marca cada item (quita ou parcial).
-  const previa = useMemo(() => {
-    const ordenados = ordem === 'antigas' ? abertos : [...abertos].reverse();
+  const [input, setInput] = useState<number>(emAbertoEscopo);
+  // Ao trocar o escopo, reseta o valor pro "tudo" do novo escopo.
+  useEffect(() => { setInput(emAbertoEscopo); }, [comp, emAbertoEscopo]);
+
+  // Distribui `input` na ordem escolhida dentro do escopo. Para cada item:
+  // aplicado (o que recebe) e restante (o que continua em aberto depois).
+  const { baixados, continuam, restaraEscopo } = useMemo(() => {
+    const ordenados = ordem === 'antigas'
+      ? [...itensEscopo].sort((a, b) => (a.competencia !== b.competencia ? a.competencia.localeCompare(b.competencia) : a.dataCompra.localeCompare(b.dataCompra)))
+      : [...itensEscopo].sort((a, b) => (a.competencia !== b.competencia ? b.competencia.localeCompare(a.competencia) : b.dataCompra.localeCompare(a.dataCompra)));
     let restante = input;
-    const linhas: Array<{ item: ItemAberto; aplicado: number; quita: boolean }> = [];
+    const baixados: Array<{ item: ItemAberto; aplicado: number; quita: boolean }> = [];
+    const continuam: Array<{ item: ItemAberto; resta: number }> = [];
     for (const it of ordenados) {
-      if (restante <= 0.005) break;
-      const add = Math.min(restante, it.saldo);
+      const add = restante > 0.005 ? Math.min(restante, it.saldo) : 0;
       restante -= add;
-      linhas.push({ item: it, aplicado: add, quita: add >= it.saldo - 0.005 });
+      if (add > 0.005) baixados.push({ item: it, aplicado: add, quita: add >= it.saldo - 0.005 });
+      const resta = it.saldo - add;
+      if (resta > 0.005) continuam.push({ item: it, resta });
     }
-    return linhas;
-  }, [abertos, input, ordem]);
+    return { baixados, continuam, restaraEscopo: Math.max(0, emAbertoEscopo - input) };
+  }, [itensEscopo, input, ordem, emAbertoEscopo]);
+
+  const Linha = ({ desc, comp: c, valor, sub, icon }: { desc: string; comp: string; valor: string; sub: string; icon: React.ReactNode }) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {icon}
+      <span style={{ flex: 1, minWidth: 0, fontFamily: FONTS.ui, fontSize: 11.5, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {desc} <span style={{ color: t.textTertiary }}>· {labelCompCurto(c)}</span>
+      </span>
+      <span style={{ fontFamily: FONTS.ui, fontSize: 11, fontWeight: 600, color: sub ? t.accents.peach : t.accents.sage, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+        {valor}{sub && <span style={{ color: t.textTertiary, fontWeight: 400 }}> {sub}</span>}
+      </span>
+    </div>
+  );
 
   return (
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary }}>
-        Quanto <strong style={{ color: t.text }}>{nome.split(' ')[0]}</strong> te pagou? <span style={{ color: t.textTertiary }}>· em aberto {formatBRL(emAberto)}</span>
+      {/* Escopo: a qual mês esse pagamento se refere */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textSecondary }}>Este pagamento é referente a:</span>
+        <Select
+          value={comp}
+          onChange={setComp}
+          style={{ width: '100%' }}
+          options={[
+            ...meses.map((m) => ({ value: m.comp, label: `${labelCompCurto(m.comp)} · ${formatBRL(m.emAberto)} em aberto` })),
+            { value: '', label: `Todos os meses · ${formatBRL(emAberto)} em aberto` },
+          ]}
+        />
       </div>
+
       <InputNumber
         autoFocus
         value={input}
         min={0}
-        max={emAberto}
+        max={emAbertoEscopo}
         precision={2}
         prefix="R$"
         style={{ width: '100%' }}
-        onChange={(v) => setInput(Math.max(0, Math.min(emAberto, Number(v) || 0)))}
+        onChange={(v) => setInput(Math.max(0, Math.min(emAbertoEscopo, Number(v) || 0)))}
       />
-      <div style={{ display: 'flex', gap: 6 }}>
-        <Button size="small" style={{ flex: 1 }} onClick={() => setInput(emAberto)}>Tudo</Button>
-        <Button size="small" style={{ flex: 1 }} onClick={() => setInput(emAberto / 2)}>Metade</Button>
-      </div>
-
-      {/* Ordem da baixa */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-        <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary }}>Baixar primeiro:</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <Button size="small" style={{ flex: 1 }} onClick={() => setInput(emAbertoEscopo)}>Tudo do mês</Button>
+        <Button size="small" style={{ flex: 1 }} onClick={() => setInput(emAbertoEscopo / 2)}>Metade</Button>
         <div style={{ display: 'inline-flex', background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 8, padding: 2, gap: 2 }}>
-          {([['antigas', 'Mais antigas'], ['recentes', 'Mais recentes']] as const).map(([k, lbl]) => (
-            <button key={k} onClick={() => setOrdem(k)} style={{
+          {([['antigas', 'Antigas'], ['recentes', 'Recentes']] as const).map(([k, lbl]) => (
+            <button key={k} onClick={() => setOrdem(k)} title={`Baixar primeiro as ${k === 'antigas' ? 'mais antigas' : 'mais recentes'}`} style={{
               border: 'none', cursor: 'pointer', fontFamily: FONTS.ui, fontSize: 11, fontWeight: ordem === k ? 600 : 500,
-              padding: '3px 9px', borderRadius: 6, transition: 'all 0.15s',
+              padding: '3px 8px', borderRadius: 6, transition: 'all 0.15s',
               background: ordem === k ? cor : 'transparent', color: ordem === k ? '#fff' : t.textSecondary,
             }}>{lbl}</button>
           ))}
         </div>
       </div>
 
-      {/* Prévia do que será baixado — transparência total, sem adivinhação */}
+      {/* Vai baixar */}
       <div style={{ borderTop: `1px solid ${t.borderSoft}`, paddingTop: 8 }}>
         <div style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 }}>
-          Vai baixar {previa.length} {previa.length === 1 ? 'item' : 'itens'}
+          Vai baixar {baixados.length} {baixados.length === 1 ? 'item' : 'itens'}
         </div>
-        {previa.length === 0 ? (
+        {baixados.length === 0 ? (
           <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary }}>Digite um valor pra ver o que será quitado.</div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 5, maxHeight: 132, overflowY: 'auto', paddingRight: 2 }}>
-            {previa.map(({ item, aplicado, quita }) => (
-              <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                {quita
-                  ? <CheckCircle2 size={13} color={t.accents.sage} style={{ flexShrink: 0 }} />
-                  : <HandCoins size={13} color={t.accents.peach} style={{ flexShrink: 0 }} />}
-                <span style={{ flex: 1, minWidth: 0, fontFamily: FONTS.ui, fontSize: 11.5, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {item.descricao} <span style={{ color: t.textTertiary }}>· {labelComp(item.competencia)}</span>
-                </span>
-                <span style={{ fontFamily: FONTS.ui, fontSize: 11, fontWeight: 600, color: quita ? t.accents.sage : t.accents.peach, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-                  {formatBRL(aplicado)}{!quita && <span style={{ color: t.textTertiary, fontWeight: 400 }}> /{formatBRL(item.saldo)}</span>}
-                </span>
-              </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5, maxHeight: 116, overflowY: 'auto', paddingRight: 2 }}>
+            {baixados.map(({ item, aplicado, quita }) => (
+              <Linha key={item.id} desc={item.descricao} comp={item.competencia} valor={formatBRL(aplicado)}
+                sub={quita ? '' : `/${formatBRL(item.saldo)}`}
+                icon={quita ? <CheckCircle2 size={13} color={t.accents.sage} style={{ flexShrink: 0 }} /> : <HandCoins size={13} color={t.accents.peach} style={{ flexShrink: 0 }} />} />
             ))}
           </div>
         )}
       </div>
 
+      {/* Continua em aberto — pra conferir o que NÃO foi pago */}
+      {continuam.length > 0 && (
+        <div style={{ borderTop: `1px solid ${t.borderSoft}`, paddingTop: 8 }}>
+          <div style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 }}>
+            Continua em aberto {comp ? `em ${labelCompCurto(comp)}` : ''} ({continuam.length})
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5, maxHeight: 96, overflowY: 'auto', paddingRight: 2 }}>
+            {continuam.map(({ item, resta }) => (
+              <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: 0.85 }}>
+                <Clock size={12} color={t.textTertiary} style={{ flexShrink: 0 }} />
+                <span style={{ flex: 1, minWidth: 0, fontFamily: FONTS.ui, fontSize: 11.5, color: t.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {item.descricao} <span style={{ color: t.textTertiary }}>· {labelCompCurto(item.competencia)}</span>
+                </span>
+                <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{formatBRL(resta)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, lineHeight: 1.4 }}>
-        Também <strong style={{ color: t.text }}>lança uma receita</strong> no caixa de hoje. {restara > 0.005 ? <>Restará <strong style={{ color: t.accents.peach }}>{formatBRL(restara)}</strong> em aberto.</> : <span style={{ color: t.accents.sage }}>Zera o saldo dele. 🎉</span>}
+        Também <strong style={{ color: t.text }}>lança uma receita</strong> no caixa de hoje.
+        {comp
+          ? <> Fica amarrado a <strong style={{ color: t.text }}>{labelCompCurto(comp)}</strong>{restaraEscopo > 0.005 ? <> — restam <strong style={{ color: t.accents.peach }}>{formatBRL(restaraEscopo)}</strong> nesse mês.</> : <> — <span style={{ color: t.accents.sage }}>mês quitado. 🎉</span></>}</>
+          : <> {restaraEscopo > 0.005 ? <>Restará <strong style={{ color: t.accents.peach }}>{formatBRL(restaraEscopo)}</strong> no total.</> : <span style={{ color: t.accents.sage }}>Zera o saldo dele. 🎉</span>}</>}
       </div>
-      <Button type="primary" size="small" block disabled={input <= 0.005} onClick={() => { onRegistrar(input, ordem); onClose(); }} style={{ background: cor, borderColor: cor }}>
+      <Button type="primary" size="small" block disabled={input <= 0.005} onClick={() => { onRegistrar(input, ordem, comp); onClose(); }} style={{ background: cor, borderColor: cor }}>
         Confirmar recebimento
       </Button>
     </div>
@@ -1251,7 +1310,7 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
   onPdf?: (competencia?: string) => void;
   onNova: () => void;
   onRegistrarPagamento: (c: CobrancaDetalhada, valorPago: number) => void;
-  onRegistrarRecebimento: (valor: number, ordem: 'antigas' | 'recentes') => void;
+  onRegistrarRecebimento: (valor: number, ordem: 'antigas' | 'recentes', competencia: string) => void;
   onEditar: (c: Cobranca) => void;
   onRemover: (id: string) => void;
 }): React.ReactElement {
@@ -1635,7 +1694,7 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
         width={400}
         title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><HandCoins size={17} color={t.accents.sage} /> Registrar recebimento · {membro.nome.split(' ')[0]}</span>}
       >
-        <PopoverRecebimento nome={membro.nome} emAberto={emAberto} cor={t.accents.sage} abertos={itensAbertos} onRegistrar={onRegistrarRecebimento} onClose={() => setRecebPop(false)} />
+        <PopoverRecebimento nome={membro.nome} emAberto={emAberto} cor={t.accents.sage} abertos={itensAbertos} mesAtual={mes} onRegistrar={onRegistrarRecebimento} onClose={() => setRecebPop(false)} />
       </Modal>
     </div>
   );

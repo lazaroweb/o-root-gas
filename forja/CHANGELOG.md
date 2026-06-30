@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.225.0] — 2026-06-30
+
+### Melhorado (Registrar recebimento — amarrado ao mês)
+- **Recebimento agora é por mês**: o modal tem um seletor "Este pagamento é
+  referente a:" (padrão = mês vigente; pode escolher outro mês ou "Todos os
+  meses"). A baixa só acontece dentro do mês escolhido — não varre mais o ano
+  inteiro sem querer.
+- **Conferência do que ficou em aberto**: além da prévia "Vai baixar", o modal
+  mostra a lista "Continua em aberto no mês (N)" com o que NÃO foi pago, pra você
+  validar o raciocínio antes de confirmar.
+- Atalhos "Tudo do mês" / "Metade" e ordem (Antigas/Recentes) agora operam dentro
+  do escopo do mês selecionado.
+
 ## [1.224.1] — 2026-06-30
 
 ### Corrigido
