@@ -10955,7 +10955,12 @@ function gerarPdfCobrancasMembro(membroId: string, apenasPendentes?: boolean, co
       if (c['vencimentoFatura']) detParts.push('Vence ' + _escHtml(_fmtDataBR(String(c['vencimentoFatura']))));
       const sub = detParts.length ? '<br><span class="muted" style="font-size:10.5px;">' + detParts.join(' · ') + '</span>' : '';
       const pago = pagoDe(c);
-      return '<tr><td><strong>' + _escHtml(c['descricao'] || '—') + '</strong>' + sub + '</td>'
+      // Item quitado (saldo zero): linha em tom suave + selo "pago" pra separar
+      // visualmente do que ainda está em aberto.
+      const quitado = saldoDe(c) <= 0.005 && valorDe(c) > 0.005;
+      const selo = quitado ? ' <span style="font-size:9.5px;color:#3C8C5A;border:1px solid #BFE0CB;border-radius:5px;padding:1px 5px;vertical-align:middle;">pago</span>' : '';
+      const trStyle = quitado ? ' style="color:#9A938A;"' : '';
+      return '<tr' + trStyle + '><td><strong>' + _escHtml(c['descricao'] || '—') + '</strong>' + selo + sub + '</td>'
         + (comComp ? '<td>' + _escHtml(_fmtCompetenciaBR(String(c['competencia'] || ''))) + '</td>' : '')
         + '<td class="right mono">' + _fmtBRLpdf(valorDe(c)) + '</td>'
         + (algumPago ? '<td class="right mono" style="color:#3C8C5A;">' + (pago > 0.005 ? _fmtBRLpdf(pago) : '—') + '</td>' : '')

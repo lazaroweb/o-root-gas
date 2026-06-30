@@ -36,6 +36,18 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.227.0] — 2026-06-30
+
+### Adicionado (PDF de cobrança com itens pagos)
+- **Opção "Incluir já pagos (abaixo)"** no menu de exportar PDF do membro. Por
+  padrão o PDF segue trazendo só o que está em aberto; ao marcar o checkbox, os
+  itens já quitados aparecem **abaixo** dos pendentes, em tom suave e com um
+  selo "pago".
+- O **"Total a pagar"** e os subtotais por mês continuam somando só o saldo em
+  aberto — os itens pagos entram como Saldo R$ 0,00, apenas para conferência.
+
+---
+
 ## [1.226.0] — 2026-06-30
 
 ### Corrigido / Melhorado (saldo por mês no detalhe)

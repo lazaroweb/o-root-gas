@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Button, Modal, Form, Input, InputNumber, Select, DatePicker, Tag, Switch,
-  App as AntApp, Popconfirm, Empty, Tooltip, Dropdown, Popover,
+  App as AntApp, Popconfirm, Empty, Tooltip, Dropdown, Popover, Checkbox,
 } from 'antd';
 import {
   Plus, Pencil, Trash2, Users, CheckCircle2, Clock, CreditCard,
@@ -115,9 +115,11 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
   }, []);
   useEffect(() => { carregarDetalheMembro(drawerMembro); }, [drawerMembro, carregarDetalheMembro]);
 
-  const baixarPdfMembro = (membro: FamiliaMembro, competencia?: string) => {
+  const baixarPdfMembro = (membro: FamiliaMembro, competencia?: string, incluirPagos?: boolean) => {
     setPdfLoading(true);
-    gerarEbaixarPdf('gerarPdfCobrancasMembro', membro.id, true, competencia)
+    // apenasPendentes = !incluirPagos. Quando inclui pagos, eles saem abaixo dos
+    // pendentes (a ordenação do servidor já põe pendente primeiro).
+    gerarEbaixarPdf('gerarPdfCobrancasMembro', membro.id, !incluirPagos, competencia)
       .then(() => message.success('PDF gerado'))
       .catch(() => message.error('Falha ao gerar PDF'))
       .finally(() => setPdfLoading(false));
@@ -438,7 +440,7 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
             provisao={provisao}
             loading={detalheCobr === null}
             pdfLoading={pdfLoading}
-            onPdf={(competencia?: string) => baixarPdfMembro(drawerMembro, competencia)}
+            onPdf={(competencia?: string, incluirPagos?: boolean) => baixarPdfMembro(drawerMembro, competencia, incluirPagos)}
             onNova={() => abrirNovaCobranca({ membroId: drawerMembro.id, competencia: mes })}
             onRegistrarPagamento={registrarPagamento}
             onRegistrarRecebimento={registrarRecebimento}
@@ -1307,7 +1309,7 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
   provisao: ProvisaoMembro | null;
   loading: boolean;
   pdfLoading?: boolean;
-  onPdf?: (competencia?: string) => void;
+  onPdf?: (competencia?: string, incluirPagos?: boolean) => void;
   onNova: () => void;
   onRegistrarPagamento: (c: CobrancaDetalhada, valorPago: number) => void;
   onRegistrarRecebimento: (valor: number, ordem: 'antigas' | 'recentes', competencia: string) => void;
@@ -1363,6 +1365,8 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
     [cobrancas]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Meses com cobranças (pra o menu do PDF) — competência + total, ordenados.
+  const [pdfIncluirPagos, setPdfIncluirPagos] = useState(false);
+  const [pdfMenuOpen, setPdfMenuOpen] = useState(false);
   const mesesPdf = useMemo(() => {
     const mapa: Record<string, number> = {};
     for (const c of cobrancas) {
@@ -1374,7 +1378,17 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
 
   const pdfMenuItems = useMemo(() => {
     const items: NonNullable<React.ComponentProps<typeof Dropdown>['menu']>['items'] = [
-      { key: 'all', label: 'Todos os meses (separado por mês)', onClick: () => onPdf?.() },
+      {
+        key: 'incluir-pagos',
+        label: (
+          // stopPropagation: alterna sem fechar o menu (dá pra marcar e então escolher o mês).
+          <div onClick={(e) => { e.stopPropagation(); setPdfIncluirPagos((v) => !v); }} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <Checkbox checked={pdfIncluirPagos} /> Incluir já pagos (abaixo)
+          </div>
+        ),
+      },
+      { type: 'divider' },
+      { key: 'all', label: 'Todos os meses (separado por mês)', onClick: () => { onPdf?.(undefined, pdfIncluirPagos); setPdfMenuOpen(false); } },
     ];
     if (mesesPdf.length > 0) {
       items.push({ type: 'divider' });
@@ -1383,12 +1397,12 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
         items.push({
           key: m.comp,
           label: `${rotulo.charAt(0).toUpperCase()}${rotulo.slice(1)} · ${formatBRL(m.total)}`,
-          onClick: () => onPdf?.(m.comp),
+          onClick: () => { onPdf?.(m.comp, pdfIncluirPagos); setPdfMenuOpen(false); },
         });
       }
     }
     return items;
-  }, [mesesPdf, onPdf]);
+  }, [mesesPdf, onPdf, pdfIncluirPagos]);
 
   // Aba de mês ativa na visão "Por mês". null = "Todos" (mostra todos os meses).
   const [mesAba, setMesAba] = useState<string | null>(null);
@@ -1526,7 +1540,7 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
             Atribuir manual
           </Button>
           {onPdf && (
-            <Dropdown menu={{ items: pdfMenuItems }} trigger={['click']} disabled={pdfLoading}>
+            <Dropdown menu={{ items: pdfMenuItems }} trigger={['click']} disabled={pdfLoading} open={pdfMenuOpen} onOpenChange={setPdfMenuOpen}>
               <Button size="small" icon={<FileDown size={14} />} loading={pdfLoading}>
                 PDF <ChevronDown size={12} style={{ marginLeft: 2 }} />
               </Button>
