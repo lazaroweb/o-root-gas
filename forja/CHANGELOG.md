@@ -36,6 +36,17 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.220.0] — 2026-06-30
+
+### Adicionado (Recebíveis · Fase 3 — polish)
+- **Indicador de saldo por mês** nas abas do detalhe do membro: cada aba (e o
+  "Todos") ganha um ponto âmbar quando ainda há saldo em aberto naquele mês, com
+  tooltip mostrando o valor; some quando o mês está quitado.
+- **Filtro "Só em aberto"** na barra de ações do detalhe: esconde os itens já
+  quitados (saldo ≈ 0) tanto na visão "Por mês" quanto na "Lista", com estado
+  vazio dedicado ("Tudo quitado por aqui 🎉"). Régua e abas seguem mostrando o
+  ano inteiro pra contexto.
+
 ## [1.219.0] — 2026-06-30
 
 ### Adicionado (Recebíveis · Fase 2)

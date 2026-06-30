@@ -1147,6 +1147,12 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
   const passaFiltro = (c: CobrancaDetalhada) => !filtroAtivo || origemDaCobranca(c).key === filtroAtivo;
   const cobrFiltradas = useMemo(() => cobrancas.filter(passaFiltro), [cobrancas, filtroAtivo]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Filtro "só em aberto": esconde itens já quitados (saldo ≈ 0). Aplica só na
+  // LISTA — a régua e as abas continuam mostrando o ano inteiro pra contexto.
+  const [soEmAberto, setSoEmAberto] = useState(false);
+  const saldoItem = (c: CobrancaDetalhada) => Math.max(0, Math.abs(Number(c.valor || 0)) - valorPagoDe(c));
+  const passaAberto = (c: CobrancaDetalhada) => !soEmAberto || saldoItem(c) > 0.005;
+
   // Meses com cobranças (pra o menu do PDF) — competência + total, ordenados.
   const mesesPdf = useMemo(() => {
     const mapa: Record<string, number> = {};
@@ -1184,13 +1190,17 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
   // Meses (competências) com cobranças, respeitando o filtro de cartão — viram
   // as abas Jun/26 · Jul/26 · Ago/26 acima da lista.
   const mesesAba = useMemo(() => {
-    const mapa: Record<string, number> = {};
+    const mapa: Record<string, { total: number; aberto: number }> = {};
     for (const c of cobrFiltradas) {
       const comp = String(c.competencia || '').substring(0, 7);
-      if (/^\d{4}-\d{2}$/.test(comp)) mapa[comp] = (mapa[comp] || 0) + Math.abs(Number(c.valor || 0));
+      if (!/^\d{4}-\d{2}$/.test(comp)) continue;
+      if (!mapa[comp]) mapa[comp] = { total: 0, aberto: 0 };
+      mapa[comp].total += Math.abs(Number(c.valor || 0));
+      mapa[comp].aberto += saldoItem(c);
     }
-    return Object.keys(mapa).sort().map((comp) => ({ comp, total: mapa[comp] }));
-  }, [cobrFiltradas]);
+    return Object.keys(mapa).sort().map((comp) => ({ comp, total: mapa[comp].total, aberto: mapa[comp].aberto }));
+  }, [cobrFiltradas]); // eslint-disable-line react-hooks/exhaustive-deps
+  const totalAbertoMembro = useMemo(() => mesesAba.reduce((s, m) => s + m.aberto, 0), [mesesAba]);
 
   const labelMesCurto = (comp: string) => {
     const s = dayjs(`${comp}-01`).format('MMM/YY');
@@ -1307,6 +1317,15 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
               </Button>
             </Dropdown>
           )}
+          <button onClick={() => setSoEmAberto((o) => !o)} title="Mostrar só o que ainda falta receber" style={{
+            border: `1px solid ${soEmAberto ? t.accents.peach : t.borderSoft}`, cursor: 'pointer',
+            fontFamily: FONTS.ui, fontSize: 11.5, fontWeight: soEmAberto ? 600 : 500,
+            padding: '4px 11px', borderRadius: 999, transition: 'all 0.15s',
+            background: soEmAberto ? `${t.accents.peach}1f` : t.surfaceMuted, color: soEmAberto ? t.accents.peach : t.textSecondary,
+            display: 'inline-flex', alignItems: 'center', gap: 5,
+          }}>
+            <HandCoins size={12} /> Só em aberto
+          </button>
         </div>
         {/* Toggle Por mês × Lista */}
         <div style={{ display: 'inline-flex', background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 9, padding: 3, gap: 3 }}>
@@ -1330,16 +1349,22 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
           Clicar filtra a lista pra o mês escolhido (só na visão "Por mês"). */}
       {!loading && modo === 'mes' && provisao && mesesAba.length > 0 && (
         <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 2, flexShrink: 0 }}>
-          {([{ comp: null as string | null, total: 0 }, ...mesesAba]).map((m) => {
+          {([{ comp: null as string | null, total: 0, aberto: totalAbertoMembro }, ...mesesAba]).map((m) => {
             const on = mesAba === m.comp;
+            const temAberto = m.aberto > 0.005;
             return (
-              <button key={m.comp ?? 'todos'} onClick={() => setMesAba(m.comp)} style={{
+              <button key={m.comp ?? 'todos'} onClick={() => setMesAba(m.comp)} title={temAberto ? `Em aberto: ${formatBRL(m.aberto)}` : 'Tudo quitado'} style={{
                 border: `1px solid ${on ? membro.cor : t.borderSoft}`, cursor: 'pointer',
                 fontFamily: FONTS.ui, fontSize: 12, fontWeight: on ? 600 : 500,
                 padding: '5px 13px', borderRadius: 999, transition: 'all 0.15s', whiteSpace: 'nowrap',
                 background: on ? membro.cor : t.surfaceMuted, color: on ? '#fff' : t.textSecondary,
+                display: 'inline-flex', alignItems: 'center', gap: 6,
               }}>
                 {m.comp ? labelMesCurto(m.comp) : 'Todos'}
+                <span style={{
+                  width: 6, height: 6, borderRadius: 999, flexShrink: 0,
+                  background: temAberto ? (on ? '#fff' : t.accents.peach) : 'transparent',
+                }} />
               </button>
             );
           })}
@@ -1354,17 +1379,27 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
       ) : cobrFiltradas.length === 0 ? (
         <Empty description="Nada nesse cartão" />
       ) : modo === 'lista' || !provisao ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {cobrFiltradas.map((c) => (
-            <LinhaCobranca key={c.id} c={c} onRegistrarPagamento={onRegistrarPagamento} onEditar={onEditar} onRemover={onRemover} />
-          ))}
-        </div>
+        cobrFiltradas.filter(passaAberto).length === 0 ? (
+          <Empty description="Tudo quitado por aqui. 🎉" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {cobrFiltradas.filter(passaAberto).map((c) => (
+              <LinhaCobranca key={c.id} c={c} onRegistrarPagamento={onRegistrarPagamento} onEditar={onEditar} onRemover={onRemover} />
+            ))}
+          </div>
+        )
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-          {provisao.porMes
-            .map((m) => ({ ...m, itens: m.itens.filter(passaFiltro) }))
+        (() => {
+          const mesesVisiveis = provisao.porMes
+            .map((m) => ({ ...m, itens: m.itens.filter(passaFiltro).filter(passaAberto) }))
             .filter((m) => m.itens.length > 0)
-            .filter((m) => !mesAba || m.competencia === mesAba)
+            .filter((m) => !mesAba || m.competencia === mesAba);
+          if (mesesVisiveis.length === 0) {
+            return <Empty description={soEmAberto ? 'Tudo quitado por aqui. 🎉' : 'Nada neste período.'} image={Empty.PRESENTED_IMAGE_SIMPLE} />;
+          }
+          return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {mesesVisiveis
             .map((m) => {
             const total = m.itens.reduce((s, c) => s + Math.abs(Number(c.valor || 0)), 0);
             const pago = m.itens.filter((c) => String(c.status) === 'pago').reduce((s, c) => s + Math.abs(Number(c.valor || 0)), 0);
@@ -1430,6 +1465,8 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
             );
           })}
         </div>
+          );
+        })()
       )}
       </div>
     </div>
