@@ -78,7 +78,7 @@ export default function Configuracoes({ initialSecao }: ConfiguracoesProps = {})
       .then(([s, st]) => {
         if (s.ok && s.data) {
           setSettings(s.data);
-          llmForm.setFieldsValue({ baseUrl: s.data.llm.baseUrl, modelo: s.data.llm.modelo, provider: s.data.llm.provider || 'proxy' });
+          llmForm.setFieldsValue({ baseUrl: s.data.llm.baseUrl, modelo: s.data.llm.modelo, provider: s.data.llm.provider || 'proxy', authType: s.data.llm.authType || 'apikey' });
           geminiForm.setFieldsValue({ modelo: s.data.gemini?.modelo || 'gemini-3.5-flash' });
           gitForm.setFieldsValue({ usuario: s.data.github.usuario });
         }
@@ -92,7 +92,7 @@ export default function Configuracoes({ initialSecao }: ConfiguracoesProps = {})
 
   const saveLlm = (v: Record<string, string>) => {
     setSavingLlm(true);
-    callServer<ServerResponse<unknown>>('saveSettings', { llm: { baseUrl: v.baseUrl, modelo: v.modelo, provider: v.provider, apiKey: v.apiKey || '' } })
+    callServer<ServerResponse<unknown>>('saveSettings', { llm: { baseUrl: v.baseUrl, modelo: v.modelo, provider: v.provider, authType: v.authType || 'apikey', apiKey: v.apiKey || '' } })
       .then(res => { if (res.ok) { message.success('Conexão de IA salva'); llmForm.setFieldValue('apiKey', ''); load(); } else message.error(res.error || 'Erro'); })
       .catch(() => message.error('Erro ao salvar'))
       .finally(() => setSavingLlm(false));
@@ -210,6 +210,14 @@ export default function Configuracoes({ initialSecao }: ConfiguracoesProps = {})
                         { value: 'proxy', label: 'Proxy (compatível OpenAI/Anthropic)' },
                         { value: 'anthropic', label: 'Anthropic (nativo)' },
                         { value: 'openai', label: 'OpenAI (nativo)' },
+                      ]}
+                    />
+                  </Form.Item>
+                  <Form.Item name="authType" label="Autenticação" extra="Anthropic nativo usa x-api-key. Muitos proxies/gateways exigem Bearer (Authorization).">
+                    <Select
+                      options={[
+                        { value: 'apikey', label: 'x-api-key (padrão Anthropic)' },
+                        { value: 'bearer', label: 'Bearer (Authorization)' },
                       ]}
                     />
                   </Form.Item>

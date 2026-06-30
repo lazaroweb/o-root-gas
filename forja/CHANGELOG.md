@@ -36,6 +36,24 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.231.0] — 2026-06-30
+
+### Adicionado (autenticação Bearer pra proxy de IA)
+- Novo campo **Autenticação** na Conexão de IA (Proxy): `x-api-key` (padrão
+  Anthropic) ou **`Bearer` (Authorization)** — necessário pra muitos gateways/
+  proxies (ex.: endpoints que usam `ANTHROPIC_AUTH_TYPE=bearer`).
+- O header das chamadas nativas Anthropic (`/messages` e `/models`) passa a
+  respeitar esse tipo. Persistido em `LLM_AUTH_TYPE`.
+- `syncSettings` agora também mapeia `ANTHROPIC_AUTH_TYPE` → `LLM_AUTH_TYPE`.
+
+### Nota
+- Lembrete: o app lê as chaves canônicas **`LLM_BASE_URL` / `LLM_API_KEY` /
+  `LLM_MODEL` / `LLM_PROVIDER` / `LLM_AUTH_TYPE`**. As variantes `ANTHROPIC_*`
+  só entram via "Sincronizar do Apps Script" (e não sobrescrevem `LLM_*` já
+  preenchidas).
+
+---
+
 ## [1.230.0] — 2026-06-30
 
 ### Corrigido (PDF — reconciliação do "recebido")

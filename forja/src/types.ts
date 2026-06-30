@@ -1499,7 +1499,7 @@ export interface DashboardData {
 }
 
 export interface Settings {
-  llm: { baseUrl: string; modelo: string; provider: string; temChave: boolean };
+  llm: { baseUrl: string; modelo: string; provider: string; authType?: string; temChave: boolean };
   gemini?: { modelo: string; temChave: boolean };
   github: { usuario: string; temToken: boolean };
 }

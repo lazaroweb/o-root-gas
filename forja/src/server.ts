@@ -4124,6 +4124,7 @@ function getSettings(): ServerResult {
           baseUrl: get('LLM_BASE_URL'),
           modelo: get('LLM_MODEL'),
           provider: get('LLM_PROVIDER') || 'proxy',
+          authType: (get('LLM_AUTH_TYPE') || 'apikey').toLowerCase(),
           temChave: has('LLM_API_KEY'),
         },
         gemini: {
@@ -4155,6 +4156,7 @@ function saveSettings(settings: Record<string, unknown>): ServerResult {
     if ('baseUrl' in llm) set('LLM_BASE_URL', llm['baseUrl']);
     if ('modelo' in llm) set('LLM_MODEL', llm['modelo']);
     if ('provider' in llm) set('LLM_PROVIDER', llm['provider']);
+    if ('authType' in llm) set('LLM_AUTH_TYPE', llm['authType']);
     if ('apiKey' in llm && String(llm['apiKey'] || '') !== '') set('LLM_API_KEY', llm['apiKey']);
     if ('modelo' in gemini) set('GEMINI_MODEL', gemini['modelo']);
     if ('apiKey' in gemini && String(gemini['apiKey'] || '') !== '') set('GEMINI_API_KEY', gemini['apiKey']);
@@ -4191,6 +4193,7 @@ function syncSettings(): ServerResult {
       LLM_MODEL: ['LLM_MODEL', 'MODEL', 'MODELO', 'LLM_MODELO', 'DEFAULT_MODEL', 'OPENAI_MODEL', 'ANTHROPIC_MODEL'],
       LLM_API_KEY: ['LLM_API_KEY', 'API_KEY', 'APIKEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'PROXY_API_KEY', 'PROXY_KEY', 'LLM_KEY', 'OPENAI_KEY', 'ANTHROPIC_KEY', 'KEY'],
       LLM_PROVIDER: ['LLM_PROVIDER', 'PROVIDER', 'PROVEDOR'],
+      LLM_AUTH_TYPE: ['LLM_AUTH_TYPE', 'ANTHROPIC_AUTH_TYPE', 'AUTH_TYPE', 'AUTH'],
       GITHUB_USER: ['GITHUB_USER', 'GITHUB_USERNAME', 'GITHUB_USUARIO', 'GH_USER', 'GIT_USER'],
       GITHUB_TOKEN: ['GITHUB_TOKEN', 'GITHUB_PAT', 'GITHUB_ACCESS_TOKEN', 'GH_TOKEN', 'GH_PAT', 'GIT_TOKEN', 'PAT'],
     };
@@ -13467,14 +13470,27 @@ interface LlmMessage {
   content: string;
 }
 
-function getLlmConfig(): { baseUrl: string; modelo: string; apiKey: string; provider: string } {
+function getLlmConfig(): { baseUrl: string; modelo: string; apiKey: string; provider: string; authType: string } {
   const props = PropertiesService.getScriptProperties();
+  // authType: 'apikey' (header x-api-key, padrão Anthropic) ou 'bearer'
+  // (Authorization: Bearer — usado por muitos proxies/gateways). Sem valor,
+  // mantém o comportamento histórico: anthropic→x-api-key, demais→bearer.
   return {
     baseUrl: (props.getProperty('LLM_BASE_URL') || '').replace(/\/+$/, ''),
     modelo: props.getProperty('LLM_MODEL') || '',
     apiKey: props.getProperty('LLM_API_KEY') || '',
     provider: props.getProperty('LLM_PROVIDER') || 'proxy',
+    authType: (props.getProperty('LLM_AUTH_TYPE') || '').trim().toLowerCase(),
   };
+}
+
+// Monta os headers de auth pro formato Anthropic (/messages e /models nativos),
+// respeitando o authType: 'bearer' usa Authorization, senão x-api-key.
+function _anthropicHeaders(cfg: { apiKey: string; authType: string }): Record<string, string> {
+  const base: Record<string, string> = { 'anthropic-version': '2023-06-01' };
+  if (cfg.authType === 'bearer') base['Authorization'] = 'Bearer ' + cfg.apiKey;
+  else base['x-api-key'] = cfg.apiKey;
+  return base;
 }
 
 // ═══ Roteamento de IA por serviço (v1.69) ═══════════════════════════════════
@@ -13774,7 +13790,7 @@ function forjaCallLLMDetalhado(
     const convo = messages.filter(m => m.role !== 'system').map(m => ({ role: m.role, content: m.content }));
     const r = llmFetch(
       llmUrlCandidates(cfg.baseUrl, '/messages'),
-      { 'x-api-key': cfg.apiKey, 'anthropic-version': '2023-06-01' },
+      _anthropicHeaders(cfg),
       JSON.stringify({ model: modelo, max_tokens: maxTokens || 1500, system: systemMsg, messages: convo }),
     );
     if (r.code < 200 || r.code >= 300) {
@@ -20067,7 +20083,7 @@ function listModelosDisponiveis(): ServerResult {
 
     const urls = llmUrlCandidates(cfg.baseUrl, '/models');
     const headers: Record<string, string> = cfg.provider === 'anthropic'
-      ? { 'x-api-key': cfg.apiKey, 'anthropic-version': '2023-06-01' }
+      ? _anthropicHeaders(cfg)
       : { Authorization: `Bearer ${cfg.apiKey}` };
 
     let resposta: { code: number; body: string; url: string } = { code: 0, body: '', url: urls[0] || '' };
