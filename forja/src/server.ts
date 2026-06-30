@@ -10749,7 +10749,10 @@ function getProvisaoMembro(membroId: string): ServerResult {
 
 // PDF da "fatura" de um membro: tudo o que ele deve, com detalhe (cartão, data da
 // compra, vencimento). `apenasPendentes` (default true) ignora o que já pagou.
-function gerarPdfCobrancasMembro(membroId: string, apenasPendentes?: boolean): ServerResult {
+// PDF de cobrança do membro. `competencia` (YYYY-MM) opcional: quando informada,
+// traz SÓ aquele mês; quando ausente, traz TODOS os meses agrupados por
+// competência, com subtotal por mês + total geral.
+function gerarPdfCobrancasMembro(membroId: string, apenasPendentes?: boolean, competencia?: string): ServerResult {
   try {
     const membro = dbGetById('FinPessoalMembros', String(membroId || ''));
     if (!membro) return { ok: false, error: 'Membro não encontrado.' };
@@ -10757,6 +10760,9 @@ function gerarPdfCobrancasMembro(membroId: string, apenasPendentes?: boolean): S
     if (!det.ok) return det;
     let itens = (det.data as Array<Record<string, unknown>>) || [];
     if (apenasPendentes !== false) itens = itens.filter((c) => String(c['status']) !== 'pago');
+    const comp = String(competencia || '').substring(0, 7);
+    const filtrarMes = /^\d{4}-\d{2}$/.test(comp);
+    if (filtrarMes) itens = itens.filter((c) => String(c['competencia'] || '').substring(0, 7) === comp);
     const total = itens.reduce((s, c) => s + Number(c['valor'] || 0), 0);
     const emp = _empresaPerfil();
     const nomeMembro = String(membro['nome'] || 'Membro');
@@ -10765,37 +10771,72 @@ function gerarPdfCobrancasMembro(membroId: string, apenasPendentes?: boolean): S
     const telMembro = String(membro['telefone'] || '').trim();
     const relacaoMembro = String(membro['relacao'] || '').trim();
 
-    const linhas = itens.map((c) => {
+    // Linha de um item. `comComp` controla a coluna de competência (redundante
+    // quando já há cabeçalho de mês — modo agrupado e modo mês único).
+    const rowOf = (c: Record<string, unknown>, comComp: boolean): string => {
       const detParts: string[] = [];
       if (c['cartaoNome']) detParts.push('Cartão ' + _escHtml(c['cartaoNome']));
       if (c['dataCompra']) detParts.push('Compra ' + _escHtml(_fmtDataBR(String(c['dataCompra']))));
       if (c['vencimentoFatura']) detParts.push('Vence ' + _escHtml(_fmtDataBR(String(c['vencimentoFatura']))));
       const sub = detParts.length ? '<br><span class="muted" style="font-size:10.5px;">' + detParts.join(' · ') + '</span>' : '';
       return '<tr><td><strong>' + _escHtml(c['descricao'] || '—') + '</strong>' + sub + '</td>'
-        + '<td>' + _escHtml(_fmtCompetenciaBR(String(c['competencia'] || ''))) + '</td>'
+        + (comComp ? '<td>' + _escHtml(_fmtCompetenciaBR(String(c['competencia'] || ''))) + '</td>' : '')
         + '<td style="text-transform:capitalize;">' + _escHtml(String(c['status'] || 'pendente')) + '</td>'
         + '<td class="right mono">' + _fmtBRLpdf(Number(c['valor'] || 0)) + '</td></tr>';
-    }).join('');
+    };
+
+    let tabela: string;
+    if (itens.length === 0) {
+      tabela = '<div class="muted" style="padding:30px;text-align:center;">Nada pendente — está tudo em dia. 🎉</div>';
+    } else if (filtrarMes) {
+      // Mês único: tabela simples (a competência é o título do documento).
+      const linhas = itens.map((c) => rowOf(c, false)).join('');
+      tabela = '<table><thead><tr><th>Descrição</th><th>Status</th><th class="right">Valor</th></tr></thead>'
+        + '<tbody>' + linhas + '</tbody>'
+        + '<tfoot><tr><td colspan="2" class="right" style="font-weight:600;border-top:2px solid #E7E1D8;">Total</td>'
+        + '<td class="right mono" style="font-weight:600;border-top:2px solid #E7E1D8;">' + _fmtBRLpdf(total) + '</td></tr></tfoot></table>';
+    } else {
+      // Todos os meses: agrupa por competência, subtotal por mês + total geral.
+      const grupos: Record<string, Array<Record<string, unknown>>> = {};
+      for (const c of itens) {
+        const k = String(c['competencia'] || '').substring(0, 7) || '0000-00';
+        (grupos[k] = grupos[k] || []).push(c);
+      }
+      const keys = Object.keys(grupos).sort();
+      let linhas = '';
+      for (const k of keys) {
+        const its = grupos[k];
+        const subtotal = its.reduce((s, c) => s + Number(c['valor'] || 0), 0);
+        linhas += '<tr><td colspan="2" style="background:#F6F3EE;font-weight:600;border-top:1px solid #E7E1D8;">'
+          + _escHtml(_fmtCompetenciaBR(k)) + ' · ' + its.length + ' item(ns)</td>'
+          + '<td class="right mono" style="background:#F6F3EE;font-weight:600;border-top:1px solid #E7E1D8;">' + _fmtBRLpdf(subtotal) + '</td></tr>';
+        linhas += its.map((c) => rowOf(c, false)).join('');
+      }
+      tabela = '<table><thead><tr><th>Descrição</th><th>Status</th><th class="right">Valor</th></tr></thead>'
+        + '<tbody>' + linhas + '</tbody>'
+        + '<tfoot><tr><td colspan="2" class="right" style="font-weight:600;border-top:2px solid #E7E1D8;">Total geral</td>'
+        + '<td class="right mono" style="font-weight:600;border-top:2px solid #E7E1D8;">' + _fmtBRLpdf(total) + '</td></tr></tfoot></table>';
+    }
+
+    const escopo = filtrarMes
+      ? 'Competência: ' + _escHtml(_fmtCompetenciaBR(comp))
+      : 'Todos os meses · separado por competência';
 
     const corpo = '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:26px;">'
       + '<div><div class="muted" style="font-size:10px;letter-spacing:0.16em;text-transform:uppercase;">' + _escHtml(emp.nome) + ' — Cobrança</div>'
       + '<h1 style="font-size:28px;margin-top:6px;">' + _escHtml((emoji ? emoji + ' ' : '') + nomeMembro) + '</h1>'
       + ((relacaoMembro || telMembro) ? '<div class="muted" style="font-size:11.5px;margin-top:2px;">' + _escHtml([relacaoMembro, telMembro].filter(Boolean).join(' · ')) + '</div>' : '')
-      + '<div class="muted" style="font-size:11px;margin-top:4px;">Gerado em ' + _escHtml(_fmtDataBR(new Date().toISOString())) + '</div></div>'
+      + '<div class="muted" style="font-size:11px;margin-top:4px;">' + escopo + ' · Gerado em ' + _escHtml(_fmtDataBR(new Date().toISOString())) + '</div></div>'
       + '<div class="right"><div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;">Total a receber</div>'
       + '<div style="font-size:26px;font-weight:600;margin-top:2px;color:#B05A2A;">' + _fmtBRLpdf(total) + '</div>'
       + '<div class="muted" style="font-size:11px;">' + itens.length + ' item(ns)</div></div></div>'
-      + (itens.length === 0
-        ? '<div class="muted" style="padding:30px;text-align:center;">Nada pendente — está tudo em dia. 🎉</div>'
-        : '<table><thead><tr><th>Descrição</th><th>Competência</th><th>Status</th><th class="right">Valor</th></tr></thead>'
-          + '<tbody>' + linhas + '</tbody>'
-          + '<tfoot><tr><td colspan="3" class="right" style="font-weight:600;border-top:2px solid #E7E1D8;">Total</td>'
-          + '<td class="right mono" style="font-weight:600;border-top:2px solid #E7E1D8;">' + _fmtBRLpdf(total) + '</td></tr></tfoot></table>')
+      + tabela
       + (pixMembro ? '<div style="margin-top:22px;padding:14px 16px;background:#F6F3EE;border:1px solid #E7E1D8;border-radius:10px;font-size:13px;">Pague via PIX: <strong>' + _escHtml(pixMembro) + '</strong></div>' : '')
       + '<div style="border-top:1px solid #E7E1D8;padding-top:14px;margin-top:32px;" class="muted">Documento gerado pela FORJA · ' + _escHtml(_fmtDataBR(new Date().toISOString())) + '</div>';
 
+    const sufixo = filtrarMes ? '_' + comp : '';
     const html = _pdfDoc('Cobrança — ' + nomeMembro, corpo);
-    return _htmlToPdfResult(html, 'cobranca_' + nomeMembro.toLowerCase().replace(/\s+/g, '_'));
+    return _htmlToPdfResult(html, 'cobranca_' + nomeMembro.toLowerCase().replace(/\s+/g, '_') + sufixo);
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao gerar PDF do membro' };
   }

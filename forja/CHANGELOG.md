@@ -36,6 +36,16 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.215.0] — 2026-06-30
+
+### Adicionado
+- **PDF de cobrança do membro agora dá pra escolher o mês.** O botão "PDF" virou
+  um menu: "Todos os meses (separado por mês)" gera o relatório completo, mas
+  agora **agrupado por competência** com subtotal por mês + total geral; abaixo,
+  cada mês com cobranças aparece como opção individual ("Junho de 2026 · R$ …")
+  pra exportar só aquele mês. O nome do arquivo inclui a competência quando for
+  mês único.
+
 ## [1.214.0] — 2026-06-30
 
 ### Alterado

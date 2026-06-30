@@ -8,12 +8,12 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Button, Modal, Form, Input, InputNumber, Select, DatePicker, Tag, Switch,
-  App as AntApp, Popconfirm, Empty, Tooltip,
+  App as AntApp, Popconfirm, Empty, Tooltip, Dropdown,
 } from 'antd';
 import {
   Plus, Pencil, Trash2, Users, CheckCircle2, Clock, CreditCard,
   Link2, AlertCircle, Repeat, HandCoins, FileDown, CalendarClock,
-  CalendarRange, Layers, ListChecks, Wand2, ChevronLeft, ChevronRight,
+  CalendarRange, Layers, ListChecks, Wand2, ChevronLeft, ChevronRight, ChevronDown,
 } from 'lucide-react';
 import dayjs, { Dayjs } from 'dayjs';
 import { Panel, formatBRL, Skeleton } from '../components/ui';
@@ -109,9 +109,9 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
       .catch(() => { /* visão por mês fica indisponível, lista normal segue */ });
   }, [drawerMembro]);
 
-  const baixarPdfMembro = (membro: FamiliaMembro) => {
+  const baixarPdfMembro = (membro: FamiliaMembro, competencia?: string) => {
     setPdfLoading(true);
-    gerarEbaixarPdf('gerarPdfCobrancasMembro', membro.id, true)
+    gerarEbaixarPdf('gerarPdfCobrancasMembro', membro.id, true, competencia)
       .then(() => message.success('PDF gerado'))
       .catch(() => message.error('Falha ao gerar PDF'))
       .finally(() => setPdfLoading(false));
@@ -376,7 +376,7 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
             provisao={provisao}
             loading={detalheCobr === null}
             pdfLoading={pdfLoading}
-            onPdf={() => baixarPdfMembro(drawerMembro)}
+            onPdf={(competencia?: string) => baixarPdfMembro(drawerMembro, competencia)}
             onNova={() => abrirNovaCobranca({ membroId: drawerMembro.id, competencia: mes })}
             onTogglePago={togglePago}
             onEditar={abrirEditarCobranca}
@@ -898,7 +898,7 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
   provisao: ProvisaoMembro | null;
   loading: boolean;
   pdfLoading?: boolean;
-  onPdf?: () => void;
+  onPdf?: (competencia?: string) => void;
   onNova: () => void;
   onTogglePago: (c: Cobranca) => void;
   onEditar: (c: Cobranca) => void;
@@ -928,6 +928,34 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
   const filtroAtivo = multiplos ? cartaoFiltro : null;
   const passaFiltro = (c: CobrancaDetalhada) => !filtroAtivo || origemDaCobranca(c).key === filtroAtivo;
   const cobrFiltradas = useMemo(() => cobrancas.filter(passaFiltro), [cobrancas, filtroAtivo]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Meses com cobranças (pra o menu do PDF) — competência + total, ordenados.
+  const mesesPdf = useMemo(() => {
+    const mapa: Record<string, number> = {};
+    for (const c of cobrancas) {
+      const comp = String(c.competencia || '').substring(0, 7);
+      if (/^\d{4}-\d{2}$/.test(comp)) mapa[comp] = (mapa[comp] || 0) + Number(c.valor || 0);
+    }
+    return Object.keys(mapa).sort().map((comp) => ({ comp, total: mapa[comp] }));
+  }, [cobrancas]);
+
+  const pdfMenuItems = useMemo(() => {
+    const items: NonNullable<React.ComponentProps<typeof Dropdown>['menu']>['items'] = [
+      { key: 'all', label: 'Todos os meses (separado por mês)', onClick: () => onPdf?.() },
+    ];
+    if (mesesPdf.length > 0) {
+      items.push({ type: 'divider' });
+      for (const m of mesesPdf) {
+        const rotulo = dayjs(`${m.comp}-01`).format('MMMM [de] YYYY');
+        items.push({
+          key: m.comp,
+          label: `${rotulo.charAt(0).toUpperCase()}${rotulo.slice(1)} · ${formatBRL(m.total)}`,
+          onClick: () => onPdf?.(m.comp),
+        });
+      }
+    }
+    return items;
+  }, [mesesPdf, onPdf]);
 
   // Clicar num mês da régua do membro foca o grupo correspondente na visão "Por mês".
   const focarMes = (comp: string) => {
@@ -992,9 +1020,11 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
             Atribuir manual
           </Button>
           {onPdf && (
-            <Button size="small" icon={<FileDown size={14} />} loading={pdfLoading} onClick={onPdf}>
-              PDF
-            </Button>
+            <Dropdown menu={{ items: pdfMenuItems }} trigger={['click']} disabled={pdfLoading}>
+              <Button size="small" icon={<FileDown size={14} />} loading={pdfLoading}>
+                PDF <ChevronDown size={12} style={{ marginLeft: 2 }} />
+              </Button>
+            </Dropdown>
           )}
         </div>
         {/* Toggle Por mês × Lista */}
