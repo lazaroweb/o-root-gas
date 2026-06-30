@@ -36,6 +36,20 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.217.0] — 2026-06-30
+
+### Adicionado
+- **Pagamento parcial por cobrança (recebíveis do membro).** Cada lançamento do
+  membro agora tem um **chip de 3 estados** — Pendente / **Parcial** / Pago —
+  no lugar do antigo check binário. Clicar abre um popover pra **registrar o
+  valor recebido** (botões "Tudo" e "Em aberto"); se for parcial, a linha mostra
+  **"faltam R$ X"**. O status é derivado: 0 = pendente, igual ao valor = pago, no
+  meio = parcial.
+- Novo campo `valorPago` na cobrança (append-only, `SCHEMA_VERSION`
+  `v1.92-cobranca-valorpago`) e RPC `registrarPagamentoCobranca`. O reembolso por
+  mês passou a considerar pagamentos parciais (saldo = valor − recebido).
+- Sem integração com fluxo de caixa (continua consultivo) — conforme combinado.
+
 ## [1.216.2] — 2026-06-30
 
 ### Alterado

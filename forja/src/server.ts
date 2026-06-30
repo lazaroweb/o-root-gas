@@ -332,7 +332,10 @@ const SCHEMA: SheetSchema[] = [
   // parcela de cartão, carimba o grupo da compra parcelada. Permite propagar a
   // atribuição pras parcelas futuras e montar a visão de provisionamento do
   // membro por mês (quanto ele deve a longo prazo).
-  { name: 'FinPessoalCobrancas', columns: ['id', 'membroId', 'descricao', 'valor', 'competencia', 'status', 'origem', 'origemId', 'recorrente', 'dataPagamento', 'notas', 'criadoEm', 'atualizadoEm', 'parcelaGrupoId'] },
+  // v1.92: + valorPago (append-only) — quanto o membro já me reembolsou desta
+  // cobrança. 0 = pendente, igual ao `valor` = pago, no meio = parcial. O saldo
+  // (valor - valorPago) é o que ainda falta receber; soma-se nos 12 meses.
+  { name: 'FinPessoalCobrancas', columns: ['id', 'membroId', 'descricao', 'valor', 'competencia', 'status', 'origem', 'origemId', 'recorrente', 'dataPagamento', 'notas', 'criadoEm', 'atualizadoEm', 'parcelaGrupoId', 'valorPago'] },
   // FinPerfilIdeal (v1.53): "Perfil familiar ideal" — o orçamento-ALVO. Cada
   // linha é uma despesa que a família PRECISA pra viver bem (aluguel, mercado,
   // saúde, educação...), com o valor mensal ideal. Comparado com o gasto REAL
@@ -436,7 +439,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.91-cores-membros';
+const SCHEMA_VERSION = 'v1.92-cobranca-valorpago';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -10353,14 +10356,40 @@ function deletarCobranca(id: string): ServerResult {
 
 function marcarCobrancaPaga(id: string, pago: boolean): ServerResult {
   try {
+    const row = dbGetById('FinPessoalCobrancas', String(id || ''));
+    const valor = row ? Math.abs(Number(row['valor'] || 0)) : 0;
     const upd = dbUpdate('FinPessoalCobrancas', id, {
       status: pago ? 'pago' : 'pendente',
+      valorPago: pago ? valor : 0,
       dataPagamento: pago ? new Date().toISOString().substring(0, 10) : '',
       atualizadoEm: new Date().toISOString(),
     });
     return upd ? { ok: true, data: upd } : { ok: false, error: 'Cobrança não encontrada' };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao atualizar cobrança' };
+  }
+}
+
+// Registra quanto o membro me reembolsou desta cobrança (pagamento total ou
+// PARCIAL). Deriva o status: 0 → pendente, igual ao valor → pago, no meio →
+// parcial. Clampa em [0, valor] e zera resíduo de centavo no "pago".
+function registrarPagamentoCobranca(id: string, valorPago: number): ServerResult {
+  try {
+    const row = dbGetById('FinPessoalCobrancas', String(id || ''));
+    if (!row) return { ok: false, error: 'Cobrança não encontrada' };
+    const valor = Math.abs(Number(row['valor'] || 0));
+    let vp = Math.max(0, Math.min(valor, Number(valorPago) || 0));
+    const status = vp <= 0.005 ? 'pendente' : vp >= valor - 0.005 ? 'pago' : 'parcial';
+    if (status === 'pago') vp = valor;
+    const upd = dbUpdate('FinPessoalCobrancas', String(id), {
+      valorPago: vp,
+      status,
+      dataPagamento: vp > 0 ? new Date().toISOString().substring(0, 10) : '',
+      atualizadoEm: new Date().toISOString(),
+    });
+    return upd ? { ok: true, data: upd } : { ok: false, error: 'Cobrança não encontrada' };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao registrar pagamento' };
   }
 }
 
@@ -10663,6 +10692,15 @@ function getCobrancasMembroDetalhado(membroId: string): ServerResult {
         const base = _sanitizarLinha(c) as Record<string, unknown>;
         // Normaliza competência ('2026-06-01' → '2026-06') pra agrupamento por mês.
         base['competencia'] = _toYYYYMM(c['competencia']);
+        // valorPago normalizado [0, valor]. Linhas legadas (sem o campo) herdam
+        // do status: pago → valor cheio; senão 0. Saldo = valor - valorPago.
+        const valorTot = Math.abs(Number(base['valor'] || 0));
+        const vpRaw = c['valorPago'];
+        let vp = (vpRaw === '' || vpRaw === null || vpRaw === undefined)
+          ? (String(c['status']) === 'pago' ? valorTot : 0)
+          : Number(vpRaw) || 0;
+        vp = Math.max(0, Math.min(valorTot, vp));
+        base['valorPago'] = vp;
         const lanc = String(c['origem']) === 'lancamento' && c['origemId'] ? lancMap[String(c['origemId'])] : null;
         if (lanc) {
           const cartao = lanc['cartaoId'] ? cartoesMap[String(lanc['cartaoId'])] : null;
@@ -10728,10 +10766,14 @@ function getProvisaoMembro(membroId: string): ServerResult {
         futuro: comp > mesAtual, itens: [],
       };
       const v = Math.abs(Number(it['valor'] || 0));
-      const pago = String(it['status']) === 'pago';
+      // Reembolso considera pagamento PARCIAL: `pago` = quanto já recebi,
+      // `pendente` = saldo que ainda falta. Cobre pago/parcial/pendente.
+      const vp = Math.max(0, Math.min(v, Number(it['valorPago'] || 0)));
       mapMes[comp].total += v;
       mapMes[comp].itens.push(it);
-      if (pago) { mapMes[comp].pago += v; totalPago += v; } else mapMes[comp].pendente += v;
+      mapMes[comp].pago += vp;
+      mapMes[comp].pendente += (v - vp);
+      totalPago += vp;
       totalCusto += v;
       if (comp > mesAtual) custoFuturo += v;
       else if (comp === mesAtual) custoEsteMes += v;

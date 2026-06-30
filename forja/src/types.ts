@@ -1197,7 +1197,7 @@ export interface FamiliaMembro {
   atualizadoEm?: string;
 }
 
-export type StatusCobranca = 'pendente' | 'pago';
+export type StatusCobranca = 'pendente' | 'pago' | 'parcial';
 export type OrigemCobranca = 'manual' | 'lancamento' | 'assinatura';
 
 export interface Cobranca {
@@ -1211,6 +1211,9 @@ export interface Cobranca {
   origemId?: string;
   recorrente: 'sim' | 'nao';
   dataPagamento?: string;
+  // Quanto o membro já reembolsou desta cobrança. 0 = pendente, igual ao `valor`
+  // = pago, no meio = parcial. Saldo a receber = valor - valorPago.
+  valorPago?: number;
   notas?: string;
   criadoEm?: string;
   atualizadoEm?: string;

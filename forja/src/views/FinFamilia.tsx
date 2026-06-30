@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Button, Modal, Form, Input, InputNumber, Select, DatePicker, Tag, Switch,
-  App as AntApp, Popconfirm, Empty, Tooltip, Dropdown,
+  App as AntApp, Popconfirm, Empty, Tooltip, Dropdown, Popover,
 } from 'antd';
 import {
   Plus, Pencil, Trash2, Users, CheckCircle2, Clock, CreditCard,
@@ -24,7 +24,7 @@ import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import type {
   FamiliaMembro, Cobranca, ResumoFamilia, MembroResumo, NaoAtribuido,
-  LancamentoPessoal, AssinaturaPessoal, CartaoPessoal, ServerResponse,
+  LancamentoPessoal, AssinaturaPessoal, CartaoPessoal, ServerResponse, StatusCobranca,
 } from '../types';
 
 
@@ -94,20 +94,20 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
   const [provisao, setProvisao] = useState<ProvisaoMembro | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
 
-  // Ao abrir o drawer do membro: busca as cobranças ENRIQUECIDAS (com cartão,
-  // data da compra e vencimento da fatura) de todos os meses + o provisionamento
-  // agrupado por mês (este mês × futuro × atrasado) pra visão de longo prazo.
-  useEffect(() => {
-    if (!drawerMembro) { setDetalheCobr(null); setProvisao(null); return; }
-    setDetalheCobr(null);
-    setProvisao(null);
-    callServer<ServerResponse<CobrancaDetalhada[]>>('getCobrancasMembroDetalhado', drawerMembro.id)
-      .then((res) => { if (res?.ok && Array.isArray(res.data)) setDetalheCobr(res.data as CobrancaDetalhada[]); else setDetalheCobr([]); })
-      .catch(() => setDetalheCobr([]));
-    callServer<ServerResponse<ProvisaoMembro>>('getProvisaoMembro', drawerMembro.id)
+  // Carrega as cobranças ENRIQUECIDAS (com cartão, data da compra e vencimento)
+  // de todos os meses + o provisionamento agrupado por mês. `silent` evita o
+  // "piscar" (não limpa antes) — usado pra reconciliar após registrar pagamento.
+  const carregarDetalheMembro = useCallback((m: FamiliaMembro | null, silent?: boolean) => {
+    if (!m) { setDetalheCobr(null); setProvisao(null); return; }
+    if (!silent) { setDetalheCobr(null); setProvisao(null); }
+    callServer<ServerResponse<CobrancaDetalhada[]>>('getCobrancasMembroDetalhado', m.id)
+      .then((res) => { if (res?.ok && Array.isArray(res.data)) setDetalheCobr(res.data as CobrancaDetalhada[]); else if (!silent) setDetalheCobr([]); })
+      .catch(() => { if (!silent) setDetalheCobr([]); });
+    callServer<ServerResponse<ProvisaoMembro>>('getProvisaoMembro', m.id)
       .then((res) => { if (res?.ok && res.data) setProvisao(res.data as ProvisaoMembro); })
       .catch(() => { /* visão por mês fica indisponível, lista normal segue */ });
-  }, [drawerMembro]);
+  }, []);
+  useEffect(() => { carregarDetalheMembro(drawerMembro); }, [drawerMembro, carregarDetalheMembro]);
 
   const baixarPdfMembro = (membro: FamiliaMembro, competencia?: string) => {
     setPdfLoading(true);
@@ -166,10 +166,24 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
     setModalCobr(true);
   };
 
-  const togglePago = (c: Cobranca) => {
-    callServer<ServerResponse<unknown>>('marcarCobrancaPaga', c.id, c.status !== 'pago').then((res) => {
-      if (res.ok) refreshTudo(); else message.error(res.error || 'Erro');
-    });
+  // Registra o quanto o membro reembolsou (total ou parcial). Atualiza a UI
+  // otimisticamente (lista + provisão) pra resposta instantânea e reconcilia em
+  // segundo plano com o servidor.
+  const registrarPagamento = (c: CobrancaDetalhada, valorPago: number) => {
+    const valor = Math.abs(Number(c.valor || 0));
+    const vp = Math.max(0, Math.min(valor, Number(valorPago) || 0));
+    const status: StatusCobranca = vp <= 0.005 ? 'pendente' : vp >= valor - 0.005 ? 'pago' : 'parcial';
+    const vpFinal = status === 'pago' ? valor : vp;
+    const aplicar = (arr: CobrancaDetalhada[]) => arr.map((x) => (x.id === c.id ? { ...x, valorPago: vpFinal, status } : x));
+    setDetalheCobr((prev) => (prev ? aplicar(prev) : prev));
+    setProvisao((prev) => (prev ? { ...prev, porMes: prev.porMes.map((mm) => ({ ...mm, itens: aplicar(mm.itens) })) } : prev));
+    callServer<ServerResponse<unknown>>('registrarPagamentoCobranca', c.id, vp)
+      .then((res) => {
+        if (!res.ok) message.error(res.error || 'Erro');
+        if (drawerMembro) carregarDetalheMembro(drawerMembro, true);
+        recarregarFamilia();
+      })
+      .catch(() => { if (drawerMembro) carregarDetalheMembro(drawerMembro, true); });
   };
   const removerCobranca = (id: string) => {
     callServer<ServerResponse<unknown>>('deletarCobranca', id).then((res) => {
@@ -379,7 +393,7 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
             pdfLoading={pdfLoading}
             onPdf={(competencia?: string) => baixarPdfMembro(drawerMembro, competencia)}
             onNova={() => abrirNovaCobranca({ membroId: drawerMembro.id, competencia: mes })}
-            onTogglePago={togglePago}
+            onRegistrarPagamento={registrarPagamento}
             onEditar={abrirEditarCobranca}
             onRemover={removerCobranca}
           />
@@ -818,29 +832,93 @@ function MembroCard({ mr, onClick, onEditar }: { mr: MembroResumo; onClick: () =
   );
 }
 
-// Uma linha de cobrança no drawer — reusada na lista e na visão por mês.
-function LinhaCobranca({ c, onTogglePago, onEditar, onRemover }: {
+// Conteúdo do popover de pagamento — registrar quanto o membro reembolsou.
+function PopoverPagamento({ c, onRegistrar, onClose }: {
   c: CobrancaDetalhada;
-  onTogglePago: (c: Cobranca) => void;
+  onRegistrar: (c: CobrancaDetalhada, valorPago: number) => void;
+  onClose: () => void;
+}): React.ReactElement {
+  const t = useTokens();
+  const valor = Math.abs(Number(c.valor || 0));
+  const vpAtual = Math.max(0, Math.min(valor, Number(c.valorPago || 0)));
+  const [input, setInput] = useState<number>(vpAtual > 0 ? vpAtual : valor);
+  const faltam = Math.max(0, valor - input);
+  return (
+    <div style={{ width: 234, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>
+        Valor recebido <span style={{ color: t.textTertiary }}>· de {formatBRL(valor)}</span>
+      </div>
+      <InputNumber
+        autoFocus
+        value={input}
+        min={0}
+        max={valor}
+        precision={2}
+        prefix="R$"
+        style={{ width: '100%' }}
+        onChange={(v) => setInput(Math.max(0, Math.min(valor, Number(v) || 0)))}
+      />
+      <div style={{ display: 'flex', gap: 6 }}>
+        <Button size="small" style={{ flex: 1 }} onClick={() => setInput(valor)}>Tudo</Button>
+        <Button size="small" style={{ flex: 1 }} onClick={() => setInput(0)}>Em aberto</Button>
+      </div>
+      <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: faltam > 0.005 ? t.accents.peach : t.accents.sage }}>
+        {faltam > 0.005 ? `Faltam ${formatBRL(faltam)}` : 'Quitado integralmente'}
+      </div>
+      <Button type="primary" size="small" block onClick={() => { onRegistrar(c, input); onClose(); }}>
+        Salvar
+      </Button>
+    </div>
+  );
+}
+
+// Uma linha de cobrança no drawer — reusada na lista e na visão por mês.
+function LinhaCobranca({ c, onRegistrarPagamento, onEditar, onRemover }: {
+  c: CobrancaDetalhada;
+  onRegistrarPagamento: (c: CobrancaDetalhada, valorPago: number) => void;
   onEditar: (c: Cobranca) => void;
   onRemover: (id: string) => void;
 }): React.ReactElement {
   const t = useTokens();
-  const pgto = c.status === 'pago';
+  const [pop, setPop] = useState(false);
+  const valor = Math.abs(Number(c.valor || 0));
+  const vp = Math.max(0, Math.min(valor, Number(c.valorPago || 0)));
+  const saldo = Math.max(0, valor - vp);
+  const estado: 'pago' | 'parcial' | 'pendente' =
+    c.status === 'pago' || vp >= valor - 0.005 ? 'pago' : vp > 0.005 ? 'parcial' : 'pendente';
+  const pgto = estado === 'pago';
+  const cfg = {
+    pago: { cor: t.accents.sage, Icone: CheckCircle2, label: 'Pago' },
+    parcial: { cor: t.accents.peach, Icone: HandCoins, label: 'Parcial' },
+    pendente: { cor: t.textTertiary, Icone: Clock, label: 'Pendente' },
+  }[estado];
+  const Icone = cfg.Icone;
   const temParcela = (c.parcelasTotal || 0) > 1 && (c.parcelaAtual || 0) > 0;
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
       background: t.surface, border: `1px solid ${t.borderSoft}`, borderRadius: 10,
-      opacity: pgto ? 0.72 : 1,
+      opacity: pgto ? 0.78 : 1,
     }}>
-      <Tooltip title={pgto ? 'Reembolsado — clique pra desmarcar' : 'Marcar que o membro já me reembolsou (opcional)'}>
-        <Button
-          size="small" type="text"
-          icon={pgto ? <CheckCircle2 size={18} color={t.accents.sage} /> : <Clock size={18} color={t.textTertiary} />}
-          onClick={() => onTogglePago(c)}
-        />
-      </Tooltip>
+      <Popover
+        open={pop}
+        onOpenChange={setPop}
+        trigger="click"
+        placement="bottomLeft"
+        destroyTooltipOnHide
+        content={pop ? <PopoverPagamento c={c} onRegistrar={onRegistrarPagamento} onClose={() => setPop(false)} /> : null}
+      >
+        <Tooltip title={estado === 'parcial' ? `Recebido ${formatBRL(vp)} · faltam ${formatBRL(saldo)}` : 'Registrar pagamento (total ou parcial)'}>
+          <button style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+            border: `1px solid ${cfg.cor}59`, background: `${cfg.cor}16`, color: cfg.cor,
+            borderRadius: 999, padding: '4px 10px', fontFamily: FONTS.ui, fontSize: 11.5, fontWeight: 600,
+            whiteSpace: 'nowrap', transition: 'all 0.15s',
+          }}>
+            <Icone size={13} color={cfg.cor} /> {cfg.label}
+          </button>
+        </Tooltip>
+      </Popover>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontFamily: FONTS.ui, fontSize: 13.5, color: t.text, textDecoration: pgto ? 'line-through' : 'none', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {c.descricao}
@@ -861,7 +939,12 @@ function LinhaCobranca({ c, onTogglePago, onEditar, onRemover }: {
           </div>
         )}
       </div>
-      <div style={{ fontFamily: FONTS.display, fontSize: 14.5, fontWeight: 600, color: t.text, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(c.valor)}</div>
+      <div style={{ textAlign: 'right' }}>
+        <div style={{ fontFamily: FONTS.display, fontSize: 14.5, fontWeight: 600, color: pgto ? t.textTertiary : t.text, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(valor)}</div>
+        {estado === 'parcial' && (
+          <div style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.accents.peach, fontVariantNumeric: 'tabular-nums' }}>faltam {formatBRL(saldo)}</div>
+        )}
+      </div>
       <Button size="small" type="text" icon={<Pencil size={13} />} onClick={() => onEditar(c)} />
       <Popconfirm title="Remover cobrança?" onConfirm={() => onRemover(c.id)} okText="Remover" cancelText="Cancelar" okButtonProps={{ danger: true }}>
         <Button size="small" type="text" icon={<Trash2 size={13} />} danger />
@@ -892,7 +975,7 @@ function origemDaCobranca(c: CobrancaDetalhada): { key: string; label: string } 
   return { key: 'avulso', label: 'Avulso' };
 }
 
-function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, onPdf, onNova, onTogglePago, onEditar, onRemover }: {
+function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, onPdf, onNova, onRegistrarPagamento, onEditar, onRemover }: {
   membro: FamiliaMembro;
   mes: string;
   cobrancas: CobrancaDetalhada[];
@@ -901,7 +984,7 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
   pdfLoading?: boolean;
   onPdf?: (competencia?: string) => void;
   onNova: () => void;
-  onTogglePago: (c: Cobranca) => void;
+  onRegistrarPagamento: (c: CobrancaDetalhada, valorPago: number) => void;
   onEditar: (c: Cobranca) => void;
   onRemover: (id: string) => void;
 }): React.ReactElement {
@@ -1133,7 +1216,7 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
       ) : modo === 'lista' || !provisao ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {cobrFiltradas.map((c) => (
-            <LinhaCobranca key={c.id} c={c} onTogglePago={onTogglePago} onEditar={onEditar} onRemover={onRemover} />
+            <LinhaCobranca key={c.id} c={c} onRegistrarPagamento={onRegistrarPagamento} onEditar={onEditar} onRemover={onRemover} />
           ))}
         </div>
       ) : (
@@ -1191,7 +1274,7 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
                           <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(g.total)}</span>
                         </div>
                         {g.itens.map((c) => (
-                          <LinhaCobranca key={c.id} c={c} onTogglePago={onTogglePago} onEditar={onEditar} onRemover={onRemover} />
+                          <LinhaCobranca key={c.id} c={c} onRegistrarPagamento={onRegistrarPagamento} onEditar={onEditar} onRemover={onRemover} />
                         ))}
                       </div>
                     ))}
@@ -1199,7 +1282,7 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     {m.itens.map((c) => (
-                      <LinhaCobranca key={c.id} c={c} onTogglePago={onTogglePago} onEditar={onEditar} onRemover={onRemover} />
+                      <LinhaCobranca key={c.id} c={c} onRegistrarPagamento={onRegistrarPagamento} onEditar={onEditar} onRemover={onRemover} />
                     ))}
                   </div>
                 )}
