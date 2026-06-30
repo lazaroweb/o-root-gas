@@ -36,6 +36,17 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.226.0] — 2026-06-30
+
+### Corrigido / Melhorado (saldo por mês no detalhe)
+- **"Recebido · Em aberto" por mês**: cada mês no detalhe do membro agora mostra,
+  no cabeçalho, quanto já foi recebido e quanto sobra naquele mês — sem precisar
+  ligar o filtro "Só em aberto".
+- **Fix do cálculo do mês**: o "recebido"/tag "reembolsado" do mês só contava itens
+  100% pagos e ignorava os PARCIAIS. Agora soma o valor efetivamente pago (incluindo
+  parciais), então o "em aberto" do mês fecha certinho (ex.: Jun 1.534,15 − 1.400 =
+  134,15).
+
 ## [1.225.0] — 2026-06-30
 
 ### Melhorado (Registrar recebimento — amarrado ao mês)

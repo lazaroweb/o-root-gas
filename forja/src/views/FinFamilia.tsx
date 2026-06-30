@@ -1617,8 +1617,11 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
           {mesesVisiveis
             .map((m) => {
             const total = m.itens.reduce((s, c) => s + Math.abs(Number(c.valor || 0)), 0);
-            const pago = m.itens.filter((c) => String(c.status) === 'pago').reduce((s, c) => s + Math.abs(Number(c.valor || 0)), 0);
-            const tudoReembolsado = total - pago <= 0.01 && pago > 0;
+            // Recebido do mês = soma do efetivamente pago (inclui PARCIAIS, não só
+            // itens 100% quitados). Em aberto = total − recebido.
+            const recebidoMes = m.itens.reduce((s, c) => s + valorPagoDe(c), 0);
+            const abertoMes = Math.max(0, total - recebidoMes);
+            const tudoReembolsado = abertoMes <= 0.01 && recebidoMes > 0.005;
             const corMes = m.futuro ? t.accents.lavender : m.competencia === provisao.mesAtual ? t.accents.peach : t.textSecondary;
             const etiqueta = m.competencia === provisao.mesAtual ? 'este mês' : m.futuro ? 'previsto' : '';
             const qtd = m.itens.length;
@@ -1650,7 +1653,15 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
                     <span style={{ display: 'block', fontFamily: FONTS.display, fontSize: 15, fontWeight: 700, color: t.text, fontVariantNumeric: 'tabular-nums' }}>
                       {formatBRL(total)}
                     </span>
-                    <span style={{ fontFamily: FONTS.ui, fontSize: 10, color: t.textTertiary }}>{qtd} {qtd === 1 ? 'item' : 'itens'}</span>
+                    {recebidoMes > 0.005 ? (
+                      <span style={{ fontFamily: FONTS.ui, fontSize: 10.5, fontVariantNumeric: 'tabular-nums' }}>
+                        <span style={{ color: t.accents.sage }}>recebido {formatBRL(recebidoMes)}</span>
+                        <span style={{ color: t.textTertiary }}> · </span>
+                        <span style={{ color: abertoMes > 0.005 ? t.accents.peach : t.accents.sage }}>{abertoMes > 0.005 ? `em aberto ${formatBRL(abertoMes)}` : 'quitado'}</span>
+                      </span>
+                    ) : (
+                      <span style={{ fontFamily: FONTS.ui, fontSize: 10, color: t.textTertiary }}>{qtd} {qtd === 1 ? 'item' : 'itens'}</span>
+                    )}
                   </span>
                 </div>
                 {grupos ? (
