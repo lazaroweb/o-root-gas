@@ -22,6 +22,9 @@ import type { MesExecutivo, MesExecutivoItem, MesExecutivoCartao, CategoriaPesso
 
 interface Props {
   mes: string;
+  // Visão do mês já pronta, vinda do bootstrap essencial do FinPessoal. Quando
+  // presente (e do mês certo), evita a chamada extra de getMesExecutivo no mount.
+  dadosIniciais?: MesExecutivo | null;
   categorias: CategoriaPessoal[];
   lancamentos: LancamentoPessoal[];
   cartoes: CartaoPessoal[];
@@ -43,11 +46,12 @@ const METODO_META: Record<string, { label: string; cor: string; icon: React.Reac
   transferencia: { label: 'Transferência', cor: '#06b6d4', icon: <ArrowLeftRight size={13} /> },
 };
 
-export default function FinMesExecutivo({ mes, categorias, lancamentos, cartoes, onRecarregar, onAbrirCartao, onNovoLancamento, onIrParaOrcamentos, onNavegarMes, onMesHoje, onEditar }: Props): React.ReactElement {
+export default function FinMesExecutivo({ mes, dadosIniciais, categorias, lancamentos, cartoes, onRecarregar, onAbrirCartao, onNovoLancamento, onIrParaOrcamentos, onNavegarMes, onMesHoje, onEditar }: Props): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
-  const [data, setData] = useState<MesExecutivo | null>(null);
-  const [loading, setLoading] = useState(true);
+  const temIniciais = !!dadosIniciais && dadosIniciais.mes === mes;
+  const [data, setData] = useState<MesExecutivo | null>(temIniciais ? dadosIniciais! : null);
+  const [loading, setLoading] = useState(!temIniciais);
   const [flight, setFlight] = useState<Record<string, boolean>>({});
   // Drill-down de categoria: lista os lançamentos do mês daquela categoria
   // (em TODOS os cartões + avulsos), com recategorizar inline e editar.
@@ -63,7 +67,21 @@ export default function FinMesExecutivo({ mes, categorias, lancamentos, cartoes,
       .finally(() => setLoading(false));
   }, [mes]);
 
-  useEffect(carregar, [carregar]);
+  // Estratégia de carga da visão do mês:
+  //   • Bootstrap já trouxe ESTE mês → usa direto (zero chamada extra).
+  //   • Nunca recebemos bootstrap (uso standalone) → busca sob demanda.
+  //   • Bootstrap existe mas de OUTRO mês (navegação) → espera o pai empurrar a
+  //     visão do novo mês (ele recarrega ao trocar de mês), evitando chamada
+  //     dupla. Mostra o loading enquanto isso.
+  useEffect(() => {
+    if (dadosIniciais && dadosIniciais.mes === mes) {
+      setData(dadosIniciais);
+      setLoading(false);
+      return;
+    }
+    if (!dadosIniciais) { carregar(); return; }
+    setLoading(true);
+  }, [carregar, dadosIniciais, mes]);
 
   const corCategoria = (nome: string): string => categorias.find((c) => c.nome === nome)?.cor || t.accents.peach;
   const labelCategoria = (nome: string): string => {

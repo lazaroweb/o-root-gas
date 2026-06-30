@@ -36,6 +36,26 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.212.0] — 2026-06-30
+
+### Performance
+- **"Meu mês" abre em ~2 chamadas em vez de ~13** (corta os 10-15s no
+  navegador): o Apps Script trata cada `google.script.run` como uma **execução
+  separada** — recarrega o bundle, reabre a planilha e roda o init a cada uma.
+  Abrir o Financeiro Pessoal disparava ~13 dessas. Agora há **2 endpoints
+  agregadores** no servidor:
+  - `getFinPessoalEssencial(mes)` — resumo, lançamentos, cartões, categorias **e
+    a visão "Meu mês" pronta**, numa execução só (libera a tela).
+  - `getFinPessoalSecundario(mes)` — orçamentos, recorrências, assinaturas,
+    plano de contas, membros e atribuições, em segundo plano.
+- **Handle da planilha memoizado**: `getSpreadsheet()` agora reaproveita o mesmo
+  handle dentro da execução. Antes, **cada leitura de aba** refazia
+  `getProperty` + `SpreadsheetApp.openById` (~100-300ms cada), multiplicando o
+  custo por leitura.
+- **"Meu mês" não faz mais chamada própria de `getMesExecutivo` ao abrir**: a
+  visão já chega no bootstrap essencial; só busca sob demanda ao navegar pra um
+  mês ainda não carregado.
+
 ## [1.211.0] — 2026-06-30
 
 ### Performance

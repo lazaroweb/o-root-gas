@@ -51,7 +51,7 @@ import type {
   MetodoPagamento, StatusLancamento, TipoLancamento, ServerResponse,
   RecorrenciaAtiva, OrcamentoPessoal, ProgressoOrcamentos, ProgressoOrcamentoItem,
   CategoriaPessoal, AssinaturaPessoal, ResumoAssinaturas,
-  FaturaInterpretada, FaturaItemIA, PlanoConta, FamiliaMembro,
+  FaturaInterpretada, FaturaItemIA, PlanoConta, FamiliaMembro, MesExecutivo,
 } from '../types';
 
 // ─── Constantes de UI ──────────────────────────────────────────────────────────
@@ -307,6 +307,9 @@ export default function FinPessoal(): React.ReactElement {
   const [resumo, setResumo] = useState<ResumoFinPessoal | null>(null);
   const [lancamentos, setLancamentos] = useState<LancamentoPessoal[]>([]);
   const [cartoes, setCartoes] = useState<CartaoPessoal[]>([]);
+  // Visão "Meu mês" já vem pronta no bootstrap essencial — evita o filho
+  // (FinMesExecutivo) fazer uma chamada extra de getMesExecutivo no mount.
+  const [mesExecutivo, setMesExecutivo] = useState<MesExecutivo | null>(null);
   const [orcamentosProgresso, setOrcamentosProgresso] = useState<ProgressoOrcamentos | null>(null);
   const [recorrencias, setRecorrencias] = useState<RecorrenciaAtiva[]>([]);
   const [categorias, setCategorias] = useState<CategoriaPessoal[]>(CATEGORIAS_FALLBACK);
@@ -394,90 +397,75 @@ export default function FinPessoal(): React.ReactElement {
     const preload = !autoGerouUmaVez
       ? callServer<ServerResponse<unknown>>('gerarRecorrenciasPendentes').then(() => setAutoGerouUmaVez(true))
       : Promise.resolve();
-    // Carga em 2 ONDAS pra "Meu mês" abrir rápido. O GAS (HTMLService) enfileira
-    // chamadas concorrentes — disparar 12 de uma vez fazia o getMesExecutivo do
-    // "Meu mês" esperar a fila inteira (sofrível no tablet). Agora:
-    //   • Onda 1 (essencial): resumo + lançamentos + cartões + categorias →
-    //     libera a UI e some o esqueleto.
-    //   • Onda 2 (secundária): o que SÓ as outras abas usam (pendentes dedicado,
-    //     orçamentos, recorrências, assinaturas, plano, membros, atribuições) →
-    //     roda em segundo plano, sem travar a primeira pintura.
-    const carregarSecundarios = (jaTemPendentes: boolean) => {
-      Promise.all([
-        jaTemPendentes
-          ? Promise.resolve(null)
-          : callServer<ServerResponse<LancamentoPessoal[]>>('getPendentesPessoais'),
-        callServer<ServerResponse<ProgressoOrcamentos>>('getProgressoOrcamentos', mes),
-        callServer<ServerResponse<RecorrenciaAtiva[]>>('getRecorrenciasAtivas'),
-        callServer<ServerResponse<AssinaturaPessoal[]>>('getAssinaturas'),
-        callServer<ServerResponse<ResumoAssinaturas>>('getResumoAssinaturas'),
-        callServer<ServerResponse<PlanoConta[]>>('getPlanoContas'),
-        callServer<ServerResponse<FamiliaMembro[]>>('getMembros'),
-        callServer<ServerResponse<Array<{ origemId: string; membroId: string }>>>('getAtribuicoesLancamentos'),
-      ])
-        .then(([pendR, orcR, recR, assR, resAssR, planoR, membrosR, atribR]) => {
-          const pend = pendR as ServerResponse<LancamentoPessoal[]> | null;
-          if (!jaTemPendentes && pend?.ok && pend.data) setPendentes(pend.data as LancamentoPessoal[]);
-          if (orcR?.ok && orcR.data) setOrcamentosProgresso(orcR.data as ProgressoOrcamentos);
-          if (recR?.ok && recR.data) setRecorrencias(recR.data as RecorrenciaAtiva[]);
-          if (assR?.ok && assR.data) setAssinaturas(assR.data as AssinaturaPessoal[]);
-          if (resAssR?.ok && resAssR.data) setResumoAssinaturas(resAssR.data as ResumoAssinaturas);
-          if (planoR?.ok && planoR.data) setPlanoContas(planoR.data as PlanoConta[]);
-          if (membrosR?.ok && membrosR.data) setMembros(membrosR.data as FamiliaMembro[]);
+    // Carga em 2 ONDAS via ENDPOINTS AGREGADORES (1 execução do GAS cada). Antes
+    // eram ~13 `google.script.run` separados — e o GAS trata cada um como uma
+    // execução independente (recarrega o bundle, reabre a planilha, roda init),
+    // o que somava 10-15s no navegador. Agora:
+    //   • Onda 1 (getFinPessoalEssencial): resumo + lançamentos + cartões +
+    //     categorias + a visão "Meu mês" pronta → 1 chamada, libera a UI.
+    //   • Onda 2 (getFinPessoalSecundario): orçamentos, recorrências,
+    //     assinaturas, plano, membros e atribuições → 1 chamada em background.
+    interface EssencialPayload {
+      resumo: ResumoFinPessoal | null;
+      lancamentos: LancamentoPessoal[];
+      cartoes: CartaoPessoal[];
+      categorias: CategoriaPessoal[];
+      mesExecutivo: MesExecutivo | null;
+    }
+    interface SecundarioPayload {
+      orcamentos: ProgressoOrcamentos | null;
+      recorrencias: RecorrenciaAtiva[];
+      assinaturas: AssinaturaPessoal[];
+      resumoAssinaturas: ResumoAssinaturas | null;
+      planoContas: PlanoConta[];
+      membros: FamiliaMembro[];
+      atribuicoes: Array<{ origemId: string; membroId: string }>;
+    }
+
+    const carregarSecundarios = () => {
+      callServer<ServerResponse<SecundarioPayload>>('getFinPessoalSecundario', mes)
+        .then((r) => {
+          if (!r?.ok || !r.data) return;
+          const d = r.data as SecundarioPayload;
+          if (d.orcamentos) setOrcamentosProgresso(d.orcamentos);
+          if (Array.isArray(d.recorrencias)) setRecorrencias(d.recorrencias);
+          if (Array.isArray(d.assinaturas)) setAssinaturas(d.assinaturas);
+          if (d.resumoAssinaturas) setResumoAssinaturas(d.resumoAssinaturas);
+          if (Array.isArray(d.planoContas)) setPlanoContas(d.planoContas);
+          if (Array.isArray(d.membros)) setMembros(d.membros);
           // Mapa lançamentoId → [membroId...] pra mostrar o avatar do membro no
           // lugar do "boneco" genérico quando o lançamento já foi atribuído.
-          if (atribR?.ok && Array.isArray(atribR.data)) {
+          if (Array.isArray(d.atribuicoes)) {
             const mapa: Record<string, string[]> = {};
-            for (const a of atribR.data as Array<{ origemId: string; membroId: string }>) {
-              (mapa[a.origemId] = mapa[a.origemId] || []).push(a.membroId);
-            }
+            for (const a of d.atribuicoes) (mapa[a.origemId] = mapa[a.origemId] || []).push(a.membroId);
             setAtribuicoes(mapa);
           }
         })
         .catch((err) => { console.warn('[FinPessoal] falha na carga secundária:', err); });
     };
 
-    preload.then(() => Promise.all([
-      callServer<ServerResponse<ResumoFinPessoal>>('getResumoFinPessoal', mes),
-      callServer<ServerResponse<LancamentoPessoal[]>>('getLancamentosPessoais', mes),
-      callServer<ServerResponse<CartaoPessoal[]>>('getCartoesPessoais', mes),
-      callServer<ServerResponse<CategoriaPessoal[]>>('getCategoriasPessoais', mes),
-    ])
-      .then(([resR, lancR, cartR, catR]) => {
-        // Cada resposta é checada com `?.` porque o GAS às vezes devolve null
-        // (rate limit, erro silenciado, payload grande). Antes uma única
-        // resposta null quebrava TODO o handler — a tela "A pagar" ficava vazia
-        // mesmo com itens existindo no servidor.
-        let resumoData: ResumoFinPessoal | null = null;
-        if (resR?.ok && resR.data) {
-          resumoData = resR.data as ResumoFinPessoal;
-          setResumo(resumoData);
-        }
-        if (lancR?.ok && lancR.data) {
-          const lista = lancR.data as LancamentoPessoal[];
+    preload.then(() => callServer<ServerResponse<EssencialPayload>>('getFinPessoalEssencial', mes)
+      .then((r) => {
+        const d = (r?.ok && r.data ? r.data : null) as EssencialPayload | null;
+        const resumoData = d?.resumo || null;
+        if (resumoData) setResumo(resumoData);
+        if (d && Array.isArray(d.lancamentos)) {
+          const lista = d.lancamentos;
           setLancamentos(lista);
-          // Extrai categorias distintas usadas até hoje (pra alimentar o
-          // autocomplete da modal — vibe code: sugere o que você já usou).
+          // Categorias distintas usadas até hoje (autocomplete da modal).
           const cats = new Set<string>();
           for (const l of lista) if (l.categoria) cats.add(l.categoria);
           setCategoriasUsadas(Array.from(cats).sort());
         }
-        if (cartR?.ok && cartR.data) setCartoes(cartR.data as CartaoPessoal[]);
-        if (catR?.ok && catR.data) setCategorias(catR.data as CategoriaPessoal[]);
-        // Pendentes: fonte autoritativa é o próprio resumo (`pendentesLista`),
-        // que é calculado no MESMO lugar que o contador `qtdPendentes` — então
-        // lista e contador nunca divergem. Se o resumo trouxe a lista, a onda 2
-        // nem chama o endpoint dedicado.
-        let temPendentes = false;
-        if (resumoData && Array.isArray(resumoData.pendentesLista)) {
-          setPendentes(resumoData.pendentesLista);
-          temPendentes = true;
-        }
-        return temPendentes;
+        if (d && Array.isArray(d.cartoes)) setCartoes(d.cartoes);
+        if (d && Array.isArray(d.categorias)) setCategorias(d.categorias);
+        if (d) setMesExecutivo(d.mesExecutivo || null);
+        // Pendentes: fonte autoritativa é o resumo (mesma origem do contador).
+        if (resumoData && Array.isArray(resumoData.pendentesLista)) setPendentes(resumoData.pendentesLista);
       })
-      .catch((err) => { console.warn('[FinPessoal] falha ao recarregar:', err); return false; })
+      .catch((err) => { console.warn('[FinPessoal] falha ao recarregar:', err); })
       .finally(() => setLoading(false))
-      .then((temPendentes) => carregarSecundarios(!!temPendentes)));
+      .then(() => carregarSecundarios()));
   }, [mes, autoGerouUmaVez]);
 
   useEffect(recarregar, [recarregar]);
@@ -725,6 +713,7 @@ export default function FinPessoal(): React.ReactElement {
       {view === 'mes' && (
         <FinMesExecutivo
           mes={mes}
+          dadosIniciais={mesExecutivo}
           categorias={categorias}
           lancamentos={lancamentos}
           cartoes={cartoes}

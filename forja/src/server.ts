@@ -373,14 +373,24 @@ const SCHEMA: SheetSchema[] = [
 
 // ─── SheetDB Core Engine ─────────────────────────────────────────────────────
 
+// Memoiza o handle da planilha DENTRO da execução. Antes, cada leitura de aba
+// (`sheetToObjects`) chamava `getSpreadsheet()`, que fazia um
+// `PropertiesService.getProperty` + `SpreadsheetApp.openById` (~100-300ms cada).
+// Numa única chamada que lê várias abas isso multiplicava; e como cada
+// `google.script.run` é uma execução separada, o custo se repetia. O handle é só
+// uma referência viva — os dados continuam sendo lidos frescos via getRange.
+let _ssCache: GoogleAppsScript.Spreadsheet.Spreadsheet | null = null;
+
 function getSpreadsheet(): GoogleAppsScript.Spreadsheet.Spreadsheet {
+  if (_ssCache) return _ssCache;
   const props = PropertiesService.getScriptProperties();
   const savedId = props.getProperty('FORJA_SHEET_ID');
 
   // Se já temos um ID salvo, tenta abrir
   if (savedId) {
     try {
-      return SpreadsheetApp.openById(savedId);
+      _ssCache = SpreadsheetApp.openById(savedId);
+      return _ssCache;
     } catch {
       // ID inválido ou sem permissão — recria
     }
@@ -389,6 +399,7 @@ function getSpreadsheet(): GoogleAppsScript.Spreadsheet.Spreadsheet {
   // Cria uma planilha nova
   const ss = SpreadsheetApp.create('FORJA — Base de Dados');
   props.setProperty('FORJA_SHEET_ID', ss.getId());
+  _ssCache = ss;
 
   // Remove a aba padrão "Sheet1" depois de criar as demais
   return ss;
@@ -11148,6 +11159,57 @@ function getMesExecutivo(mes?: string): ServerResult {
     };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao montar a visão do mês' };
+  }
+}
+
+// ─── Agregadores do Financeiro Pessoal (1 execução = N datasets) ──────────────
+// O GAS trata cada `google.script.run` como uma EXECUÇÃO separada: recarrega o
+// bundle, reabre a planilha, roda initDatabase. Abrir o "Meu mês" disparava ~13
+// dessas — daí os 15s no navegador. Estes 2 endpoints reúnem tudo em 2 execuções
+// (essencial + secundário), reaproveitando a lógica já testada de cada função e
+// o handle de planilha memoizado (1 openById por execução).
+function _data<T>(r: ServerResult, fallback: T): T {
+  return r && r.ok && r.data !== undefined && r.data !== null ? (r.data as T) : fallback;
+}
+
+// Onda 1: tudo que o "Meu mês" precisa pra pintar (inclui o mesExecutivo, pra o
+// componente filho NÃO fazer a própria chamada).
+function getFinPessoalEssencial(mes?: string): ServerResult {
+  try {
+    initDatabase();
+    return {
+      ok: true,
+      data: {
+        resumo: _data<unknown>(getResumoFinPessoal(mes), null),
+        lancamentos: _data<unknown[]>(getLancamentosPessoais(mes), []),
+        cartoes: _data<unknown[]>(getCartoesPessoais(mes), []),
+        categorias: _data<unknown[]>(getCategoriasPessoais(mes), []),
+        mesExecutivo: _data<unknown>(getMesExecutivo(mes), null),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao carregar o essencial do mês' };
+  }
+}
+
+// Onda 2: o que só as OUTRAS abas usam — carregado em segundo plano pelo client.
+function getFinPessoalSecundario(mes?: string): ServerResult {
+  try {
+    initDatabase();
+    return {
+      ok: true,
+      data: {
+        orcamentos: _data<unknown>(getProgressoOrcamentos(mes), null),
+        recorrencias: _data<unknown[]>(getRecorrenciasAtivas(), []),
+        assinaturas: _data<unknown[]>(getAssinaturas(), []),
+        resumoAssinaturas: _data<unknown>(getResumoAssinaturas(), null),
+        planoContas: _data<unknown[]>(getPlanoContas(), []),
+        membros: _data<unknown[]>(getMembros(), []),
+        atribuicoes: _data<unknown[]>(getAtribuicoesLancamentos(), []),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao carregar dados secundários' };
   }
 }
 
