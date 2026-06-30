@@ -365,8 +365,9 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
         onCancel={() => setDrawerMembro(null)}
         footer={null}
         width={920}
+        centered
         destroyOnClose
-        styles={{ body: { height: '86vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' } }}
+        styles={{ body: { height: '78vh', maxHeight: 'calc(100vh - 140px)', overflow: 'hidden', display: 'flex', flexDirection: 'column' } }}
       >
         {drawerMembro && (
           <DetalheMembro
@@ -1041,16 +1042,23 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
         <>
           <button onClick={() => setReguaAberta((o) => !o)} style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-            width: '100%', cursor: 'pointer', border: `1px solid ${t.borderSoft}`,
-            background: t.surfaceMuted, borderRadius: 12, padding: '9px 13px',
+            width: '100%', cursor: 'pointer', border: `1px solid ${membro.cor}3d`,
+            background: `${membro.cor}12`, borderRadius: 12, padding: '10px 14px',
             fontFamily: FONTS.ui, color: t.textSecondary, transition: 'all 0.15s', flexShrink: 0,
           }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-              <CalendarRange size={15} color={membro.cor} />
-              <span style={{ fontSize: 12.5, fontWeight: 600, color: t.text }}>{membro.nome.split(' ')[0]} · 12 meses</span>
-              <span style={{ fontSize: 11.5, color: t.textTertiary }}>visão do ano</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 9, background: `${membro.cor}26` }}>
+                <CalendarRange size={15} color={membro.cor} />
+              </span>
+              <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25, textAlign: 'left' }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{membro.nome.split(' ')[0]} · 12 meses</span>
+                <span style={{ fontSize: 11, color: t.textTertiary }}>visão do ano inteiro</span>
+              </span>
             </span>
-            <ChevronDown size={15} style={{ transform: reguaAberta ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, color: membro.cor }}>
+              {reguaAberta ? 'Recolher' : 'Ver ano'}
+              <ChevronDown size={15} color={membro.cor} style={{ transform: reguaAberta ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+            </span>
           </button>
           {reguaAberta && (
             <Resumo12Meses

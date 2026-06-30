@@ -36,6 +36,15 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.216.2] — 2026-06-30
+
+### Alterado
+- **Modal do membro centralizado e contido na janela** (78vh com teto de
+  `100vh - 140px`) — não estoura mais pra baixo nem cria barra de rolagem na
+  página; mantém margem superior/inferior pra harmonia.
+- **Cabeçalho "12 meses" recolhido com mais destaque**: fundo e borda na cor do
+  membro, ícone em badge, subtítulo "visão do ano inteiro" e CTA "Ver ano".
+
 ## [1.216.1] — 2026-06-30
 
 ### Alterado
