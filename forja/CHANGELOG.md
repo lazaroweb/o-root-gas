@@ -36,6 +36,18 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.224.0] — 2026-06-30
+
+### Corrigido / Melhorado (Registrar recebimento)
+- **Fix do campo sumido**: o `Tooltip` aninhado no botão "Registrar recebimento"
+  bloqueava o popover (só aparecia o balão cinza). Removido — agora o popover com
+  o campo de valor abre normalmente.
+- **Prévia da distribuição (sem adivinhação)**: o popover mostra, ao vivo, exatamente
+  quais itens serão baixados (✓ quita / parcial R$x de R$y) conforme você digita o
+  valor — então dá pra conferir antes de confirmar.
+- **Escolha da ordem**: "Baixar primeiro Mais antigas ou Mais recentes". Para baixa
+  cirúrgica de um item específico, o chip por linha continua disponível.
+
 ## [1.223.0] — 2026-06-30
 
 ### Corrigido / Adicionado (Receitas pessoais)

@@ -10428,7 +10428,7 @@ function registrarPagamentoCobranca(id: string, valorPago: number): ServerResult
 // mesmo campo `valorPago` por item — então convive sem conflito com o ajuste
 // item-a-item (chip). `competencia` (YYYY-MM) opcional restringe a um mês.
 // Devolve { aplicado, restante, itensAfetados } pra feedback no cliente.
-function registrarRecebimentoMembro(membroId: string, valor: number, competencia?: string, criarReceita?: boolean): ServerResult {
+function registrarRecebimentoMembro(membroId: string, valor: number, competencia?: string, criarReceita?: boolean, ordem?: string): ServerResult {
   try {
     const alvo = String(membroId || '').trim();
     if (!alvo) return { ok: false, error: 'Membro inválido.' };
@@ -10441,7 +10441,9 @@ function registrarRecebimentoMembro(membroId: string, valor: number, competencia
     const comp = String(competencia || '').substring(0, 7);
     if (/^\d{4}-\d{2}$/.test(comp)) itens = itens.filter((c) => String(c['competencia'] || '').substring(0, 7) === comp);
 
-    // Em aberto, ordenado por competência asc (mais antigo primeiro), depois data da compra.
+    // Em aberto, ordenado por competência + data da compra. `ordem='recentes'`
+    // baixa das mais novas primeiro; default 'antigas' (mais velhas primeiro).
+    const dir = String(ordem || 'antigas') === 'recentes' ? -1 : 1;
     const abertos = itens
       .map((c) => {
         const v = Math.abs(Number(c['valor'] || 0));
@@ -10452,8 +10454,8 @@ function registrarRecebimentoMembro(membroId: string, valor: number, competencia
       .sort((a, b) => {
         const ka = String(a.c['competencia'] || '');
         const kb = String(b.c['competencia'] || '');
-        if (ka !== kb) return ka.localeCompare(kb);
-        return String(a.c['dataCompra'] || '').localeCompare(String(b.c['dataCompra'] || ''));
+        if (ka !== kb) return ka.localeCompare(kb) * dir;
+        return String(a.c['dataCompra'] || '').localeCompare(String(b.c['dataCompra'] || '')) * dir;
       });
 
     let aplicado = 0;

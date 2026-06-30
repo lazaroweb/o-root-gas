@@ -194,9 +194,9 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
   // Recebimento GERAL do membro: informa o quanto ele pagou e o servidor quita
   // das cobranças mais antigas pras mais novas (mesmo `valorPago` por item, sem
   // conflito com o ajuste item-a-item). Recarrega depois pra refletir a distribuição.
-  const registrarRecebimento = (valor: number) => {
+  const registrarRecebimento = (valor: number, ordem: 'antigas' | 'recentes' = 'antigas') => {
     if (!drawerMembro) return;
-    callServer<ServerResponse<{ aplicado: number; restante: number; itensAfetados: number; receitaId?: string }>>('registrarRecebimentoMembro', drawerMembro.id, valor)
+    callServer<ServerResponse<{ aplicado: number; restante: number; itensAfetados: number; receitaId?: string }>>('registrarRecebimentoMembro', drawerMembro.id, valor, '', true, ordem)
       .then((res) => {
         if (res?.ok && res.data) {
           const d = res.data;
@@ -1028,20 +1028,48 @@ function PopoverPagamento({ c, onRegistrar, onClose }: {
   );
 }
 
+// Item em aberto (saldo > 0) usado na prévia da distribuição do recebimento.
+interface ItemAberto { id: string; descricao: string; competencia: string; dataCompra: string; saldo: number; }
+
 // Popover do recebimento GERAL: informa quanto o membro pagou; o valor é
-// distribuído das cobranças mais antigas pras mais novas (no servidor).
-function PopoverRecebimento({ nome, emAberto, cor, onRegistrar, onClose }: {
+// distribuído entre as cobranças em aberto. O usuário escolhe a ordem (mais
+// antigas / mais recentes) e VÊ a prévia exata do que será baixado antes de
+// confirmar — então nada é "adivinhado às cegas".
+function PopoverRecebimento({ nome, emAberto, cor, abertos, onRegistrar, onClose }: {
   nome: string;
   emAberto: number;
   cor: string;
-  onRegistrar: (valor: number) => void;
+  abertos: ItemAberto[];
+  onRegistrar: (valor: number, ordem: 'antigas' | 'recentes') => void;
   onClose: () => void;
 }): React.ReactElement {
   const t = useTokens();
   const [input, setInput] = useState<number>(emAberto);
+  const [ordem, setOrdem] = useState<'antigas' | 'recentes'>('antigas');
   const restara = Math.max(0, emAberto - input);
+
+  const labelComp = (comp: string) => {
+    if (!/^\d{4}-\d{2}$/.test(comp)) return '—';
+    const s = dayjs(`${comp}-01`).format('MMM/YY');
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  };
+
+  // Prévia: distribui `input` na ordem escolhida e marca cada item (quita ou parcial).
+  const previa = useMemo(() => {
+    const ordenados = ordem === 'antigas' ? abertos : [...abertos].reverse();
+    let restante = input;
+    const linhas: Array<{ item: ItemAberto; aplicado: number; quita: boolean }> = [];
+    for (const it of ordenados) {
+      if (restante <= 0.005) break;
+      const add = Math.min(restante, it.saldo);
+      restante -= add;
+      linhas.push({ item: it, aplicado: add, quita: add >= it.saldo - 0.005 });
+    }
+    return linhas;
+  }, [abertos, input, ordem]);
+
   return (
-    <div style={{ width: 256, display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div style={{ width: 312, display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>
         Quanto <strong style={{ color: t.text }}>{nome.split(' ')[0]}</strong> te pagou? <span style={{ color: t.textTertiary }}>· em aberto {formatBRL(emAberto)}</span>
       </div>
@@ -1059,11 +1087,52 @@ function PopoverRecebimento({ nome, emAberto, cor, onRegistrar, onClose }: {
         <Button size="small" style={{ flex: 1 }} onClick={() => setInput(emAberto)}>Tudo</Button>
         <Button size="small" style={{ flex: 1 }} onClick={() => setInput(emAberto / 2)}>Metade</Button>
       </div>
-      <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, lineHeight: 1.4 }}>
-        Quita das cobranças mais antigas pras mais novas e <strong style={{ color: t.text }}>lança uma receita</strong> no caixa de hoje. {restara > 0.005 ? <>Restará <strong style={{ color: t.accents.peach }}>{formatBRL(restara)}</strong> em aberto.</> : <span style={{ color: t.accents.sage }}>Zera o saldo dele. 🎉</span>}
+
+      {/* Ordem da baixa */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+        <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary }}>Baixar primeiro:</span>
+        <div style={{ display: 'inline-flex', background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`, borderRadius: 8, padding: 2, gap: 2 }}>
+          {([['antigas', 'Mais antigas'], ['recentes', 'Mais recentes']] as const).map(([k, lbl]) => (
+            <button key={k} onClick={() => setOrdem(k)} style={{
+              border: 'none', cursor: 'pointer', fontFamily: FONTS.ui, fontSize: 11, fontWeight: ordem === k ? 600 : 500,
+              padding: '3px 9px', borderRadius: 6, transition: 'all 0.15s',
+              background: ordem === k ? cor : 'transparent', color: ordem === k ? '#fff' : t.textSecondary,
+            }}>{lbl}</button>
+          ))}
+        </div>
       </div>
-      <Button type="primary" size="small" block disabled={input <= 0.005} onClick={() => { onRegistrar(input); onClose(); }} style={{ background: cor, borderColor: cor }}>
-        Registrar recebimento
+
+      {/* Prévia do que será baixado — transparência total, sem adivinhação */}
+      <div style={{ borderTop: `1px solid ${t.borderSoft}`, paddingTop: 8 }}>
+        <div style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 }}>
+          Vai baixar {previa.length} {previa.length === 1 ? 'item' : 'itens'}
+        </div>
+        {previa.length === 0 ? (
+          <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary }}>Digite um valor pra ver o que será quitado.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5, maxHeight: 132, overflowY: 'auto', paddingRight: 2 }}>
+            {previa.map(({ item, aplicado, quita }) => (
+              <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {quita
+                  ? <CheckCircle2 size={13} color={t.accents.sage} style={{ flexShrink: 0 }} />
+                  : <HandCoins size={13} color={t.accents.peach} style={{ flexShrink: 0 }} />}
+                <span style={{ flex: 1, minWidth: 0, fontFamily: FONTS.ui, fontSize: 11.5, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {item.descricao} <span style={{ color: t.textTertiary }}>· {labelComp(item.competencia)}</span>
+                </span>
+                <span style={{ fontFamily: FONTS.ui, fontSize: 11, fontWeight: 600, color: quita ? t.accents.sage : t.accents.peach, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                  {formatBRL(aplicado)}{!quita && <span style={{ color: t.textTertiary, fontWeight: 400 }}> /{formatBRL(item.saldo)}</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, lineHeight: 1.4 }}>
+        Também <strong style={{ color: t.text }}>lança uma receita</strong> no caixa de hoje. {restara > 0.005 ? <>Restará <strong style={{ color: t.accents.peach }}>{formatBRL(restara)}</strong> em aberto.</> : <span style={{ color: t.accents.sage }}>Zera o saldo dele. 🎉</span>}
+      </div>
+      <Button type="primary" size="small" block disabled={input <= 0.005} onClick={() => { onRegistrar(input, ordem); onClose(); }} style={{ background: cor, borderColor: cor }}>
+        Confirmar recebimento
       </Button>
     </div>
   );
@@ -1182,7 +1251,7 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
   onPdf?: (competencia?: string) => void;
   onNova: () => void;
   onRegistrarPagamento: (c: CobrancaDetalhada, valorPago: number) => void;
-  onRegistrarRecebimento: (valor: number) => void;
+  onRegistrarRecebimento: (valor: number, ordem: 'antigas' | 'recentes') => void;
   onEditar: (c: Cobranca) => void;
   onRemover: (id: string) => void;
 }): React.ReactElement {
@@ -1218,6 +1287,21 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
   const [recebPop, setRecebPop] = useState(false);
   const saldoItem = (c: CobrancaDetalhada) => Math.max(0, Math.abs(Number(c.valor || 0)) - valorPagoDe(c));
   const passaAberto = (c: CobrancaDetalhada) => !soEmAberto || saldoItem(c) > 0.005;
+
+  // Itens em aberto do membro (todas as cobranças, não filtra por cartão — é o
+  // mesmo universo que o servidor usa pra distribuir). Alimenta a prévia do
+  // recebimento. Ordenado por competência asc (mais antigas primeiro).
+  const itensAbertos = useMemo<ItemAberto[]>(() => cobrancas
+    .map((c) => ({
+      id: c.id,
+      descricao: c.descricao,
+      competencia: String(c.competencia || '').substring(0, 7),
+      dataCompra: String(c.dataCompra || ''),
+      saldo: saldoItem(c),
+    }))
+    .filter((x) => x.saldo > 0.005)
+    .sort((a, b) => (a.competencia !== b.competencia ? a.competencia.localeCompare(b.competencia) : a.dataCompra.localeCompare(b.dataCompra))),
+    [cobrancas]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Meses com cobranças (pra o menu do PDF) — competência + total, ordenados.
   const mesesPdf = useMemo(() => {
@@ -1379,14 +1463,13 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
             trigger="click"
             placement="bottomLeft"
             destroyTooltipOnHide
-            content={recebPop ? <PopoverRecebimento nome={membro.nome} emAberto={emAberto} cor={t.accents.sage} onRegistrar={onRegistrarRecebimento} onClose={() => setRecebPop(false)} /> : null}
+            content={recebPop ? <PopoverRecebimento nome={membro.nome} emAberto={emAberto} cor={t.accents.sage} abertos={itensAbertos} onRegistrar={onRegistrarRecebimento} onClose={() => setRecebPop(false)} /> : null}
           >
-            <Tooltip title={emAberto > 0.005 ? 'Lançar um valor que o membro pagou (distribui automático)' : 'Nada em aberto pra receber'}>
-              <Button type="primary" size="small" icon={<HandCoins size={14} />} disabled={emAberto <= 0.005}
-                style={emAberto > 0.005 ? { background: t.accents.sage, borderColor: t.accents.sage } : undefined}>
-                Registrar recebimento
-              </Button>
-            </Tooltip>
+            <Button type="primary" size="small" icon={<HandCoins size={14} />} disabled={emAberto <= 0.005}
+              title={emAberto > 0.005 ? 'Lançar um valor que o membro pagou' : 'Nada em aberto pra receber'}
+              style={emAberto > 0.005 ? { background: t.accents.sage, borderColor: t.accents.sage } : undefined}>
+              Registrar recebimento
+            </Button>
           </Popover>
           <Button size="small" icon={<Plus size={14} />} onClick={onNova}>
             Atribuir manual
