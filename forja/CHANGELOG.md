@@ -36,6 +36,18 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.218.0] — 2026-06-30
+
+### Alterado
+- **Família dividida em macro-seções (igual à Empresa).** A aba única e cheia
+  virou um grupo "Família" no menu lateral do Pessoal, com três áreas:
+  - **Visão geral** — resumo + régua de 12 meses + cards dos membros.
+  - **Recebíveis** — quanto cada um já devolveu no ano.
+  - **A cobrar** — compras na fatura ainda sem dono (com estado vazio quando
+    está tudo atribuído).
+  Dá respiro e organiza, sem mudar nada do que cada bloco faz. Os modais de
+  membro/cobrança seguem disponíveis em qualquer seção.
+
 ## [1.217.0] — 2026-06-30
 
 ### Adicionado

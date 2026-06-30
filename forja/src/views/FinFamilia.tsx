@@ -67,6 +67,11 @@ function compToLabel(comp: string): string {
   return new Date(y, m - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
 }
 
+// Macro-seções da Família (espelham os itens agrupados no SubNav do Pessoal):
+// 'visao' = resumo + régua + membros; 'recebiveis' = quanto cada um devolveu;
+// 'cobrar' = compras na fatura ainda sem dono.
+export type SecaoFamilia = 'visao' | 'recebiveis' | 'cobrar';
+
 interface FinFamiliaProps {
   mes: string;
   membros: FamiliaMembro[];
@@ -75,9 +80,10 @@ interface FinFamiliaProps {
   assinaturas: AssinaturaPessoal[];
   onRecarregar: () => void;
   onSelecionarMes?: (comp: string) => void;
+  secao?: SecaoFamilia;
 }
 
-export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinaturas, onRecarregar, onSelecionarMes }: FinFamiliaProps): React.ReactElement {
+export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinaturas, onRecarregar, onSelecionarMes, secao = 'visao' }: FinFamiliaProps): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [resumo, setResumo] = useState<ResumoFamilia | null>(null);
@@ -244,6 +250,7 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      {secao === 'visao' && (<>
       {/* Hero strip — resumo + gráfico de gastos por membro lado a lado */}
       <div style={{
         background: `linear-gradient(135deg, ${t.accents.lavender}1f, ${t.surface})`,
@@ -310,12 +317,22 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
           ))}
         </div>
       )}
+      </>)}
 
-      {/* Mini-relatório: quanto cada um já me devolveu no ano */}
-      {!semMembros && <RelatorioReembolsos cobrancas={cobrancas} membros={membrosLista} />}
+      {/* Recebíveis — quanto cada um já me devolveu no ano */}
+      {secao === 'recebiveis' && (
+        semMembros ? (
+          <Panel title="Recebíveis">
+            <Empty description="Cadastre membros na Família primeiro." image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          </Panel>
+        ) : (
+          <RelatorioReembolsos cobrancas={cobrancas} membros={membrosLista} />
+        )
+      )}
 
-      {/* Não atribuídos: veio na fatura e não cobrei */}
-      {resumo && resumo.naoAtribuidos.length > 0 && (
+      {/* A cobrar — veio na fatura e ainda não cobrei */}
+      {secao === 'cobrar' && (
+        resumo && resumo.naoAtribuidos.length > 0 ? (
         <Panel
           title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><AlertCircle size={16} color={t.accents.peach} /> No seu cartão, ainda sem cobrar ({resumo.naoAtribuidos.length})</span>}
         >
@@ -344,6 +361,11 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
             ))}
           </div>
         </Panel>
+        ) : (
+          <Panel title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><CheckCircle2 size={16} color={t.accents.sage} /> A cobrar</span>}>
+            <Empty description="Tudo do seu cartão neste mês já está atribuído." image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          </Panel>
+        )
       )}
 
       <ModalMembro

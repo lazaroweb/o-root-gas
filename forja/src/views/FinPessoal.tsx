@@ -294,7 +294,7 @@ export default function FinPessoal(): React.ReactElement {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   });
-  const [view, setView] = useState<'mes' | 'painel' | 'inteligencia' | 'perfil' | 'lancamentos' | 'receitas' | 'familia' | 'cartoes' | 'pagar' | 'orcamentos' | 'recorrencias' | 'assinaturas' | 'categorias' | 'plano' | 'imposto-renda'>('mes');
+  const [view, setView] = useState<'mes' | 'painel' | 'inteligencia' | 'perfil' | 'lancamentos' | 'receitas' | 'familia' | 'familia-recebiveis' | 'familia-cobrar' | 'cartoes' | 'pagar' | 'orcamentos' | 'recorrencias' | 'assinaturas' | 'categorias' | 'plano' | 'imposto-renda'>('mes');
   // Deep-link: clicar num cartão na visão "Meu mês" leva pra aba Cartões já
   // abrindo a fatura daquele cartão.
   const [cartaoParaAbrir, setCartaoParaAbrir] = useState<string | null>(null);
@@ -589,7 +589,9 @@ export default function FinPessoal(): React.ReactElement {
     { key: 'cartoes', icon: CreditCard, label: 'Cartões', count: cartoes.length, accent: 'peach', group: 'Movimento', desc: 'Seus cartões, faturas abertas e limites.' },
     { key: 'assinaturas', icon: Repeat, label: 'Assinaturas', count: assinaturas.length, accent: 'lavender', group: 'Movimento', desc: 'Streamings e recorrências — custo mensal e anual.' },
     { key: 'recorrencias', icon: RotateCcw, label: 'Recorrências', count: recorrencias.length, accent: 'blue', group: 'Movimento', desc: 'Lançamentos que se repetem automaticamente.' },
-    { key: 'familia', icon: Users, label: 'Família', count: membros.length, accent: 'lavender', group: 'Organização', desc: 'Quanto do seu cartão é de cada familiar — visão de custo por mês.' },
+    { key: 'familia', icon: Users, label: 'Visão geral', count: membros.length, accent: 'lavender', group: 'Família', desc: 'Quanto do seu cartão é de cada familiar — resumo, régua do ano e os membros.' },
+    { key: 'familia-recebiveis', icon: Banknote, label: 'Recebíveis', accent: 'sage', group: 'Família', desc: 'Quanto cada um já te devolveu no ano e o que falta receber.' },
+    { key: 'familia-cobrar', icon: AlertCircle, label: 'A cobrar', accent: 'peach', group: 'Família', desc: 'Compras que vieram no seu cartão e ainda não foram atribuídas a ninguém.' },
     { key: 'orcamentos', icon: Target, label: 'Orçamentos', count: orcamentosProgresso?.itens.length || 0, accent: 'sage', group: 'Organização', desc: 'Tetos de gasto por categoria e progresso do mês.' },
     { key: 'plano', icon: BookOpen, label: 'Plano de contas', count: planoContas.length, accent: 'sage', ia: true, group: 'Organização', desc: 'Centros de custo gerados pela IA pra classificar gastos.' },
     { key: 'categorias', icon: LayersIcon, label: 'Categorias', count: categorias.length, accent: 'peach', group: 'Organização', desc: 'Categorias de gasto e seus totais no mês.' },
@@ -751,7 +753,7 @@ export default function FinPessoal(): React.ReactElement {
           onRecarregar={recarregar}
         />
       )}
-      {view === 'familia' && (
+      {view.startsWith('familia') && (
         <FinFamilia
           mes={mes}
           membros={membros}
@@ -760,6 +762,7 @@ export default function FinPessoal(): React.ReactElement {
           assinaturas={assinaturas}
           onRecarregar={recarregar}
           onSelecionarMes={setMes}
+          secao={view === 'familia-recebiveis' ? 'recebiveis' : view === 'familia-cobrar' ? 'cobrar' : 'visao'}
         />
       )}
       {view === 'cartoes' && (
