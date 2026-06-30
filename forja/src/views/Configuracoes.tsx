@@ -16,15 +16,16 @@ import RegrasCategoriaPanel from '../components/RegrasCategoriaPanel';
 import ModelosDisponiveisWidget from '../components/ModelosDisponiveisWidget';
 import BackupRestorePanel from '../components/BackupRestorePanel';
 import ConexoesBackupPanel from '../components/ConexoesBackupPanel';
+import ScriptPropertiesPanel from '../components/ScriptPropertiesPanel';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import { useIsMobile } from '../useResponsive';
 import callServer from '../gas-client';
 import type { Settings, Stack, StatusGeral, ServerResponse } from '../types';
 
-type SecaoKey = 'conta' | 'ia' | 'integracoes' | 'apis' | 'infra' | 'pagamentos' | 'fiscal' | 'financeiro' | 'automacoes' | 'dados' | 'stacks';
+type SecaoKey = 'conta' | 'ia' | 'integracoes' | 'apis' | 'infra' | 'pagamentos' | 'fiscal' | 'financeiro' | 'automacoes' | 'dados' | 'stacks' | 'avancado';
 
-const SECAO_VALIDAS: SecaoKey[] = ['conta', 'ia', 'integracoes', 'apis', 'infra', 'pagamentos', 'fiscal', 'financeiro', 'automacoes', 'dados', 'stacks'];
+const SECAO_VALIDAS: SecaoKey[] = ['conta', 'ia', 'integracoes', 'apis', 'infra', 'pagamentos', 'fiscal', 'financeiro', 'automacoes', 'dados', 'stacks', 'avancado'];
 
 interface ConfiguracoesProps {
   // Deep-link: abre direto numa seção (ex.: vindo de Operações/Atelier → Conexões).
@@ -187,6 +188,7 @@ export default function Configuracoes({ initialSecao }: ConfiguracoesProps = {})
     { key: 'automacoes', label: 'Automações & Alertas', descricao: 'Regras, e-mail, WhatsApp', icon: <Bell size={18} strokeWidth={1.6} />, accent: t.accents.clay },
     { key: 'dados', label: 'Dados & Backup', descricao: 'Exportar e restaurar', icon: <Database size={18} strokeWidth={1.6} />, accent: t.accents.blue },
     { key: 'stacks', label: 'Catálogo de Stacks', descricao: 'Tecnologias', icon: <LayersSection size={18} strokeWidth={1.6} />, accent: t.accents.blue },
+    { key: 'avancado', label: 'Avançado', descricao: 'Script Properties (chaves do sistema)', icon: <KeyRound size={18} strokeWidth={1.6} />, accent: t.accents.lavender },
   ];
 
   const renderSecao = (): React.ReactNode => {
@@ -366,6 +368,8 @@ export default function Configuracoes({ initialSecao }: ConfiguracoesProps = {})
             <ConexoesBackupPanel />
           </div>
         );
+      case 'avancado':
+        return <ScriptPropertiesPanel />;
       case 'stacks':
         return (
           <Panel title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Layers size={18} strokeWidth={1.6} color={t.accents.blue} /> Catálogo de Stacks</span>}>

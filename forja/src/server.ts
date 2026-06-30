@@ -19952,6 +19952,94 @@ function getModeloAuditoria(): ServerResult {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN — Script Properties (editor interno, contorna o limite de 50 da UI do GAS)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Heurística: chaves cujo VALOR é sensível (token/segredo). Mascaramos o valor
+// na listagem; o conteúdo só sai via revealScriptProperty (sob demanda).
+function _propSensivel(chave: string): boolean {
+  return /(TOKEN|SECRET|SENHA|PASSWORD|API_?KEY|_KEY$|^KEY$|_PAT$|^PAT$|PRIVATE|CREDENTIAL|AUTH)/i.test(String(chave || ''));
+}
+
+// Lista TODAS as Script Properties (sem o teto de 50 da interface do GAS).
+// Valores sensíveis vêm mascarados; `tamanho` ajuda a achar valores gigantes.
+function listScriptProperties(): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
+  try {
+    const all = PropertiesService.getScriptProperties().getProperties();
+    const itens = Object.keys(all).sort().map((k) => {
+      const v = String(all[k] == null ? '' : all[k]);
+      const sensivel = _propSensivel(k);
+      return {
+        chave: k,
+        valor: sensivel ? '' : v,
+        sensivel,
+        tamanho: v.length,
+        preview: sensivel ? '•'.repeat(Math.min(12, Math.max(4, v.length))) : v.slice(0, 160),
+      };
+    });
+    const scriptId = ScriptApp.getScriptId();
+    return {
+      ok: true,
+      data: {
+        itens,
+        total: itens.length,
+        settingsUrl: `https://script.google.com/home/projects/${scriptId}/settings`,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar propriedades' };
+  }
+}
+
+// Revela o valor completo de UMA chave (inclusive sensível). Uso sob demanda.
+function revealScriptProperty(chave: string): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
+  try {
+    const k = String(chave || '').trim();
+    if (!k) return { ok: false, error: 'Informe a chave.' };
+    const v = PropertiesService.getScriptProperties().getProperty(k);
+    if (v === null) return { ok: false, error: 'Chave não encontrada.' };
+    return { ok: true, data: { chave: k, valor: v } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ler propriedade' };
+  }
+}
+
+// Cria ou atualiza uma propriedade. Respeita os limites do serviço (9KB/valor).
+function setScriptProperty(chave: string, valor: string): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
+  try {
+    const k = String(chave || '').trim();
+    if (!k) return { ok: false, error: 'A chave não pode ficar vazia.' };
+    if (k.length > 240) return { ok: false, error: 'Chave muito longa (máx. ~240 caracteres).' };
+    const v = valor == null ? '' : String(valor);
+    if (v.length > 9000) return { ok: false, error: 'Valor muito grande (máx. ~9KB por propriedade).' };
+    const novo = PropertiesService.getScriptProperties().getProperty(k) === null;
+    PropertiesService.getScriptProperties().setProperty(k, v);
+    return { ok: true, data: { chave: k, criada: novo } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar propriedade' };
+  }
+}
+
+// Remove uma propriedade.
+function deleteScriptProperty(chave: string): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
+  try {
+    const k = String(chave || '').trim();
+    if (!k) return { ok: false, error: 'Informe a chave.' };
+    if (PropertiesService.getScriptProperties().getProperty(k) === null) {
+      return { ok: false, error: 'Chave não encontrada.' };
+    }
+    PropertiesService.getScriptProperties().deleteProperty(k);
+    return { ok: true, data: { chave: k } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover propriedade' };
+  }
+}
+
 // Tenta GET /models no proxy/endpoint configurado e retorna lista normalizada.
 // Funciona com qualquer provider OpenAI-compatible (proxies, LiteLLM, OpenRouter)
 // e com Anthropic nativo (que também expõe /v1/models desde 2024).

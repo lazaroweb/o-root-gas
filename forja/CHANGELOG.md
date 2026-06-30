@@ -36,6 +36,21 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.229.0] — 2026-06-30
+
+### Adicionado (editor de Script Properties dentro do app)
+- Nova seção **Configurações → Avançado** com um editor completo das **Script
+  Properties**, contornando o limite de 50 itens da tela do Apps Script.
+- **Listar / buscar / criar / editar / remover** qualquer propriedade pela
+  interface, com contagem total e busca por chave ou valor.
+- **Segurança**: valores sensíveis (token, key, secret, senha, PAT…) saem
+  mascarados; revelação sob demanda (ícone do olho). Todas as RPCs exigem papel
+  **admin** (`listScriptProperties`, `revealScriptProperty`, `setScriptProperty`,
+  `deleteScriptProperty`).
+- Atalho "Abrir no GAS" leva direto pra tela de Project Settings.
+
+---
+
 ## [1.228.0] — 2026-06-30
 
 ### Redesenhado (PDF de cobrança premium)
