@@ -191,6 +191,27 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
       })
       .catch(() => { if (drawerMembro) carregarDetalheMembro(drawerMembro, true); });
   };
+  // Recebimento GERAL do membro: informa o quanto ele pagou e o servidor quita
+  // das cobranças mais antigas pras mais novas (mesmo `valorPago` por item, sem
+  // conflito com o ajuste item-a-item). Recarrega depois pra refletir a distribuição.
+  const registrarRecebimento = (valor: number) => {
+    if (!drawerMembro) return;
+    callServer<ServerResponse<{ aplicado: number; restante: number; itensAfetados: number }>>('registrarRecebimentoMembro', drawerMembro.id, valor)
+      .then((res) => {
+        if (res?.ok && res.data) {
+          const d = res.data;
+          const itens = d.itensAfetados;
+          let msg = `Recebido ${formatBRL(d.aplicado)} distribuído em ${itens} ${itens === 1 ? 'item' : 'itens'}.`;
+          if (d.restante > 0.005) msg += ` Sobrou ${formatBRL(d.restante)} (sem itens em aberto pra alocar).`;
+          message.success(msg);
+        } else {
+          message.error(res?.error || 'Erro ao registrar recebimento');
+        }
+        if (drawerMembro) carregarDetalheMembro(drawerMembro, true);
+        recarregarFamilia();
+      })
+      .catch(() => message.error('Erro ao registrar recebimento'));
+  };
   const removerCobranca = (id: string) => {
     callServer<ServerResponse<unknown>>('deletarCobranca', id).then((res) => {
       if (res.ok) { message.success('Cobrança removida'); refreshTudo(); } else message.error(res.error || 'Erro');
@@ -419,6 +440,7 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
             onPdf={(competencia?: string) => baixarPdfMembro(drawerMembro, competencia)}
             onNova={() => abrirNovaCobranca({ membroId: drawerMembro.id, competencia: mes })}
             onRegistrarPagamento={registrarPagamento}
+            onRegistrarRecebimento={registrarRecebimento}
             onEditar={abrirEditarCobranca}
             onRemover={removerCobranca}
           />
@@ -1005,6 +1027,47 @@ function PopoverPagamento({ c, onRegistrar, onClose }: {
   );
 }
 
+// Popover do recebimento GERAL: informa quanto o membro pagou; o valor é
+// distribuído das cobranças mais antigas pras mais novas (no servidor).
+function PopoverRecebimento({ nome, emAberto, cor, onRegistrar, onClose }: {
+  nome: string;
+  emAberto: number;
+  cor: string;
+  onRegistrar: (valor: number) => void;
+  onClose: () => void;
+}): React.ReactElement {
+  const t = useTokens();
+  const [input, setInput] = useState<number>(emAberto);
+  const restara = Math.max(0, emAberto - input);
+  return (
+    <div style={{ width: 256, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>
+        Quanto <strong style={{ color: t.text }}>{nome.split(' ')[0]}</strong> te pagou? <span style={{ color: t.textTertiary }}>· em aberto {formatBRL(emAberto)}</span>
+      </div>
+      <InputNumber
+        autoFocus
+        value={input}
+        min={0}
+        max={emAberto}
+        precision={2}
+        prefix="R$"
+        style={{ width: '100%' }}
+        onChange={(v) => setInput(Math.max(0, Math.min(emAberto, Number(v) || 0)))}
+      />
+      <div style={{ display: 'flex', gap: 6 }}>
+        <Button size="small" style={{ flex: 1 }} onClick={() => setInput(emAberto)}>Tudo</Button>
+        <Button size="small" style={{ flex: 1 }} onClick={() => setInput(emAberto / 2)}>Metade</Button>
+      </div>
+      <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, lineHeight: 1.4 }}>
+        Quitamos das cobranças mais antigas pras mais novas. {restara > 0.005 ? <>Restará <strong style={{ color: t.accents.peach }}>{formatBRL(restara)}</strong> em aberto.</> : <span style={{ color: t.accents.sage }}>Zera o saldo dele. 🎉</span>}
+      </div>
+      <Button type="primary" size="small" block disabled={input <= 0.005} onClick={() => { onRegistrar(input); onClose(); }} style={{ background: cor, borderColor: cor }}>
+        Registrar recebimento
+      </Button>
+    </div>
+  );
+}
+
 // Uma linha de cobrança no drawer — reusada na lista e na visão por mês.
 function LinhaCobranca({ c, onRegistrarPagamento, onEditar, onRemover }: {
   c: CobrancaDetalhada;
@@ -1108,7 +1171,7 @@ function origemDaCobranca(c: CobrancaDetalhada): { key: string; label: string } 
   return { key: 'avulso', label: 'Avulso' };
 }
 
-function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, onPdf, onNova, onRegistrarPagamento, onEditar, onRemover }: {
+function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, onPdf, onNova, onRegistrarPagamento, onRegistrarRecebimento, onEditar, onRemover }: {
   membro: FamiliaMembro;
   mes: string;
   cobrancas: CobrancaDetalhada[];
@@ -1118,6 +1181,7 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
   onPdf?: (competencia?: string) => void;
   onNova: () => void;
   onRegistrarPagamento: (c: CobrancaDetalhada, valorPago: number) => void;
+  onRegistrarRecebimento: (valor: number) => void;
   onEditar: (c: Cobranca) => void;
   onRemover: (id: string) => void;
 }): React.ReactElement {
@@ -1150,6 +1214,7 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
   // Filtro "só em aberto": esconde itens já quitados (saldo ≈ 0). Aplica só na
   // LISTA — a régua e as abas continuam mostrando o ano inteiro pra contexto.
   const [soEmAberto, setSoEmAberto] = useState(false);
+  const [recebPop, setRecebPop] = useState(false);
   const saldoItem = (c: CobrancaDetalhada) => Math.max(0, Math.abs(Number(c.valor || 0)) - valorPagoDe(c));
   const passaAberto = (c: CobrancaDetalhada) => !soEmAberto || saldoItem(c) > 0.005;
 
@@ -1306,8 +1371,23 @@ function DetalheMembro({ membro, mes, cobrancas, provisao, loading, pdfLoading, 
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap' }}>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-          <Button type="primary" size="small" icon={<Plus size={14} />} onClick={onNova} style={{ background: membro.cor, borderColor: membro.cor }}>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <Popover
+            open={recebPop}
+            onOpenChange={(o) => { if (emAberto > 0.005) setRecebPop(o); }}
+            trigger="click"
+            placement="bottomLeft"
+            destroyTooltipOnHide
+            content={recebPop ? <PopoverRecebimento nome={membro.nome} emAberto={emAberto} cor={t.accents.sage} onRegistrar={onRegistrarRecebimento} onClose={() => setRecebPop(false)} /> : null}
+          >
+            <Tooltip title={emAberto > 0.005 ? 'Lançar um valor que o membro pagou (distribui automático)' : 'Nada em aberto pra receber'}>
+              <Button type="primary" size="small" icon={<HandCoins size={14} />} disabled={emAberto <= 0.005}
+                style={emAberto > 0.005 ? { background: t.accents.sage, borderColor: t.accents.sage } : undefined}>
+                Registrar recebimento
+              </Button>
+            </Tooltip>
+          </Popover>
+          <Button size="small" icon={<Plus size={14} />} onClick={onNova}>
             Atribuir manual
           </Button>
           {onPdf && (

@@ -10393,6 +10393,65 @@ function registrarPagamentoCobranca(id: string, valorPago: number): ServerResult
   }
 }
 
+// Recebimento GERAL de um membro: distribui um valor recebido entre as cobranças
+// em aberto (saldo > 0), quitando das mais ANTIGAS pras mais novas. Escreve no
+// mesmo campo `valorPago` por item — então convive sem conflito com o ajuste
+// item-a-item (chip). `competencia` (YYYY-MM) opcional restringe a um mês.
+// Devolve { aplicado, restante, itensAfetados } pra feedback no cliente.
+function registrarRecebimentoMembro(membroId: string, valor: number, competencia?: string): ServerResult {
+  try {
+    const alvo = String(membroId || '').trim();
+    if (!alvo) return { ok: false, error: 'Membro inválido.' };
+    let restante = Math.max(0, Number(valor) || 0);
+    if (restante <= 0.005) return { ok: false, error: 'Informe um valor maior que zero.' };
+
+    const det = getCobrancasMembroDetalhado(alvo);
+    if (!det.ok) return det;
+    let itens = (det.data as Array<Record<string, unknown>>) || [];
+    const comp = String(competencia || '').substring(0, 7);
+    if (/^\d{4}-\d{2}$/.test(comp)) itens = itens.filter((c) => String(c['competencia'] || '').substring(0, 7) === comp);
+
+    // Em aberto, ordenado por competência asc (mais antigo primeiro), depois data da compra.
+    const abertos = itens
+      .map((c) => {
+        const v = Math.abs(Number(c['valor'] || 0));
+        const p = Math.max(0, Math.min(v, Number(c['valorPago'] || 0)));
+        return { c, v, p, saldo: Math.max(0, v - p) };
+      })
+      .filter((x) => x.saldo > 0.005)
+      .sort((a, b) => {
+        const ka = String(a.c['competencia'] || '');
+        const kb = String(b.c['competencia'] || '');
+        if (ka !== kb) return ka.localeCompare(kb);
+        return String(a.c['dataCompra'] || '').localeCompare(String(b.c['dataCompra'] || ''));
+      });
+
+    let aplicado = 0;
+    let afetados = 0;
+    const agora = new Date().toISOString();
+    const hoje = agora.substring(0, 10);
+    for (const x of abertos) {
+      if (restante <= 0.005) break;
+      const add = Math.min(restante, x.saldo);
+      const novoPago = Math.min(x.v, x.p + add);
+      const status = novoPago >= x.v - 0.005 ? 'pago' : 'parcial';
+      dbUpdate('FinPessoalCobrancas', String(x.c['id']), {
+        valorPago: status === 'pago' ? x.v : novoPago,
+        status,
+        dataPagamento: hoje,
+        atualizadoEm: agora,
+      });
+      restante -= add;
+      aplicado += add;
+      afetados += 1;
+    }
+
+    return { ok: true, data: { aplicado, restante, itensAfetados: afetados } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao registrar recebimento' };
+  }
+}
+
 // Retorna as cobranças vinculadas a um lançamento específico (origem=lancamento).
 // Usado pra pré-preencher a modal "Atribuir a membros".
 function getCobrancasDoLancamento(lancamentoId: string): ServerResult {

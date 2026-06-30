@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.221.0] — 2026-06-30
+
+### Adicionado (Recebíveis · Recebimento geral)
+- **Botão "Registrar recebimento"** no detalhe do membro: lança de uma vez quanto
+  a pessoa pagou (ex.: "Malu te pagou R$ 500") e o sistema **distribui automático**
+  entre as cobranças em aberto, quitando das mais antigas pras mais novas — sem
+  precisar marcar item por item. Atalhos "Tudo" e "Metade", e prévia do que
+  restará em aberto.
+- Convive sem conflito com o ajuste fino item-a-item (chip): ambos gravam no mesmo
+  campo `valorPago`, então saldo, abas e extrato ficam sempre consistentes.
+- Nova RPC `registrarRecebimentoMembro(membroId, valor, competencia?)`. Não mexe no
+  fluxo de caixa (decisão de projeto) — só baixa o saldo a receber.
+
 ## [1.220.0] — 2026-06-30
 
 ### Adicionado (Recebíveis · Fase 3 — polish)
