@@ -14566,6 +14566,284 @@ function getGitHubRepos(): ServerResult {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// BACKUP DE REPOSITÓRIOS (v1.232.0) — espelho dos repos do GitHub no Google Drive
+//   Baixa o repo inteiro via endpoint zipball do GitHub e salva um .zip no Drive,
+//   organizado por repositório, com retenção (mantém os N snapshots mais recentes).
+//   Fase 1: backup manual (cliente chama repo a repo, com progresso → sem estourar
+//   o limite de 6 min do GAS). Fase 2: agendamento por trigger de tempo, em lotes.
+//   Fase 3 (Google): destino pode ser uma pasta de Drive Compartilhado (Shared
+//   Drive) — basta colar o ID da pasta; aí o espelho é automático dentro do Google.
+//   Reaproveita escopos já existentes (drive + script.external_request) — sem novo
+//   consentimento. Não fala com OneDrive: pra isso, aponte o Google Drive para
+//   Desktop nessa pasta e deixe o OneDrive desktop sincronizar o mesmo diretório.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const REPOS_BACKUP_MANTER_PADRAO = 4;
+
+// Pasta-raiz dos backups de repositório. Respeita um destino customizado
+// (REPOS_BACKUP_FOLDER_ID — pode ser uma pasta de Shared Drive); senão usa/cria
+// "Forja — Backups de Repositórios" no Meu Drive.
+function _reposBackupRoot(): GoogleAppsScript.Drive.Folder {
+  const sp = PropertiesService.getScriptProperties();
+  const override = String(sp.getProperty('REPOS_BACKUP_FOLDER_ID') || '').trim();
+  if (override) { try { return DriveApp.getFolderById(override); } catch { /* id inválido → cai pro padrão */ } }
+  const id = sp.getProperty('REPOS_BACKUP_ROOT');
+  if (id) { try { return DriveApp.getFolderById(id); } catch { /* recria abaixo */ } }
+  const f = DriveApp.createFolder('Forja — Backups de Repositórios');
+  sp.setProperty('REPOS_BACKUP_ROOT', f.getId());
+  return f;
+}
+
+// Subpasta de um repo dentro da raiz (nome = full_name com "/" → "__").
+function _reposBackupFolderRepo(fullName: string): GoogleAppsScript.Drive.Folder {
+  const root = _reposBackupRoot();
+  const nome = String(fullName || '').replace(/\//g, '__') || 'repo';
+  const ex = root.getFoldersByName(nome);
+  return ex.hasNext() ? ex.next() : root.createFolder(nome);
+}
+
+// Mantém só os N zips mais recentes na pasta do repo (stamp no nome ordena por data).
+function _reposAplicarRetencao(folder: GoogleAppsScript.Drive.Folder, manter: number): number {
+  const lim = Math.max(1, Number(manter || REPOS_BACKUP_MANTER_PADRAO));
+  const files: GoogleAppsScript.Drive.File[] = [];
+  const it = folder.getFiles();
+  while (it.hasNext()) { const f = it.next(); if (/\.zip$/i.test(f.getName())) files.push(f); }
+  files.sort((a, b) => b.getName().localeCompare(a.getName()));
+  let removidos = 0;
+  for (let i = lim; i < files.length; i++) { try { files[i].setTrashed(true); removidos++; } catch { /* best-effort */ } }
+  return removidos;
+}
+
+// Registra a meta do backup (último por repo + histórico geral, últimos 100).
+function _reposRegistrarBackup(meta: Record<string, unknown>): void {
+  try {
+    const sp = PropertiesService.getScriptProperties();
+    const porRepo = JSON.parse(sp.getProperty('FORJA_REPOS_BACKUP_PORREPO') || '{}') as Record<string, unknown>;
+    porRepo[String(meta['fullName'])] = meta;
+    sp.setProperty('FORJA_REPOS_BACKUP_PORREPO', JSON.stringify(porRepo));
+    const hist = JSON.parse(sp.getProperty('FORJA_REPOS_BACKUPS') || '[]') as unknown[];
+    hist.unshift(meta);
+    sp.setProperty('FORJA_REPOS_BACKUPS', JSON.stringify(hist.slice(0, 100)));
+  } catch { /* registro é best-effort */ }
+}
+
+// Baixa o zipball do repo e grava no Drive. Lança em caso de erro (quem chama trata).
+function _reposBackupZip(fullName: string, ref?: string): Record<string, unknown> {
+  const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+  if (!token) throw new Error('Configure o GitHub em Configurações.');
+  const full = String(fullName || '').trim();
+  if (!full || full.indexOf('/') < 0) throw new Error('Repositório inválido.');
+  const branch = String(ref || '').trim();
+  const url = 'https://api.github.com/repos/' + full + '/zipball' + (branch ? '/' + encodeURIComponent(branch) : '');
+  const res = UrlFetchApp.fetch(url, { headers: ghHeaders(token), muteHttpExceptions: true, followRedirects: true });
+  const code = res.getResponseCode();
+  if (code !== 200) {
+    if (code === 404) throw new Error('Repositório não encontrado ou sem acesso (404).');
+    throw new Error('GitHub respondeu ' + code + ' ao baixar.');
+  }
+  const stamp = _bkpStamp();
+  const nomeCurto = full.split('/').pop() || full;
+  const blob = res.getBlob().setName(nomeCurto + '__' + stamp + '.zip');
+  const folder = _reposBackupFolderRepo(full);
+  const file = folder.createFile(blob);
+  const tamanho = file.getSize();
+  const manter = Number(PropertiesService.getScriptProperties().getProperty('REPOS_BACKUP_MANTER') || REPOS_BACKUP_MANTER_PADRAO);
+  _reposAplicarRetencao(folder, manter);
+  const meta = { fullName: full, nome: nomeCurto, stamp, criadoEm: new Date().toISOString(), tamanho, fileId: file.getId(), url: file.getUrl(), ok: true };
+  _reposRegistrarBackup(meta);
+  return meta;
+}
+
+// Lista os repositórios do usuário (apenas owner), paginando até ~500.
+function _reposOwnerRaw(): Array<Record<string, unknown>> {
+  const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+  if (!token) throw new Error('Configure o GitHub em Configurações.');
+  const todos: Array<Record<string, unknown>> = [];
+  for (let page = 1; page <= 5; page++) {
+    const res = UrlFetchApp.fetch('https://api.github.com/user/repos?per_page=100&sort=pushed&affiliation=owner&page=' + page, {
+      muteHttpExceptions: true, headers: ghHeaders(token),
+    });
+    if (res.getResponseCode() !== 200) {
+      if (page === 1) throw new Error('GitHub respondeu ' + res.getResponseCode() + '. Verifique o token.');
+      break;
+    }
+    const lote = JSON.parse(res.getContentText()) as Array<Record<string, unknown>>;
+    todos.push(...lote);
+    if (lote.length < 100) break;
+  }
+  return todos;
+}
+
+// RPC: estado completo do painel (repos + último backup de cada + config + histórico).
+function getReposBackupEstado(): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
+  try {
+    const sp = PropertiesService.getScriptProperties();
+    const porRepo = JSON.parse(sp.getProperty('FORJA_REPOS_BACKUP_PORREPO') || '{}') as Record<string, Record<string, unknown>>;
+    const hist = JSON.parse(sp.getProperty('FORJA_REPOS_BACKUPS') || '[]') as Array<Record<string, unknown>>;
+    const agenda = JSON.parse(sp.getProperty('REPOS_BACKUP_AGENDA') || '{}') as Record<string, unknown>;
+    const agendaAtiva = ScriptApp.getProjectTriggers().some((tr) => tr.getHandlerFunction() === 'reposBackupAgendado');
+
+    let destinoNome = 'Forja — Backups de Repositórios (Meu Drive)';
+    let pastaUrl = '';
+    try { const root = _reposBackupRoot(); destinoNome = root.getName(); pastaUrl = root.getUrl(); } catch { /* sem permissão ainda */ }
+
+    let repos: Array<Record<string, unknown>> = [];
+    let githubOk = true;
+    let githubErro = '';
+    try {
+      repos = _reposOwnerRaw().map((r) => {
+        const fullName = String(r['full_name'] || '');
+        const ult = porRepo[fullName] || null;
+        return {
+          fullName,
+          nome: String(r['name'] || ''),
+          privado: !!r['private'],
+          pushedAt: String(r['pushed_at'] || ''),
+          tamanhoKb: Number(r['size'] || 0),
+          defaultBranch: String(r['default_branch'] || ''),
+          ultimoBackup: ult ? { criadoEm: String(ult['criadoEm'] || ''), tamanho: Number(ult['tamanho'] || 0) } : null,
+        };
+      });
+    } catch (e: unknown) {
+      githubOk = false;
+      githubErro = e instanceof Error ? e.message : 'Erro ao listar repositórios';
+    }
+
+    return {
+      ok: true,
+      data: {
+        repos,
+        githubOk,
+        githubErro,
+        total: repos.length,
+        historico: hist.slice(0, 30),
+        config: {
+          manter: Number(sp.getProperty('REPOS_BACKUP_MANTER') || REPOS_BACKUP_MANTER_PADRAO),
+          destinoFolderId: String(sp.getProperty('REPOS_BACKUP_FOLDER_ID') || ''),
+          destinoNome,
+          pastaUrl,
+          ultimoRun: String(sp.getProperty('FORJA_REPOS_BACKUP_ULTIMO_RUN') || ''),
+          agendamento: {
+            ativo: agendaAtiva,
+            freq: String(agenda['freq'] || 'semanal'),
+            hora: Number(agenda['hora'] != null ? agenda['hora'] : 3),
+            dia: Number(agenda['dia'] != null ? agenda['dia'] : 1),
+          },
+        },
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao carregar backups' };
+  }
+}
+
+// RPC: faz o backup de UM repositório (o cliente chama em loop pra mostrar progresso).
+function backupRepoParaDrive(fullName: string, ref?: string): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
+  try {
+    const meta = _reposBackupZip(String(fullName || ''), ref);
+    return { ok: true, data: meta };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Erro ao fazer backup';
+    // Erro de tamanho do UrlFetchApp (resposta > ~50MB) vem com texto pouco amigável.
+    const amigavel = /too large|size limit|limit exceeded/i.test(msg)
+      ? 'Repositório grande demais pro backup direto (limite ~50MB do Apps Script).'
+      : msg;
+    return { ok: false, error: amigavel };
+  }
+}
+
+// RPC: salva configuração (retenção + pasta de destino opcional).
+function setReposBackupConfig(input: Record<string, unknown>): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
+  try {
+    const sp = PropertiesService.getScriptProperties();
+    if (input['manter'] != null) {
+      const n = Math.max(1, Math.min(50, Math.round(Number(input['manter']) || REPOS_BACKUP_MANTER_PADRAO)));
+      sp.setProperty('REPOS_BACKUP_MANTER', String(n));
+    }
+    if (input['destinoFolderId'] != null) {
+      const id = String(input['destinoFolderId'] || '').trim();
+      if (id) {
+        // Valida que a pasta existe e é acessível (vale pra Shared Drive também).
+        let nome = '';
+        try { nome = DriveApp.getFolderById(id).getName(); } catch { return { ok: false, error: 'Pasta não encontrada ou sem acesso. Confira o ID e o compartilhamento.' }; }
+        sp.setProperty('REPOS_BACKUP_FOLDER_ID', id);
+        return { ok: true, data: { destinoFolderId: id, destinoNome: nome } };
+      }
+      sp.deleteProperty('REPOS_BACKUP_FOLDER_ID');
+    }
+    return { ok: true, data: { salvo: true } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar configuração' };
+  }
+}
+
+// Handler do trigger agendado: processa a fila de repos em lotes, respeitando o
+// limite de tempo do GAS; se sobrar repo, agenda uma continuação em ~1min.
+function reposBackupAgendado(): void {
+  initDatabase();
+  const sp = PropertiesService.getScriptProperties();
+  _reposLimparContinuacao();
+  let fila: string[] = [];
+  try { fila = JSON.parse(sp.getProperty('FORJA_REPOS_BACKUP_FILA') || '[]') as string[]; } catch { fila = []; }
+  if (!fila.length) {
+    try { fila = _reposOwnerRaw().map((r) => String(r['full_name'] || '')).filter(Boolean); } catch { fila = []; }
+  }
+  const inicio = Date.now();
+  const LIMITE_MS = 4.5 * 60 * 1000;
+  while (fila.length && (Date.now() - inicio) < LIMITE_MS) {
+    const full = fila.shift() as string;
+    try { _reposBackupZip(full); }
+    catch (e: unknown) { _reposRegistrarBackup({ fullName: full, nome: full.split('/').pop(), stamp: _bkpStamp(), criadoEm: new Date().toISOString(), tamanho: 0, ok: false, erro: e instanceof Error ? e.message : 'erro' }); }
+    sp.setProperty('FORJA_REPOS_BACKUP_FILA', JSON.stringify(fila));
+  }
+  if (fila.length) {
+    ScriptApp.newTrigger('reposBackupContinuar').timeBased().after(60 * 1000).create();
+  } else {
+    sp.deleteProperty('FORJA_REPOS_BACKUP_FILA');
+    sp.setProperty('FORJA_REPOS_BACKUP_ULTIMO_RUN', new Date().toISOString());
+  }
+}
+
+// Continuação one-shot (mesmo trabalho do agendado). Distingue-se por nome pra
+// poder ser limpa sem afetar o trigger recorrente.
+function reposBackupContinuar(): void { reposBackupAgendado(); }
+
+function _reposLimparContinuacao(): void {
+  ScriptApp.getProjectTriggers().forEach((tr) => { if (tr.getHandlerFunction() === 'reposBackupContinuar') ScriptApp.deleteTrigger(tr); });
+}
+
+// RPC: liga/desliga o agendamento automático (diário ou semanal).
+function configurarAgendamentoReposBackup(input: Record<string, unknown>): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
+  try {
+    const sp = PropertiesService.getScriptProperties();
+    const ativo = !(input['ativo'] === false || String(input['ativo']).toLowerCase() === 'false');
+    const freq = String(input['freq'] || 'semanal').toLowerCase() === 'diario' ? 'diario' : 'semanal';
+    const hora = Math.max(0, Math.min(23, Math.round(Number(input['hora']) || 3)));
+    const dia = Math.max(1, Math.min(7, Math.round(Number(input['dia']) || 1))); // 1=domingo .. 7=sábado
+
+    ScriptApp.getProjectTriggers().forEach((tr) => { if (tr.getHandlerFunction() === 'reposBackupAgendado') ScriptApp.deleteTrigger(tr); });
+    _reposLimparContinuacao();
+
+    if (ativo) {
+      if (freq === 'diario') {
+        ScriptApp.newTrigger('reposBackupAgendado').timeBased().atHour(hora).everyDays(1).create();
+      } else {
+        const SEM = [ScriptApp.WeekDay.SUNDAY, ScriptApp.WeekDay.MONDAY, ScriptApp.WeekDay.TUESDAY, ScriptApp.WeekDay.WEDNESDAY, ScriptApp.WeekDay.THURSDAY, ScriptApp.WeekDay.FRIDAY, ScriptApp.WeekDay.SATURDAY];
+        ScriptApp.newTrigger('reposBackupAgendado').timeBased().onWeekDay(SEM[dia - 1]).atHour(hora).create();
+      }
+    }
+    sp.setProperty('REPOS_BACKUP_AGENDA', JSON.stringify({ freq, hora, dia }));
+    return { ok: true, data: { ativo, freq, hora, dia } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao configurar agendamento' };
+  }
+}
+
 // Status ao vivo de cada aplicação: ping da urlProd + endpoints de API vinculados.
 function getAppStatus(): ServerResult {
   try {

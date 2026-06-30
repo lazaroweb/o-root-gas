@@ -16,6 +16,7 @@ import RegrasCategoriaPanel from '../components/RegrasCategoriaPanel';
 import ModelosDisponiveisWidget from '../components/ModelosDisponiveisWidget';
 import BackupRestorePanel from '../components/BackupRestorePanel';
 import ConexoesBackupPanel from '../components/ConexoesBackupPanel';
+import ReposBackupPanel from '../components/ReposBackupPanel';
 import ScriptPropertiesPanel from '../components/ScriptPropertiesPanel';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -377,6 +378,7 @@ export default function Configuracoes({ initialSecao }: ConfiguracoesProps = {})
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
             <BackupRestorePanel />
+            <ReposBackupPanel />
             <ConexoesBackupPanel />
           </div>
         );

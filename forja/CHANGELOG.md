@@ -36,6 +36,27 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.232.0] — 2026-06-30
+
+### Adicionado (Backup de repositórios → Google Drive)
+- Novo painel **Configurações → Dados & Backup → Backup de repositórios**: baixa
+  cada repo do GitHub inteiro (`.zip`, via endpoint *zipball*) e guarda no seu
+  Google Drive — uma cópia fora do GitHub e do GAS.
+- **Fase 1 — manual:** botão "Backup de todos" (com barra de progresso, repo a
+  repo, sem estourar o limite de 6 min do GAS) e backup individual por repo.
+- **Fase 2 — agendamento:** trigger de tempo diário/semanal (`reposBackupAgendado`),
+  processando em lotes com continuação automática quando há muitos repos.
+- **Fase 3 — espelho (Google):** o destino pode ser uma pasta de **Drive
+  Compartilhado** — basta colar o ID — pra espelhar dentro do Google. Pra OneDrive/
+  outros, basta apontar o Google Drive para Desktop / OneDrive desktop na pasta.
+- **Retenção** configurável: mantém os últimos N snapshots de cada repo (padrão 4),
+  organizados em subpastas por repositório, com histórico das execuções.
+- Reaproveita os escopos já concedidos (`drive` + `script.external_request`) —
+  **sem novo consentimento OAuth**. Repos > ~50MB são pulados com aviso (limite do
+  `UrlFetchApp`). Todas as RPCs são admin-gated.
+
+---
+
 ## [1.231.1] — 2026-06-30
 
 ### Corrigido
