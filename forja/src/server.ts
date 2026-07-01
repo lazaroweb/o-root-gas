@@ -9709,11 +9709,30 @@ function _vencimentoNoMes(comp: string, diaVenc: number): string {
 // valor+mês da 1ª parcela). Reimportar a próxima fatura NÃO duplica: a mesma
 // compra cai no mesmo grupo (já existe) e é ignorada — só as compras novas
 // entram. Itens à vista têm dedupe por (cartão+mês+descrição+valor).
-// Remove parcelas/itens DUPLICADOS de um cartão (limpeza do estrago de imports
-// antigos). Parceladas: dedup por (total, nº parcela, valor, mês) — pega variação
-// de descrição. À vista: exige também a descrição igual, pra não apagar compras
-// distintas de mesmo valor/mês. Mantém a "melhor" linha (paga > agendada >
-// pendente; empate → mais antiga) e apaga as demais.
+// Duas linhas são a MESMA parcela/compra? (usado na limpeza de duplicados)
+// Parceladas (total>1): âncora cartão + total + nº da parcela e ≥2 de 3 sinais
+// (mês, valor, descrição) — robusto quando SÓ o mês difere (parcela provisionada
+// num mês e a reimportada no mês da fatura), que era o que escapava. À vista
+// (total<=1): exige valor + descrição + mês iguais (não funde recorrências).
+function _mesmaParcela(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const totA = Number(a['parcelas'] || 0), totB = Number(b['parcelas'] || 0);
+  if (totA !== totB) return false;
+  const paA = Number(a['parcelaAtual'] || 0), paB = Number(b['parcelaAtual'] || 0);
+  if (paA !== paB) return false;
+  const mesA = (String(a['vencimento'] || '').substring(0, 7)) || _toYYYYMM(a['data']);
+  const mesB = (String(b['vencimento'] || '').substring(0, 7)) || _toYYYYMM(b['data']);
+  const centsA = Math.round(Number(a['valor'] || 0) * 100), centsB = Math.round(Number(b['valor'] || 0) * 100);
+  const descA = _normDescFatura(String(a['descricao'] || '')), descB = _normDescFatura(String(b['descricao'] || ''));
+  const mesOk = !!mesA && mesA === mesB;
+  const valOk = centsA === centsB;
+  const descOk = !!descA && descA === descB;
+  if (totA > 1) return (mesOk ? 1 : 0) + (valOk ? 1 : 0) + (descOk ? 1 : 0) >= 2;
+  return valOk && descOk && mesOk;
+}
+
+// Remove parcelas/itens DUPLICADOS de um cartão (limpeza de imports antigos).
+// Mantém a "melhor" linha (paga > agendada > pendente; empate → mais antiga) e
+// apaga as demais. Devolve a lista do que foi removido e guarda um log.
 function deduplicarFaturaCartao(cartaoId: string): ServerResult {
   try {
     const cid = String(cartaoId || '');
@@ -9726,23 +9745,60 @@ function deduplicarFaturaCartao(cartaoId: string): ServerResult {
       if (r) return r;
       return String(a['criadoEm'] || '').localeCompare(String(b['criadoEm'] || ''));
     });
-    const vistos: Record<string, boolean> = {};
-    let removidos = 0;
+
+    const mantidos: Array<Record<string, unknown>> = [];
+    const removidosItens: Array<Record<string, unknown>> = [];
     for (const l of doCartao) {
-      const total = Number(l['parcelas'] || 0);
-      const pa = Number(l['parcelaAtual'] || 0);
-      const cents = Math.round(Number(l['valor'] || 0) * 100);
-      const mes = (String(l['vencimento'] || '').substring(0, 7)) || _toYYYYMM(l['data']);
-      const key = total > 1
-        ? `p|${total}|${pa}|${cents}|${mes}`
-        : `v|${cents}|${mes}|${_normDescFatura(String(l['descricao'] || ''))}`;
-      if (vistos[key]) { dbDelete('FinPessoalLancamentos', String(l['id'])); removidos++; }
-      else vistos[key] = true;
+      const dupDe = mantidos.find((k) => _mesmaParcela(k, l));
+      if (dupDe) {
+        dbDelete('FinPessoalLancamentos', String(l['id']));
+        removidosItens.push({
+          id: String(l['id'] || ''),
+          descricao: String(l['descricao'] || ''),
+          valor: Number(l['valor'] || 0),
+          data: String(l['data'] || ''),
+          vencimento: String(l['vencimento'] || ''),
+          status: String(l['status'] || ''),
+          parcelaAtual: Number(l['parcelaAtual'] || 0),
+          parcelas: Number(l['parcelas'] || 0),
+          manteve: String(dupDe['id'] || ''),
+        });
+      } else {
+        mantidos.push(l);
+      }
     }
-    return { ok: true, data: { removidos } };
+
+    const cartao = dbGetById('FinPessoalCartoes', cid);
+    const cartaoNome = cartao ? String(cartao['apelido'] || cartao['nome'] || cid) : cid;
+    const quando = new Date().toISOString();
+
+    // Log persistente (últimas 20 execuções; itens capados em 100 por execução).
+    try {
+      const sp = PropertiesService.getScriptProperties();
+      const log = JSON.parse(sp.getProperty('FORJA_DEDUP_LOG') || '[]') as unknown[];
+      log.unshift({ cartaoId: cid, cartaoNome, quando, removidos: removidosItens.length, itens: removidosItens.slice(0, 100) });
+      sp.setProperty('FORJA_DEDUP_LOG', JSON.stringify(log.slice(0, 20)));
+    } catch { /* log é best-effort */ }
+
+    const historico = _lerDedupLog(cid);
+    return { ok: true, data: { removidos: removidosItens.length, itens: removidosItens, quando, cartaoNome, historico } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deduplicar' };
   }
+}
+
+function _lerDedupLog(cartaoId?: string): unknown[] {
+  try {
+    const log = JSON.parse(PropertiesService.getScriptProperties().getProperty('FORJA_DEDUP_LOG') || '[]') as Array<Record<string, unknown>>;
+    const cid = String(cartaoId || '');
+    return cid ? log.filter((r) => String(r['cartaoId'] || '') === cid) : log;
+  } catch { return []; }
+}
+
+// RPC: log de limpezas de duplicados (opcionalmente filtrado por cartão).
+function getDedupLog(cartaoId?: string): ServerResult {
+  try { return { ok: true, data: { historico: _lerDedupLog(cartaoId) } }; }
+  catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ler log' }; }
 }
 
 // Procura uma parcela JÁ existente da MESMA compra, mesmo que tenha vindo com

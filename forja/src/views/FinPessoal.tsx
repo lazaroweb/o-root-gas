@@ -22,7 +22,7 @@ import {
   Plus, ChevronLeft, ChevronRight, Wallet, TrendingDown, TrendingUp,
   CreditCard, Smartphone, Banknote, FileText, ArrowLeftRight, AlertCircle,
   Pencil, Trash2, Calendar, CheckCircle2, Clock, ArrowDownRight, ArrowUpRight,
-  RotateCcw, Layers as LayersIcon, Target, Sparkles, PauseCircle, PlayCircle, Repeat,
+  RotateCcw, Layers as LayersIcon, Target, Sparkles, PauseCircle, PlayCircle, Repeat, History,
   Upload, FileUp, Compass, Users, CalendarRange, FileDown, BadgeCheck, BadgePlus,
   // Ícones de categoria — outline lucide, mesmo padrão da sidebar
   ShoppingCart, Car, Utensils, Gamepad2, Pill, Home, Lightbulb, Tv, BookOpen, Shirt,
@@ -1521,6 +1521,7 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
   const [itensCartao, setItensCartao] = useState<LancamentoPessoal[]>([]);
   const [removendoImportados, setRemovendoImportados] = useState(false);
   const [deduplicando, setDeduplicando] = useState(false);
+  const [dedupRes, setDedupRes] = useState<DedupResultado | null>(null);
   const [pagandoFatura, setPagandoFatura] = useState(false);
 
   const abrirNovo = () => { setEditando(null); setModalOpen(true); };
@@ -1592,10 +1593,10 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
     if (!cartaoAberto || deduplicando) return;
     setDeduplicando(true);
     const hide = message.loading('Procurando e removendo duplicados…', 0);
-    callServer<ServerResponse<{ removidos: number }>>('deduplicarFaturaCartao', cartaoAberto.id).then((res) => {
+    callServer<ServerResponse<DedupResultado>>('deduplicarFaturaCartao', cartaoAberto.id).then((res) => {
       if (res.ok) {
-        const n = (res.data as { removidos: number } | undefined)?.removidos ?? 0;
-        message.success(n > 0 ? `${n} lançamento(s) duplicado(s) removido(s)` : 'Nenhum duplicado encontrado');
+        const d = res.data as DedupResultado | undefined;
+        setDedupRes(d ?? { removidos: 0, itens: [], quando: '', cartaoNome: '', historico: [] });
         if (cartaoAberto) carregarFatura(cartaoAberto);
         onRecarregar();
       } else message.error(res.error || 'Erro');
@@ -1719,6 +1720,8 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
         />
       </Modal>
 
+      <DedupResultadoModal res={dedupRes} onClose={() => setDedupRes(null)} />
+
       <PromoverAssinaturaModal
         open={!!promoverLanc}
         lancamento={promoverLanc}
@@ -1827,6 +1830,79 @@ function CartaoCard({ cartao, onClick, onEditar, onRemover, onImportar }: { cart
         Clique pra ver fatura aberta →
       </div>
     </div>
+  );
+}
+
+interface DedupItem { id: string; descricao: string; valor: number; data: string; vencimento: string; status: string; parcelaAtual: number; parcelas: number; manteve: string }
+interface DedupLogRun { cartaoId: string; cartaoNome: string; quando: string; removidos: number; itens: DedupItem[] }
+interface DedupResultado { removidos: number; itens: DedupItem[]; quando: string; cartaoNome: string; historico: DedupLogRun[] }
+
+// Mostra o resultado da limpeza de duplicados: quantos e QUAIS foram removidos,
+// com um histórico das limpezas anteriores (o "log" pedido).
+function DedupResultadoModal({ res, onClose }: { res: DedupResultado | null; onClose: () => void }): React.ReactElement {
+  const t = useTokens();
+  const [verLog, setVerLog] = useState(false);
+  const n = res?.removidos ?? 0;
+  const mesDe = (it: DedupItem) => (String(it.vencimento || '').substring(0, 7)) || String(it.data || '').substring(0, 7);
+  const anteriores = (res?.historico || []).slice(1); // [0] é a execução atual
+  return (
+    <Modal
+      open={!!res}
+      onCancel={onClose}
+      footer={<Button type="primary" onClick={onClose}>Fechar</Button>}
+      title={
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          {n > 0
+            ? <CheckCircle2 size={17} color={t.accents.sage} />
+            : <AlertCircle size={17} color={t.accents.peach} />}
+          {n > 0 ? `${n} duplicado(s) removido(s)` : 'Nenhum duplicado encontrado'}
+        </span>
+      }
+    >
+      {n === 0 ? (
+        <div style={{ fontSize: 13, color: t.textSecondary, lineHeight: 1.6 }}>
+          Não achei parcelas repetidas neste cartão pelos critérios de segurança (mesmo cartão, nº da parcela e ao
+          menos 2 de 3: mês, valor, descrição). Se você ainda vê itens repetidos, pode ser que sejam parcelas de
+          <b> totais diferentes</b> (ex.: uma leitura como 10x e outra como 12x) — nesse caso me diga que ajusto, ou
+          apague o grupo errado manualmente.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 360, overflow: 'auto' }}>
+          {(res?.itens || []).map((it) => (
+            <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', border: `1px solid ${t.borderSoft}`, borderRadius: 8 }}>
+              <Trash2 size={13} color={t.accents.rose} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, color: t.text, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {it.descricao}{it.parcelas > 1 ? ` (${it.parcelaAtual}/${it.parcelas})` : ''}
+                </div>
+                <div style={{ fontSize: 11.5, color: t.textTertiary }}>{mesDe(it)} · {it.status}</div>
+              </div>
+              <span style={{ fontSize: 12.5, color: t.textSecondary, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(it.valor)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {anteriores.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => setVerLog((v) => !v)}>
+            {verLog ? 'Ocultar' : 'Ver'} limpezas anteriores ({anteriores.length})
+          </Button>
+          {verLog && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
+              {anteriores.map((r, i) => (
+                <div key={i} style={{ fontSize: 11.5, color: t.textTertiary, display: 'flex', gap: 8 }}>
+                  <History size={12} />
+                  <span>{r.quando ? dayjs(r.quando).format('DD/MM/YY HH:mm') : '—'}</span>
+                  <span>·</span>
+                  <span>{r.removidos} removido(s)</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
   );
 }
 

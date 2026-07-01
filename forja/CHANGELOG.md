@@ -36,6 +36,28 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.236.0] — 2026-07-01
+
+### Corrigido (limpeza de duplicados não removia nada) + log do que foi removido
+- **Bug:** o "Remover duplicados" dizia que rodava, mas o saldo e os lançamentos
+  continuavam iguais. A limpeza usava uma **chave exata que incluía o mês** — e as
+  parcelas duplicadas costumam ter **meses diferentes** (a provisionada fica no mês
+  calculado; a reimportada vai pro mês da fatura). Como o mês diferia, a chave
+  mudava e as linhas não eram vistas como duplicadas → removia 0.
+- **Correção:** a limpeza agora usa o **mesmo casamento robusto** da importação —
+  âncora por cartão + total de parcelas + nº da parcela e **≥2 de 3 sinais**
+  (mês, valor, descrição). Assim ela pega o duplicado mesmo quando só o mês
+  difere. À vista continua estrito (valor + descrição + mês) pra não fundir
+  recorrências. Mantém a "melhor" linha (paga > agendada > pendente; empate →
+  mais antiga) e apaga as demais.
+- **Log/status:** ao rodar, um modal mostra **quantos e quais** itens foram
+  removidos (descrição, parcela, mês, status e valor) e um **histórico das
+  limpezas anteriores**. O log fica guardado no servidor (últimas 20 execuções,
+  novo RPC `getDedupLog`). Se não achar nada, o modal explica os critérios e o
+  caso residual (parceladas com **totais diferentes**, ex.: 10x vs 12x).
+
+---
+
 ## [1.235.0] — 2026-07-01
 
 ### Corrigido (duplicação ao importar fatura de cartão parcelado)
