@@ -12288,12 +12288,23 @@ function getLancamentosPorCartao(cartaoId: string): ServerResult {
 // cartão. Atalho pra desfazer uma importação feita no cartão errado. Como toda a
 // app deriva da tabela de lançamentos, apagar aqui já "baixa" de tudo (fatura,
 // a pagar, resumo, lançamentos do mês).
-function deletarLancamentosImportadosCartao(cartaoId: string): ServerResult {
+// Remove lançamentos importados de fatura. Se `competencia` (YYYY-MM) vier,
+// apaga SÓ os do mês daquela fatura (pelo vencimento; fallback pela data) —
+// evita o acidente de zerar meses anteriores. Sem competência, apaga todos do
+// cartão (comportamento antigo, só usado se explicitamente pedido).
+function deletarLancamentosImportadosCartao(cartaoId: string, competencia?: string): ServerResult {
   try {
     const alvo = String(cartaoId || '').trim();
     if (!alvo) return { ok: false, error: 'Cartão não informado.' };
+    const comp = String(competencia || '').trim();
+    const mesDe = (l: Record<string, unknown>): string => {
+      const v = String(l['vencimento'] || '').substring(0, 7);
+      return v || _toYYYYMM(l['data']);
+    };
     const alvos = (dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>)
-      .filter((l) => String(l['cartaoId'] || '').trim() === alvo && String(l['tags'] || '').indexOf('fatura-importada') >= 0);
+      .filter((l) => String(l['cartaoId'] || '').trim() === alvo
+        && String(l['tags'] || '').indexOf('fatura-importada') >= 0
+        && (!comp || mesDe(l) === comp));
     const removidos = dbDeleteMany('FinPessoalLancamentos', alvos.map((a) => String(a['id'])));
     return { ok: true, data: { removidos } };
   } catch (e: unknown) {

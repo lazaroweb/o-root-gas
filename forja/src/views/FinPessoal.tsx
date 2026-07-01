@@ -1576,14 +1576,16 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
     });
   };
 
+  // Remove APENAS os importados do mês da fatura aberta (passa `mes`), nunca
+  // mais os de outros meses. O servidor escopa pela competência.
   const removerImportados = () => {
     if (!cartaoAberto || removendoImportados) return;
     setRemovendoImportados(true);
-    const hide = message.loading('Removendo lançamentos importados…', 0);
-    callServer<ServerResponse<{ removidos: number }>>('deletarLancamentosImportadosCartao', cartaoAberto.id).then((res) => {
+    const hide = message.loading('Removendo lançamentos importados deste mês…', 0);
+    callServer<ServerResponse<{ removidos: number }>>('deletarLancamentosImportadosCartao', cartaoAberto.id, mes).then((res) => {
       if (res.ok) {
         const n = (res.data as { removidos: number } | undefined)?.removidos ?? 0;
-        message.success(`${n} lançamento(s) importado(s) removido(s)`);
+        message.success(`${n} lançamento(s) importado(s) removido(s) deste mês`);
         if (cartaoAberto) carregarFatura(cartaoAberto);
         onRecarregar();
       } else message.error(res.error || 'Erro');
@@ -2390,7 +2392,11 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
   if (loading) return <div style={{ textAlign: 'center', padding: 40, color: t.textTertiary }}>Carregando fatura…</div>;
   if (!fatura) return <Empty description="Sem dados de fatura" />;
 
-  const qtdImportados = todosItens.filter((l) => String(l.tags || '').indexOf('fatura-importada') >= 0).length;
+  // Escopado ao mês da fatura aberta — o "Remover importados" só mexe neste mês
+  // (nunca mais zera meses anteriores).
+  const mesFatura = fatura.mes || '';
+  const mesDeLanc = (l: LancamentoPessoal) => (String(l.vencimento || '').substring(0, 7)) || (String(l.data || '').substring(0, 7));
+  const qtdImportados = todosItens.filter((l) => String(l.tags || '').indexOf('fatura-importada') >= 0 && (!mesFatura || mesDeLanc(l) === mesFatura)).length;
   const totalTodos = todosItens.reduce((s, l) => s + l.valor, 0);
 
   // Uso do limite considera tudo que está EM ABERTO no cartão (não pago),
@@ -2459,15 +2465,15 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
           )}
           {qtdImportados > 0 && (
             <Popconfirm
-              title={`Remover ${qtdImportados} lançamento(s) importado(s)?`}
-              description="Apaga de uma vez tudo que foi importado de fatura neste cartão."
+              title={`Remover ${qtdImportados} importado(s) deste mês?`}
+              description="Apaga só o que foi importado de fatura NESTE mês. Não mexe em outros meses."
               onConfirm={onRemoverImportados}
-              okText="Remover tudo"
+              okText="Remover deste mês"
               cancelText="Cancelar"
               okButtonProps={{ danger: true, loading: removendoImportados }}
             >
               <Button size="small" danger icon={<Trash2 size={13} />} loading={removendoImportados}>
-                {removendoImportados ? 'Removendo…' : `Remover importados (${qtdImportados})`}
+                {removendoImportados ? 'Removendo…' : `Remover importados do mês (${qtdImportados})`}
               </Button>
             </Popconfirm>
           )}

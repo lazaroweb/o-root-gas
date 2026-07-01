@@ -36,6 +36,23 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.238.0] — 2026-07-01
+
+### Corrigido (⚠️ "Remover importados" apagava TODOS os meses)
+- **Bug grave:** o botão "Remover importados" apagava **todos** os lançamentos
+  com a tag `fatura-importada` do cartão — de **todos os meses**, não só o da
+  fatura aberta. Como a exclusão é definitiva (não há lixeira), faturas de meses
+  anteriores sumiam junto.
+- **Correção:** a remoção agora é **escopada ao mês da fatura aberta**. O servidor
+  (`deletarLancamentosImportadosCartao`) aceita a competência e só apaga os itens
+  daquele mês; o cliente sempre envia o mês. O botão passou a se chamar "Remover
+  importados do mês (N)" e o aviso deixa claro que **não mexe em outros meses**.
+- **Recuperação:** dados apagados podem ser restaurados pelo **histórico de versões
+  da planilha** no Google Sheets (Arquivo → Histórico de versões → Ver histórico),
+  voltando para um ponto anterior à exclusão.
+
+---
+
 ## [1.237.0] — 2026-07-01
 
 ### Importação de fatura mais inteligente e auto-corretiva ("camada viva")
