@@ -9576,6 +9576,82 @@ function gerarPlanoIdealIA(): ServerResult {
 // estrutura as compras em itens {data, descricao, valor, categoria}. O cliente
 // revisa numa tabela e chama importarFaturaLancamentos pra criar tudo de uma vez
 // — cada compra vira um lançamento individual no cartão escolhido.
+// ── Conciliação de fatura (camada "viva" de auto-correção) ────────────────────
+// Converte "1.285,90" / "R$ 1.285,90" / "1285.90" → 1285.9. 0 se inválido.
+function _parseBRL(s: string): number {
+  let x = String(s || '').replace(/[^\d.,-]/g, '').trim();
+  if (!x) return 0;
+  // Traço à direita (crédito no extrato brasileiro): "1.285,90-" → negativo.
+  const neg = /-\s*$/.test(x) || /^\s*-/.test(x);
+  x = x.replace(/-/g, '');
+  if (x.indexOf(',') >= 0) x = x.replace(/\./g, '').replace(',', '.'); // vírgula = decimal
+  const n = Number(x);
+  if (isNaN(n)) return 0;
+  return neg ? -n : n;
+}
+
+// Detecta o TOTAL DESTA fatura no texto, priorizando os rótulos certos e
+// EVITANDO os "valor total a pagar" das opções de parcelamento/financiamento e
+// os totais de "próximas faturas". Retorna 0 se não achar com confiança.
+function _detectarTotalFaturaTexto(txt: string): number {
+  const linhas = String(txt || '').split(/\r?\n/);
+  const bom = /total da fatura|total desta fatura|saldo desta fatura|valor total desta fatura|\(=\)\s*total\b/i;
+  const ruim = /pr[oó]xim|parcel|financi|a pagar|m[ií]nimo|encargo|1[ªa]\s*parcela|demais faturas/i;
+  const acha = (linha: string): number => {
+    const m = linha.match(/r\$\s*([\d.]+,\d{2})/i) || linha.match(/([\d.]+,\d{2})/);
+    return m ? Math.abs(_parseBRL(m[1])) : 0;
+  };
+  for (let i = 0; i < linhas.length; i++) {
+    const ln = linhas[i];
+    if (!bom.test(ln) || ruim.test(ln)) continue;
+    let v = acha(ln);
+    if (!v && i + 1 < linhas.length && !ruim.test(linhas[i + 1])) v = acha(linhas[i + 1]);
+    if (v > 0) return Math.round(v * 100) / 100;
+  }
+  return 0;
+}
+
+interface ConciliacaoFatura { total: number; soma: number; diferenca: number; bateu: boolean; tol: number; tentativas: number }
+
+function _conciliarFatura(total: number, itens: Array<{ valor: number }>): ConciliacaoFatura {
+  const soma = Math.round(itens.reduce((s, it) => s + Number(it.valor || 0), 0) * 100) / 100;
+  const tol = Math.max(0.02, Math.round(total * 0.005 * 100) / 100); // 0,5% ou 2 centavos
+  const diferenca = Math.round((total - soma) * 100) / 100;
+  return { total: Math.round(total * 100) / 100, soma, diferenca, bateu: total > 0 && Math.abs(diferenca) <= tol, tol, tentativas: 0 };
+}
+
+// Instrução de re-extração quando a soma não bate: explica O QUE está errado
+// (falta/sobra) e pede o JSON completo corrigido. É o "porquê + ajuste".
+function _instrucaoCorrecaoFatura(itens: Array<Record<string, unknown>>, c: ConciliacaoFatura): string {
+  const falta = c.diferenca > 0;
+  return 'CONFERÊNCIA AUTOMÁTICA — corrija e reenvie o JSON COMPLETO. Você extraiu '
+    + itens.length + ' itens somando R$ ' + c.soma.toFixed(2) + ', mas o TOTAL DESTA FATURA é R$ '
+    + c.total.toFixed(2) + ' — diferença de R$ ' + Math.abs(c.diferenca).toFixed(2) + '. '
+    + (falta
+      ? 'A soma está MENOR que o total: FALTAM lançamentos. Reveja o documento linha a linha e inclua o que escapou — quase sempre são ENCARGOS (IOF diário e IOF adicional, multa/mora por atraso, encargos contratuais, juros, anuidade mesmo quando parcelada, seguro/odontológico) ou alguma compra não listada. '
+      : 'A soma está MAIOR que o total: SOBRA valor. Confira se você não incluiu por engano um PAGAMENTO/crédito da fatura (remova), duplicou um item, errou um valor, ou esqueceu de lançar um ESTORNO/crédito de saldo anterior como NEGATIVO. ')
+    + 'Confirme também se o "total" é o "Total da fatura"/"(=) Total" — NUNCA o "Valor total a pagar" das opções de parcelamento/financiamento. '
+    + 'Devolva o JSON completo no MESMO formato, com TODOS os itens (não só os novos), preservando as parcelas (x/y) e os sinais. '
+    + 'Itens já extraídos (referência):\n' + JSON.stringify(itens);
+}
+
+// Regras comuns aos dois extratores (texto e Gemini) — mantém os prompts alinhados.
+const _REGRAS_FATURA_COMUNS =
+  'Regras de SINAL: POSITIVO para compras e encargos; NEGATIVO apenas para ESTORNOS/DEVOLUÇÕES/REEMBOLSOS de compras '
+  + '(ex.: "ESTORNO DE ANUIDADE -22,00" → -22.00). NUNCA descarte um estorno. '
+  + 'TRAÇO À DIREITA: em faturas brasileiras um valor com "-" DEPOIS do número (ex.: "6.568,83 -") é NEGATIVO (crédito). '
+  + 'PAGAMENTOS da fatura (ex.: "PAGAMENTO", "PAGAMENTO RECEBIDO", "PAGAMENTO PIX", "PGTO", "PAGTO", "DÉBITO AUTOMÁTICO", "pagamento/créditos", saldo/pagamento da fatura anterior) '
+  + 'QUITAM a fatura e NÃO são compras — IGNORE por completo, mesmo com valor negativo. '
+  + 'CARTÕES ADICIONAIS: a fatura pode listar mais de um cartão (finais diferentes) do mesmo titular; extraia os lançamentos de TODOS. '
+  + 'INCLUA os ENCARGOS: IOF diário e IOF adicional, multa contratual/por atraso, encargos contratuais, juros/mora de atraso, anuidade (mesmo parcelada), seguro/proteção/odontológico. '
+  + 'COMPRAS PARCELADAS: SEMPRE preserve a parcela no formato (x/y) — ex.: "LOJA X (02/05)"; se vier "x de y" ou "parcela x/y", normalize para (x/y). NUNCA remova a parcela (é essencial pra projetar as próximas faturas). '
+  + 'O campo "total" é o VALOR TOTAL DESTA fatura — rótulos "Total da fatura", "(=) Total" ou "Total desta fatura". '
+  + 'NUNCA use o "Valor total a pagar" das OPÇÕES DE PAGAMENTO/PARCELAMENTO (financiamento), nem "1ª parcela de", nem "Pagamento mínimo". '
+  + 'IGNORE as seções "Opções de pagamento", "Parcelamento da fatura", "Total parcelado para as próximas faturas", "Próxima fatura", "Demais faturas", "Resumo dos encargos financeiros", "Limites" e linhas de total/subtotal — não são lançamentos. '
+  + 'CRÉDITO DE SALDO ANTERIOR: se os PAGAMENTOS/CRÉDITOS do período forem MAIORES que o "saldo da fatura anterior", inclua a DIFERENÇA (saldo anterior − pagamentos) como UM item NEGATIVO "Crédito de saldo anterior", categoria "outros". '
+  + 'CONCILIE: a soma de (compras + encargos − estornos − crédito de saldo anterior) DEVE bater com o "total". '
+  + 'Se a data do item não tiver ano, use o ano do período da fatura. Números com ponto decimal e sem separador de milhar (1285.90, nunca 1.285,90). Português do Brasil.';
+
 function interpretarFaturaIA(textoFatura: string): ServerResult {
   try {
     const txt = String(textoFatura || '').replace(/\u0000/g, ' ').slice(0, 14000);
@@ -9584,50 +9660,66 @@ function interpretarFaturaIA(textoFatura: string): ServerResult {
       + 'Recebe o texto bruto de uma fatura e extrai TODAS as compras/lançamentos. '
       + 'Responda ESTRITAMENTE em JSON válido (sem texto fora do JSON, sem cercas markdown) no formato: '
       + '{"emissor":"","periodo":"","total":0,"itens":[{"data":"YYYY-MM-DD","descricao":"","valor":0,"categoria":""}]}. '
-      + 'Regras de SINAL do valor: POSITIVO para compras e encargos; NEGATIVO apenas para ESTORNOS, DEVOLUÇÕES e REEMBOLSOS de compras '
-      + '(ex.: "ESTORNO DE ANUIDADE -22,00" vira -22.00). NUNCA descarte um estorno — ele abate o total. '
-      + 'ATENÇÃO — não confunda PAGAMENTO com estorno: linhas de PAGAMENTO da fatura (ex.: "PAGAMENTO", "PAGAMENTO PIX", "PGTO", "PAGTO", "DÉBITO AUTOMÁTICO", "pagamento/créditos", saldo/pagamento da fatura anterior) '
-      + 'QUITAM a fatura e NÃO são compras — IGNORE-as por completo, mesmo que apareçam com valor negativo no detalhamento. '
-      + 'CRÍTICO sobre números: use SEMPRE ponto como separador decimal e NUNCA vírgula nem separador de milhar — '
-      + 'ex.: escreva 1285.90 (jamais 1.285,90) e 44.00 (jamais 44,00). Números são tokens JSON puros, sem aspas. '
-      + 'Faturas brasileiras vêm com vírgula decimal e ponto de milhar; CONVERTA antes de responder. '
-      + 'COMPRAS PARCELADAS: SEMPRE preserve a parcela na descrição no formato (x/y) — ex.: "LOJA X (02/05)" ou "MERCADOLIVRE 03/03". '
-      + 'Se a fatura escrever "x de y" ou "parcela x/y", normalize para (x/y) na descrição. É ESSENCIAL pra projetar as próximas faturas; nunca remova a parcela. '
-      + 'Extraia as COMPRAS, os ENCARGOS financeiros (juros, multa por atraso, IOF, anuidade/mensalidade, seguro) E os ESTORNOS/DEVOLUÇÕES (com valor negativo). '
-      + 'IGNORE: pagamentos da fatura, limite e linhas de total/subtotal. '
-      + 'O campo "total" é o VALOR TOTAL A PAGAR da fatura (rótulos: "valor total", "total a pagar" ou "Saldo"). '
-      + 'CRÉDITO DE SALDO ANTERIOR: se os PAGAMENTOS/CRÉDITOS do período forem MAIORES que o "saldo da fatura anterior", existe um crédito a favor do cliente — '
-      + 'inclua a DIFERENÇA (saldo anterior − pagamentos) como UM item NEGATIVO com descrição "Crédito de saldo anterior" e categoria "outros"; ele reduz o total. '
-      + 'CONCILIE: a soma de (compras + encargos − estornos − crédito de saldo anterior) deve bater com o "total" (valor a pagar). '
-      + 'Se a soma ficar MAIOR que o total, verifique se você não incluiu por engano um PAGAMENTO (remova), esqueceu um estorno negativo, ou esqueceu o crédito de saldo anterior. '
-      + 'Se a data do item não tiver ano, use o ano do período da fatura. '
+      + _REGRAS_FATURA_COMUNS + ' '
       + 'categoria: classifique cada item em uma de [mercado, transporte, alimentacao, lazer, saude, casa, assinaturas, vestuario, educacao, viagem, encargos, outros] (use "encargos" para juros, multa, IOF, anuidade e seguro). '
-      + 'Não invente itens que não estejam no texto. Português do Brasil.';
-    const msgs: LlmMessage[] = [
+      + 'Não invente itens que não estejam no texto.';
+
+    const mapear = (p: Record<string, unknown>) => {
+      const raw = Array.isArray(p['itens']) ? p['itens'] as Array<Record<string, unknown>> : [];
+      return raw.map((it) => ({
+        data: String(it['data'] || ''),
+        descricao: String(it['descricao'] || '').trim(),
+        valor: Number(it['valor'] || 0),
+        categoria: String(it['categoria'] || 'outros').toLowerCase().trim(),
+      })).filter((it) => it.descricao && it.valor !== 0 && !_ehPagamentoFatura(it.descricao, it.valor));
+    };
+
+    const r = forjaCallLLMDetalhado([
       { role: 'system', content: sys },
       { role: 'user', content: 'Texto da fatura:\n\n' + txt },
-    ];
-    const r = forjaCallLLMDetalhado(msgs, 8000, undefined, 'financasLeitura');
+    ], 8000, undefined, 'financasLeitura');
     let parsed: Record<string, unknown>;
     try { parsed = extrairJsonFatura(r.texto) as Record<string, unknown>; }
     catch { return { ok: false, error: 'A IA não retornou um JSON válido. Tente de novo ou cole o texto manualmente.' }; }
-    const itensRaw = Array.isArray(parsed['itens']) ? parsed['itens'] as Array<Record<string, unknown>> : [];
-    const itens = itensRaw.map((it) => ({
-      data: String(it['data'] || ''),
-      descricao: String(it['descricao'] || '').trim(),
-      // Preserva o SINAL: estornos/devoluções vêm negativos e abatem o total.
-      valor: Number(it['valor'] || 0),
-      categoria: String(it['categoria'] || 'outros').toLowerCase().trim(),
-    })).filter((it) => it.descricao && it.valor !== 0 && !_ehPagamentoFatura(it.descricao, it.valor));
+
+    let itens = mapear(parsed);
     if (itens.length === 0) return { ok: false, error: 'Não encontrei compras na fatura. Confira o arquivo ou cole o texto manualmente.' };
+    let modelo = r.modelo;
+    // Total: o do texto (rótulo certo) manda; senão o da IA. Se achado no texto,
+    // fica FIXO nas rodadas de correção (é a âncora deterministica).
+    const totalTexto = _detectarTotalFaturaTexto(txt);
+    let total = totalTexto || Math.abs(Number(parsed['total'] || 0));
+    let c = _conciliarFatura(total, itens);
+
+    // Camada viva: enquanto a soma não bater, re-extrai apontando o quê e o porquê.
+    let tentativas = 0;
+    while (!c.bateu && total > 0 && tentativas < 2) {
+      tentativas++;
+      const corr = forjaCallLLMDetalhado([
+        { role: 'system', content: sys },
+        { role: 'user', content: 'Texto da fatura:\n\n' + txt },
+        { role: 'user', content: _instrucaoCorrecaoFatura(itens, c) },
+      ], 8000, undefined, 'financasLeitura');
+      let p2: Record<string, unknown>;
+      try { p2 = extrairJsonFatura(corr.texto) as Record<string, unknown>; } catch { break; }
+      const itens2 = mapear(p2);
+      if (itens2.length === 0) break;
+      const total2 = totalTexto || Math.abs(Number(p2['total'] || total));
+      const c2 = _conciliarFatura(total2, itens2);
+      if (Math.abs(c2.diferenca) < Math.abs(c.diferenca) - 0.001) { itens = itens2; total = total2; c = c2; modelo = corr.modelo || modelo; }
+      else break;
+    }
+    c.tentativas = tentativas;
+
     return {
       ok: true,
       data: {
         emissor: String(parsed['emissor'] || ''),
         periodo: String(parsed['periodo'] || ''),
-        total: Math.abs(Number(parsed['total'] || 0)),
+        total: Math.round(total * 100) / 100,
         itens,
-        modelo: r.modelo,
+        modelo,
+        conciliacao: c,
       },
     };
   } catch (e: unknown) {
@@ -10029,62 +10121,77 @@ function interpretarFaturaGemini(base64: string, mimeType: string): ServerResult
 
     const sys = 'Você é um extrator de dados de faturas de cartão de crédito brasileiras. '
       + 'Lê o documento e extrai TODAS as compras/lançamentos com precisão. Português do Brasil.';
-    const instr = 'Extraia os LANÇAMENTOS desta fatura: TODAS as compras, os encargos financeiros cobrados '
-      + '(juros, multa por atraso, IOF, anuidade/mensalidade, seguro/proteção) E os ESTORNOS/DEVOLUÇÕES/REEMBOLSOS de compras. '
-      + 'NÃO inclua PAGAMENTOS da fatura: linhas como "PAGAMENTO", "PAGAMENTO PIX", "PGTO", "PAGTO", "DÉBITO AUTOMÁTICO", "pagamento/créditos" ou pagamento/saldo da fatura anterior '
-      + 'QUITAM a fatura e NÃO são compras — IGNORE-as por completo, mesmo aparecendo com valor negativo no detalhamento. '
-      + 'IGNORE também: limite e as linhas de total/subtotal. '
-      + 'Para cada lançamento devolva: data (YYYY-MM-DD; se faltar o ano use o do período da fatura; encargo sem data use a data de fechamento/vencimento da fatura), '
-      + 'descricao. COMPRAS PARCELADAS: SEMPRE preserve a parcela no formato (x/y) — ex.: "SAMSUNG (05/06)" ou "MERCADOLIVRE 03/03"; '
-      + 'se a fatura escrever "x de y" ou "parcela x/y", normalize para (x/y). É ESSENCIAL pra projetar as próximas faturas; NUNCA remova a parcela. '
-      + 'valor com SINAL: POSITIVO para compras/encargos e NEGATIVO apenas para estornos/devoluções/reembolsos (ex.: "ESTORNO DE ANUIDADE -22,00" → -22.00). NUNCA descarte um estorno. '
-      + 'Use SEMPRE ponto decimal e sem separador de milhar — ex.: 1285.90, nunca 1.285,90. '
-      + 'e categoria (slug curto, minúsculo, sem acento; use "encargos" para juros, multa, IOF, anuidade e seguro). '
-      + 'O campo "total" é o VALOR TOTAL A PAGAR da fatura ("valor total", "total a pagar" ou "Saldo"). '
-      + 'CRÉDITO DE SALDO ANTERIOR: se os PAGAMENTOS/CRÉDITOS do período forem MAIORES que o "saldo da fatura anterior", há um crédito a favor do cliente — '
-      + 'inclua a DIFERENÇA (saldo anterior − pagamentos) como UM item NEGATIVO "Crédito de saldo anterior", categoria "outros"; ele reduz o total. '
-      + 'CONCILIE: a soma de (compras + encargos − estornos − crédito de saldo anterior) deve bater com o "total" (valor a pagar). '
-      + 'Se a soma ficar MAIOR que o total, confira se você não incluiu por engano um PAGAMENTO (remova), esqueceu um estorno negativo, ou o crédito de saldo anterior. '
+    const instr = 'Extraia os LANÇAMENTOS desta fatura: TODAS as compras, os encargos e os ESTORNOS/DEVOLUÇÕES/REEMBOLSOS. '
+      + 'Para cada lançamento devolva: data (YYYY-MM-DD; se faltar o ano use o do período; encargo sem data usa a data de fechamento/vencimento), descricao, valor e categoria (slug curto, minúsculo, sem acento; use "encargos" para juros, multa, IOF, anuidade e seguro). '
+      + _REGRAS_FATURA_COMUNS + ' '
       + (contasLista
         ? `Classifique cada compra escolhendo a melhor CONTA deste plano de contas (devolva "conta" = nome exato e "grupo" = grupo correspondente). Encargos podem usar conta "Outros". Se nenhuma servir, use conta "Outros". Plano de contas: ${contasLista}. `
         : 'Devolva "conta" e "grupo" vazios. ')
       + 'Responda APENAS JSON no formato: {"emissor":"","periodo":"","total":0,"itens":[{"data":"","descricao":"","valor":0,"categoria":"","conta":"","grupo":""}]}.';
+
+    const mapear = (p: Record<string, unknown>) => {
+      const raw = Array.isArray(p['itens']) ? p['itens'] as Array<Record<string, unknown>> : [];
+      return raw.map((it) => {
+        const conta = String(it['conta'] || '').trim();
+        return {
+          data: String(it['data'] || ''),
+          descricao: String(it['descricao'] || '').trim(),
+          valor: Number(it['valor'] || 0),
+          categoria: String(it['categoria'] || '').trim() || _slug(conta || 'outros'),
+          conta,
+          grupo: String(it['grupo'] || '').trim(),
+        };
+      }).filter((it) => it.descricao && it.valor !== 0 && !_ehPagamentoFatura(it.descricao, it.valor));
+    };
+    const parseGem = (texto: string): Record<string, unknown> | null => {
+      try { return JSON.parse(texto) as Record<string, unknown>; }
+      catch { try { return extrairJsonFatura(texto) as Record<string, unknown>; } catch { return null; } }
+    };
 
     const partes: GeminiParte[] = [
       { text: instr },
       { inline_data: { mime_type: mimeType || 'application/pdf', data: dados } },
     ];
     const r = geminiGenerateContent(partes, { system: sys, json: true, maxTokens: 8192, temperature: 0.1 });
-    let parsed: Record<string, unknown>;
-    try { parsed = JSON.parse(r.texto) as Record<string, unknown>; }
-    catch {
-      try { parsed = extrairJsonFatura(r.texto) as Record<string, unknown>; }
-      catch { return { ok: false, error: 'O Gemini não retornou um JSON válido. Tente de novo.' }; }
-    }
-    const itensRaw = Array.isArray(parsed['itens']) ? parsed['itens'] as Array<Record<string, unknown>> : [];
-    const itens = itensRaw.map((it) => {
-      const conta = String(it['conta'] || '').trim();
-      const cat = String(it['categoria'] || '').trim() || _slug(conta || 'outros');
-      return {
-        data: String(it['data'] || ''),
-        descricao: String(it['descricao'] || '').trim(),
-        // Preserva o SINAL: estornos/devoluções vêm negativos e abatem o total.
-        valor: Number(it['valor'] || 0),
-        categoria: cat,
-        conta,
-        grupo: String(it['grupo'] || '').trim(),
-      };
-    }).filter((it) => it.descricao && it.valor !== 0 && !_ehPagamentoFatura(it.descricao, it.valor));
+    const parsed = parseGem(r.texto);
+    if (!parsed) return { ok: false, error: 'O Gemini não retornou um JSON válido. Tente de novo.' };
+
+    let itens = mapear(parsed);
     if (itens.length === 0) return { ok: false, error: 'Não encontrei compras na fatura. Tente o modo de colar texto.' };
+    let modelo = r.modelo;
+    let total = Math.abs(Number(parsed['total'] || 0));
+    let c = _conciliarFatura(total, itens);
+
+    // Camada viva: reenvia o PDF apontando o quê/porquê até a soma bater (2x).
+    let tentativas = 0;
+    while (!c.bateu && total > 0 && tentativas < 2) {
+      tentativas++;
+      const partesCorr: GeminiParte[] = [
+        { text: instr + '\n\n' + _instrucaoCorrecaoFatura(itens, c) },
+        { inline_data: { mime_type: mimeType || 'application/pdf', data: dados } },
+      ];
+      const corr = geminiGenerateContent(partesCorr, { system: sys, json: true, maxTokens: 8192, temperature: 0.1 });
+      const p2 = parseGem(corr.texto);
+      if (!p2) break;
+      const itens2 = mapear(p2);
+      if (itens2.length === 0) break;
+      const total2 = Math.abs(Number(p2['total'] || total));
+      const c2 = _conciliarFatura(total2, itens2);
+      if (Math.abs(c2.diferenca) < Math.abs(c.diferenca) - 0.001) { itens = itens2; total = total2; c = c2; modelo = corr.modelo || modelo; }
+      else break;
+    }
+    c.tentativas = tentativas;
+
     return {
       ok: true,
       data: {
         emissor: String(parsed['emissor'] || ''),
         periodo: String(parsed['periodo'] || ''),
-        total: Math.abs(Number(parsed['total'] || 0)),
+        total: Math.round(total * 100) / 100,
         itens,
-        modelo: r.modelo,
+        modelo,
         fonte: 'gemini',
+        conciliacao: c,
       },
     };
   } catch (e: unknown) {

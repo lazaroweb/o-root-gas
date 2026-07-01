@@ -1119,6 +1119,15 @@ export interface FaturaItemIA {
 }
 
 // Resultado da interpretação de uma fatura pela IA.
+export interface ConciliacaoFatura {
+  total: number;       // total declarado da fatura
+  soma: number;        // soma dos itens extraídos (com sinal)
+  diferenca: number;   // total − soma (positivo = faltou item)
+  bateu: boolean;      // soma conciliou com o total (dentro da tolerância)
+  tol: number;         // tolerância usada
+  tentativas: number;  // rodadas de auto-correção que a IA fez
+}
+
 export interface FaturaInterpretada {
   emissor: string;
   periodo: string;
@@ -1126,6 +1135,7 @@ export interface FaturaInterpretada {
   itens: FaturaItemIA[];
   modelo?: string;
   fonte?: string; // 'gemini' | 'proxy'
+  conciliacao?: ConciliacaoFatura;
 }
 
 // ─── Despesas da empresa: livro-caixa mensal (v1.15) ──────────────────────────

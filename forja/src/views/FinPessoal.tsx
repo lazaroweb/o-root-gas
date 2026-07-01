@@ -52,6 +52,7 @@ import type {
   RecorrenciaAtiva, OrcamentoPessoal, ProgressoOrcamentos, ProgressoOrcamentoItem,
   CategoriaPessoal, AssinaturaPessoal, ResumoAssinaturas,
   FaturaInterpretada, FaturaItemIA, PlanoConta, FamiliaMembro, MesExecutivo,
+  ConciliacaoFatura,
 } from '../types';
 
 // ─── Constantes de UI ──────────────────────────────────────────────────────────
@@ -3953,6 +3954,9 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
   // com a soma dos itens — alerta quando algo escapou (juros, multa, IOF).
   const [totalFatura, setTotalFatura] = useState(0);
   const [periodoFatura, setPeriodoFatura] = useState('');
+  // Conciliação automática feita no servidor (camada "viva"): quantas rodadas de
+  // auto-correção a IA fez e se a soma bateu com o total da fatura.
+  const [conciliacao, setConciliacao] = useState<ConciliacaoFatura | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -3972,6 +3976,7 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
       setFonteUsada('');
       setTotalFatura(0);
       setPeriodoFatura('');
+      setConciliacao(null);
       setGeminiChecado(false);
       callServer<boolean>('geminiTemChave')
         .then((v) => setGeminiOn(!!v))
@@ -3993,6 +3998,7 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
     setFonteUsada(d.fonte || 'proxy');
     setTotalFatura(Number(d.total || 0));
     setPeriodoFatura(String(d.periodo || ''));
+    setConciliacao(d.conciliacao || null);
     setEtapa('revisao');
   };
 
@@ -4446,6 +4452,9 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
                     showIcon
                     style={estilo}
                     message={<span style={{ color: t.text }}>Bate com o total da fatura ({formatBRL(totalFatura)}).</span>}
+                    description={conciliacao && conciliacao.tentativas > 0
+                      ? <span style={{ color: t.textSecondary }}>A IA conferiu a soma, notou a divergência e se corrigiu sozinha em {conciliacao.tentativas} rodada(s) até fechar com o total.</span>
+                      : undefined}
                   />
                 ) : (
                   <Alert

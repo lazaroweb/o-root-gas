@@ -36,6 +36,29 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.237.0] — 2026-07-01
+
+### Importação de fatura mais inteligente e auto-corretiva ("camada viva")
+- **Problema:** o total importado ficava *perto* mas diferente do total da fatura,
+  exigindo refino manual toda vez. Duas causas: (1) em faturas Bradesco com
+  **opções de parcelamento/financiamento**, a IA às vezes pegava o "Valor total a
+  pagar" errado (financiamento) em vez do "Total da fatura"; (2) a IA deixava
+  escapar **encargos** (IOF diário/adicional, multa e mora por atraso, encargos
+  contratuais, juros, anuidade parcelada, seguro/odontológico).
+- **Auto-correção (o que você pediu):** agora, depois de ler a fatura, o servidor
+  **confere sozinho** a soma dos itens contra o total. Se divergir, ele **re-extrai
+  apontando o quê e o porquê** (falta encargo? sobra pagamento incluído por engano?
+  sinal errado?) e repete até **2 rodadas** até fechar. A tela de revisão mostra
+  quando a IA se corrigiu sozinha.
+- **Total certo por âncora:** no modo texto, o total passa a ser lido pelo rótulo
+  correto ("Total da fatura"/"(=) Total"), ignorando os "valor total a pagar" das
+  opções de parcelamento e os totais de "próximas faturas".
+- **Prompt reforçado (texto + Gemini):** trata traço à direita como negativo
+  ("6.568,83 -" = crédito), reconhece **cartões adicionais** (finais diferentes do
+  mesmo titular) e ignora as seções de parcelamento/limites/resumo de encargos.
+
+---
+
 ## [1.236.0] — 2026-07-01
 
 ### Corrigido (limpeza de duplicados não removia nada) + log do que foi removido
