@@ -36,6 +36,23 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.239.0] — 2026-07-01
+
+### Auditoria mais afiada pra código gerado por IA
+- Adicionado um **checklist de "cheiros" de código** injetado nos três caminhos
+  de auditoria (completo, incremental e por batch), sempre que há código no
+  contexto — mantendo a regra de "só vira finding se tiver impacto real":
+  - **Segredos hardcoded** (chaves/tokens/senhas no código em vez de Script
+    Properties) → sempre severidade ALTA, com arquivo + trecho.
+  - **Erro engolido** (`catch {}` / catch que descarta a exceção sem log) que
+    mascara falhas reais — ignorando casos legitimamente best-effort.
+  - **Tipagem insegura** (`any`, casts forçados, `@ts-ignore`, `!` non-null sem
+    checagem) em pontos sensíveis.
+  - **Duplicação de lógica** (blocos quase-idênticos que deveriam ser função
+    compartilhada), citando os locais.
+
+---
+
 ## [1.238.0] — 2026-07-01
 
 ### Corrigido (⚠️ "Remover importados" apagava TODOS os meses)

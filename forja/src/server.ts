@@ -20054,6 +20054,16 @@ function _sintetizarNarrativaPosBatch(
 
 // Roda 1 chamada LLM pra UM batch do diff. Retorna o AuditPayload já parseado
 // (com findings + resolvidos do batch). Sem narrativa aqui — vai pra síntese.
+// Checklist de "cheiros" comuns em código gerado por IA — injetado nos prompts
+// de auditoria quando há código pra analisar. Cada item só vira finding se tiver
+// impacto real (mantém a regra qualidade > quantidade e evita nitpicking).
+const _CHECKLIST_CODIGO_IA =
+  'CHECKLIST DE CÓDIGO (aplique quando houver código no contexto; cada item só vira finding se tiver impacto real):\n'
+  + '- SEGREDOS HARDCODED: chaves de API, tokens, senhas ou credenciais escritos no código (devem morar em Script Properties / variáveis de ambiente). Sempre severidade ALTA (segurança); cite o arquivo e o trecho.\n'
+  + '- ERRO ENGOLIDO: catch vazio ou que descarta a exceção sem log nem tratamento (ex.: `catch {}`, `catch { /* ignore */ }`) mascarando falhas reais. Aponte o arquivo e diga QUAL falha fica invisível (ignore casos legítimos e claramente best-effort).\n'
+  + '- TIPAGEM INSEGURA: uso de `any`, casts forçados (`as unknown as`, `as X`), `@ts-ignore`/`@ts-expect-error` ou `!` non-null sem checagem, que derrubam a segurança de tipos em pontos sensíveis.\n'
+  + '- DUPLICAÇÃO DE LÓGICA: blocos copiados/quase-idênticos que deveriam ser uma função compartilhada (risco de corrigir só uma cópia e divergir). Cite os locais duplicados.\n';
+
 function _auditarUmBatch(
   sistemaId: string,
   sistema: Record<string, unknown>,
@@ -20099,6 +20109,7 @@ function _auditarUmBatch(
     + '- Achados NOVOS: só os introduzidos pelo diff DESTE batch. Sem inferências sobre outros batches.\n'
     + '- Máx 6 findings por batch. Qualidade > quantidade.\n'
     + '- JSON VÁLIDO. Aspas escapadas. Sem comentários.\n\n'
+    + _CHECKLIST_CODIGO_IA + '\n'
     + 'IDs reais: sistemaId="' + sistemaId + '"\n\n'
     + '--- ACHADOS ANTERIORES (referência para reconciliação) ---\n' + prevList + '\n\n'
     + '--- DIFF DESTE BATCH ---\n' + diffContexto
@@ -20277,6 +20288,7 @@ function _executarAuditoriaIncremental(
     + '- Todo achado de CÓDIGO deve citar o ARQUIVO e o trecho literal do diff. Ex: "src/api.ts → + const API_KEY = \'sk-...\'".\n'
     + '- O JSON dentro de <AUDIT> precisa ser VÁLIDO. Aspas escapadas, sem comentários, sem trailing commas.\n'
     + '- toolParams perfeito pro tipo: registrar_risco {sistemaId, area, descricao, gravidade}; registrar_decisao {sistemaId, titulo, decisao, justificativa}; registrar_oportunidade {titulo, valorEstimado, proximoPasso}.\n\n'
+    + _CHECKLIST_CODIGO_IA + '\n'
     + 'IDs reais: sistemaId="' + sistemaId + '". Não invente outros.\n\n'
     + '--- ACHADOS ANTERIORES (auditados no commit ' + diff.baseCommit + ') ---\n' + prevList + '\n\n'
     + (modo === 'completa' ? '--- CONTEXTO DE GOVERNANÇA (metadados, custos, riscos, decisões) ---\n' + _contextoSistemaProfundo(sistemaId) + '\n\n' : '')
@@ -20484,6 +20496,7 @@ function acaoIAAuditarSistema(sistemaId: string, modo?: string, forcar?: boolean
       + (temCodigo ? '- Quando o achado vier do CÓDIGO, a evidência DEVE citar o ARQUIVO e o trecho literal. Ex: "src/config.ts → const API_KEY = \'sk-...\'". Priorize achados de código reais (segredos, deps desatualizadas, falta de testes/CI, arquitetura, código morto) sobre achados de metadados.\n' : '')
       + '- O JSON dentro de <AUDIT> precisa ser VÁLIDO. Aspas escapadas, sem comentários, sem trailing commas.\n'
       + '- toolParams precisa estar PERFEITO pro tipo de tool. Ex: registrar_risco quer {sistemaId, area, descricao, gravidade}; registrar_decisao quer {sistemaId, titulo, decisao, justificativa}; registrar_oportunidade quer {titulo, valorEstimado, proximoPasso}.\n\n'
+      + (temCodigo ? _CHECKLIST_CODIGO_IA + '\n' : '')
       + 'IDs reais: sistemaId="' + sistemaId + '". Não invente outros.\n\n'
       + '--- CONTEXTO COMPLETO DO SISTEMA ---\n' + contexto
     );
