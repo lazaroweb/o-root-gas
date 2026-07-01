@@ -1520,6 +1520,7 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
   const [promoverLanc, setPromoverLanc] = useState<LancamentoPessoal | null>(null);
   const [itensCartao, setItensCartao] = useState<LancamentoPessoal[]>([]);
   const [removendoImportados, setRemovendoImportados] = useState(false);
+  const [deduplicando, setDeduplicando] = useState(false);
   const [pagandoFatura, setPagandoFatura] = useState(false);
 
   const abrirNovo = () => { setEditando(null); setModalOpen(true); };
@@ -1585,6 +1586,20 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
         onRecarregar();
       } else message.error(res.error || 'Erro');
     }).finally(() => { hide(); setRemovendoImportados(false); });
+  };
+
+  const deduplicar = () => {
+    if (!cartaoAberto || deduplicando) return;
+    setDeduplicando(true);
+    const hide = message.loading('Procurando e removendo duplicados…', 0);
+    callServer<ServerResponse<{ removidos: number }>>('deduplicarFaturaCartao', cartaoAberto.id).then((res) => {
+      if (res.ok) {
+        const n = (res.data as { removidos: number } | undefined)?.removidos ?? 0;
+        message.success(n > 0 ? `${n} lançamento(s) duplicado(s) removido(s)` : 'Nenhum duplicado encontrado');
+        if (cartaoAberto) carregarFatura(cartaoAberto);
+        onRecarregar();
+      } else message.error(res.error || 'Erro');
+    }).finally(() => { hide(); setDeduplicando(false); });
   };
 
   const editarLancamento = (l: LancamentoPessoal) => {
@@ -1692,6 +1707,8 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
           onEditar={editarLancamento}
           onRemoverImportados={removerImportados}
           removendoImportados={removendoImportados}
+          onDeduplicar={deduplicar}
+          deduplicando={deduplicando}
           onPagarFatura={pagarFatura}
           pagandoFatura={pagandoFatura}
           onAtribuir={onAtribuir}
@@ -1823,6 +1840,8 @@ interface DetalheFaturaProps {
   onEditar: (l: LancamentoPessoal) => void;
   onRemoverImportados: () => void;
   removendoImportados?: boolean;
+  onDeduplicar?: () => void;
+  deduplicando?: boolean;
   onPagarFatura: (ids: string[]) => void;
   pagandoFatura?: boolean;
   onAtribuir: (l: LancamentoPessoal) => void;
@@ -2261,7 +2280,7 @@ function ProvisaoFaturas({ itens }: { itens: LancamentoPessoal[] }): React.React
   );
 }
 
-function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, removendoImportados, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs }: DetalheFaturaProps): React.ReactElement {
+function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, removendoImportados, onDeduplicar, deduplicando, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs }: DetalheFaturaProps): React.ReactElement {
   // Selo "já é assinatura": casa por id (rápido) OU por assinatura estável
   // valor+nome (sobrevive a reimportação que troca o id do lançamento).
   const temAssinaturaDe = (l: LancamentoPessoal): boolean =>
@@ -2346,6 +2365,20 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
             <Button size="small" icon={<Users size={13} />} onClick={() => setModoLote(true)}>
               Atribuir a membro
             </Button>
+          )}
+          {onDeduplicar && (
+            <Popconfirm
+              title="Remover parcelas/itens duplicados?"
+              description="Mantém uma cópia de cada parcela (a paga tem prioridade) e apaga as repetidas deste cartão."
+              onConfirm={onDeduplicar}
+              okText="Remover duplicados"
+              cancelText="Cancelar"
+              okButtonProps={{ danger: true, loading: deduplicando }}
+            >
+              <Button size="small" icon={<LayersIcon size={13} />} loading={deduplicando}>
+                {deduplicando ? 'Limpando…' : 'Remover duplicados'}
+              </Button>
+            </Popconfirm>
           )}
           {qtdImportados > 0 && (
             <Popconfirm
@@ -3816,7 +3849,7 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [etapa, setEtapa] = useState<'upload' | 'revisao' | 'importando' | 'concluido'>('upload');
-  const [resultado, setResultado] = useState<{ criados: number; total: number; cartaoNome: string; parcelasFuturas: number; gruposNovos: number; duplicados: number; cobrancasReorganizadas?: number } | null>(null);
+  const [resultado, setResultado] = useState<{ criados: number; total: number; cartaoNome: string; parcelasFuturas: number; gruposNovos: number; duplicados: number; conciliados?: number; cobrancasReorganizadas?: number } | null>(null);
   const [cartaoId, setCartaoId] = useState<string | undefined>();
   const [statusImport, setStatusImport] = useState('pendente');
   // Mês em que ESTA fatura vence (= mês em que você paga). Todos os itens da
@@ -4025,18 +4058,19 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
     setEtapa('importando');
     try {
       const payload = incluidos.map((it) => ({ data: it.data, descricao: it.descricao, valor: it.valor, categoria: it.categoria }));
-      const res = await callServer<ServerResponse<{ criados: number; parcelasFuturas?: number; gruposNovos?: number; duplicados?: number; cobrancasReorganizadas?: number }>>('importarFaturaLancamentos', cartaoId, JSON.stringify(payload), statusImport, faturaMes.format('YYYY-MM'));
+      const res = await callServer<ServerResponse<{ criados: number; parcelasFuturas?: number; gruposNovos?: number; duplicados?: number; conciliados?: number; cobrancasReorganizadas?: number }>>('importarFaturaLancamentos', cartaoId, JSON.stringify(payload), statusImport, faturaMes.format('YYYY-MM'));
       // `res?.ok` com optional chaining: o google.script.run pode devolver null
       // (resposta truncada/erro silencioso) — sem isso a tela ficava "importando"
       // pra sempre. Agora cai no else e volta pra revisão sem perder os dados.
       if (res?.ok) {
-        const d = (res.data as { criados: number; parcelasFuturas?: number; gruposNovos?: number; duplicados?: number; cobrancasReorganizadas?: number } | undefined);
+        const d = (res.data as { criados: number; parcelasFuturas?: number; gruposNovos?: number; duplicados?: number; conciliados?: number; cobrancasReorganizadas?: number } | undefined);
         const n = d?.criados ?? incluidos.length;
         setResultado({
           criados: n, total: totalEnviado, cartaoNome,
           parcelasFuturas: d?.parcelasFuturas ?? 0,
           gruposNovos: d?.gruposNovos ?? 0,
           duplicados: d?.duplicados ?? 0,
+          conciliados: d?.conciliados ?? 0,
           cobrancasReorganizadas: d?.cobrancasReorganizadas ?? 0,
         });
         setEtapa('concluido');
@@ -4181,6 +4215,11 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
                     <strong>{resultado.parcelasFuturas} parcela(s) futura(s)</strong> provisionada(s)
                     {resultado.gruposNovos > 0 ? ` de ${resultado.gruposNovos} compra(s) parcelada(s)` : ''}. Veja em "Próximas faturas" do cartão.
                   </span>
+                </div>
+              )}
+              {(resultado.conciliados ?? 0) > 0 && (
+                <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, maxWidth: 380 }}>
+                  {resultado.conciliados} parcela(s) já provisionada(s) foram conciliadas com esta fatura (sem duplicar).
                 </div>
               )}
               {resultado.duplicados > 0 && (

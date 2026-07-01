@@ -9709,6 +9709,66 @@ function _vencimentoNoMes(comp: string, diaVenc: number): string {
 // valor+mês da 1ª parcela). Reimportar a próxima fatura NÃO duplica: a mesma
 // compra cai no mesmo grupo (já existe) e é ignorada — só as compras novas
 // entram. Itens à vista têm dedupe por (cartão+mês+descrição+valor).
+// Remove parcelas/itens DUPLICADOS de um cartão (limpeza do estrago de imports
+// antigos). Parceladas: dedup por (total, nº parcela, valor, mês) — pega variação
+// de descrição. À vista: exige também a descrição igual, pra não apagar compras
+// distintas de mesmo valor/mês. Mantém a "melhor" linha (paga > agendada >
+// pendente; empate → mais antiga) e apaga as demais.
+function deduplicarFaturaCartao(cartaoId: string): ServerResult {
+  try {
+    const cid = String(cartaoId || '');
+    if (!cid) return { ok: false, error: 'Cartão inválido.' };
+    const doCartao = (dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>)
+      .filter((l) => String(l['cartaoId'] || '') === cid);
+    const rank = (s: string) => (s === 'pago' ? 0 : s === 'agendado' ? 1 : 2);
+    doCartao.sort((a, b) => {
+      const r = rank(String(a['status'] || '')) - rank(String(b['status'] || ''));
+      if (r) return r;
+      return String(a['criadoEm'] || '').localeCompare(String(b['criadoEm'] || ''));
+    });
+    const vistos: Record<string, boolean> = {};
+    let removidos = 0;
+    for (const l of doCartao) {
+      const total = Number(l['parcelas'] || 0);
+      const pa = Number(l['parcelaAtual'] || 0);
+      const cents = Math.round(Number(l['valor'] || 0) * 100);
+      const mes = (String(l['vencimento'] || '').substring(0, 7)) || _toYYYYMM(l['data']);
+      const key = total > 1
+        ? `p|${total}|${pa}|${cents}|${mes}`
+        : `v|${cents}|${mes}|${_normDescFatura(String(l['descricao'] || ''))}`;
+      if (vistos[key]) { dbDelete('FinPessoalLancamentos', String(l['id'])); removidos++; }
+      else vistos[key] = true;
+    }
+    return { ok: true, data: { removidos } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao deduplicar' };
+  }
+}
+
+// Procura uma parcela JÁ existente da MESMA compra, mesmo que tenha vindo com
+// outro parcelaGrupoId (provisão manual `pg_`, legado, ou variação de descrição/
+// valor entre faturas). Ancora nas coordenadas fortes (cartão + total de parcelas
+// + nº da parcela) e exige pelo menos 2 de 3 sinais casando: mês, valor, descrição.
+// Robusto a variação isolada de qualquer um dos três (que é o que quebrava a dedupe).
+function _acharParcelaExistente(
+  existentes: Array<Record<string, unknown>>,
+  cid: string, total: number, j: number, valorCents: number, compJ: string, merchantNorm: string,
+): Record<string, unknown> | null {
+  for (const l of existentes) {
+    if (String(l['cartaoId'] || '') !== cid) continue;
+    if (Number(l['parcelas'] || 0) !== total) continue;
+    if (Number(l['parcelaAtual'] || 0) !== j) continue;
+    const mesVenc = String(l['vencimento'] || '').substring(0, 7);
+    const mesData = _toYYYYMM(l['data']);
+    const mesOk = (!!compJ) && (mesVenc === compJ || mesData === compJ);
+    const valOk = Math.round(Number(l['valor'] || 0) * 100) === valorCents;
+    const descOk = _normDescFatura(String(l['descricao'] || '')) === merchantNorm;
+    const sinais = (mesOk ? 1 : 0) + (valOk ? 1 : 0) + (descOk ? 1 : 0);
+    if (sinais >= 2) return l;
+  }
+  return null;
+}
+
 function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPadrao?: string, competenciaFatura?: string): ServerResult {
   try {
     let itens: Array<Record<string, unknown>>;
@@ -9729,18 +9789,15 @@ function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPa
     const temCompFat = /^\d{4}-\d{2}$/.test(compFat);
     const vencimentoFatura = temCompFat ? _vencimentoNoMes(compFat, diaVenc) : '';
 
-    // Snapshot ANTES do loop pra dedupe (não inclui o que criamos agora).
+    // Snapshot ANTES do loop pra dedupe. Empurramos os novos aqui dentro pra
+    // deduplicar também DENTRO do mesmo lote (fatura com linha repetida).
     const existentes = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
-    const gruposExistentes: Record<string, boolean> = {};
-    for (const l of existentes) {
-      const g = String(l['parcelaGrupoId'] || '');
-      if (g) gruposExistentes[g] = true;
-    }
 
     let criados = 0;        // parcelas atuais + itens à vista gravados
     let parcelasFuturas = 0; // parcelas futuras provisionadas
     let gruposNovos = 0;     // compras parceladas novas
     let duplicados = 0;      // ignorados por já existirem
+    let conciliados = 0;     // parcelas já provisionadas que esta fatura confirmou
 
     for (const it of itens) {
       // Preserva o SINAL: estornos/créditos entram como despesa NEGATIVA, que
@@ -9767,17 +9824,51 @@ function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPa
       if (parc) {
         // Âncora estável: mês da 1ª parcela (não muda entre faturas).
         const compP1 = _addMesesComp(compAtual, -(parc.atual - 1));
-        const grupoId = `imp:${cid}:${_normDescFatura(descricao)}:${parc.total}:${valorCents}:${compP1}`;
-        if (gruposExistentes[grupoId]) { duplicados++; continue; }
-        gruposExistentes[grupoId] = true;
-        gruposNovos++;
+        const grupoIdCalc = `imp:${cid}:${_normDescFatura(descricao)}:${parc.total}:${valorCents}:${compP1}`;
         const merchant = _descSemParcela(descricao) || descricao;
-        // Materializa a parcela atual + as futuras (atual..total).
+        const merchantNorm = _normDescFatura(descricao);
+
+        // A compra já existe? (mesmo sob outro grupoId — provisão manual `pg_`,
+        // legado, ou variação de descrição/valor). Se sim, reusa o grupoId
+        // existente pra manter as parcelas agrupadas e não duplica.
+        let grupoIdEfetivo = grupoIdCalc;
+        let jaExistia = false;
+        for (let j = parc.atual; j <= parc.total; j++) {
+          const compJ = _addMesesComp(compAtual, j - parc.atual);
+          const achado = _acharParcelaExistente(existentes, cid, parc.total, j, valorCents, compJ, merchantNorm);
+          if (achado) {
+            jaExistia = true;
+            const g = String(achado['parcelaGrupoId'] || '');
+            if (g) { grupoIdEfetivo = g; break; }
+          }
+        }
+        if (!jaExistia) gruposNovos++;
+
+        // Materializa/concilia a parcela atual + preenche as futuras que faltarem.
         for (let j = parc.atual; j <= parc.total; j++) {
           const compJ = _addMesesComp(compAtual, j - parc.atual);
           const vencJ = _vencimentoNoMes(compJ, diaVenc);
           const ehAtual = j === parc.atual;
-          dbCreate('FinPessoalLancamentos', {
+          const achado = _acharParcelaExistente(existentes, cid, parc.total, j, valorCents, compJ, merchantNorm);
+          if (achado) {
+            // Parcela já existe: NÃO duplica. Se for a parcela desta fatura,
+            // concilia (marca o status desta importação e a data/vencimento).
+            if (ehAtual) {
+              dbUpdate('FinPessoalLancamentos', String(achado['id']), {
+                status,
+                data: dataItem,
+                vencimento: vencimentoFatura || String(achado['vencimento'] || vencJ),
+                atualizadoEm: agora,
+              });
+              achado['status'] = status;
+              achado['data'] = dataItem;
+              conciliados++;
+            } else {
+              duplicados++;
+            }
+            continue;
+          }
+          const novo = dbCreate('FinPessoalLancamentos', {
             data: ehAtual ? dataItem : (vencJ || dataItem),
             descricao: `${merchant} (${j}/${parc.total})`,
             valor,
@@ -9792,12 +9883,13 @@ function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPa
             recorrencia: 'unica',
             tags: 'fatura-importada',
             notas: ehAtual ? 'Importado da fatura via IA (parcelado)' : 'Parcela futura provisionada na importação',
-            parcelaGrupoId: grupoId,
+            parcelaGrupoId: grupoIdEfetivo,
             recorrenciaOrigemId: '',
             recorrenciaAtiva: 'nao',
             criadoEm: agora,
             atualizadoEm: agora,
-          });
+          }) as Record<string, unknown>;
+          existentes.push(novo); // pros próximos itens/loops enxergarem
           if (ehAtual) criados++; else parcelasFuturas++;
         }
       } else {
@@ -9812,7 +9904,7 @@ function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPa
           return vm === compFat || _toYYYYMM(l['data']) === compFat;
         });
         if (dup) { duplicados++; continue; }
-        dbCreate('FinPessoalLancamentos', {
+        const novoAvista = dbCreate('FinPessoalLancamentos', {
           data: dataItem,
           descricao,
           valor,
@@ -9832,7 +9924,8 @@ function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPa
           recorrenciaAtiva: 'nao',
           criadoEm: agora,
           atualizadoEm: agora,
-        });
+        }) as Record<string, unknown>;
+        existentes.push(novoAvista); // dedup dentro do próprio lote
         criados++;
       }
     }
@@ -9856,7 +9949,7 @@ function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPa
       }
     } catch { /* segue baile */ }
 
-    return { ok: true, data: { criados, parcelasFuturas, gruposNovos, duplicados, reclassificados, cobrancasReorganizadas } };
+    return { ok: true, data: { criados, parcelasFuturas, gruposNovos, duplicados, conciliados, reclassificados, cobrancasReorganizadas } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao importar fatura' };
   }

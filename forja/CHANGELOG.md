@@ -36,6 +36,29 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.235.0] — 2026-07-01
+
+### Corrigido (duplicação ao importar fatura de cartão parcelado)
+- **Bug:** ao importar a fatura de um mês seguinte, as parcelas que já tinham sido
+  **provisionadas na importação anterior** eram recriadas — inflando o total do mês
+  e deixando itens duplicados. A dedup só pulava quando a chave de grupo `imp:…`
+  batia **exatamente**; qualquer variação (descrição da IA entre faturas, valor,
+  total de parcelas, ou grupo diferente como provisão manual `pg_`) escapava e
+  re-materializava `parcela atual..total` de novo.
+- **Correção:** dedup agora é **por parcela**, ancorada em coordenadas fortes
+  (cartão + total de parcelas + nº da parcela) exigindo ≥2 de 3 sinais casando
+  (mês, valor, descrição) — robusta a variação isolada de qualquer um deles. A
+  parcela desta fatura, se já existia provisionada, é **conciliada** (status/data/
+  vencimento desta fatura) em vez de duplicada; as futuras que faltarem são
+  preenchidas reusando o grupo existente. Dedup também dentro do próprio lote.
+- **Limpeza:** novo botão **"Remover duplicados"** na fatura do cartão (RPC
+  `deduplicarFaturaCartao`) pra apagar o que já duplicou — mantém uma cópia de cada
+  parcela (a paga tem prioridade) e remove as repetidas.
+- O resultado da importação agora informa também **quantas parcelas foram
+  conciliadas** (além de criadas / provisionadas / ignoradas).
+
+---
+
 ## [1.234.0] — 2026-07-01
 
 ### Adicionado (status do backup nos 3 destinos)
