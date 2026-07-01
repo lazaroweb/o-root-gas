@@ -5,8 +5,8 @@
 //   de tempo (diário/semanal). Fase 3 (Google): o destino pode ser uma pasta de
 //   Drive Compartilhado — basta colar o ID — pra espelhar dentro do Google.
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, App as AntApp, Tag, Empty, Spin, Input, InputNumber, Select, Switch, Tooltip, Progress, Alert } from 'antd';
-import { GitBranch, HardDrive, Download, Folder, Clock, CheckCircle2, AlertCircle, RefreshCw, ExternalLink, History, ShieldCheck, Lock } from 'lucide-react';
+import { Button, App as AntApp, Tag, Empty, Spin, Input, InputNumber, Select, Switch, Tooltip, Progress, Alert, Modal } from 'antd';
+import { GitBranch, HardDrive, Download, Folder, Clock, CheckCircle2, AlertCircle, RefreshCw, ExternalLink, History, ShieldCheck, Lock, Eye } from 'lucide-react';
 import { Panel } from './ui';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -23,7 +23,12 @@ interface RepoItem {
   defaultBranch: string;
   ultimoBackup: UltimoBackup | null;
 }
-interface HistItem { fullName: string; nome: string; stamp: string; criadoEm: string; tamanho: number; ok?: boolean; erro?: string; url?: string }
+interface EspelhoRes { id: string; rotulo: string; ok: boolean; erro?: string; fileId?: string }
+interface HistItem { fullName: string; nome: string; stamp: string; criadoEm: string; tamanho: number; ok?: boolean; erro?: string; url?: string; espelhos?: EspelhoRes[] }
+interface Snap { nome: string; stamp: string; criadoEm: string; tamanho: number; url: string }
+interface DestPrincipal { destinoNome: string; pastaUrl: string; snapshots: Snap[] }
+interface DestEspelho { id: string; rotulo: string; email: string; conectado: boolean; erro?: string; snapshots: Snap[] }
+interface Detalhe { fullName: string; principal: DestPrincipal; espelhos: DestEspelho[] }
 interface Agenda { ativo: boolean; freq: string; hora: number; dia: number }
 interface Conector { id: string; rotulo: string; email: string; conectado: boolean; espelhar: boolean }
 interface Config { manter: number; destinoFolderId: string; destinoNome: string; pastaUrl: string; espelhos: string[]; ultimoRun: string; agendamento: Agenda }
@@ -51,6 +56,12 @@ export default function ReposBackupPanel(): React.ReactElement {
 
   // Backup em lote (todos): progresso controlado no cliente.
   const [lote, setLote] = useState<{ ativo: boolean; feito: number; total: number; atual: string; erros: string[] }>({ ativo: false, feito: 0, total: 0, atual: '', erros: [] });
+
+  // Modal de detalhes (snapshots por destino).
+  const [detOpen, setDetOpen] = useState(false);
+  const [detRepo, setDetRepo] = useState('');
+  const [det, setDet] = useState<Detalhe | null>(null);
+  const [detLoad, setDetLoad] = useState(false);
 
   // Edição de config (rascunho local até salvar).
   const [manter, setManter] = useState<number>(4);
@@ -81,11 +92,36 @@ export default function ReposBackupPanel(): React.ReactElement {
     return repos.filter((r) => r.fullName.toLowerCase().includes(q));
   }, [estado, busca]);
 
+  const abrirDetalhe = (fullName: string) => {
+    setDetRepo(fullName);
+    setDet(null);
+    setDetOpen(true);
+    setDetLoad(true);
+    callServer<ServerResult>('detalharBackupRepo', fullName)
+      .then((r) => { if (r.ok && r.data) setDet(r.data as Detalhe); else message.error(r.error || 'Erro'); })
+      .catch(() => message.error('Detalhes só no app publicado'))
+      .finally(() => setDetLoad(false));
+  };
+
+  const resumoEspelho = (esp: EspelhoRes[]): string => {
+    if (!esp || !esp.length) return '';
+    const ok = esp.filter((e) => e.ok).length;
+    return ` · espelho ${ok}/${esp.length}`;
+  };
+
   const backupUm = async (fullName: string): Promise<boolean> => {
     setRepoBusy(fullName);
     try {
       const r = await callServer<ServerResult>('backupRepoParaDrive', fullName);
-      if (r.ok) { message.success(`Backup de ${fullName} concluído`); carregar(true); return true; }
+      if (r.ok) {
+        const meta = (r.data || {}) as { espelhos?: EspelhoRes[] };
+        const esp = meta.espelhos || [];
+        message.success(`Backup de ${fullName} concluído (principal${resumoEspelho(esp)})`);
+        const falhas = esp.filter((e) => !e.ok);
+        if (falhas.length) message.warning('Espelho pendente: ' + falhas.map((e) => `${e.rotulo} (${e.erro || 'erro'})`).join(' · '));
+        carregar(true);
+        return true;
+      }
       message.error(`${fullName}: ${r.error || 'erro'}`);
       return false;
     } catch {
@@ -346,6 +382,9 @@ export default function ReposBackupPanel(): React.ReactElement {
                     )}
                   </div>
                 </div>
+                <Tooltip title="Ver snapshots nos 3 destinos">
+                  <Button size="small" icon={<Eye size={13} />} disabled={lote.ativo} onClick={() => abrirDetalhe(r.fullName)} />
+                </Tooltip>
                 <Button
                   size="small"
                   icon={<Download size={13} />}
@@ -387,6 +426,81 @@ export default function ReposBackupPanel(): React.ReactElement {
           </div>
         </div>
       )}
+
+      {/* ─── Modal de detalhes (snapshots por destino) ──────────────────── */}
+      <Modal
+        open={detOpen}
+        onCancel={() => setDetOpen(false)}
+        footer={<Button onClick={() => setDetOpen(false)}>Fechar</Button>}
+        width={640}
+        title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><HardDrive size={16} color={t.accents.blue} /> Backups de <span style={{ fontFamily: FONTS.mono }}>{detRepo}</span></span>}
+      >
+        {detLoad ? (
+          <Spin style={{ display: 'block', margin: '32px auto' }} />
+        ) : !det ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Sem dados" />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {renderDestino(
+              det.principal.destinoNome + ' (principal)',
+              <Tag bordered={false} color="blue" style={{ fontSize: 11 }}>Meu Drive</Tag>,
+              det.principal.snapshots,
+              undefined,
+              det.principal.pastaUrl,
+            )}
+            {det.espelhos.map((e) => renderDestino(
+              e.rotulo + (e.email ? ` · ${e.email}` : ''),
+              e.conectado
+                ? <Tag bordered={false} color="green" style={{ fontSize: 11 }}>conectada</Tag>
+                : <Tag bordered={false} style={{ fontSize: 11, background: `${t.accents.clay}1a`, color: t.accents.clay }}>reconectar</Tag>,
+              e.snapshots,
+              e.erro,
+              '',
+            ))}
+            {det.espelhos.length === 0 && (
+              <div style={{ fontSize: 12, color: t.textTertiary, textAlign: 'center', padding: 8 }}>
+                Nenhuma conta espelho marcada. Ative contas em “Espelhar em outras contas Google”.
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
     </Panel>
   );
+
+  function renderDestino(titulo: string, status: React.ReactNode, snaps: Snap[], erro?: string, url?: string): React.ReactElement {
+    return (
+      <div key={titulo} style={{ border: `1px solid ${t.borderSoft}`, borderRadius: 12, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: t.surfaceMuted, borderBottom: `1px solid ${t.borderSoft}` }}>
+          <Folder size={14} color={t.accents.peach} />
+          <span style={{ fontWeight: 600, fontSize: 13, color: t.text, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{titulo}</span>
+          {status}
+          {url ? <a href={url} target="_blank" rel="noreferrer" style={{ display: 'inline-flex' }}><ExternalLink size={13} color={t.textTertiary} /></a> : null}
+        </div>
+        <div style={{ padding: '4px 0' }}>
+          {erro ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 14px', fontSize: 12, color: t.accents.rose }}>
+              <AlertCircle size={13} /> {erro === 'não conectada' ? 'Conta não conectada — reconecte no Atelier → Driver.' : erro}
+            </div>
+          ) : snaps.length === 0 ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 14px', fontSize: 12, color: t.textTertiary }}>
+              <AlertCircle size={13} /> Ainda sem backup neste destino.
+            </div>
+          ) : (
+            snaps.map((s, i) => (
+              <div key={s.stamp + i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', borderTop: i > 0 ? `1px solid ${t.borderSoft}` : 'none' }}>
+                <CheckCircle2 size={14} color={t.accents.sage} />
+                <span style={{ fontSize: 12.5, fontWeight: 600, color: t.text, width: 128 }}>
+                  {i + 1}ª{i === 0 ? ' (mais recente)' : ''}
+                </span>
+                <span style={{ fontSize: 12, color: t.textSecondary, flex: 1 }}>{fmtData(s.criadoEm)}</span>
+                <span style={{ fontSize: 11.5, color: t.textTertiary }}>{fmtBytes(s.tamanho)}</span>
+                {s.url ? <a href={s.url} target="_blank" rel="noreferrer" style={{ display: 'inline-flex' }}><ExternalLink size={12} color={t.textTertiary} /></a> : null}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    );
+  }
 }

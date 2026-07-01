@@ -36,6 +36,21 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.234.0] — 2026-07-01
+
+### Adicionado (status do backup nos 3 destinos)
+- **Modal "Detalhes" por repositório** (ícone de olho na lista): mostra os
+  snapshots em cada destino — **principal (Meu Drive)** e cada **conta espelho** —
+  numerados **1ª (mais recente), 2ª, 3ª, 4ª…** com data, hora e tamanho, além do
+  status da conta (conectada / reconectar) e link direto pro arquivo no Drive.
+- **Confirmação do espelho no aviso do backup:** ao salvar um repo, o toast agora
+  informa `principal · espelho N/M` e alerta quais contas ficaram pendentes (com o
+  motivo), em vez de só dizer que o backup foi feito.
+- Nova RPC `detalharBackupRepo` lê os `.zip` de cada destino (local via `DriveApp`,
+  remoto via Drive REST com o token do conector).
+
+---
+
 ## [1.233.0] — 2026-06-30
 
 ### Adicionado (espelho do backup em outras contas Google + agendamento das conexões)

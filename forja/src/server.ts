@@ -14772,6 +14772,114 @@ function _remoteDriveRetencao(token: string, folderId: string, manter: number): 
   }
 }
 
+// Localiza (sem criar) uma pasta por nome dentro de parentId na conta remota.
+function _remoteDriveFindFolder(token: string, nome: string, parentId: string): string {
+  const parent = parentId || 'root';
+  const nomeEsc = nome.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const q = "name='" + nomeEsc + "' and mimeType='application/vnd.google-apps.folder' and trashed=false and '" + parent + "' in parents";
+  const url = 'https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(q) + '&fields=' + encodeURIComponent('files(id,name)') + '&supportsAllDrives=true&includeItemsFromAllDrives=true';
+  const res = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
+  const code = res.getResponseCode();
+  if (code === 401 || code === 403) throw new Error('sem permissão — reconecte a conta no Driver');
+  if (code !== 200) return '';
+  const arr = (JSON.parse(res.getContentText()).files || []) as Array<Record<string, unknown>>;
+  return arr.length ? String(arr[0]['id']) : '';
+}
+
+// Lista os .zip (snapshots) de uma pasta remota, do mais recente pro mais antigo.
+function _remoteDriveListZips(token: string, folderId: string): Array<Record<string, unknown>> {
+  const q = "'" + folderId + "' in parents and trashed=false and name contains '.zip'";
+  const url = 'https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(q) + '&fields=' + encodeURIComponent('files(id,name,size,createdTime,webViewLink)') + '&pageSize=200&orderBy=' + encodeURIComponent('name desc') + '&supportsAllDrives=true&includeItemsFromAllDrives=true';
+  const res = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) return [];
+  const files = (JSON.parse(res.getContentText()).files || []) as Array<Record<string, unknown>>;
+  return files.map((f) => ({
+    nome: String(f['name'] || ''),
+    stamp: (String(f['name'] || '').match(/__(\d{8}-\d{6})\.zip$/) || [])[1] || '',
+    criadoEm: String(f['createdTime'] || ''),
+    tamanho: Number(f['size'] || 0),
+    url: String(f['webViewLink'] || ''),
+  }));
+}
+
+// Raiz dos backups (sem criar) — pra visualização read-only.
+function _reposBackupRootExistente(): GoogleAppsScript.Drive.Folder | null {
+  const sp = PropertiesService.getScriptProperties();
+  const override = String(sp.getProperty('REPOS_BACKUP_FOLDER_ID') || '').trim();
+  if (override) { try { return DriveApp.getFolderById(override); } catch { /* segue */ } }
+  const id = sp.getProperty('REPOS_BACKUP_ROOT');
+  if (id) { try { return DriveApp.getFolderById(id); } catch { /* segue */ } }
+  return null;
+}
+
+// Snapshots locais (Meu Drive) de um repo, do mais recente pro mais antigo.
+function _reposSnapshotsLocais(fullName: string): Array<Record<string, unknown>> {
+  const root = _reposBackupRootExistente();
+  if (!root) return [];
+  const nome = fullName.replace(/\//g, '__');
+  const fs = root.getFoldersByName(nome);
+  if (!fs.hasNext()) return [];
+  const sub = fs.next();
+  const out: Array<Record<string, unknown>> = [];
+  const it = sub.getFiles();
+  while (it.hasNext()) {
+    const f = it.next();
+    if (!/\.zip$/i.test(f.getName())) continue;
+    out.push({
+      nome: f.getName(),
+      stamp: (f.getName().match(/__(\d{8}-\d{6})\.zip$/) || [])[1] || '',
+      criadoEm: f.getDateCreated().toISOString(),
+      tamanho: f.getSize(),
+      url: f.getUrl(),
+    });
+  }
+  out.sort((a, b) => String(b['nome']).localeCompare(String(a['nome'])));
+  return out;
+}
+
+// RPC: detalha os snapshots de um repo em cada destino (principal + espelhos).
+function detalharBackupRepo(fullName: string): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
+  try {
+    const full = String(fullName || '').trim();
+    if (!full) return { ok: false, error: 'Repositório inválido' };
+    const subNome = full.replace(/\//g, '__');
+    const sp = PropertiesService.getScriptProperties();
+
+    let destinoNome = 'Meu Drive';
+    let pastaUrl = '';
+    try { const root = _reposBackupRootExistente(); if (root) { destinoNome = root.getName(); pastaUrl = root.getUrl(); } } catch { /* segue */ }
+    const principal = { destinoNome, pastaUrl, snapshots: _reposSnapshotsLocais(full) };
+
+    let ids: string[] = [];
+    try { ids = JSON.parse(sp.getProperty('REPOS_BACKUP_ESPELHOS') || '[]') as string[]; } catch { ids = []; }
+    const espelhos = ids.map((id) => {
+      const conn = _findConnector(id);
+      const base: Record<string, unknown> = { id, rotulo: conn ? String(conn['rotulo'] || conn['email'] || id) : id, email: conn ? String(conn['email'] || '') : '', conectado: false, snapshots: [] as unknown[] };
+      try {
+        if (!conn || String(conn['provedor'] || '') !== 'google-drive') { base['erro'] = 'conta inválida'; return base; }
+        const svc = _oauthService(id, 'google-drive');
+        if (!svc.hasAccess()) { base['erro'] = 'não conectada'; return base; }
+        const token = svc.getAccessToken();
+        if (!token) { base['erro'] = 'sem token'; return base; }
+        base['conectado'] = true;
+        const root = _remoteDriveFindFolder(token, 'Forja — Backups de Repositórios', 'root');
+        if (!root) return base;
+        const sub = _remoteDriveFindFolder(token, subNome, root);
+        if (!sub) return base;
+        base['snapshots'] = _remoteDriveListZips(token, sub);
+      } catch (e: unknown) {
+        base['erro'] = e instanceof Error ? e.message : 'erro';
+      }
+      return base;
+    });
+
+    return { ok: true, data: { fullName: full, principal, espelhos } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao detalhar backup' };
+  }
+}
+
 // Espelha o blob do repo em cada conta selecionada (REPOS_BACKUP_ESPELHOS).
 function _espelharRepoBlob(blob: GoogleAppsScript.Base.Blob, fullName: string, manter: number): Array<Record<string, unknown>> {
   const sp = PropertiesService.getScriptProperties();
