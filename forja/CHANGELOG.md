@@ -36,6 +36,33 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.240.0] — 2026-07-01
+
+### Auditoria em lotes resumível (não estoura mais o limite de 6 min)
+- **Problema:** com muitos arquivos mudados (ex.: 47), o modo em lotes rodava
+  todos os batches + a síntese numa **única** execução do Apps Script → batia no
+  teto de 6 min, **falhava e perdia tudo** (a persistência só ocorria no fim), e
+  a tela voltava como se nunca tivesse auditado.
+- **Correção:** a auditoria incremental de diff grande virou um **job resumível
+  orquestrado pelo cliente**:
+  1. `auditarBatchIniciar` calcula o diff paginado e guarda os batches no
+     `CacheService` (retorna quantos lotes há).
+  2. `auditarBatchProcessar` roda **um** lote por chamada (1 ida à LLM, curta),
+     com barra de progresso "Lote X/Y" e 2 tentativas por lote.
+  3. `auditarBatchFinalizar` consolida (merge + síntese + saúde), persiste e
+     limpa o job.
+  Como cada round-trip é pequeno, **nunca dá timeout**; se um lote falhar, dá pra
+  reprocessar sem refazer o resto.
+- **Refactor:** a cauda comum (merge → narrativa → fechar backlog → saúde →
+  persistir) virou `_consolidarAuditoriaBatches`, reutilizada pelo caminho antigo
+  e pelo novo (sem duplicar lógica).
+- **Segurança:** as três RPCs seguem o mesmo modelo do fluxo de auditoria
+  existente; o estado do job fica no servidor (CacheService, TTL 6h) e **nenhum
+  segredo** (tokens GitHub/LLM) trafega pro cliente. Falha fechada por lote e
+  erros genéricos pro cliente.
+
+---
+
 ## [1.239.0] — 2026-07-01
 
 ### Auditoria mais afiada pra código gerado por IA

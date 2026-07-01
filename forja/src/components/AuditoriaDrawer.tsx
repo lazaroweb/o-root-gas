@@ -86,6 +86,9 @@ export default function AuditoriaDrawer({ sistemaId, sistemaNome, repoUrl, scrip
   const [limpando, setLimpando] = useState(false);
   const [copiadoPrompt, setCopiadoPrompt] = useState(false);
 
+  // Progresso da auditoria EM LOTES (quando o diff é grande e roda batch a batch).
+  const [batchProg, setBatchProg] = useState<{ feito: number; total: number } | null>(null);
+
   // Cronômetro ao vivo durante a auditoria — feedback de progresso e alerta de
   // que estamos chegando perto do limite de 6min do Apps Script.
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -124,24 +127,61 @@ export default function AuditoriaDrawer({ sistemaId, sistemaNome, repoUrl, scrip
       .finally(() => setLoadingStatus(false));
   };
 
+  // Aplica um resultado de auditoria (vindo do fluxo inline OU do em lotes) na UI.
+  const aplicarResultado = (novo: AuditResult) => {
+    setResultado(novo);
+    setUltima(null); // a "ultima" agora é a recém-rodada
+    if (novo.semMudanca) {
+      message.info('Sem mudanças desde a última auditoria — mostrando o resultado salvo.');
+    }
+    if (novo.fechadosAuto && novo.fechadosAuto.length > 0) {
+      const n = novo.fechadosAuto.length;
+      message.success(`${n} item(ns) do backlog fechado(s) automaticamente — o diff resolveu o achado.`);
+    }
+    if (onAuditoriaAtualizada) onAuditoriaAtualizada();
+    carregarStatus(); // HEAD agora == commit auditado → banner fica "em dia"
+    carregarHistorico();
+  };
+
   const auditar = async (forcar?: boolean) => {
     setLoading(true);
+    setBatchProg(null);
     try {
+      // 1) Tenta o caminho EM LOTES resumível (diff grande, várias mudanças).
+      //    O servidor decide: se não for o caso multi-batch, devolve {tipo:'inline'}
+      //    e caímos no fluxo normal abaixo. Cada batch é uma chamada curta, então
+      //    não estoura o limite de 6 min do Apps Script.
+      try {
+        const ini = await callServer<ServerResult>('auditarBatchIniciar', sistemaId, modo, !!forcar);
+        const d = (ini && ini.ok) ? (ini.data as { tipo?: string; jobId?: string; totalBatches?: number } | undefined) : undefined;
+        if (d && d.tipo === 'batch' && d.jobId && d.totalBatches) {
+          const jobId = d.jobId;
+          const total = d.totalBatches;
+          setBatchProg({ feito: 0, total });
+          for (let i = 0; i < total; i++) {
+            // 2 tentativas por batch: um hiccup de rede não derruba o job inteiro.
+            let okBatch = false;
+            for (let tent = 0; tent < 2 && !okBatch; tent++) {
+              try {
+                const rb = await callServer<ServerResult>('auditarBatchProcessar', jobId, i);
+                okBatch = !!(rb && rb.ok);
+              } catch { okBatch = false; }
+            }
+            setBatchProg({ feito: i + 1, total });
+          }
+          const fin = await callServer<ServerResult>('auditarBatchFinalizar', jobId);
+          if (fin.ok && fin.data) aplicarResultado(fin.data as AuditResult);
+          else message.error(fin.error || 'Erro ao finalizar a auditoria em lotes');
+          return;
+        }
+      } catch {
+        // Falha ao preparar o job → segue pro caminho inline (não bloqueia).
+      }
+
+      // 2) Caminho inline (completa, incremental de 1 batch, governança, sem mudança).
       const r = await callServer<ServerResult>('acaoIAAuditarSistema', sistemaId, modo, !!forcar);
       if (r.ok && r.data) {
-        const novo = r.data as AuditResult;
-        setResultado(novo);
-        setUltima(null); // a "ultima" agora é a recém-rodada
-        if (novo.semMudanca) {
-          message.info('Sem mudanças desde a última auditoria — mostrando o resultado salvo.');
-        }
-        if (novo.fechadosAuto && novo.fechadosAuto.length > 0) {
-          const n = novo.fechadosAuto.length;
-          message.success(`${n} item(ns) do backlog fechado(s) automaticamente — o diff resolveu o achado.`);
-        }
-        if (onAuditoriaAtualizada) onAuditoriaAtualizada();
-        carregarStatus(); // HEAD agora == commit auditado → banner fica "em dia"
-        carregarHistorico();
+        aplicarResultado(r.data as AuditResult);
       } else {
         message.error(r.error || 'Erro ao auditar');
       }
@@ -149,6 +189,7 @@ export default function AuditoriaDrawer({ sistemaId, sistemaNome, repoUrl, scrip
       message.error(e instanceof Error ? e.message : 'Erro');
     } finally {
       setLoading(false);
+      setBatchProg(null);
     }
   };
 
@@ -737,23 +778,32 @@ export default function AuditoriaDrawer({ sistemaId, sistemaNome, repoUrl, scrip
       {/* Estado: rodando nova auditoria */}
       {loading && !resultado && (() => {
         const seg = elapsedMs / 1000;
+        // Em LOTES: barra determinística pelo progresso real (batches feitos/total)
+        // — cada batch é uma chamada curta, então não há risco de timeout.
+        const emLotes = !!batchProg && batchProg.total > 0;
         // Progresso assintótico: ~40s = "esperado" (90%), nunca chega a 100 até voltar.
-        const pct = Math.min(96, Math.round((1 - Math.exp(-seg / 22)) * 100));
-        const perto = seg >= 240; // 4min → começa a alertar (limite GAS = 6min)
-        const corBarra = perto ? t.accents.rose : seg >= 60 ? t.accents.peach : t.accents.blue;
+        const pct = emLotes
+          ? Math.round((batchProg!.feito / batchProg!.total) * 100)
+          : Math.min(96, Math.round((1 - Math.exp(-seg / 22)) * 100));
+        const perto = !emLotes && seg >= 240; // 4min → alerta (só no fluxo single)
+        const corBarra = perto ? t.accents.rose : emLotes ? t.accents.blue : seg >= 60 ? t.accents.peach : t.accents.blue;
         return (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '40px 0' }}>
             <Spin size="large" />
             <div style={{ fontFamily: FONTS.display, fontSize: 26, fontWeight: 500, color: corBarra, fontVariantNumeric: 'tabular-nums' }}>
-              {seg < 60 ? `${seg.toFixed(0)}s` : `${Math.floor(seg / 60)}m ${String(Math.floor(seg % 60)).padStart(2, '0')}s`}
+              {emLotes
+                ? `Lote ${Math.min(batchProg!.feito + 1, batchProg!.total)}/${batchProg!.total}`
+                : (seg < 60 ? `${seg.toFixed(0)}s` : `${Math.floor(seg / 60)}m ${String(Math.floor(seg % 60)).padStart(2, '0')}s`)}
             </div>
             <div style={{ width: 320, maxWidth: '80%' }}>
               <Progress percent={pct} showInfo={false} strokeColor={corBarra} trailColor={t.borderSoft} size="small" />
             </div>
             <div style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary, textAlign: 'center', maxWidth: 380 }}>
-              {modo === 'governanca'
-                ? 'A Forja IA está lendo o contexto deste sistema (custos, decisões, riscos, alertas, timeline) e montando uma análise crítica…'
-                : 'A Forja IA está abrindo o repositório, lendo os arquivos-chave do código e cruzando com o contexto do sistema…'}
+              {emLotes
+                ? 'Diff grande — auditando em lotes, um após o outro. Cada lote é uma chamada curta, então não estoura o limite do Apps Script. Pode deixar rodando.'
+                : modo === 'governanca'
+                  ? 'A Forja IA está lendo o contexto deste sistema (custos, decisões, riscos, alertas, timeline) e montando uma análise crítica…'
+                  : 'A Forja IA está abrindo o repositório, lendo os arquivos-chave do código e cruzando com o contexto do sistema…'}
             </div>
             {perto ? (
               <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.accents.rose, textAlign: 'center', maxWidth: 380 }}>

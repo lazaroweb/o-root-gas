@@ -20166,6 +20166,34 @@ function _executarAuditoriaIncrementalChunked(
     if (p) payloadsParciais.push(p);
   }
 
+  return _consolidarAuditoriaBatches(
+    sistemaId, sistema, fontes, payloadsParciais, prevPayload, prevRegistros,
+    paginado.arquivos.length, paginado.batches.length, Date.now() - inicio, modeloEfetivo,
+  );
+}
+
+// Log leve pra Stackdriver — usado em catches de contexto opcional (parse de
+// cache/payload), onde engolir o erro em silêncio esconderia diagnóstico.
+function _logInfo(msg: string, e?: unknown): void {
+  try { console.warn('[FORJA] ' + msg + (e ? ' :: ' + (e instanceof Error ? e.message : String(e)) : '')); }
+  catch (_) { /* logging nunca pode derrubar o fluxo */ }
+}
+
+// Cauda compartilhada da auditoria em lotes (usada pelo chunked single-call E
+// pelo fluxo resumível): merge dos batches → síntese da narrativa → auto-fecha
+// backlog → saúde → persiste. Extraído pra não duplicar lógica entre os dois.
+function _consolidarAuditoriaBatches(
+  sistemaId: string,
+  sistema: Record<string, unknown>,
+  fontes: AuditFontes,
+  payloadsParciais: AuditPayload[],
+  prevPayload: AuditPayload,
+  prevRegistros: Record<string, RegistroFinding>,
+  numArquivos: number,
+  numBatches: number,
+  duracaoMs: number,
+  modeloEfetivo: string,
+): ServerResult {
   if (payloadsParciais.length === 0) {
     return { ok: false, error: 'Todos os batches da auditoria falharam. Tente de novo em 1 min ou troque o modelo em Configurações.' };
   }
@@ -20174,12 +20202,10 @@ function _executarAuditoriaIncrementalChunked(
   const merged = _mergeAuditPayloads(payloadsParciais);
 
   // Síntese final: 1 chamada extra pra narrativa.
-  const narrativa = _sintetizarNarrativaPosBatch(String(sistema.nome || 'sistema'), merged, paginado.batches.length, paginado.arquivos.length);
+  const narrativa = _sintetizarNarrativaPosBatch(String(sistema.nome || 'sistema'), merged, numBatches, numArquivos);
   merged.estadoGeral = narrativa.estadoGeral;
   merged.oQueEmpolga = narrativa.oQueEmpolga;
   merged.proximosPassos = narrativa.proximosPassos;
-
-  const duracaoMs = Date.now() - inicio;
 
   // Auto-fecha backlog dos resolvidos antes de calcular saúde.
   let fechadosAuto: BacklogFechadoAuto[] = [];
@@ -20216,9 +20242,197 @@ function _executarAuditoriaIncrementalChunked(
       registrosJson: '{}',
     }) as Record<string, unknown>;
     resultadoFinal.id = String(novaLinha.id || '');
-  } catch { /* persistência é best-effort */ }
+  } catch (e) { _logInfo('consolidarAuditoria: falha ao persistir', e); }
 
   return { ok: true, data: resultadoFinal };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AUDITORIA EM LOTES RESUMÍVEL (v1.240.0)
+//   O chunked antigo rodava N batches + síntese numa ÚNICA chamada → estourava o
+//   limite de 6 min do Apps Script com muitos arquivos e PERDIA tudo (só persistia
+//   no fim). Aqui o cliente orquestra: inicia o job (calcula o diff paginado e
+//   guarda os batches no CacheService), processa CADA batch numa chamada curta
+//   (1 LLM call) mostrando progresso, e finaliza. Cada round-trip é pequeno, então
+//   nunca dá timeout; se um batch falhar, dá pra reprocessar sem refazer o resto.
+//   Estado no CacheService (não Properties: batch chega a ~75KB, acima do teto de
+//   9KB por propriedade; cache aceita 100KB/chave). Segredos ficam no servidor.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const _AUDIT_JOB_TTL = 21600; // 6h (teto do CacheService) — job vive por minutos
+
+function _auditJobKey(jobId: string, sufixo: string): string {
+  return 'auditjob:' + String(jobId || '') + ':' + sufixo;
+}
+
+// Prepara um job de auditoria. Só o caminho INCREMENTAL multi-batch vira job
+// resumível; todo o resto (completa, incremental de 1 batch, governança, sem
+// mudança) devolve {tipo:'inline'} e o cliente segue pelo acaoIAAuditarSistema.
+function auditarBatchIniciar(sistemaId: string, modo?: string, forcar?: boolean): ServerResult {
+  try {
+    const sistema = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => s.id === sistemaId);
+    if (!sistema) return { ok: false, error: 'Sistema não encontrado' };
+    const inline: ServerResult = { ok: true, data: { tipo: 'inline' } };
+
+    const modoSolicitado: 'governanca' | 'codigo' | 'completa' =
+      (modo === 'governanca' || modo === 'codigo') ? modo : 'completa';
+    if (forcar || modoSolicitado === 'governanca') return inline;
+
+    const repoUrlSist = String(sistema.repoUrl || '').trim();
+    if (!repoUrlSist) return inline;
+    const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+    const full = _ghFullName(repoUrlSist);
+    if (!token || !/^[^/]+\/[^/]+$/.test(full)) return inline;
+
+    const { auditoria: ultAud, commit: lastCommit } = _ultimaAuditoriaCommit(sistemaId);
+    if (!lastCommit || !ultAud) return inline;
+    const headers = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'User-Agent': 'FORJA' };
+    const head = _ghHeadCommitCurto(full, headers);
+    if (!head || head === lastCommit) return inline; // sem mudança → inline devolve a salva
+
+    let prevPayload: AuditPayload | null = null;
+    try { prevPayload = JSON.parse(String(ultAud.payloadJson || 'null')) as AuditPayload; }
+    catch (e) { _logInfo('auditarBatchIniciar: payload anterior inválido', e); prevPayload = null; }
+    if (!prevPayload || !Array.isArray(prevPayload.findings) || prevPayload.findings.length === 0) return inline;
+    let prevRegistros: Record<string, RegistroFinding> = {};
+    try { prevRegistros = JSON.parse(String(ultAud.registrosJson || '{}')) || {}; }
+    catch (e) { _logInfo('auditarBatchIniciar: registros anteriores inválidos', e); prevRegistros = {}; }
+
+    const pag = _lerDiffGitHubPaginado(repoUrlSist, lastCommit);
+    if (pag.erro || pag.batches.length === 0) return inline;
+    // 1 batch e nada ignorado → o fluxo single (inline) já resolve rápido.
+    if (pag.batches.length === 1 && pag.arquivosIgnorados.length === 0) return inline;
+
+    const props = PropertiesService.getScriptProperties();
+    const modeloAuditoria = props.getProperty('LLM_MODEL_AUDITORIA') || '';
+    const modeloEfetivo = modeloAuditoria || props.getProperty('LLM_MODEL') || 'desconhecido';
+
+    const jobId = Utilities.getUuid();
+    const manifest = {
+      sistemaId,
+      modo: modoSolicitado,
+      baseCommit: pag.baseCommit,
+      headCommit: pag.headCommit,
+      totalBatches: pag.batches.length,
+      arquivos: pag.arquivos.length,
+      arquivosIgnorados: pag.arquivosIgnorados,
+      arquivosSplitted: pag.arquivosSplitted,
+      bytes: pag.bytes,
+      modeloAuditoria,
+      modeloEfetivo,
+      inicio: Date.now(),
+    };
+    const cache = CacheService.getScriptCache();
+    const entries: Record<string, string> = {};
+    entries[_auditJobKey(jobId, 'manifest')] = JSON.stringify(manifest);
+    entries[_auditJobKey(jobId, 'prev')] = JSON.stringify(prevPayload);
+    entries[_auditJobKey(jobId, 'prevreg')] = JSON.stringify(prevRegistros);
+    for (let i = 0; i < pag.batches.length; i++) {
+      entries[_auditJobKey(jobId, 'b' + i)] = pag.batches[i].contexto;
+    }
+    cache.putAll(entries, _AUDIT_JOB_TTL);
+
+    return {
+      ok: true,
+      data: {
+        tipo: 'batch',
+        jobId,
+        totalBatches: pag.batches.length,
+        arquivos: pag.arquivos.length,
+        arquivosIgnorados: pag.arquivosIgnorados.length,
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao preparar auditoria em lotes' };
+  }
+}
+
+// Processa UM batch do job (1 chamada LLM curta). Idempotente por índice —
+// reprocessar sobrescreve o resultado daquele batch.
+function auditarBatchProcessar(jobId: string, indice: number): ServerResult {
+  try {
+    const cache = CacheService.getScriptCache();
+    const manRaw = cache.get(_auditJobKey(jobId, 'manifest'));
+    if (!manRaw) return { ok: false, error: 'Job expirado ou inexistente. Rode a auditoria de novo.' };
+    const man = JSON.parse(manRaw) as { sistemaId: string; totalBatches: number; modeloAuditoria: string };
+    const i = Number(indice);
+    if (!(i >= 0 && i < man.totalBatches)) return { ok: false, error: 'Índice de batch inválido.' };
+
+    const sistema = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => s.id === man.sistemaId);
+    if (!sistema) return { ok: false, error: 'Sistema não encontrado' };
+
+    const contexto = cache.get(_auditJobKey(jobId, 'b' + i));
+    if (!contexto) return { ok: false, error: 'Batch expirado. Rode a auditoria de novo.' };
+
+    let prevPayload: AuditPayload = { estadoGeral: '', oQueEmpolga: [], proximosPassos: '', findings: [] };
+    const prevRaw = cache.get(_auditJobKey(jobId, 'prev'));
+    // prev é contexto OPCIONAL de reconciliação; se faltar, o batch ainda roda.
+    if (prevRaw) { try { prevPayload = JSON.parse(prevRaw) as AuditPayload; } catch (e) { _logInfo('auditarBatchProcessar: prev inválido', e); } }
+
+    const p = _auditarUmBatch(man.sistemaId, sistema, contexto, prevPayload, i + 1, man.totalBatches, man.modeloAuditoria);
+    if (p) cache.put(_auditJobKey(jobId, 'r' + i), JSON.stringify(p), _AUDIT_JOB_TTL);
+
+    return { ok: true, data: { indice: i, ok: !!p, findings: p ? p.findings.length : 0, resolvidos: (p && p.resolvidos) ? p.resolvidos.length : 0 } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao processar o batch' };
+  }
+}
+
+// Consolida os batches já processados, persiste a auditoria e limpa o job.
+function auditarBatchFinalizar(jobId: string): ServerResult {
+  try {
+    const cache = CacheService.getScriptCache();
+    const manRaw = cache.get(_auditJobKey(jobId, 'manifest'));
+    if (!manRaw) return { ok: false, error: 'Job expirado ou inexistente. Rode a auditoria de novo.' };
+    const man = JSON.parse(manRaw) as {
+      sistemaId: string; modo: 'governanca' | 'codigo' | 'completa'; baseCommit: string; headCommit: string;
+      totalBatches: number; arquivos: number; arquivosIgnorados: string[]; arquivosSplitted: string[];
+      bytes: number; modeloEfetivo: string; inicio: number;
+    };
+    const sistema = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => s.id === man.sistemaId);
+    if (!sistema) return { ok: false, error: 'Sistema não encontrado' };
+
+    let prevPayload: AuditPayload = { estadoGeral: '', oQueEmpolga: [], proximosPassos: '', findings: [] };
+    const prevRaw = cache.get(_auditJobKey(jobId, 'prev'));
+    if (prevRaw) { try { prevPayload = JSON.parse(prevRaw) as AuditPayload; } catch (e) { _logInfo('auditarBatchFinalizar: prev inválido', e); } }
+    let prevRegistros: Record<string, RegistroFinding> = {};
+    const prevRegRaw = cache.get(_auditJobKey(jobId, 'prevreg'));
+    if (prevRegRaw) { try { prevRegistros = JSON.parse(prevRegRaw) || {}; } catch (e) { _logInfo('auditarBatchFinalizar: prevreg inválido', e); } }
+
+    const payloadsParciais: AuditPayload[] = [];
+    for (let i = 0; i < man.totalBatches; i++) {
+      const r = cache.get(_auditJobKey(jobId, 'r' + i));
+      if (r) { try { payloadsParciais.push(JSON.parse(r) as AuditPayload); } catch (e) { _logInfo('auditarBatchFinalizar: resultado de batch inválido', e); } }
+    }
+
+    const fontes = _coletarFontesAuditoria(man.sistemaId);
+    fontes.modo = man.modo;
+    fontes.fonteCodigo = 'github';
+    fontes.incremental = true;
+    fontes.arquivosLidos = man.arquivos - (man.arquivosIgnorados ? man.arquivosIgnorados.length : 0);
+    fontes.bytesCodigo = man.bytes;
+    fontes.commitSha = man.headCommit;
+    fontes.baseCommit = man.baseCommit;
+    fontes.codigoTruncado = (man.arquivosIgnorados || []).length > 0;
+    fontes.batchesUsados = man.totalBatches;
+    fontes.arquivosIgnorados = man.arquivosIgnorados || [];
+    fontes.arquivosSplitted = man.arquivosSplitted || [];
+
+    const duracaoMs = Date.now() - Number(man.inicio || Date.now());
+    const res = _consolidarAuditoriaBatches(
+      man.sistemaId, sistema, fontes, payloadsParciais, prevPayload, prevRegistros,
+      man.arquivos, man.totalBatches, duracaoMs, man.modeloEfetivo,
+    );
+
+    // Limpa o job do cache (best-effort — expira sozinho em 6h de qualquer jeito).
+    const keys = [_auditJobKey(jobId, 'manifest'), _auditJobKey(jobId, 'prev'), _auditJobKey(jobId, 'prevreg')];
+    for (let i = 0; i < man.totalBatches; i++) { keys.push(_auditJobKey(jobId, 'b' + i)); keys.push(_auditJobKey(jobId, 'r' + i)); }
+    cache.removeAll(keys);
+
+    return res;
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao finalizar a auditoria em lotes' };
+  }
 }
 
 function _executarAuditoriaIncremental(
