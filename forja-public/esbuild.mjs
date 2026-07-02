@@ -23,7 +23,13 @@ const clientResult = await esbuild.build({
 
 const serverTs = readFileSync('src/server.ts', 'utf8');
 const serverResult = await esbuild.transform(serverTs, { loader: 'ts', target: 'es2020' });
-const serverJs = serverResult.code.replace(/^export\s*\{\s*\};?\s*$/gm, '');
+// Lib compartilhada com o app principal — fonte ÚNICA do score de oportunidade.
+// Injetada no topo do Server.js (GAS não tem ESM), igual ao build do forja/.
+const scoreLibTs = readFileSync('../forja/src/lib/score.ts', 'utf8').replace(/^export\s+/gm, '');
+const scoreLibJs = (await esbuild.transform(scoreLibTs, { loader: 'ts', target: 'es2020' }))
+  .code.replace(/^export\s*\{\s*\};?\s*$/gm, '');
+const serverJs = '// ── lib compartilhada: forja/src/lib/score.ts ──\n' + scoreLibJs
+  + '\n' + serverResult.code.replace(/^export\s*\{\s*\};?\s*$/gm, '');
 writeFileSync('dist/Server.js', serverJs);
 
 // Fatiamento anti-corrupção do GAS (mesmo truque do app principal).

@@ -156,30 +156,21 @@ function _normalizeBlocos(raw: unknown): Array<{ tema: string; perguntas: Array<
   });
 }
 
-// ─── Score determinístico (igual ao app principal) ─────────────────────────────
+// ─── Score determinístico (fonte única compartilhada) ─────────────────────────
+// A fórmula vive em ../forja/src/lib/score.ts — o esbuild.mjs deste projeto
+// injeta scoreOportunidadeCore no topo do Server.js. Antes era uma cópia
+// literal da fórmula do app principal, que divergia silenciosamente a cada fix.
+
+declare function scoreOportunidadeCore(input: {
+  respostas?: Record<string, unknown>; ferramentas?: unknown[];
+  querAmostra?: boolean; agendaPref?: string; nome?: string; email?: string; totalPerguntas?: number;
+}): { score: number; breakdown: Record<string, number> };
 
 function _scoreOportunidade(input: {
   respostas: Record<string, unknown>; ferramentas: string[];
   querAmostra: boolean; agendaPref: string; nome: string; email: string; totalPerguntas: number;
 }): { score: number; breakdown: Record<string, number> } {
-  var total = Math.max(1, input.totalPerguntas || Object.keys(input.respostas).length || 1);
-  var respondidas = Object.keys(input.respostas).filter(function (k) {
-    var v = input.respostas[k];
-    return v !== null && v !== undefined && String(v).trim() !== '' && !(Array.isArray(v) && v.length === 0);
-  }).length;
-  var completude = Math.round((respondidas / total) * 40);
-  var ferr = input.ferramentas.filter(function (x) { return String(x || '').trim(); });
-  var ferramentasPts = ferr.length ? Math.min(12, 4 + ferr.length * 2) : 0;
-  var chars = 0;
-  Object.keys(input.respostas).forEach(function (k) { var v = input.respostas[k]; if (typeof v === 'string') chars += v.trim().length; });
-  var textoPts = Math.min(18, Math.round(chars / 40));
-  var amostraPts = input.querAmostra ? 15 : 0;
-  var agendaPts = String(input.agendaPref || '').trim() ? 8 : 0;
-  var contatoPts = (String(input.nome || '').trim() && String(input.email || '').trim()) ? 7 : 0;
-  var breakdown = { completude: completude, ferramentas: ferramentasPts, riquezaTexto: textoPts, pediuAmostra: amostraPts, agenda: agendaPts, contato: contatoPts };
-  var score = completude + ferramentasPts + textoPts + amostraPts + agendaPts + contatoPts;
-  if (score > 100) score = 100;
-  return { score: score, breakdown: breakdown };
+  return scoreOportunidadeCore(input);
 }
 
 // ─── Endpoints públicos ────────────────────────────────────────────────────────

@@ -16234,33 +16234,18 @@ function _discoveryUrlComToken(token: string): string {
 
 // Score determinístico de oportunidade (0-100): o quanto a resposta sinaliza que
 // vale virar um app. Componentes auditáveis em breakdown. A Leva 2 pode somar IA.
+// A FÓRMULA vive em src/lib/score.ts (fonte única, compartilhada com o
+// forja-public) — o build injeta scoreOportunidadeCore no topo do Server.js.
+declare function scoreOportunidadeCore(input: {
+  respostas?: Record<string, unknown>; ferramentas?: unknown[];
+  querAmostra?: boolean; agendaPref?: string; nome?: string; email?: string; totalPerguntas?: number;
+}): { score: number; breakdown: Record<string, number> };
+
 function _scoreOportunidadeDiscovery(input: {
   respostas?: Record<string, unknown>; ferramentas?: unknown[];
   querAmostra?: boolean; agendaPref?: string; nome?: string; email?: string; totalPerguntas?: number;
 }): { score: number; breakdown: Record<string, number> } {
-  const respostas = input.respostas || {};
-  const total = Math.max(1, Number(input.totalPerguntas || Object.keys(respostas).length) || 1);
-  const respondidas = Object.keys(respostas).filter((k) => {
-    const v = respostas[k];
-    return v !== null && v !== undefined && String(v).trim() !== '' && !(Array.isArray(v) && v.length === 0);
-  }).length;
-  const completude = Math.round((respondidas / total) * 40); // até 40
-  const ferramentas = Array.isArray(input.ferramentas) ? input.ferramentas.filter((x) => String(x || '').trim()) : [];
-  const ferramentasPts = ferramentas.length ? Math.min(12, 4 + ferramentas.length * 2) : 0; // até 12
-  // riqueza de texto livre — sinaliza clareza/engajamento
-  let chars = 0;
-  Object.keys(respostas).forEach((k) => { const v = respostas[k]; if (typeof v === 'string') chars += v.trim().length; });
-  const textoPts = Math.min(18, Math.round(chars / 40)); // até 18
-  const amostraPts = input.querAmostra ? 15 : 0;
-  const agendaPts = String(input.agendaPref || '').trim() ? 8 : 0;
-  const contatoPts = (String(input.nome || '').trim() && String(input.email || '').trim()) ? 7 : 0;
-  const breakdown = {
-    completude, ferramentas: ferramentasPts, riquezaTexto: textoPts,
-    pediuAmostra: amostraPts, agenda: agendaPts, contato: contatoPts,
-  };
-  let score = completude + ferramentasPts + textoPts + amostraPts + agendaPts + contatoPts;
-  if (score > 100) score = 100;
-  return { score, breakdown };
+  return scoreOportunidadeCore(input);
 }
 
 function salvarRoteiroDiscovery(input: { id?: string; pessoaId?: string; titulo?: string; segmento?: string; blocos?: unknown }): ServerResult {

@@ -61,8 +61,15 @@ const serverResult = await esbuild.transform(serverTs, {
   loader: 'ts',
   target: 'es2020',
 });
+// Lib compartilhada (fonte única do score de oportunidade — usada também pelo
+// build do forja-public). GAS não tem ESM: removemos os `export` e injetamos o
+// código no topo do Server.js, virando função global.
+const scoreLibTs = readFileSync('src/lib/score.ts', 'utf8').replace(/^export\s+/gm, '');
+const scoreLibJs = (await esbuild.transform(scoreLibTs, { loader: 'ts', target: 'es2020' }))
+  .code.replace(/^export\s*\{\s*\};?\s*$/gm, '');
 // Strip any export {} that esbuild might add (GAS doesn't support ESM)
-const serverJs = serverResult.code.replace(/^export\s*\{\s*\};?\s*$/gm, '');
+const serverJs = '// ── lib compartilhada: forja/src/lib/score.ts ──\n' + scoreLibJs
+  + '\n' + serverResult.code.replace(/^export\s*\{\s*\};?\s*$/gm, '');
 writeFileSync('dist/Server.js', serverJs);
 
 // Estratégia anti-corrupção do GAS:
