@@ -36,6 +36,21 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.240.5] — 2026-07-02
+
+### Corrigido
+
+- **Auditoria: retry automático quando a IA responde só com raciocínio** — modelos
+  "thinking" gastavam todo o orçamento de tokens dentro do `<think>` e nunca
+  emitiam o bloco `<AUDIT>`, quebrando com "Formato não estruturado" mesmo após
+  os aumentos de teto anteriores. Agora todas as chamadas de auditoria (completa,
+  incremental e por lote) passam por `_chamarAuditoriaLLM`: teto de 16000 tokens
+  e, se a resposta vier sem um `<AUDIT>` parseável, o servidor refaz UMA vez a
+  chamada exigindo somente o JSON compacto, sem raciocínio. O system prompt
+  também passou a proibir raciocínio visível (`_SYS_AUDITORIA_SEM_THINK`).
+
+---
+
 ## [1.240.4] — 2026-07-01
 
 ### Aviso de conclusão/quebra também no fluxo sem lotes

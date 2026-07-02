@@ -19683,6 +19683,41 @@ function _parseAuditPayload(resposta: string): { texto: string; payload: AuditPa
   }
 }
 
+// Sufixo de sistema pra chamadas de auditoria: modelos "thinking" que imprimem
+// o raciocínio como texto (<think>…) gastam o orçamento antes do <AUDIT>.
+const _SYS_AUDITORIA_SEM_THINK =
+  ' IMPORTANTE: NÃO imprima raciocínio nem tags <think> na resposta — se precisar raciocinar, faça internamente e entregue DIRETO o formato pedido.';
+
+// Chamada de auditoria tolerante a modelos "thinking": teto alto (16000) e, se
+// a resposta vier sem um <AUDIT> parseável (só raciocínio, ou JSON cortado além
+// do reparo), refaz UMA vez exigindo somente o JSON compacto. Devolve a última
+// resposta útil + o parse (o da 1ª tentativa se o retry também falhar, pra
+// diagnóstico no drawer).
+function _chamarAuditoriaLLM(
+  messages: LlmMessage[],
+  modeloAuditoria: string,
+): { resposta: string; parsed: { texto: string; payload: AuditPayload | null } } {
+  const resposta = forjaCallLLM(messages, 16000, modeloAuditoria, 'auditoria');
+  const parsed = _parseAuditPayload(resposta);
+  if (parsed.payload) return { resposta, parsed };
+  _logInfo('auditoria: 1ª resposta sem <AUDIT> parseável — refazendo com exigência de JSON puro');
+  const retryMsgs: LlmMessage[] = messages.concat([
+    { role: 'assistant', content: resposta.slice(0, 1200) },
+    {
+      role: 'user',
+      content: 'Sua resposta anterior veio SEM um bloco <AUDIT> com JSON válido (só raciocínio e/ou JSON cortado). '
+        + 'Responda AGORA SOMENTE com o bloco <AUDIT>{...}</AUDIT> completo e válido — sem raciocínio, sem <think>, sem nenhum texto fora do bloco. '
+        + 'Seja COMPACTO: "prompt" ≤ 40 palavras e "solucao" ≤ 3 passos por finding.',
+    },
+  ]);
+  try {
+    const resposta2 = forjaCallLLM(retryMsgs, 16000, modeloAuditoria, 'auditoria');
+    const parsed2 = _parseAuditPayload(resposta2);
+    if (parsed2.payload) return { resposta: resposta2, parsed: parsed2 };
+  } catch (e) { _logInfo('auditoria: retry de formato falhou', e); }
+  return { resposta, parsed };
+}
+
 // Estado por finding: { tipo: 'risco'|'decisao'|'oportunidade', idCriado: string, registradoEm: string }
 interface RegistroFinding {
   tipo: string;
@@ -20188,18 +20223,15 @@ function _auditarUmBatch(
   );
 
   const messages: LlmMessage[] = [
-    { role: 'system', content: 'Você audita UM batch de um diff grande. Não generaliza pra arquivos fora do batch.' },
+    { role: 'system', content: 'Você audita UM batch de um diff grande. Não generaliza pra arquivos fora do batch.' + _SYS_AUDITORIA_SEM_THINK },
     { role: 'user', content: promptUser },
   ];
   try {
-    // 8000 (não 4000): 6 findings com "prompt" colável estouravam 4000 tokens
-    // de saída fácil → JSON cortado no meio → lote perdido. Com o teto maior +
-    // instrução de compacidade + reparador de JSON truncado, o lote sobrevive.
-    const resp = forjaCallLLM(messages, 8000, modeloAuditoria, 'auditoria');
-    const parsed = _parseAuditPayload(resp);
+    // Teto alto + retry de formato (modelos thinking) ficam no _chamarAuditoriaLLM.
+    const { resposta, parsed } = _chamarAuditoriaLLM(messages, modeloAuditoria);
     if (!parsed.payload) {
-      const semTag = resp.indexOf('<AUDIT>') < 0;
-      return { payload: null, erro: semTag ? 'a IA respondeu sem o bloco <AUDIT>' : 'JSON do bloco <AUDIT> inválido (nem o reparador salvou)' };
+      const semTag = resposta.indexOf('<AUDIT>') < 0;
+      return { payload: null, erro: semTag ? 'a IA respondeu só com raciocínio, sem o bloco <AUDIT> (mesmo após retry)' : 'JSON do bloco <AUDIT> inválido (nem o reparador salvou)' };
     }
     return { payload: parsed.payload };
   } catch (e) {
@@ -20599,7 +20631,7 @@ function _executarAuditoriaIncremental(
   );
 
   const messages: LlmMessage[] = [
-    { role: 'system', content: 'Você é um auditor técnico/produto sênior. Seguir o formato exigido é mais importante do que ser eloquente.' },
+    { role: 'system', content: 'Você é um auditor técnico/produto sênior. Seguir o formato exigido é mais importante do que ser eloquente.' + _SYS_AUDITORIA_SEM_THINK },
     { role: 'user', content: promptUser },
   ];
 
@@ -20608,11 +20640,9 @@ function _executarAuditoriaIncremental(
   const modeloEfetivo = modeloAuditoria || props.getProperty('LLM_MODEL') || 'desconhecido';
 
   const inicio = Date.now();
-  // 8000 (não 5500): modelos "thinking" gastam parte do orçamento raciocinando
-  // antes do <AUDIT> — teto menor cortava o JSON no meio.
-  const resposta = forjaCallLLM(messages, 8000, modeloAuditoria, 'auditoria');
+  // Teto alto + retry de formato (modelos thinking) ficam no _chamarAuditoriaLLM.
+  const { resposta, parsed } = _chamarAuditoriaLLM(messages, modeloAuditoria);
   const duracaoMs = Date.now() - inicio;
-  const parsed = _parseAuditPayload(resposta);
 
   // Auto-fecha os itens de backlog cujos achados o diff resolveu. Faz ANTES de
   // calcular a saúde, pra que riscos mitigados/decisões "feito" já reflitam no score.
@@ -20808,7 +20838,7 @@ function acaoIAAuditarSistema(sistemaId: string, modo?: string, forcar?: boolean
     );
 
     const messages: LlmMessage[] = [
-      { role: 'system', content: 'Você é um auditor técnico/produto sênior. Seguir o formato exigido é mais importante do que ser eloquente.' },
+      { role: 'system', content: 'Você é um auditor técnico/produto sênior. Seguir o formato exigido é mais importante do que ser eloquente.' + _SYS_AUDITORIA_SEM_THINK },
       { role: 'user', content: promptUser },
     ];
 
@@ -20817,11 +20847,9 @@ function acaoIAAuditarSistema(sistemaId: string, modo?: string, forcar?: boolean
     const modeloEfetivo = modeloAuditoria || props.getProperty('LLM_MODEL') || 'desconhecido';
 
     const inicio = Date.now();
-    // 8000 (não 5500): modelos "thinking" gastam parte do orçamento raciocinando
-    // antes do <AUDIT> — teto menor cortava o JSON no meio.
-    const resposta = forjaCallLLM(messages, 8000, modeloAuditoria, 'auditoria');
+    // Teto alto + retry de formato (modelos thinking) ficam no _chamarAuditoriaLLM.
+    const { resposta, parsed } = _chamarAuditoriaLLM(messages, modeloAuditoria);
     const duracaoMs = Date.now() - inicio;
-    const parsed = _parseAuditPayload(resposta);
 
     // Reconciliação determinística pós-IA: cruza títulos novos contra os da
     // última auditoria pra reconstruir "saíram / entraram / persistem" mesmo
