@@ -36,6 +36,21 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.242.0] — 2026-07-02
+
+### Adicionado
+
+- **Auditoria: vacina contra falso positivo de versão de dependência** — a IA
+  auditora condenou 4 rodadas seguidas o `lucide-react ^1.18.0` como "fora da
+  série oficial" (sugerindo downgrade!) porque o conhecimento de treino dela
+  parou antes da série 1.x existir. Nova regra dura no `_CHECKLIST_CODIGO_IA`
+  (injetado nos 3 caminhos de auditoria): sem acesso ao registry, memória de
+  versões NÃO é evidência — só reportar dependência com sinal concreto no
+  contexto (registry estranho no lockfile, typo real, CVE citado); na dúvida,
+  vira verificação manual em `proximosPassos`, nunca finding nem downgrade.
+
+---
+
 ## [1.241.2] — 2026-07-02
 
 ### Corrigido (2ª rodada da auditoria Forja IA — commit base 531dc8f)

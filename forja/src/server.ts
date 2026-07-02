@@ -20153,7 +20153,11 @@ const _CHECKLIST_CODIGO_IA =
   + '- SEGREDOS HARDCODED: chaves de API, tokens, senhas ou credenciais escritos no código (devem morar em Script Properties / variáveis de ambiente). Sempre severidade ALTA (segurança); cite o arquivo e o trecho.\n'
   + '- ERRO ENGOLIDO: catch vazio ou que descarta a exceção sem log nem tratamento (ex.: `catch {}`, `catch { /* ignore */ }`) mascarando falhas reais. Aponte o arquivo e diga QUAL falha fica invisível (ignore casos legítimos e claramente best-effort).\n'
   + '- TIPAGEM INSEGURA: uso de `any`, casts forçados (`as unknown as`, `as X`), `@ts-ignore`/`@ts-expect-error` ou `!` non-null sem checagem, que derrubam a segurança de tipos em pontos sensíveis.\n'
-  + '- DUPLICAÇÃO DE LÓGICA: blocos copiados/quase-idênticos que deveriam ser uma função compartilhada (risco de corrigir só uma cópia e divergir). Cite os locais duplicados.\n';
+  + '- DUPLICAÇÃO DE LÓGICA: blocos copiados/quase-idênticos que deveriam ser uma função compartilhada (risco de corrigir só uma cópia e divergir). Cite os locais duplicados.\n'
+  // "Vacina" contra falso positivo recorrente: o modelo condenava versões de
+  // dependência legítimas ("fora da série oficial") porque o conhecimento de
+  // treino dele parou antes das releases novas — e sugeria até DOWNGRADE.
+  + '- VERSÕES DE DEPENDÊNCIA — REGRA DURA: você NÃO tem acesso ao registry (npm/PyPI/etc.) e seu conhecimento de versões PAROU no seu corte de treino; séries novas (majors inclusive) são lançadas depois disso o tempo todo. NUNCA marque uma versão como "inexistente", "fora da série oficial", "acima da cadência conhecida" ou "possível typosquat" baseado APENAS na sua memória de versões — isso NÃO é evidência verificável. Só reporte dependência se houver sinal CONCRETO no contexto (ex.: lockfile apontando registry estranho, nome com typo real tipo "lodahs", CVE citado no código). Na dúvida, NÃO emita o finding — no máximo mencione em "proximosPassos" como verificação manual opcional. JAMAIS proponha downgrade de versão por memória.\n';
 
 function _auditarUmBatch(
   sistemaId: string,
