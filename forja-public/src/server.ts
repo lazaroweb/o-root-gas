@@ -238,7 +238,13 @@ function _throttleOk(token: string): boolean {
     if (cache.get(key)) return false;
     cache.put(key, '1', THROTTLE_SEG);
     return true;
-  } catch (e) { return true; }
+  } catch (e) {
+    // Fail-CLOSED (OWASP A10): se o CacheService falhar (quota/permissão), o
+    // throttle bloqueia em vez de liberar — senão o teto anti-spam vira nominal
+    // exatamente quando o atacante consegue degradar o cache.
+    Logger.log('throttle degraded: ' + String(e));
+    return false;
+  }
 }
 
 function submitRespostaPublica(payload: unknown): ServerOk {
