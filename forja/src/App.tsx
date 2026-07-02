@@ -205,7 +205,9 @@ export default function App(): React.ReactElement {
   const loadSaude = useCallback(() => {
     callServer<ServerResponse<DashboardData>>('getDashboardData')
       .then(res => { if (res.ok && res.data) setSaudeMedia(res.data.kpis.saudeMedia); })
-      .catch(() => setSaudeMedia(88));
+      // Falha NÃO vira número mágico otimista (antes: 88, que mascarava
+      // incidentes). Mantém o último valor válido e registra o erro.
+      .catch((e) => { console.error('loadSaude falhou — mantendo último valor válido', e); });
   }, []);
 
   useEffect(loadSaude, [loadSaude]);

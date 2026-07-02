@@ -84,7 +84,13 @@ export default function Dashboard({ onSelectSistema, onNavigate, onImportGAS, on
         if (res.ok && res.data) setData(res.data);
         else setError(res.error || 'Erro ao carregar');
       })
-      .catch(() => setData(MOCK))
+      // MOCK é só pro preview local (sem google.script.run). Falha REAL em
+      // produção não pode virar dado otimista (saúde 88 fake) — mostra erro.
+      .catch((e) => {
+        if (e instanceof Error && e.message.indexOf('local preview') >= 0) { setData(MOCK); return; }
+        console.error('getDashboardData falhou', e);
+        setError('Saúde indisponível — não foi possível carregar o dashboard. Recarregue a página.');
+      })
       .finally(() => setLoading(false));
     callServer<ServerResponse<StatusGeral>>('getStatusGeral')
       .then(res => { if (res.ok && res.data) setStatus(res.data as StatusGeral); })
