@@ -36,6 +36,24 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.241.0] — 2026-07-02
+
+### Adicionado
+
+- **Auditoria: ciclo explícito no pós-auditoria** — o card "Próximo passo"
+  mostrava só UMA ação por vez e o resto do fluxo ficava implícito. Agora é um
+  passo a passo numerado na ordem certa pro momento:
+  - **Primeira auditoria:** 1) baixar a ordem de serviço (prompt de ajustes),
+    2) entregar à IA que constrói o sistema, 3) voltar e "Auditar mudanças".
+  - **Re-auditoria:** 1) baixar o relatório de baixa e entregar à IA (ela só
+    atualiza o planning — fecha o passado), 2) abrir a nova rodada com o prompt
+    dos N achados em aberto, 3) depois do push, "Auditar mudanças" de novo.
+  - O subtítulo explica o papel de cada artefato: ordem de serviço (IA corrige)
+    vs. relatório de baixa (IA atualiza backlog) vs. "Auditar mudanças" (Forja
+    confirma no diff o que fechou).
+
+---
+
 ## [1.240.5] — 2026-07-02
 
 ### Corrigido

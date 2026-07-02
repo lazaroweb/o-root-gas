@@ -959,6 +959,7 @@ export default function AuditoriaDrawer({ sistemaId, sistemaNome, repoUrl, scrip
           <AcaoPrincipal
             t={t}
             ehPrimeiraAuditoria={historico.length < 2}
+            numAbertos={dadosExibidos.payload.findings.length}
             onBaixarPrompt={baixarPromptMaster}
             onCopiarPrompt={copiarPromptMaster}
             onBaixarBaixa={baixarRelatorioBaixa}
@@ -1232,30 +1233,96 @@ function ResultadoHero({ t, score, payload, modelo, duracaoMs, recente, historic
   );
 }
 
-// AcaoPrincipal — UM card focal com a ação certa pro momento do ciclo.
-// Sem os 2 sub-blocos lado a lado (Prompt/Baixa) que confundiam — agora
-// escolhemos AUTOMATICAMENTE qual CTA é o principal:
-//   • Primeira auditoria → "Baixar prompt de ajustes" (CTA peach)
-//   • Re-auditoria → "Baixar relatório de baixa" (CTA sage)
+// AcaoPrincipal — o CICLO da auditoria como passo a passo numerado, na ordem
+// em que o usuário deve executar AGORA. Pedido direto do usuário: o card
+// anterior mostrava só UMA ação por vez e o resto do fluxo ficava implícito.
 //
-// A outra opção fica disponível mas em segundo plano (text button), pra
-// quem quiser baixar os dois.
-function AcaoPrincipal({ t, ehPrimeiraAuditoria, onBaixarPrompt, onCopiarPrompt, onBaixarBaixa, copiado }: {
+// O ciclo Forja → IA → Forja tem dois artefatos com papéis opostos:
+//   • Prompt de ajustes (.md) = ORDEM DE SERVIÇO → a IA implementa e faz push.
+//   • Relatório de baixa (.md) = STATUS → a IA só atualiza o planning/backlog.
+//
+// Primeira auditoria: prompt → IA implementa → "Auditar mudanças".
+// Re-auditoria: baixa (fechar o passado) → prompt dos abertos (nova rodada)
+// → "Auditar mudanças" de novo.
+function AcaoPrincipal({ t, ehPrimeiraAuditoria, numAbertos, onBaixarPrompt, onCopiarPrompt, onBaixarBaixa, copiado }: {
   t: ReturnType<typeof useTokens>;
   ehPrimeiraAuditoria: boolean;
+  numAbertos: number;
   onBaixarPrompt: () => void;
   onCopiarPrompt: () => void;
   onBaixarBaixa: () => void;
   copiado: boolean;
 }): React.ReactElement {
   const corPrincipal = ehPrimeiraAuditoria ? t.accents.peach : t.accents.sage;
-  const iconePrincipal = ehPrimeiraAuditoria ? <Rocket size={16} color={corPrincipal} /> : <ClipboardCheck size={16} color={corPrincipal} />;
-  const tituloPrincipal = ehPrimeiraAuditoria ? 'Próximo passo: implementar as correções' : 'Próximo passo: avisar a IA o que foi resolvido';
-  const descPrincipal = ehPrimeiraAuditoria
-    ? 'Baixe o .md, cole no Cursor/Claude com a instrução "siga as instruções dentro do arquivo".'
-    : 'Baixe o .md de baixa e entregue à mesma IA que implementou. Ela vai atualizar o planning/backlog dela.';
-  const labelBotaoPrincipal = ehPrimeiraAuditoria ? 'Baixar prompt de ajustes (.md)' : 'Baixar relatório de baixa (.md)';
-  const onClickPrincipal = ehPrimeiraAuditoria ? onBaixarPrompt : onBaixarBaixa;
+
+  const btnPrompt = (destaque: boolean) => (
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+      <Button
+        type={destaque ? 'primary' : 'default'}
+        size="small"
+        icon={<Download size={13} />}
+        onClick={onBaixarPrompt}
+        style={destaque ? { background: t.accents.peach, borderColor: t.accents.peach, fontWeight: 600 } : undefined}
+      >
+        Baixar prompt de ajustes (.md)
+      </Button>
+      <Button size="small" icon={copiado ? <Check size={13} color={t.accents.sage} /> : <Copy size={13} />} onClick={onCopiarPrompt}>
+        {copiado ? 'Copiado!' : 'Copiar'}
+      </Button>
+    </div>
+  );
+
+  const btnBaixa = (
+    <div style={{ marginTop: 8 }}>
+      <Button
+        type="primary"
+        size="small"
+        icon={<Download size={13} />}
+        onClick={onBaixarBaixa}
+        style={{ background: t.accents.sage, borderColor: t.accents.sage, fontWeight: 600 }}
+      >
+        Baixar relatório de baixa (.md)
+      </Button>
+    </div>
+  );
+
+  interface PassoCiclo { titulo: string; desc: string; acao?: React.ReactNode }
+  const passos: PassoCiclo[] = ehPrimeiraAuditoria
+    ? [
+        {
+          titulo: 'Baixe a ordem de serviço',
+          desc: 'O .md traz problema, evidência, solução e um prompt pronto por achado — em ordem de prioridade.',
+          acao: btnPrompt(true),
+        },
+        {
+          titulo: 'Entregue à IA que constrói o sistema',
+          desc: 'Cole no Cursor/Claude com "siga as instruções do arquivo". Ela corrige, faz commits fix: e dá push.',
+        },
+        {
+          titulo: 'Volte aqui e clique em "Auditar mudanças"',
+          desc: 'A Forja lê só o diff, dá baixa automática no que foi resolvido de verdade e gera o relatório de baixa.',
+        },
+      ]
+    : [
+        {
+          titulo: 'Dê baixa com a IA (fechar o passado)',
+          desc: 'Entregue o relatório à mesma IA que implementou. Ela SÓ atualiza o planning/backlog dela — marca os resolvidos, mantém os que persistem. Não gera código.',
+          acao: btnBaixa,
+        },
+        ...(numAbertos > 0
+          ? [{
+              titulo: `Abra a nova rodada — ${numAbertos} achado(s) em aberto`,
+              desc: 'Baixe a nova ordem de serviço com os achados novos e os que persistiram. Entregue à IA pra ela implementar e dar push.',
+              acao: btnPrompt(false),
+            }]
+          : []),
+        {
+          titulo: 'Depois do push, "Auditar mudanças" de novo',
+          desc: numAbertos > 0
+            ? 'A Forja compara o diff, dá baixa automática no que fechou e o ciclo recomeça.'
+            : 'Sem achados abertos — rode quando houver novas mudanças no código pra manter a saúde em dia.',
+        },
+      ];
 
   return (
     <div style={{
@@ -1266,32 +1333,32 @@ function AcaoPrincipal({ t, ehPrimeiraAuditoria, onBaixarPrompt, onCopiarPrompt,
       padding: 16,
       boxShadow: t.shadowSoft,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
-        {iconePrincipal}
-        <span style={{ fontFamily: FONTS.display, fontSize: 15, fontWeight: 600, color: t.text }}>{tituloPrincipal}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 4 }}>
+        {ehPrimeiraAuditoria ? <Rocket size={16} color={corPrincipal} /> : <ClipboardCheck size={16} color={corPrincipal} />}
+        <span style={{ fontFamily: FONTS.display, fontSize: 15, fontWeight: 600, color: t.text }}>
+          {ehPrimeiraAuditoria ? 'Próximos passos: implementar as correções' : 'Próximos passos: fechar o ciclo'}
+        </span>
       </div>
-      <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, marginBottom: 12, lineHeight: 1.55 }}>
-        {descPrincipal}
+      <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, marginBottom: 14, lineHeight: 1.5 }}>
+        O ciclo é Forja → IA → Forja: a ordem de serviço faz a IA corrigir; o relatório de baixa faz ela atualizar o backlog; "Auditar mudanças" confirma no diff o que fechou.
       </div>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <Button
-          type="primary"
-          size="middle"
-          icon={<Download size={14} />}
-          onClick={onClickPrincipal}
-          style={{ background: corPrincipal, borderColor: corPrincipal, fontWeight: 600 }}
-        >
-          {labelBotaoPrincipal}
-        </Button>
-        {ehPrimeiraAuditoria ? (
-          <Button icon={copiado ? <Check size={14} color={t.accents.sage} /> : <Copy size={14} />} onClick={onCopiarPrompt}>
-            {copiado ? 'Copiado!' : 'Copiar prompt'}
-          </Button>
-        ) : (
-          <Button type="text" icon={<Rocket size={14} />} onClick={onBaixarPrompt} style={{ color: t.textTertiary }}>
-            Também baixar prompt p/ novos achados
-          </Button>
-        )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {passos.map((p, i) => (
+          <div key={i} style={{ display: 'flex', gap: 11, alignItems: 'flex-start' }}>
+            <div style={{
+              width: 22, height: 22, borderRadius: '50%', flexShrink: 0, marginTop: 1,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: i === 0 ? corPrincipal : `${corPrincipal}22`,
+              color: i === 0 ? '#1a1a1a' : corPrincipal,
+              fontFamily: FONTS.ui, fontSize: 12, fontWeight: 700,
+            }}>{i + 1}</div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontFamily: FONTS.ui, fontSize: 13, fontWeight: 600, color: i === 0 ? t.text : t.textSecondary }}>{p.titulo}</div>
+              <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, lineHeight: 1.5, marginTop: 2 }}>{p.desc}</div>
+              {p.acao}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
