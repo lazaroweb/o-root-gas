@@ -36,6 +36,29 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.241.1] — 2026-07-02
+
+### Corrigido (rodada da auditoria Forja IA — commit base 233e42a)
+
+- **[ALTA·segurança] Rate-limit do form público fail-closed** — `_throttleOk`
+  do forja-public retornava `true` quando o CacheService falhava, desligando o
+  anti-spam exatamente no pior momento. Agora bloqueia e loga a degradação.
+- **[ALTA·operacional] Fim do "88 otimista"** — falha no `getDashboardData` não
+  força mais `saudeMedia=88`: o App mantém o último valor válido e loga; o
+  Dashboard só usa MOCK no preview local e mostra "Saúde indisponível" em falha
+  real de produção.
+- **[MEDIA·código] Score de oportunidade com fonte única** — a fórmula saiu das
+  duas cópias (forja e forja-public) pra `src/lib/score.ts`; os dois builds
+  injetam `scoreOportunidadeCore` no Server.js. Fórmula intacta.
+
+### Adicionado
+
+- **[MEDIA·testes] Primeira camada de testes** — vitest + `npm test` + GitHub
+  Actions em PR/push, com 5 casos travando a fórmula do score (0, 100 com
+  clamp, intermediário, respostas vazias, input vazio).
+
+---
+
 ## [1.241.0] — 2026-07-02
 
 ### Adicionado
