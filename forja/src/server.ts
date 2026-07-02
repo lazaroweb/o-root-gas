@@ -33,6 +33,12 @@ interface SheetSchema {
   columns: string[];
 }
 
+// Colunas compartilhadas com o forja-public (mesma planilha) — fonte única em
+// src/lib/schema.ts, injetada no topo do Server.js pelo esbuild.mjs.
+declare const COLS_DISCOVERY_FORMS: string[];
+declare const COLS_DISCOVERY_RESPOSTAS: string[];
+declare const COLS_PESSOAS_SCHEMA: string[];
+
 const SCHEMA: SheetSchema[] = [
   { name: 'Sistemas', columns: ['id', 'nome', 'codinome', 'estagio', 'proposito', 'stack', 'urlProd', 'scoreSaude', 'repoUrl', 'scriptId', 'webAppUrl', 'dominioCustomizado', 'saudeBreakdown', 'saudeCalculadaEm', 'removidoNoGas', 'removidoNoGasEm', 'fluxoValidado'] },
   { name: 'Usuarios', columns: ['id', 'email', 'nome', 'papel', 'ativo', 'criadoEm', 'criadoPor'] },
@@ -70,19 +76,9 @@ const SCHEMA: SheetSchema[] = [
   // `contexto`: texto livre opcional (cola PRD, link, transcrição, o que vier).
   { name: 'Centelhas', columns: ['id', 'titulo', 'contexto', 'estado', 'categoria', 'sistemaId', 'clienteId', 'promovidaPara', 'tags', 'prioridade', 'criadoEm', 'triadoEm', 'decididoEm'] },
   { name: 'Oportunidades', columns: ['id', 'titulo', 'pessoaId', 'valorEstimado', 'estado', 'proximoPasso'] },
-  { name: 'Pessoas', columns: [
-    'id', 'nome', 'contato', 'papel', 'notas', 'email',
-    // Pessoa de contato
-    'nomeContato', 'cargo', 'telefone',
-    // Empresa
-    'empresa', 'cnpj', 'segmento', 'cidade', 'uf', 'site', 'instagram',
-    // Negócio
-    'faturamentoFaixa', 'funcionariosFaixa', 'tempoOperacaoAnos',
-    // Financeiro/Comercial
-    'ticketPrevisto', 'statusComercial', 'origemContato', 'proximaAcao',
-    // Fiscal/endereço (v1.157.0) — exigidos por boleto registrado (pagador)
-    'cpf', 'cep', 'logradouro', 'numeroEndereco', 'bairro',
-  ] },
+  // Colunas em src/lib/schema.ts (fonte única compartilhada com o forja-public,
+  // que lê/escreve as mesmas abas). Injetadas no build — ver esbuild.mjs.
+  { name: 'Pessoas', columns: COLS_PESSOAS_SCHEMA },
   { name: 'Custos', columns: ['id', 'sistemaId', 'fornecedor', 'valor', 'recorrencia', 'proximaCobranca', 'categoria', 'empresaId'] },
   // FinEmpresaDespesas (v1.15): livro-caixa MENSAL de despesas avulsas da empresa
   // (contas, recibos, notas) — separado dos `Custos` recorrentes. `competencia`
@@ -174,9 +170,9 @@ const SCHEMA: SheetSchema[] = [
   { name: 'Entrevistas', columns: ['id', 'pessoaId', 'data', 'tipo', 'transcricao', 'resumoIA', 'requisitos'] },
   // Discovery: roteiro estruturado (perguntas com tipo de campo) salvo por cliente.
   // Vira formulário público quando publicado (token). perguntasJson = blocos.
-  { name: 'DiscoveryForms', columns: ['id', 'pessoaId', 'titulo', 'segmento', 'perguntasJson', 'token', 'status', 'criadoEm', 'publicadoEm'] },
+  { name: 'DiscoveryForms', columns: COLS_DISCOVERY_FORMS },
   // Respostas do formulário público, casadas ao cliente. score = oportunidade 0-100.
-  { name: 'DiscoveryRespostas', columns: ['id', 'formId', 'pessoaId', 'emailRespondente', 'nome', 'respostasJson', 'ferramentasJson', 'querAmostra', 'agendaPref', 'score', 'scoreBreakdownJson', 'criadoEm'] },
+  { name: 'DiscoveryRespostas', columns: COLS_DISCOVERY_RESPOSTAS },
   { name: 'Processos', columns: ['id', 'pessoaId', 'sistemaId', 'nome', 'tipo', 'mermaid', 'notas'] },
   { name: 'Conselho', columns: ['id', 'contexto', 'persona', 'parecer', 'sintese', 'data'] },
   { name: 'Auditorias', columns: ['id', 'sistemaId', 'criadoEm', 'modeloUsado', 'duracaoMs', 'scoreNoMomento', 'numFindings', 'payloadJson', 'fontesJson', 'registrosJson'] },

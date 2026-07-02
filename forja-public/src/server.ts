@@ -13,16 +13,17 @@
 //  • Token é UUID (não-sequencial): dificulta enumeração dos formulários.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Colunas espelhando forja/src/server.ts (SCHEMA). Mantenha em sincronia.
-var COLS_FORMS = ['id', 'pessoaId', 'titulo', 'segmento', 'perguntasJson', 'token', 'status', 'criadoEm', 'publicadoEm'];
-var COLS_RESP = ['id', 'formId', 'pessoaId', 'emailRespondente', 'nome', 'respostasJson', 'ferramentasJson', 'querAmostra', 'agendaPref', 'score', 'scoreBreakdownJson', 'criadoEm'];
-var COLS_PESSOAS = [
-  'id', 'nome', 'contato', 'papel', 'notas', 'email',
-  'nomeContato', 'cargo', 'telefone',
-  'empresa', 'cnpj', 'segmento', 'cidade', 'uf', 'site', 'instagram',
-  'faturamentoFaixa', 'funcionariosFaixa', 'tempoOperacaoAnos',
-  'ticketPrevisto', 'statusComercial', 'origemContato', 'proximaAcao',
-];
+// Colunas em ../forja/src/lib/schema.ts — FONTE ÚNICA compartilhada com o app
+// principal (mesma planilha), injetada no topo do Server.js pelo esbuild.mjs.
+// Fim do "mantenha em sincronia" manual: a cópia local já tinha divergido (sem
+// as colunas fiscais da v1.157.0 do Pessoas).
+declare const COLS_DISCOVERY_FORMS: string[];
+declare const COLS_DISCOVERY_RESPOSTAS: string[];
+declare const COLS_PESSOAS_SCHEMA: string[];
+
+var COLS_FORMS = COLS_DISCOVERY_FORMS;
+var COLS_RESP = COLS_DISCOVERY_RESPOSTAS;
+var COLS_PESSOAS = COLS_PESSOAS_SCHEMA;
 
 // Limites anti-abuso (A06/A10).
 var MAX_NOME = 120;

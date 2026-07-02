@@ -28,6 +28,8 @@ const serverResult = await esbuild.transform(serverTs, { loader: 'ts', target: '
 // falha o build com mensagem clara — sem ele, um caminho quebrado viraria
 // 'scoreOportunidadeCore is not defined' só em runtime (o declare function do
 // server.ts engana o TypeScript).
+//   • ../forja/src/lib/schema.ts — COMPARTILHADA: colunas das abas Discovery/
+//     Pessoas da planilha comum (fim do "mantenha em sincronia" manual).
 //   • ../forja/src/lib/score.ts — COMPARTILHADA com o app principal (fonte
 //     única do score). Dependência cross-project intencional: ver README.md.
 //   • src/lib/guards.ts — guards do form público (throttle/token), testados.
@@ -42,7 +44,8 @@ async function libJs(caminho) {
   const r = await esbuild.transform(ts, { loader: 'ts', target: 'es2020' });
   return `// ── lib injetada: ${caminho} ──\n` + r.code.replace(/^export\s*\{\s*\};?\s*$/gm, '');
 }
-const serverJs = (await libJs('../forja/src/lib/score.ts'))
+const serverJs = (await libJs('../forja/src/lib/schema.ts'))
+  + '\n' + (await libJs('../forja/src/lib/score.ts'))
   + '\n' + (await libJs('src/lib/guards.ts'))
   + '\n' + serverResult.code.replace(/^export\s*\{\s*\};?\s*$/gm, '');
 writeFileSync('dist/Server.js', serverJs);

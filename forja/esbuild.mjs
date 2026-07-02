@@ -61,20 +61,23 @@ const serverResult = await esbuild.transform(serverTs, {
   loader: 'ts',
   target: 'es2020',
 });
-// Lib compartilhada (fonte única do score de oportunidade — usada também pelo
-// build do forja-public, que a lê via ../forja/src/lib/score.ts). GAS não tem
+// Libs compartilhadas (fonte única do score e do schema Discovery/Pessoas —
+// usadas também pelo build do forja-public via ../forja/src/lib/*). GAS não tem
 // ESM: removemos os `export` e injetamos o código no topo do Server.js, virando
-// função global. Guard explícito: sem a lib o Server.js quebraria só em runtime
-// ('scoreOportunidadeCore is not defined' — o declare function engana o TS).
-if (!existsSync('src/lib/score.ts')) {
-  console.error('ERRO: src/lib/score.ts não encontrada — o Server.js depende dela em runtime.');
-  process.exit(1);
+// globais. Guard explícito: sem a lib o Server.js quebraria só em runtime
+// ('is not defined' — o declare do server.ts engana o TS).
+async function libJs(caminho) {
+  if (!existsSync(caminho)) {
+    console.error(`ERRO: lib obrigatória não encontrada: ${caminho} — o Server.js depende dela em runtime.`);
+    process.exit(1);
+  }
+  const ts = readFileSync(caminho, 'utf8').replace(/^export\s+/gm, '');
+  const r = await esbuild.transform(ts, { loader: 'ts', target: 'es2020' });
+  return `// ── lib injetada: ${caminho} ──\n` + r.code.replace(/^export\s*\{\s*\};?\s*$/gm, '');
 }
-const scoreLibTs = readFileSync('src/lib/score.ts', 'utf8').replace(/^export\s+/gm, '');
-const scoreLibJs = (await esbuild.transform(scoreLibTs, { loader: 'ts', target: 'es2020' }))
-  .code.replace(/^export\s*\{\s*\};?\s*$/gm, '');
 // Strip any export {} that esbuild might add (GAS doesn't support ESM)
-const serverJs = '// ── lib compartilhada: forja/src/lib/score.ts ──\n' + scoreLibJs
+const serverJs = (await libJs('src/lib/schema.ts'))
+  + '\n' + (await libJs('src/lib/score.ts'))
   + '\n' + serverResult.code.replace(/^export\s*\{\s*\};?\s*$/gm, '');
 writeFileSync('dist/Server.js', serverJs);
 
