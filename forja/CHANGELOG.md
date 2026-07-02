@@ -36,6 +36,28 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.243.0] — 2026-07-02
+
+### Alterado
+
+- **Schema Discovery/Pessoas com fonte única** — `COLS_FORMS`/`COLS_RESP`/
+  `COLS_PESSOAS` eram cópias entre `forja` e `forja-public` com um comentário
+  "mantenha em sincronia" — e a sincronia já tinha quebrado (o espelho público
+  ficou sem as 5 colunas fiscais da v1.157.0 do `Pessoas`). Agora vivem em
+  `forja/src/lib/schema.ts`, injetadas nos dois builds pelo esbuild (mesmo
+  padrão do `score.ts`), com testes de invariantes (sem coluna duplicada,
+  `id` primeiro, nomes válidos).
+- **Auditoria: regra de convergência anti-"auditoria eterna"** — os prompts da
+  auditoria (completa e incremental) agora dizem explicitamente que o resultado
+  esperado de um ciclo saudável é a lista de achados ENCOLHER até zero, que a
+  régua de impacto não pode baixar pra "encontrar algo", e que melhoria opcional
+  sem dor atual vira `registrar_oportunidade`, nunca finding.
+- **CI endurecido** — o workflow roda `npx tsc --noEmit` e `npm run build` nos
+  dois projetos além do vitest; PRs que quebrem tipos ou a injeção
+  cross-project do esbuild falham antes do merge.
+
+---
+
 ## [1.242.0] — 2026-07-02
 
 ### Adicionado
