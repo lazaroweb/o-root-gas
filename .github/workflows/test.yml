@@ -8,14 +8,17 @@ on:
 jobs:
   vitest:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        projeto: [forja, forja-public]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: forja/package-lock.json
+          cache-dependency-path: ${{ matrix.projeto }}/package-lock.json
       - run: npm ci
-        working-directory: forja
+        working-directory: ${{ matrix.projeto }}
       - run: npm test
-        working-directory: forja
+        working-directory: ${{ matrix.projeto }}

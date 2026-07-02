@@ -119,8 +119,12 @@ function _emailValido(e: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && e.length <= MAX_EMAIL;
 }
 
+// Implementação em src/lib/guards.ts (pura, testada com vitest) — injetada
+// no topo do Server.js pelo esbuild.mjs.
+declare function sanitizeTokenCore(t: unknown): string;
+
 function _sanitizeToken(t: unknown): string {
-  return String(t || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+  return sanitizeTokenCore(t);
 }
 
 // Aceita perguntas como string (formato Leva 1) ou objeto estruturado.
@@ -222,20 +226,18 @@ function getFormPublico(token: unknown): ServerOk {
   }
 }
 
+// Lógica (fail-closed, OWASP A10) em src/lib/guards.ts — pura e testada.
+declare function throttleOkCore(
+  getCache: () => { get(k: string): string | null; put(k: string, v: string, seg: number): void },
+  token: string, janelaSeg: number, log?: (msg: string) => void,
+): boolean;
+
 function _throttleOk(token: string): boolean {
-  try {
-    var cache = CacheService.getScriptCache();
-    var key = 'thr_' + token;
-    if (cache.get(key)) return false;
-    cache.put(key, '1', THROTTLE_SEG);
-    return true;
-  } catch (e) {
-    // Fail-CLOSED (OWASP A10): se o CacheService falhar (quota/permissão), o
-    // throttle bloqueia em vez de liberar — senão o teto anti-spam vira nominal
-    // exatamente quando o atacante consegue degradar o cache.
-    Logger.log('throttle degraded: ' + String(e));
-    return false;
-  }
+  return throttleOkCore(
+    function () { return CacheService.getScriptCache(); },
+    token, THROTTLE_SEG,
+    function (msg) { Logger.log(msg); },
+  );
 }
 
 function submitRespostaPublica(payload: unknown): ServerOk {

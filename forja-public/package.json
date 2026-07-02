@@ -6,6 +6,7 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "push": "npm run build && npx clasp push --force",
+    "test": "vitest run",
     "deploy": "node scripts/deploy.cjs"
   },
   "dependencies": {
@@ -17,7 +18,8 @@
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "esbuild-wasm": "^0.24.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.9"
   },
   "engines": {
     "node": ">=22"
