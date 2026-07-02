@@ -62,8 +62,14 @@ const serverResult = await esbuild.transform(serverTs, {
   target: 'es2020',
 });
 // Lib compartilhada (fonte única do score de oportunidade — usada também pelo
-// build do forja-public). GAS não tem ESM: removemos os `export` e injetamos o
-// código no topo do Server.js, virando função global.
+// build do forja-public, que a lê via ../forja/src/lib/score.ts). GAS não tem
+// ESM: removemos os `export` e injetamos o código no topo do Server.js, virando
+// função global. Guard explícito: sem a lib o Server.js quebraria só em runtime
+// ('scoreOportunidadeCore is not defined' — o declare function engana o TS).
+if (!existsSync('src/lib/score.ts')) {
+  console.error('ERRO: src/lib/score.ts não encontrada — o Server.js depende dela em runtime.');
+  process.exit(1);
+}
 const scoreLibTs = readFileSync('src/lib/score.ts', 'utf8').replace(/^export\s+/gm, '');
 const scoreLibJs = (await esbuild.transform(scoreLibTs, { loader: 'ts', target: 'es2020' }))
   .code.replace(/^export\s*\{\s*\};?\s*$/gm, '');

@@ -23,12 +23,27 @@ const clientResult = await esbuild.build({
 
 const serverTs = readFileSync('src/server.ts', 'utf8');
 const serverResult = await esbuild.transform(serverTs, { loader: 'ts', target: 'es2020' });
-// Lib compartilhada com o app principal — fonte ÚNICA do score de oportunidade.
-// Injetada no topo do Server.js (GAS não tem ESM), igual ao build do forja/.
-const scoreLibTs = readFileSync('../forja/src/lib/score.ts', 'utf8').replace(/^export\s+/gm, '');
-const scoreLibJs = (await esbuild.transform(scoreLibTs, { loader: 'ts', target: 'es2020' }))
-  .code.replace(/^export\s*\{\s*\};?\s*$/gm, '');
-const serverJs = '// ── lib compartilhada: forja/src/lib/score.ts ──\n' + scoreLibJs
+
+// Libs injetadas no topo do Server.js (GAS não tem ESM). O guard de existência
+// falha o build com mensagem clara — sem ele, um caminho quebrado viraria
+// 'scoreOportunidadeCore is not defined' só em runtime (o declare function do
+// server.ts engana o TypeScript).
+//   • ../forja/src/lib/score.ts — COMPARTILHADA com o app principal (fonte
+//     única do score). Dependência cross-project intencional: ver README.md.
+//   • src/lib/guards.ts — guards do form público (throttle/token), testados.
+async function libJs(caminho) {
+  if (!existsSync(caminho)) {
+    console.error(`ERRO: lib obrigatória não encontrada: ${caminho}\n` +
+      'O Server.js depende dela em runtime (declare function no server.ts). ' +
+      'Se o repo foi reorganizado, atualize os caminhos no esbuild.mjs.');
+    process.exit(1);
+  }
+  const ts = readFileSync(caminho, 'utf8').replace(/^export\s+/gm, '');
+  const r = await esbuild.transform(ts, { loader: 'ts', target: 'es2020' });
+  return `// ── lib injetada: ${caminho} ──\n` + r.code.replace(/^export\s*\{\s*\};?\s*$/gm, '');
+}
+const serverJs = (await libJs('../forja/src/lib/score.ts'))
+  + '\n' + (await libJs('src/lib/guards.ts'))
   + '\n' + serverResult.code.replace(/^export\s*\{\s*\};?\s*$/gm, '');
 writeFileSync('dist/Server.js', serverJs);
 

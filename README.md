@@ -130,6 +130,17 @@ npm run rollback -- <numero>   # volta o deploy estável pra uma versão anterio
 
 A URL do app é sempre a mesma — só o conteúdo muda/volta no tempo.
 
+**URL canônica de produção** (deployment estável, sem domínio customizado):
+
+```
+https://script.google.com/a/macros/camada7.com.br/s/AKfycbzlZFNAYt9r_k1nZExgQkhu8jmWnF769zr_ctKMUhldT-ZtPWMixGLcI3Icq6EgFN0k/exec
+```
+
+**Dependência cross-project**: os builds do `forja/` e do `forja-public/` injetam
+`forja/src/lib/score.ts` (fonte única do score de oportunidade) no topo dos seus
+`Server.js` — ver o guard em cada `esbuild.mjs`. Se mover essa lib, atualize os
+dois builds.
+
 ---
 
 ## Documentação

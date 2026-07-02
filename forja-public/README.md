@@ -12,6 +12,18 @@ exporia tudo. Este projeto contém **apenas** `doGet` + 2 funções públicas
 (`getFormPublico`, `submitRespostaPublica`), sem nenhuma função administrativa.
 Isolamento por construção (OWASP A01).
 
+## Dependência cross-project (build)
+
+O `esbuild.mjs` deste projeto injeta duas libs no topo do `dist/Server.js`
+(o GAS não tem ESM — elas viram funções globais):
+
+- `../forja/src/lib/score.ts` — **compartilhada com o app principal**: fonte
+  única da fórmula do score de oportunidade. Mover/renomear essa lib exige
+  atualizar os dois `esbuild.mjs`. O build falha com mensagem clara se o
+  caminho quebrar.
+- `src/lib/guards.ts` — guards locais (throttle fail-closed + sanitização de
+  token), puros e cobertos por `npm test` (vitest).
+
 ## Segurança (resumo)
 
 - **Superfície mínima**: só ler form por token e gravar resposta.
