@@ -230,7 +230,24 @@ export default function AuditoriaDrawer({ sistemaId, sistemaNome, repoUrl, scrip
       // 2) Caminho inline (completa, incremental de 1 batch, governança, sem mudança).
       const r = await callServer<ServerResult>('acaoIAAuditarSistema', sistemaId, modo, !!forcar);
       if (r.ok && r.data) {
-        aplicarResultado(r.data as AuditResult);
+        const novo = r.data as AuditResult;
+        aplicarResultado(novo);
+        // Mesmo padrão de aviso do fluxo em lotes: confirma no fim ou avisa que
+        // quebrou (resposta fora do formato → só texto bruto, nada foi salvo).
+        if (!novo.semMudanca) {
+          if (novo.payload) message.success('Auditoria concluída.');
+          else {
+            modal.warning({
+              title: 'A IA respondeu fora do formato',
+              content: (
+                <div style={{ fontSize: 13 }}>
+                  <p>A resposta não trouxe os achados no formato estruturado, então <b>nada foi salvo</b> — o texto bruto fica visível no drawer pra diagnóstico.</p>
+                  <p style={{ color: t.textSecondary }}>Clique em <b>Rodar de novo</b> pra tentar outra vez. Se repetir, troque o modelo de auditoria em Configurações → Inteligência.</p>
+                </div>
+              ),
+            });
+          }
+        }
       } else {
         message.error(r.error || 'Erro ao auditar');
       }

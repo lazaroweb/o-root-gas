@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.240.4] — 2026-07-01
+
+### Aviso de conclusão/quebra também no fluxo sem lotes
+- O fluxo em lotes já confirmava no fim (sucesso/parcial/falha), mas o caminho
+  direto (diff pequeno de 1 lote, "Rodar de novo", governança) terminava em
+  silêncio — ou pior, mostrava só o alerta "Formato não estruturado" sem deixar
+  claro que **nada foi salvo**.
+- Agora TODO caminho avisa no fim: toast "Auditoria concluída." no sucesso, ou
+  modal explicando que a resposta veio fora do formato, que nada foi salvo, e o
+  que fazer (rodar de novo / trocar o modelo em Configurações → Inteligência).
+
+---
+
 ## [1.240.3] — 2026-07-01
 
 ### Corrigido ("Rodar de novo" com modelo thinking → "Formato não estruturado")
