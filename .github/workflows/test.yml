@@ -22,3 +22,10 @@ jobs:
         working-directory: ${{ matrix.projeto }}
       - run: npm test
         working-directory: ${{ matrix.projeto }}
+      - run: npx tsc --noEmit
+        working-directory: ${{ matrix.projeto }}
+      # Exercita a injeção cross-project do esbuild (forja-public lê
+      # ../forja/src/lib/*.ts direto do checkout — não precisa do build do
+      # forja antes, só do fonte; por isso a matrix segue paralela, sem needs).
+      - run: npm run build
+        working-directory: ${{ matrix.projeto }}
