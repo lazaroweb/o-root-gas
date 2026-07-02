@@ -19602,16 +19602,39 @@ function _repararJsonTruncado(s: string): unknown | null {
 }
 
 function _parseAuditPayload(resposta: string): { texto: string; payload: AuditPayload | null } {
-  const openTag = resposta.indexOf('<AUDIT>');
-  const closeTag = resposta.indexOf('</AUDIT>');
-  if (openTag < 0) return { texto: resposta, payload: null };
-  const textoAntes = resposta.slice(0, openTag).trim();
-  // Sem </AUDIT> = resposta truncada pelo limite de tokens → tenta salvar o que
-  // veio (o reparador abaixo corta no último objeto completo).
-  const jsonStr = (closeTag > openTag
-    ? resposta.slice(openTag + '<AUDIT>'.length, closeTag)
-    : resposta.slice(openTag + '<AUDIT>'.length)
-  ).replace(/```json|```/g, '').trim();
+  // Modelos "thinking" prefixam a resposta com <think>…</think> e gastam boa
+  // parte do orçamento aí. Remove os blocos fechados; se sobrar um <think>
+  // ABERTO (truncou no meio do raciocínio), preserva o que vier a partir do
+  // <AUDIT> (se existir) e descarta o resto do raciocínio.
+  let resp = String(resposta || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  const thinkAberto = resp.indexOf('<think>');
+  if (thinkAberto >= 0) {
+    const aud = resp.indexOf('<AUDIT>', thinkAberto);
+    resp = (aud >= 0 ? resp.slice(0, thinkAberto) + resp.slice(aud) : resp.slice(0, thinkAberto)).trim();
+  }
+
+  const openTag = resp.indexOf('<AUDIT>');
+  const closeTag = resp.indexOf('</AUDIT>');
+  let textoAntes = resp;
+  let jsonStr = '';
+  if (openTag >= 0) {
+    textoAntes = resp.slice(0, openTag).trim();
+    // Sem </AUDIT> = resposta truncada pelo limite de tokens → tenta salvar o
+    // que veio (o reparador abaixo corta no último objeto completo).
+    jsonStr = (closeTag > openTag
+      ? resp.slice(openTag + '<AUDIT>'.length, closeTag)
+      : resp.slice(openTag + '<AUDIT>'.length)
+    ).replace(/```json|```/g, '').trim();
+  } else {
+    // Alguns modelos esquecem o envelope <AUDIT>: procura um objeto JSON com
+    // "findings" solto no texto e tenta a partir dele.
+    const fi = resp.indexOf('"findings"');
+    if (fi < 0) return { texto: resp, payload: null };
+    const ini = resp.lastIndexOf('{', fi);
+    if (ini < 0) return { texto: resp, payload: null };
+    textoAntes = resp.slice(0, ini).trim();
+    jsonStr = resp.slice(ini).replace(/```json|```/g, '').trim();
+  }
   try {
     let parsed: unknown;
     try { parsed = JSON.parse(jsonStr); }
@@ -19622,10 +19645,10 @@ function _parseAuditPayload(resposta: string): { texto: string; payload: AuditPa
         parsed = JSON.parse(m[0]);
       } catch {
         parsed = _repararJsonTruncado(jsonStr);
-        if (!parsed) return { texto: textoAntes || resposta, payload: null };
+        if (!parsed) return { texto: textoAntes || resp, payload: null };
       }
     }
-    if (!parsed || typeof parsed !== 'object') return { texto: textoAntes || resposta, payload: null };
+    if (!parsed || typeof parsed !== 'object') return { texto: textoAntes || resp, payload: null };
     const p = parsed as Record<string, unknown>;
     const findingsRaw = Array.isArray(p.findings) ? p.findings : [];
     const findings: AuditFinding[] = findingsRaw.map((f: unknown, i: number) => {
@@ -19656,7 +19679,7 @@ function _parseAuditPayload(resposta: string): { texto: string; payload: AuditPa
     };
     return { texto: textoAntes, payload };
   } catch {
-    return { texto: resposta, payload: null };
+    return { texto: resp, payload: null };
   }
 }
 
@@ -20081,7 +20104,11 @@ function _sintetizarNarrativaPosBatch(
       { role: 'system', content: 'Você é um auditor técnico sênior fazendo a síntese final de uma auditoria já reconciliada.' },
       { role: 'user', content: prompt },
     ];
-    const resp = forjaCallLLM(messages, 800, undefined, 'auditoria');
+    // 2500 (não 800): modelos "thinking" raciocinam antes de responder e 800
+    // truncava. O strip de <think> evita casar um JSON de rascunho do raciocínio.
+    const resp = forjaCallLLM(messages, 2500, undefined, 'auditoria')
+      .replace(/<think>[\s\S]*?<\/think>/g, '')
+      .replace(/<think>[\s\S]*$/, '');
     // Parse tolerante: extrai primeiro {...}
     const m = resp.match(/\{[\s\S]*\}/);
     if (!m) return fallback;
@@ -20561,6 +20588,7 @@ function _executarAuditoriaIncremental(
     + '- Severidades têm critério OBJETIVO: ALTA=segurança/perda/blocker; MEDIA=dívida técnica que limita evolução, deps com CVE, ausência de testes em código crítico; BAIXA=DX/qualidade que economiza tempo no longo prazo (use COM PARCIMÔNIA).\n'
     + '- Máximo 8 findings. Não force mínimo — aceito 0 novos findings se o diff só resolveu coisas.\n'
     + '- Todo achado de CÓDIGO deve citar o ARQUIVO e o trecho literal do diff. Ex: "src/api.ts → + const API_KEY = \'sk-...\'".\n'
+    + '- SEJA COMPACTO: "prompt" com no máximo 80 palavras e "solucao" com no máximo 3 passos. A resposta INTEIRA precisa caber no limite de saída — um JSON cortado no meio invalida a auditoria.\n'
     + '- O JSON dentro de <AUDIT> precisa ser VÁLIDO. Aspas escapadas, sem comentários, sem trailing commas.\n'
     + '- toolParams perfeito pro tipo: registrar_risco {sistemaId, area, descricao, gravidade}; registrar_decisao {sistemaId, titulo, decisao, justificativa}; registrar_oportunidade {titulo, valorEstimado, proximoPasso}.\n\n'
     + _CHECKLIST_CODIGO_IA + '\n'
@@ -20580,7 +20608,9 @@ function _executarAuditoriaIncremental(
   const modeloEfetivo = modeloAuditoria || props.getProperty('LLM_MODEL') || 'desconhecido';
 
   const inicio = Date.now();
-  const resposta = forjaCallLLM(messages, 5500, modeloAuditoria, 'auditoria');
+  // 8000 (não 5500): modelos "thinking" gastam parte do orçamento raciocinando
+  // antes do <AUDIT> — teto menor cortava o JSON no meio.
+  const resposta = forjaCallLLM(messages, 8000, modeloAuditoria, 'auditoria');
   const duracaoMs = Date.now() - inicio;
   const parsed = _parseAuditPayload(resposta);
 
@@ -20751,7 +20781,7 @@ function acaoIAAuditarSistema(sistemaId: string, modo?: string, forcar?: boolean
       + '      "problema": "<O QUE está errado. 1-2 frases. Sem repetir o título.>",\n'
       + '      "evidencia": "<RASTREABILIDADE: cite literalmente o dado do contexto que sustenta o problema. Ex: \\"0 decisões registradas\\", \\"stack vazia\\", \\"sem urlProd nem dominioCustomizado\\". Se você ESTIVER INFERINDO sem dado direto, comece com \\"Inferência:\\".>",\n'
       + '      "solucao": "<COMO resolver. 2-4 passos concretos. Numera com 1) 2) 3).>",\n'
-      + '      "prompt": "<Texto pronto pra colar no Cursor ou Claude. Inicia com \\"Você é...\\" ou \\"Sua tarefa é...\\". Pode ter 100-400 palavras. Sem cercas markdown internas.>",\n'
+      + '      "prompt": "<Texto pronto pra colar no Cursor ou Claude. Inicia com \\"Você é...\\" ou \\"Sua tarefa é...\\". Máx 80 palavras, direto ao ponto. Sem cercas markdown internas.>",\n'
       + '      "toolSugerida": "registrar_risco|registrar_decisao|registrar_oportunidade",\n'
       + '      "toolParams": { ...parametros corretos da tool, com sistemaId="' + sistemaId + '"... }\n'
       + '    }\n'
@@ -20769,6 +20799,7 @@ function acaoIAAuditarSistema(sistemaId: string, modo?: string, forcar?: boolean
       + '- NUNCA repita um problema que já está em DECISÕES PRÉVIAS, RISCOS ABERTOS ou ALERTAS RECENTES.\n'
       + '- Cada finding TEM que ter evidência rastreável ao contexto, ou começar com "Inferência:" e explicar de onde tirou.\n'
       + (temCodigo ? '- Quando o achado vier do CÓDIGO, a evidência DEVE citar o ARQUIVO e o trecho literal. Ex: "src/config.ts → const API_KEY = \'sk-...\'". Priorize achados de código reais (segredos, deps desatualizadas, falta de testes/CI, arquitetura, código morto) sobre achados de metadados.\n' : '')
+      + '- SEJA COMPACTO: "solucao" com no máximo 3 passos. A resposta INTEIRA precisa caber no limite de saída — um JSON cortado no meio invalida a auditoria.\n'
       + '- O JSON dentro de <AUDIT> precisa ser VÁLIDO. Aspas escapadas, sem comentários, sem trailing commas.\n'
       + '- toolParams precisa estar PERFEITO pro tipo de tool. Ex: registrar_risco quer {sistemaId, area, descricao, gravidade}; registrar_decisao quer {sistemaId, titulo, decisao, justificativa}; registrar_oportunidade quer {titulo, valorEstimado, proximoPasso}.\n\n'
       + (temCodigo ? _CHECKLIST_CODIGO_IA + '\n' : '')
@@ -20786,7 +20817,9 @@ function acaoIAAuditarSistema(sistemaId: string, modo?: string, forcar?: boolean
     const modeloEfetivo = modeloAuditoria || props.getProperty('LLM_MODEL') || 'desconhecido';
 
     const inicio = Date.now();
-    const resposta = forjaCallLLM(messages, 5500, modeloAuditoria, 'auditoria');
+    // 8000 (não 5500): modelos "thinking" gastam parte do orçamento raciocinando
+    // antes do <AUDIT> — teto menor cortava o JSON no meio.
+    const resposta = forjaCallLLM(messages, 8000, modeloAuditoria, 'auditoria');
     const duracaoMs = Date.now() - inicio;
     const parsed = _parseAuditPayload(resposta);
 

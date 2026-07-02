@@ -36,6 +36,26 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.240.3] — 2026-07-01
+
+### Corrigido ("Rodar de novo" com modelo thinking → "Formato não estruturado")
+- **Causa:** o "Rodar de novo" força a auditoria COMPLETA — um caminho que ainda
+  não tinha as defesas da v1.240.2. E o modelo de auditoria configurado é um
+  modelo **"thinking"**: ele gasta boa parte do orçamento de saída raciocinando
+  num bloco `<think>…` antes da resposta. Com teto de 5500 tokens, o raciocínio
+  consumia tudo e o bloco `<AUDIT>` nunca chegava → "Formato não estruturado".
+- **Mesmo racional em TODOS os caminhos** (completa, incremental, lotes, síntese):
+  - Parser remove blocos `<think>…</think>` (e raciocínio truncado sem
+    fechamento) antes de procurar o `<AUDIT>`.
+  - Se o modelo esquecer o envelope `<AUDIT>`, o parser procura um JSON com
+    `"findings"` solto no texto e usa o reparador de truncamento nele.
+  - Tetos de saída: completa/incremental 5500 → **8000**; síntese pós-lotes
+    800 → **2500**.
+  - Compacidade nos prompts: "prompt" ≤ 80 palavras e "solucao" ≤ 3 passos
+    também na completa e na incremental (a de lotes já tinha).
+
+---
+
 ## [1.240.2] — 2026-07-01
 
 ### Corrigido (lotes falhavam com "sem bloco <AUDIT> com JSON válido")
