@@ -20072,7 +20072,7 @@ function _auditarUmBatch(
   numBatch: number,
   totalBatches: number,
   modeloAuditoria: string,
-): AuditPayload | null {
+): { payload: AuditPayload | null; erro?: string } {
   const areasPermitidas = 'governanca|arquitetura|seguranca|dependencias|testes|operacional|financeiro|produto|ux|codigo|performance';
   const prevList = prevPayload.findings
     .map((f, i) => `#${i + 1} [${f.severidade}|${f.area}] ${f.titulo}`)
@@ -20122,9 +20122,10 @@ function _auditarUmBatch(
   try {
     const resp = forjaCallLLM(messages, 4000, modeloAuditoria, 'auditoria');
     const parsed = _parseAuditPayload(resp);
-    return parsed.payload;
-  } catch {
-    return null;
+    if (!parsed.payload) return { payload: null, erro: 'a IA não devolveu um bloco <AUDIT> com JSON válido' };
+    return { payload: parsed.payload };
+  } catch (e) {
+    return { payload: null, erro: e instanceof Error ? e.message : 'falha na chamada à IA' };
   }
 }
 
@@ -20162,8 +20163,8 @@ function _executarAuditoriaIncrementalChunked(
   const payloadsParciais: AuditPayload[] = [];
   for (let i = 0; i < paginado.batches.length; i++) {
     const b = paginado.batches[i];
-    const p = _auditarUmBatch(sistemaId, sistema, b.contexto, prevPayload, i + 1, paginado.batches.length, modeloAuditoria);
-    if (p) payloadsParciais.push(p);
+    const r = _auditarUmBatch(sistemaId, sistema, b.contexto, prevPayload, i + 1, paginado.batches.length, modeloAuditoria);
+    if (r.payload) payloadsParciais.push(r.payload);
   }
 
   return _consolidarAuditoriaBatches(
@@ -20369,10 +20370,19 @@ function auditarBatchProcessar(jobId: string, indice: number): ServerResult {
     // prev é contexto OPCIONAL de reconciliação; se faltar, o batch ainda roda.
     if (prevRaw) { try { prevPayload = JSON.parse(prevRaw) as AuditPayload; } catch (e) { _logInfo('auditarBatchProcessar: prev inválido', e); } }
 
-    const p = _auditarUmBatch(man.sistemaId, sistema, contexto, prevPayload, i + 1, man.totalBatches, man.modeloAuditoria);
-    if (p) cache.put(_auditJobKey(jobId, 'r' + i), JSON.stringify(p), _AUDIT_JOB_TTL);
+    const r = _auditarUmBatch(man.sistemaId, sistema, contexto, prevPayload, i + 1, man.totalBatches, man.modeloAuditoria);
+    if (r.payload) cache.put(_auditJobKey(jobId, 'r' + i), JSON.stringify(r.payload), _AUDIT_JOB_TTL);
 
-    return { ok: true, data: { indice: i, ok: !!p, findings: p ? p.findings.length : 0, resolvidos: (p && p.resolvidos) ? p.resolvidos.length : 0 } };
+    return {
+      ok: true,
+      data: {
+        indice: i,
+        ok: !!r.payload,
+        erro: r.erro || '',
+        findings: r.payload ? r.payload.findings.length : 0,
+        resolvidos: (r.payload && r.payload.resolvidos) ? r.payload.resolvidos.length : 0,
+      },
+    };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao processar o batch' };
   }

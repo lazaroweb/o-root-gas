@@ -36,6 +36,24 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.240.1] — 2026-07-01
+
+### Auditoria em lotes: confirmação no fim + motivo da falha
+- **Problema:** um job chegava a 5/5, mas se os lotes falhavam (ex.: modelo de
+  auditoria sem chave, limite estourado, ou resposta sem JSON), a finalização não
+  achava resultado, voltava pra tela "N mudanças a auditar" e **não dizia o
+  porquê**.
+- **Correção:** cada lote agora reporta o **motivo** da falha (`_auditarUmBatch`
+  devolve `{ payload, erro }`, e `auditarBatchProcessar` repassa o erro). O cliente
+  mostra, ao final:
+  - **sucesso total:** "Auditoria concluída — N lotes analisados.";
+  - **parcial:** modal de aviso listando quais lotes falharam e por quê (o que deu
+    certo é salvo);
+  - **falha total:** modal de erro persistente com os motivos e a dica mais comum
+    (modelo de auditoria em Configurações → Inteligência).
+
+---
+
 ## [1.240.0] — 2026-07-01
 
 ### Auditoria em lotes resumível (não estoura mais o limite de 6 min)

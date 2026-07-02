@@ -62,7 +62,7 @@ const MODO_HINT: Record<AuditModo, string> = {
 
 export default function AuditoriaDrawer({ sistemaId, sistemaNome, repoUrl, scriptId, open, onClose, onSaudeRecalculada, onAuditoriaAtualizada }: AuditoriaDrawerProps): React.ReactElement {
   const t = useTokens();
-  const { message } = AntApp.useApp();
+  const { message, modal } = AntApp.useApp();
   const [loading, setLoading] = useState(false);
   const [loadingUltima, setLoadingUltima] = useState(false);
   const [resultado, setResultado] = useState<AuditResult | null>(null);
@@ -158,20 +158,69 @@ export default function AuditoriaDrawer({ sistemaId, sistemaNome, repoUrl, scrip
           const jobId = d.jobId;
           const total = d.totalBatches;
           setBatchProg({ feito: 0, total });
+          let okCount = 0;
+          const falhas: string[] = []; // "Lote i: motivo" dos que não voltaram
           for (let i = 0; i < total; i++) {
             // 2 tentativas por batch: um hiccup de rede não derruba o job inteiro.
             let okBatch = false;
+            let ultimoErro = 'motivo desconhecido';
             for (let tent = 0; tent < 2 && !okBatch; tent++) {
               try {
                 const rb = await callServer<ServerResult>('auditarBatchProcessar', jobId, i);
-                okBatch = !!(rb && rb.ok);
-              } catch { okBatch = false; }
+                const db = (rb?.data as { ok?: boolean; erro?: string } | undefined);
+                okBatch = !!(rb && rb.ok && db && db.ok);
+                if (!okBatch) ultimoErro = (db && db.erro) || rb?.error || ultimoErro;
+              } catch (e) { ultimoErro = e instanceof Error ? e.message : ultimoErro; okBatch = false; }
             }
+            if (okBatch) okCount++;
+            else falhas.push(`Lote ${i + 1}: ${ultimoErro}`);
             setBatchProg({ feito: i + 1, total });
           }
+
+          // Nenhum lote deu certo → não adianta finalizar: mostra erro persistente
+          // dizendo ONDE quebrou (o usuário pediu explicitamente esse aviso).
+          if (okCount === 0) {
+            modal.error({
+              title: 'A auditoria em lotes não completou',
+              content: (
+                <div style={{ fontSize: 13 }}>
+                  <p>Todos os {total} lotes falharam, então nada foi salvo. Motivos:</p>
+                  <ul style={{ margin: '6px 0 10px 18px', padding: 0 }}>
+                    {falhas.slice(0, 5).map((f, i) => <li key={i} style={{ marginBottom: 3 }}>{f}</li>)}
+                  </ul>
+                  <p style={{ color: t.textSecondary }}>Geralmente é o modelo de auditoria (em Configurações → Inteligência) sem chave/limite estourado, ou um modelo que não devolve JSON. Troque o modelo e rode de novo.</p>
+                </div>
+              ),
+            });
+            return;
+          }
+
           const fin = await callServer<ServerResult>('auditarBatchFinalizar', jobId);
-          if (fin.ok && fin.data) aplicarResultado(fin.data as AuditResult);
-          else message.error(fin.error || 'Erro ao finalizar a auditoria em lotes');
+          if (fin.ok && fin.data) {
+            aplicarResultado(fin.data as AuditResult);
+            if (falhas.length > 0) {
+              // Sucesso PARCIAL: salvou, mas nem todos os lotes entraram.
+              modal.warning({
+                title: `Auditoria parcial — ${okCount}/${total} lotes`,
+                content: (
+                  <div style={{ fontSize: 13 }}>
+                    <p>O resultado foi salvo com {okCount} de {total} lotes. Estes falharam:</p>
+                    <ul style={{ margin: '6px 0 10px 18px', padding: 0 }}>
+                      {falhas.slice(0, 5).map((f, i) => <li key={i} style={{ marginBottom: 3 }}>{f}</li>)}
+                    </ul>
+                    <p style={{ color: t.textSecondary }}>Rode de novo pra tentar completar os lotes que faltaram.</p>
+                  </div>
+                ),
+              });
+            } else {
+              message.success(`Auditoria concluída — ${total} lotes analisados.`);
+            }
+          } else {
+            modal.error({
+              title: 'Erro ao finalizar a auditoria',
+              content: <div style={{ fontSize: 13 }}>{fin.error || 'A consolidação dos lotes falhou.'}<div style={{ color: t.textSecondary, marginTop: 8 }}>Os {okCount} lote(s) analisados não puderam ser salvos. Tente rodar de novo.</div></div>,
+            });
+          }
           return;
         }
       } catch {
