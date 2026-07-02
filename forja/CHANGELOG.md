@@ -36,6 +36,26 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.240.2] — 2026-07-01
+
+### Corrigido (lotes falhavam com "sem bloco <AUDIT> com JSON válido")
+- **Causa raiz:** o lote pedia até 6 findings com campo "prompt" longo (100-400
+  palavras cada), mas o teto de saída era **4000 tokens** → a resposta era
+  **cortada no meio do JSON**, o `</AUDIT>` nunca chegava e o parser descartava
+  o lote inteiro (4 de 5 lotes falharam assim).
+- **Três defesas combinadas:**
+  1. **Teto de saída dobrado** (4000 → 8000 tokens) na chamada do lote.
+  2. **Prompt mais compacto:** "prompt" ≤ 60 palavras e "solucao" ≤ 3 passos por
+     finding, com instrução explícita de caber no limite de saída.
+  3. **Reparador de JSON truncado:** se a resposta ainda vier cortada (sem
+     `</AUDIT>` ou JSON incompleto), o parser corta no último objeto completo e
+     fecha as chaves/colchetes pendentes — recupera os findings inteiros e
+     descarta só o que ficou pela metade, em vez de perder o lote.
+- Mensagens de erro mais específicas ("respondeu sem o bloco" vs "JSON inválido
+  mesmo após reparo") pra facilitar o próximo diagnóstico.
+
+---
+
 ## [1.240.1] — 2026-07-01
 
 ### Auditoria em lotes: confirmação no fim + motivo da falha

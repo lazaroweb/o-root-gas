@@ -19567,19 +19567,63 @@ interface AuditPayload {
   resolvidos?: string[];
 }
 
+// Repara um JSON TRUNCADO (resposta cortada pelo limite de tokens): corta no
+// último '}' completo e fecha as chaves/colchetes que ficaram abertos, tentando
+// do fim pro começo até parsear. Recupera os findings completos e descarta só o
+// que ficou pela metade — muito melhor que perder o lote inteiro.
+function _repararJsonTruncado(s: string): unknown | null {
+  let str = String(s || '').trim();
+  const ini = str.indexOf('{');
+  if (ini < 0) return null;
+  str = str.slice(ini);
+  for (let cut = str.length; cut > 1;) {
+    const idx = str.lastIndexOf('}', cut - 1);
+    if (idx < 0) return null;
+    const frag = str.slice(0, idx + 1);
+    // Rastreia aberturas fora de strings pra saber o que falta fechar.
+    let dentroStr = false, esc = false;
+    const pilha: string[] = [];
+    for (let i = 0; i < frag.length; i++) {
+      const ch = frag[i];
+      if (esc) { esc = false; continue; }
+      if (ch === '\\') { esc = true; continue; }
+      if (ch === '"') { dentroStr = !dentroStr; continue; }
+      if (dentroStr) continue;
+      if (ch === '{' || ch === '[') pilha.push(ch);
+      else if (ch === '}' || ch === ']') pilha.pop();
+    }
+    if (!dentroStr) {
+      const fecho = pilha.reverse().map((c) => (c === '{' ? '}' : ']')).join('');
+      try { return JSON.parse(frag + fecho); } catch (e) { _logInfo('repararJson: tentativa falhou, recuando', e); }
+    }
+    cut = idx;
+  }
+  return null;
+}
+
 function _parseAuditPayload(resposta: string): { texto: string; payload: AuditPayload | null } {
   const openTag = resposta.indexOf('<AUDIT>');
   const closeTag = resposta.indexOf('</AUDIT>');
-  if (openTag < 0 || closeTag < 0) return { texto: resposta, payload: null };
+  if (openTag < 0) return { texto: resposta, payload: null };
   const textoAntes = resposta.slice(0, openTag).trim();
-  const jsonStr = resposta.slice(openTag + '<AUDIT>'.length, closeTag).trim();
+  // Sem </AUDIT> = resposta truncada pelo limite de tokens → tenta salvar o que
+  // veio (o reparador abaixo corta no último objeto completo).
+  const jsonStr = (closeTag > openTag
+    ? resposta.slice(openTag + '<AUDIT>'.length, closeTag)
+    : resposta.slice(openTag + '<AUDIT>'.length)
+  ).replace(/```json|```/g, '').trim();
   try {
     let parsed: unknown;
     try { parsed = JSON.parse(jsonStr); }
     catch {
-      const m = jsonStr.match(/\{[\s\S]*\}/);
-      if (!m) return { texto: textoAntes || resposta, payload: null };
-      parsed = JSON.parse(m[0]);
+      try {
+        const m = jsonStr.match(/\{[\s\S]*\}/);
+        if (!m) throw new Error('sem objeto JSON');
+        parsed = JSON.parse(m[0]);
+      } catch {
+        parsed = _repararJsonTruncado(jsonStr);
+        if (!parsed) return { texto: textoAntes || resposta, payload: null };
+      }
     }
     if (!parsed || typeof parsed !== 'object') return { texto: textoAntes || resposta, payload: null };
     const p = parsed as Record<string, unknown>;
@@ -20108,6 +20152,7 @@ function _auditarUmBatch(
     + '- Persistem ≠ todos os anteriores: só marque "persiste" se o batch atual mostra que o problema CONTINUA (ex.: arquivo do problema NÃO mudou ou mudou em outra dimensão).\n'
     + '- Achados NOVOS: só os introduzidos pelo diff DESTE batch. Sem inferências sobre outros batches.\n'
     + '- Máx 6 findings por batch. Qualidade > quantidade.\n'
+    + '- SEJA COMPACTO: "prompt" com no máximo 60 palavras e "solucao" com no máximo 3 passos. A resposta INTEIRA precisa caber no limite de saída — um JSON cortado no meio perde o lote todo.\n'
     + '- JSON VÁLIDO. Aspas escapadas. Sem comentários.\n\n'
     + _CHECKLIST_CODIGO_IA + '\n'
     + 'IDs reais: sistemaId="' + sistemaId + '"\n\n'
@@ -20120,9 +20165,15 @@ function _auditarUmBatch(
     { role: 'user', content: promptUser },
   ];
   try {
-    const resp = forjaCallLLM(messages, 4000, modeloAuditoria, 'auditoria');
+    // 8000 (não 4000): 6 findings com "prompt" colável estouravam 4000 tokens
+    // de saída fácil → JSON cortado no meio → lote perdido. Com o teto maior +
+    // instrução de compacidade + reparador de JSON truncado, o lote sobrevive.
+    const resp = forjaCallLLM(messages, 8000, modeloAuditoria, 'auditoria');
     const parsed = _parseAuditPayload(resp);
-    if (!parsed.payload) return { payload: null, erro: 'a IA não devolveu um bloco <AUDIT> com JSON válido' };
+    if (!parsed.payload) {
+      const semTag = resp.indexOf('<AUDIT>') < 0;
+      return { payload: null, erro: semTag ? 'a IA respondeu sem o bloco <AUDIT>' : 'JSON do bloco <AUDIT> inválido (nem o reparador salvou)' };
+    }
     return { payload: parsed.payload };
   } catch (e) {
     return { payload: null, erro: e instanceof Error ? e.message : 'falha na chamada à IA' };
