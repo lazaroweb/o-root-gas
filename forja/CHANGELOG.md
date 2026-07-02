@@ -36,6 +36,24 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.241.2] — 2026-07-02
+
+### Corrigido (2ª rodada da auditoria Forja IA — commit base 531dc8f)
+
+- **[MEDIA·testes] Guards do form público testados** — `_throttleOk` e
+  `_sanitizeToken` extraídos pra `forja-public/src/lib/guards.ts` (funções
+  puras) com 9 testes: fail-closed com cache quebrado, janela de throttle,
+  injection e truncamento de token. CI em matrix roda os dois projetos.
+- **[MEDIA·arquitetura] Guard explícito no build cross-project** — os dois
+  `esbuild.mjs` falham com mensagem clara se uma lib injetada sumir; READMEs
+  documentam a dependência `forja/src/lib/score.ts` compartilhada.
+- **[MEDIA·governança] URL canônica de produção registrada no README** raiz
+  (deployment estável `/exec`).
+- lucide-react `^1.18.0`: **falso positivo** confirmado via npm (série 1.x
+  oficial até 1.23.0) — sem mudança.
+
+---
+
 ## [1.241.1] — 2026-07-02
 
 ### Corrigido (rodada da auditoria Forja IA — commit base 233e42a)
