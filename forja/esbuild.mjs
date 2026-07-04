@@ -78,6 +78,7 @@ async function libJs(caminho) {
 // Strip any export {} that esbuild might add (GAS doesn't support ESM)
 const serverJs = (await libJs('src/lib/schema.ts'))
   + '\n' + (await libJs('src/lib/score.ts'))
+  + '\n' + (await libJs('src/lib/faturaJson.ts'))
   + '\n' + serverResult.code.replace(/^export\s*\{\s*\};?\s*$/gm, '');
 writeFileSync('dist/Server.js', serverJs);
 

@@ -36,6 +36,36 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.244.0] — 2026-07-04
+
+### Corrigido
+
+- **Importação de fatura: fim do "não retornou um JSON válido" em fatura
+  longa** (Porto/Itaú multi-página). Três causas atacadas de uma vez:
+  1. **JSON truncado agora é reparado** — fatura grande estourava o limite de
+     saída do modelo e o JSON vinha decepado no meio da lista; o parser
+     desistia e a importação falhava inteira. Agora o reparador de truncamento
+     (o mesmo da auditoria) recupera os itens completos e a conciliação aponta
+     a diferença — com o botão de lançar o ajuste já existente na revisão.
+  2. **Gemini com 32768 tokens de saída** (antes 8192) — espaço pra fatura com
+     dezenas de parcelas e cartões adicionais sem cortar.
+  3. **Texto da fatura até 60k caracteres** (antes 14k) — o corte antigo
+     decepava fatura multi-página: itens reais ficavam fora, a conciliação
+     nunca fechava e as rodadas de correção só queimavam tempo.
+- **Teto de tempo de 150s nas rodadas de correção** — sem guarda, Gemini +
+  fallback de texto (cada um com retries e 2 correções) passavam de 3 minutos
+  pra no fim falhar. Estourou o orçamento → devolve o melhor resultado parcial.
+
+### Alterado
+
+- **Parser de JSON de fatura extraído pra `src/lib/faturaJson.ts`** — funções
+  puras (limpeza de `<think>`, parse tolerante, números BR, reparo de
+  truncamento) com testes de regressão no vitest, injetadas no build (mesmo
+  padrão do `score.ts`). A rotina de importação deixa de ser "ajuste eterno":
+  cada padrão que quebrar vira caso de teste permanente.
+
+---
+
 ## [1.243.0] — 2026-07-02
 
 ### Alterado

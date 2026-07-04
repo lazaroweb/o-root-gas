@@ -9648,9 +9648,21 @@ const _REGRAS_FATURA_COMUNS =
   + 'CONCILIE: a soma de (compras + encargos − estornos − crédito de saldo anterior) DEVE bater com o "total". '
   + 'Se a data do item não tiver ano, use o ano do período da fatura. Números com ponto decimal e sem separador de milhar (1285.90, nunca 1.285,90). Português do Brasil.';
 
+// Orçamento de tempo das rodadas de correção (conciliação). O RPC do GAS tem
+// teto de ~6min: sem guarda, Gemini + fallback de texto, cada um com retries e
+// 2 correções, passavam de 3min pra no fim falhar. Estourou o orçamento →
+// devolve o melhor resultado parcial (a UI mostra a diferença e tem o botão
+// de lançar o ajuste).
+const _FATURA_BUDGET_MS = 150000;
+
 function interpretarFaturaIA(textoFatura: string): ServerResult {
   try {
-    const txt = String(textoFatura || '').replace(/\u0000/g, ' ').slice(0, 14000);
+    const t0 = Date.now();
+    // 60k chars ≈ 15k tokens — cabe folgado nos modelos atuais. O corte antigo
+    // (14k) decepava fatura longa (Porto/Itaú multi-página): itens reais ficavam
+    // fora do texto, a conciliação NUNCA fechava e as rodadas extras só
+    // queimavam tempo sem ter como acertar.
+    const txt = String(textoFatura || '').replace(/\u0000/g, ' ').slice(0, 60000);
     if (txt.trim().length < 20) return { ok: false, error: 'Texto da fatura vazio ou muito curto.' };
     const sys = 'Você é um extrator de dados de faturas de cartão de crédito brasileiras. '
       + 'Recebe o texto bruto de uma fatura e extrai TODAS as compras/lançamentos. '
@@ -9689,7 +9701,7 @@ function interpretarFaturaIA(textoFatura: string): ServerResult {
 
     // Camada viva: enquanto a soma não bater, re-extrai apontando o quê e o porquê.
     let tentativas = 0;
-    while (!c.bateu && total > 0 && tentativas < 2) {
+    while (!c.bateu && total > 0 && tentativas < 2 && (Date.now() - t0) < _FATURA_BUDGET_MS) {
       tentativas++;
       const corr = forjaCallLLMDetalhado([
         { role: 'system', content: sys },
@@ -10104,6 +10116,7 @@ function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPa
 // escaneado. Classifica cada compra numa conta do plano de contas (se existir).
 function interpretarFaturaGemini(base64: string, mimeType: string): ServerResult {
   try {
+    const t0 = Date.now();
     if (!geminiTemChave()) return { ok: false, error: 'Configure a chave do Gemini em Configurações pra usar a leitura direta.' };
     const dados = String(base64 || '').replace(/^data:[^;]+;base64,/, '');
     if (dados.length < 50) return { ok: false, error: 'Arquivo vazio ou inválido.' };
@@ -10148,7 +10161,10 @@ function interpretarFaturaGemini(base64: string, mimeType: string): ServerResult
       { text: instr },
       { inline_data: { mime_type: mimeType || 'application/pdf', data: dados } },
     ];
-    const r = geminiGenerateContent(partes, { system: sys, json: true, maxTokens: 8192, temperature: 0.1 });
+    // 32768 tokens de saída: fatura longa (Porto/Itaú, cartões adicionais,
+    // dezenas de parcelas) estourava os 8192 antigos e o JSON vinha decepado —
+    // era a causa nº 1 do "não retornou um JSON válido" depois de minutos.
+    const r = geminiGenerateContent(partes, { system: sys, json: true, maxTokens: 32768, temperature: 0.1 });
     const parsed = parseGem(r.texto);
     if (!parsed) return { ok: false, error: 'O Gemini não retornou um JSON válido. Tente de novo.' };
 
@@ -10160,13 +10176,13 @@ function interpretarFaturaGemini(base64: string, mimeType: string): ServerResult
 
     // Camada viva: reenvia o PDF apontando o quê/porquê até a soma bater (2x).
     let tentativas = 0;
-    while (!c.bateu && total > 0 && tentativas < 2) {
+    while (!c.bateu && total > 0 && tentativas < 2 && (Date.now() - t0) < _FATURA_BUDGET_MS) {
       tentativas++;
       const partesCorr: GeminiParte[] = [
         { text: instr + '\n\n' + _instrucaoCorrecaoFatura(itens, c) },
         { inline_data: { mime_type: mimeType || 'application/pdf', data: dados } },
       ];
-      const corr = geminiGenerateContent(partesCorr, { system: sys, json: true, maxTokens: 8192, temperature: 0.1 });
+      const corr = geminiGenerateContent(partesCorr, { system: sys, json: true, maxTokens: 32768, temperature: 0.1 });
       const p2 = parseGem(corr.texto);
       if (!p2) break;
       const itens2 = mapear(p2);
@@ -15554,41 +15570,23 @@ function getThemeMode(): ServerResult {
 // FORJA IA — Conselho de especialistas, Blueprint e Diagramas (Fase 3)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Parsing de JSON de LLM — fonte única em src/lib/faturaJson.ts (pura,
+// testada no vitest), injetada no topo do Server.js pelo esbuild.mjs.
+declare function extrairJsonCore(texto: string): unknown;
+declare function extrairJsonFaturaCore(texto: string): unknown;
+declare function repararJsonTruncadoCore(s: string): unknown | null;
+
 // Extrai JSON de uma resposta do LLM (tolera ```json e texto ao redor).
 function extrairJson(texto: string): unknown {
-  let s = String(texto || '').trim();
-  s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-  try { return JSON.parse(s); } catch { /* tenta recortar */ }
-  const ini = Math.min(...[s.indexOf('{'), s.indexOf('[')].filter(i => i >= 0).concat([Infinity]));
-  const fim = Math.max(s.lastIndexOf('}'), s.lastIndexOf(']'));
-  if (ini !== Infinity && fim > ini) {
-    try { return JSON.parse(s.slice(ini, fim + 1)); } catch { /* falhou */ }
-  }
-  throw new Error('A IA não retornou um JSON válido.');
+  return extrairJsonCore(texto);
 }
 
-// A IA às vezes escreve valores no formato BR (ex.: 1.285,90) dentro dos campos
-// numéricos da fatura — o que quebra o JSON.parse (vírgula no meio do número).
-// Normaliza SÓ os campos conhecidos (valor/total) pra ponto decimal e remove
-// separador de milhar; também converte de string ("1285,90") pra número.
-function _repararNumerosFaturaJson(s: string): string {
-  return String(s || '').replace(
-    /("(?:valor|total)"\s*:\s*)"?(-?\d[\d.]*(?:,\d+)?)"?/g,
-    (_m, pre: string, num: string) => {
-      let n = num;
-      if (n.indexOf(',') >= 0) n = n.replace(/\./g, '').replace(',', '.');
-      return `${pre}${n}`;
-    },
-  );
-}
-
-// Parser de JSON de fatura tolerante: tenta o normal e, se falhar, repara os
-// números BR e tenta de novo. Centraliza o tratamento usado pelos extratores.
+// Parser de JSON de fatura tolerante: parse normal → números BR reparados →
+// reparo de JSON truncado pelo limite de tokens (fatura grande estourava a
+// saída e a importação falhava inteira; agora recupera os itens completos e a
+// conciliação aponta a diferença).
 function extrairJsonFatura(texto: string): unknown {
-  try { return extrairJson(texto); }
-  catch {
-    return extrairJson(_repararNumerosFaturaJson(String(texto || '')));
-  }
+  return extrairJsonFaturaCore(texto);
 }
 
 // Tenta extrair um bloco Mermaid válido de uma resposta crua da IA.
@@ -19548,38 +19546,12 @@ interface AuditPayload {
   resolvidos?: string[];
 }
 
-// Repara um JSON TRUNCADO (resposta cortada pelo limite de tokens): corta no
-// último '}' completo e fecha as chaves/colchetes que ficaram abertos, tentando
-// do fim pro começo até parsear. Recupera os findings completos e descarta só o
-// que ficou pela metade — muito melhor que perder o lote inteiro.
+// Repara um JSON TRUNCADO (resposta cortada pelo limite de tokens) — fonte
+// única em src/lib/faturaJson.ts (injetada no build), compartilhada com o
+// parser de fatura. Recupera os findings completos e descarta só o que ficou
+// pela metade — muito melhor que perder o lote inteiro.
 function _repararJsonTruncado(s: string): unknown | null {
-  let str = String(s || '').trim();
-  const ini = str.indexOf('{');
-  if (ini < 0) return null;
-  str = str.slice(ini);
-  for (let cut = str.length; cut > 1;) {
-    const idx = str.lastIndexOf('}', cut - 1);
-    if (idx < 0) return null;
-    const frag = str.slice(0, idx + 1);
-    // Rastreia aberturas fora de strings pra saber o que falta fechar.
-    let dentroStr = false, esc = false;
-    const pilha: string[] = [];
-    for (let i = 0; i < frag.length; i++) {
-      const ch = frag[i];
-      if (esc) { esc = false; continue; }
-      if (ch === '\\') { esc = true; continue; }
-      if (ch === '"') { dentroStr = !dentroStr; continue; }
-      if (dentroStr) continue;
-      if (ch === '{' || ch === '[') pilha.push(ch);
-      else if (ch === '}' || ch === ']') pilha.pop();
-    }
-    if (!dentroStr) {
-      const fecho = pilha.reverse().map((c) => (c === '{' ? '}' : ']')).join('');
-      try { return JSON.parse(frag + fecho); } catch (e) { _logInfo('repararJson: tentativa falhou, recuando', e); }
-    }
-    cut = idx;
-  }
-  return null;
+  return repararJsonTruncadoCore(s);
 }
 
 function _parseAuditPayload(resposta: string): { texto: string; payload: AuditPayload | null } {
