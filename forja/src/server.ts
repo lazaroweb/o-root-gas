@@ -12306,6 +12306,7 @@ declare function selecionarRemocaoImportacao(
   itens: Array<{ id: string; descricao: string; valor: number; vencimento?: unknown; data?: unknown; notas?: string; criadoEm?: string }>,
   mes: string,
 ): { removerIds: string[]; futurasIds: string[]; preservados: number };
+declare function mesDeLancamento(l: { vencimento?: unknown; data?: unknown }): string;
 
 // Remove lançamentos importados de fatura. Se `competencia` (YYYY-MM) vier,
 // DESFAZ a importação daquele mês por completo:
@@ -12318,7 +12319,13 @@ declare function selecionarRemocaoImportacao(
 //     fatura anterior", caso Bradesco).
 // Sem competência, apaga todos os importados do cartão (comportamento antigo,
 // só usado se explicitamente pedido).
-function deletarLancamentosImportadosCartao(cartaoId: string, competencia?: string): ServerResult {
+//
+// `aPartirDe` (com competência): apaga TODOS os importados do mês em diante
+// (mês atual + futuros, INCLUINDO provisões de importações antigas) e não toca
+// nos meses passados — preserva o histórico e as atribuições a membros da
+// família feitas nele. É o reset "daqui pra frente" pra recomeçar limpo
+// reimportando a fatura atual, sem perder o passado.
+function deletarLancamentosImportadosCartao(cartaoId: string, competencia?: string, aPartirDe?: boolean): ServerResult {
   try {
     const alvo = String(cartaoId || '').trim();
     if (!alvo) return { ok: false, error: 'Cartão não informado.' };
@@ -12329,6 +12336,14 @@ function deletarLancamentosImportadosCartao(cartaoId: string, competencia?: stri
     if (!comp) {
       const removidos = dbDeleteMany('FinPessoalLancamentos', importados.map((a) => String(a['id'])));
       return { ok: true, data: { removidos, futurasRemovidas: 0, preservados: 0 } };
+    }
+    if (aPartirDe) {
+      const alvos = importados.filter((l) => {
+        const m = mesDeLancamento({ vencimento: l['vencimento'], data: l['data'] });
+        return !!m && m >= comp;
+      });
+      const removidos = dbDeleteMany('FinPessoalLancamentos', alvos.map((a) => String(a['id'])));
+      return { ok: true, data: { removidos, futurasRemovidas: 0, preservados: importados.length - alvos.length } };
     }
     const sel = selecionarRemocaoImportacao(importados.map((l) => ({
       id: String(l['id'] || ''),

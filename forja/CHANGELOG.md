@@ -36,6 +36,22 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.247.0] — 2026-07-04
+
+### Adicionado
+
+- **"Zerar deste mês em diante" na gaveta da fatura** — reset intermediário
+  que preserva o histórico: apaga os importados do mês aberto e de TODOS os
+  meses à frente (incluindo provisões de faturas antigas nesses meses), mas
+  NÃO toca nos meses passados — as atribuições de compras a membros da
+  família feitas neles ficam intactas. Depois é só reimportar a fatura do
+  mês, que recria os lançamentos e reprovisiona as parcelas futuras. É o
+  meio-termo entre "Remover importados do mês" (só desfaz um lote) e "Zerar
+  importados do cartão" (apaga tudo, inclusive o passado). O botão só
+  aparece quando existe passado a preservar.
+
+---
+
 ## [1.246.0] — 2026-07-04
 
 ### Adicionado

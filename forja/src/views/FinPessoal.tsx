@@ -1600,6 +1600,26 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
     }).finally(() => { hide(); setRemovendoImportados(false); });
   };
 
+  // Reset "daqui pra frente": apaga os importados do mês ABERTO em diante
+  // (inclui provisões de importações antigas nesses meses), preservando os
+  // meses passados — e com eles as atribuições a membros da família. Depois é
+  // só reimportar a fatura atual, que reconstrói mês + provisões limpos.
+  const zerarDaquiPraFrente = () => {
+    if (!cartaoAberto || removendoImportados) return;
+    setRemovendoImportados(true);
+    const hide = message.loading('Zerando importados deste mês em diante…', 0);
+    callServer<ServerResponse<{ removidos: number; preservados?: number }>>('deletarLancamentosImportadosCartao', cartaoAberto.id, mes, true).then((res) => {
+      if (res.ok) {
+        const d = res.data as { removidos: number; preservados?: number } | undefined;
+        const n = d?.removidos ?? 0;
+        const p = d?.preservados ?? 0;
+        message.success(`${n} importado(s) removido(s) de ${mes} em diante${p > 0 ? ` · ${p} do passado preservado(s) (com as atribuições)` : ''} — reimporte a fatura atual`);
+        if (cartaoAberto) carregarFatura(cartaoAberto);
+        onRecarregar();
+      } else message.error(res.error || 'Erro');
+    }).finally(() => { hide(); setRemovendoImportados(false); });
+  };
+
   // Reset TOTAL: apaga TODOS os lançamentos importados de fatura deste cartão
   // (todos os meses, passado e futuro — inclui provisões órfãs de importações
   // desfeitas). Manuais e recorrências ficam. É o "começar do zero" pra quando
@@ -1736,6 +1756,7 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
           onRemover={removerLancamento}
           onEditar={editarLancamento}
           onRemoverImportados={removerImportados}
+          onZerarDaquiPraFrente={zerarDaquiPraFrente}
           onZerarImportados={zerarImportados}
           removendoImportados={removendoImportados}
           onDeduplicar={deduplicar}
@@ -1945,6 +1966,7 @@ interface DetalheFaturaProps {
   onRemover: (id: string) => void;
   onEditar: (l: LancamentoPessoal) => void;
   onRemoverImportados: () => void;
+  onZerarDaquiPraFrente?: () => void;
   onZerarImportados?: () => void;
   removendoImportados?: boolean;
   onDeduplicar?: () => void;
@@ -2387,7 +2409,7 @@ function ProvisaoFaturas({ itens }: { itens: LancamentoPessoal[] }): React.React
   );
 }
 
-function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, onZerarImportados, removendoImportados, onDeduplicar, deduplicando, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs }: DetalheFaturaProps): React.ReactElement {
+function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, onZerarDaquiPraFrente, onZerarImportados, removendoImportados, onDeduplicar, deduplicando, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs }: DetalheFaturaProps): React.ReactElement {
   // Selo "já é assinatura": casa por id (rápido) OU por assinatura estável
   // valor+nome (sobrevive a reimportação que troca o id do lançamento).
   const temAssinaturaDe = (l: LancamentoPessoal): boolean =>
@@ -2426,6 +2448,11 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
   const mesDeLanc = (l: LancamentoPessoal) => (String(l.vencimento || '').substring(0, 7)) || (String(l.data || '').substring(0, 7));
   const qtdImportados = todosItens.filter((l) => String(l.tags || '').indexOf('fatura-importada') >= 0 && (!mesFatura || mesDeLanc(l) === mesFatura)).length;
   const qtdImportadosTotal = todosItens.filter((l) => String(l.tags || '').indexOf('fatura-importada') >= 0).length;
+  // Reset "daqui pra frente": conta importados com competência >= mês aberto.
+  // Os meses anteriores (e as atribuições a membros feitas neles) ficam de fora.
+  const qtdImportadosAPartir = mesFatura
+    ? todosItens.filter((l) => String(l.tags || '').indexOf('fatura-importada') >= 0 && mesDeLanc(l) >= mesFatura).length
+    : 0;
   const totalTodos = todosItens.reduce((s, l) => s + l.valor, 0);
   // Raio-X do mês: de onde vem cada real do total (importados desta fatura,
   // parcelas provisionadas por faturas anteriores, recorrências, manuais) +
@@ -2475,7 +2502,7 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
       {/* Ações no TOPO do drawer — antes ficavam no cabeçalho de "Todos os
           lançamentos" e desciam pro meio quando a janela atual tinha itens.
           Agora ficam sempre acessíveis aqui em cima. */}
-      {todosItens.length > 0 && !modoLote && (membros.length > 0 || qtdImportados > 0) && (
+      {todosItens.length > 0 && !modoLote && (membros.length > 0 || qtdImportadosTotal > 0) && (
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
           {membros.length > 0 && (
             <Button size="small" icon={<Users size={13} />} onClick={() => setModoLote(true)}>
@@ -2507,6 +2534,20 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
             >
               <Button size="small" danger icon={<Trash2 size={13} />} loading={removendoImportados}>
                 {removendoImportados ? 'Removendo…' : `Remover importados do mês (${qtdImportados})`}
+              </Button>
+            </Popconfirm>
+          )}
+          {onZerarDaquiPraFrente && qtdImportadosAPartir > 0 && qtdImportadosAPartir < qtdImportadosTotal && (
+            <Popconfirm
+              title="Zerar importados deste mês em diante?"
+              description={`Apaga os ${qtdImportadosAPartir} importado(s) de ${mesFatura} e dos meses à frente — inclusive parcelas provisionadas por faturas antigas nesses meses. Os meses PASSADOS ficam intactos, com as atribuições a membros da família preservadas. Depois, reimporte a fatura deste mês: ela recria o mês e reprovisiona as parcelas futuras.`}
+              onConfirm={onZerarDaquiPraFrente}
+              okText="Zerar daqui pra frente"
+              cancelText="Cancelar"
+              okButtonProps={{ danger: true, loading: removendoImportados }}
+            >
+              <Button size="small" danger icon={<RotateCcw size={13} />} loading={removendoImportados}>
+                Zerar deste mês em diante ({qtdImportadosAPartir})
               </Button>
             </Popconfirm>
           )}
