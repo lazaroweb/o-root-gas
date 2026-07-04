@@ -1600,6 +1600,24 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
     }).finally(() => { hide(); setRemovendoImportados(false); });
   };
 
+  // Reset TOTAL: apaga TODOS os lançamentos importados de fatura deste cartão
+  // (todos os meses, passado e futuro — inclui provisões órfãs de importações
+  // desfeitas). Manuais e recorrências ficam. É o "começar do zero" pra quando
+  // o histórico de importa/remove/reimporta deixou entulho.
+  const zerarImportados = () => {
+    if (!cartaoAberto || removendoImportados) return;
+    setRemovendoImportados(true);
+    const hide = message.loading('Zerando todos os importados deste cartão…', 0);
+    callServer<ServerResponse<{ removidos: number }>>('deletarLancamentosImportadosCartao', cartaoAberto.id).then((res) => {
+      if (res.ok) {
+        const n = (res.data as { removidos: number } | undefined)?.removidos ?? 0;
+        message.success(`${n} lançamento(s) importado(s) removido(s) — cartão limpo pra reimportar`);
+        if (cartaoAberto) carregarFatura(cartaoAberto);
+        onRecarregar();
+      } else message.error(res.error || 'Erro');
+    }).finally(() => { hide(); setRemovendoImportados(false); });
+  };
+
   const deduplicar = () => {
     if (!cartaoAberto || deduplicando) return;
     setDeduplicando(true);
@@ -1718,6 +1736,7 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
           onRemover={removerLancamento}
           onEditar={editarLancamento}
           onRemoverImportados={removerImportados}
+          onZerarImportados={zerarImportados}
           removendoImportados={removendoImportados}
           onDeduplicar={deduplicar}
           deduplicando={deduplicando}
@@ -1926,6 +1945,7 @@ interface DetalheFaturaProps {
   onRemover: (id: string) => void;
   onEditar: (l: LancamentoPessoal) => void;
   onRemoverImportados: () => void;
+  onZerarImportados?: () => void;
   removendoImportados?: boolean;
   onDeduplicar?: () => void;
   deduplicando?: boolean;
@@ -2367,7 +2387,7 @@ function ProvisaoFaturas({ itens }: { itens: LancamentoPessoal[] }): React.React
   );
 }
 
-function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, removendoImportados, onDeduplicar, deduplicando, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs }: DetalheFaturaProps): React.ReactElement {
+function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, onZerarImportados, removendoImportados, onDeduplicar, deduplicando, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs }: DetalheFaturaProps): React.ReactElement {
   // Selo "já é assinatura": casa por id (rápido) OU por assinatura estável
   // valor+nome (sobrevive a reimportação que troca o id do lançamento).
   const temAssinaturaDe = (l: LancamentoPessoal): boolean =>
@@ -2405,6 +2425,7 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
   const mesFatura = fatura.mes || '';
   const mesDeLanc = (l: LancamentoPessoal) => (String(l.vencimento || '').substring(0, 7)) || (String(l.data || '').substring(0, 7));
   const qtdImportados = todosItens.filter((l) => String(l.tags || '').indexOf('fatura-importada') >= 0 && (!mesFatura || mesDeLanc(l) === mesFatura)).length;
+  const qtdImportadosTotal = todosItens.filter((l) => String(l.tags || '').indexOf('fatura-importada') >= 0).length;
   const totalTodos = todosItens.reduce((s, l) => s + l.valor, 0);
   // Raio-X do mês: de onde vem cada real do total (importados desta fatura,
   // parcelas provisionadas por faturas anteriores, recorrências, manuais) +
@@ -2486,6 +2507,20 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
             >
               <Button size="small" danger icon={<Trash2 size={13} />} loading={removendoImportados}>
                 {removendoImportados ? 'Removendo…' : `Remover importados do mês (${qtdImportados})`}
+              </Button>
+            </Popconfirm>
+          )}
+          {onZerarImportados && qtdImportadosTotal > 0 && (
+            <Popconfirm
+              title="Zerar TODOS os importados deste cartão?"
+              description={`Começar do zero: apaga os ${qtdImportadosTotal} lançamento(s) importados de fatura deste cartão em TODOS os meses (passado e futuro), incluindo parcelas provisionadas e restos de importações antigas. Lançamentos manuais e recorrências ficam. Depois, reimporte a fatura mais recente.`}
+              onConfirm={onZerarImportados}
+              okText="Zerar tudo e recomeçar"
+              cancelText="Cancelar"
+              okButtonProps={{ danger: true, loading: removendoImportados }}
+            >
+              <Button size="small" danger type="dashed" icon={<RotateCcw size={13} />} loading={removendoImportados}>
+                Zerar importados do cartão ({qtdImportadosTotal})
               </Button>
             </Popconfirm>
           )}

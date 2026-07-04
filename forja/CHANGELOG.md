@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.246.0] — 2026-07-04
+
+### Adicionado
+
+- **"Zerar importados do cartão" na gaveta da fatura** — botão de reset
+  total: apaga TODOS os lançamentos importados de fatura do cartão (todos os
+  meses, incluindo provisões e restos órfãos de ciclos antigos de
+  importa/remove/reimporta). Manuais e recorrências ficam. É o "começar do
+  zero" pra quando o histórico ficou inconsistente: zera e reimporta a
+  fatura mais recente uma vez.
+
+---
+
 ## [1.245.1] — 2026-07-04
 
 ### Corrigido
