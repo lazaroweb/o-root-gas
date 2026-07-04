@@ -40,6 +40,7 @@ import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import { gerarEbaixarPdf } from '../pdf-client';
+import { composicaoFaturaMes } from '../lib/faturaComposicao';
 import FinMesExecutivo from './FinMesExecutivo';
 import FinAssinaturas from './FinAssinaturas';
 import FinInteligencia from './FinInteligencia';
@@ -1582,10 +1583,12 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
     if (!cartaoAberto || removendoImportados) return;
     setRemovendoImportados(true);
     const hide = message.loading('Removendo lançamentos importados deste mês…', 0);
-    callServer<ServerResponse<{ removidos: number }>>('deletarLancamentosImportadosCartao', cartaoAberto.id, mes).then((res) => {
+    callServer<ServerResponse<{ removidos: number; preservados?: number }>>('deletarLancamentosImportadosCartao', cartaoAberto.id, mes).then((res) => {
       if (res.ok) {
-        const n = (res.data as { removidos: number } | undefined)?.removidos ?? 0;
-        message.success(`${n} lançamento(s) importado(s) removido(s) deste mês`);
+        const d = res.data as { removidos: number; preservados?: number } | undefined;
+        const n = d?.removidos ?? 0;
+        const p = d?.preservados ?? 0;
+        message.success(`${n} importado(s) removido(s) deste mês${p > 0 ? ` · ${p} parcela(s) de faturas anteriores preservada(s)` : ''}`);
         if (cartaoAberto) carregarFatura(cartaoAberto);
         onRecarregar();
       } else message.error(res.error || 'Erro');
@@ -2398,6 +2401,10 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
   const mesDeLanc = (l: LancamentoPessoal) => (String(l.vencimento || '').substring(0, 7)) || (String(l.data || '').substring(0, 7));
   const qtdImportados = todosItens.filter((l) => String(l.tags || '').indexOf('fatura-importada') >= 0 && (!mesFatura || mesDeLanc(l) === mesFatura)).length;
   const totalTodos = todosItens.reduce((s, l) => s + l.valor, 0);
+  // Raio-X do mês: de onde vem cada real do total (importados desta fatura,
+  // parcelas provisionadas por faturas anteriores, recorrências, manuais) +
+  // duplicidade suspeita (mesma parcela x/y da mesma compra 2+ vezes).
+  const composicao = mesFatura ? composicaoFaturaMes(todosItens, mesFatura) : null;
 
   // Uso do limite considera tudo que está EM ABERTO no cartão (não pago),
   // independente da janela de fechamento. A "fatura da janela atual" (mês
@@ -2465,8 +2472,8 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
           )}
           {qtdImportados > 0 && (
             <Popconfirm
-              title={`Remover ${qtdImportados} importado(s) deste mês?`}
-              description="Apaga só o que foi importado de fatura NESTE mês. Não mexe em outros meses."
+              title={`Remover importados deste mês?`}
+              description="Desfaz a importação DESTE mês. Não mexe em outros meses e PRESERVA as parcelas provisionadas pelas faturas anteriores que vencem neste mês."
               onConfirm={onRemoverImportados}
               okText="Remover deste mês"
               cancelText="Cancelar"
@@ -2476,6 +2483,57 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
                 {removendoImportados ? 'Removendo…' : `Remover importados do mês (${qtdImportados})`}
               </Button>
             </Popconfirm>
+          )}
+        </div>
+      )}
+
+      {/* Raio-X do total do mês: responde "por que o total não bate com o PDF?"
+          mostrando quanto veio de cada origem. A linha de provisionadas explica
+          o valor "a mais" LEGÍTIMO (parcelas de faturas antigas que vencem
+          agora); o alerta de duplicidade pega a conciliação que falhou. */}
+      {composicao && (composicao.importadosAgora.qtd + composicao.provisionadosAnteriores.qtd + composicao.recorrencias.qtd + composicao.manuais.qtd) > 0 && (
+        <div style={{
+          background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
+          borderRadius: 10, padding: '10px 14px',
+          display: 'flex', flexDirection: 'column', gap: 6,
+        }}>
+          <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, letterSpacing: 0.4 }}>
+            COMPOSIÇÃO DO MÊS {dayjs(mesFatura + '-01').format('MMM/YYYY').toUpperCase()} · {formatBRL(composicao.total)}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 18px', fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary }}>
+            {composicao.importadosAgora.qtd > 0 && (
+              <span>Importados desta fatura: <strong style={{ color: t.text }}>{formatBRL(composicao.importadosAgora.total)}</strong> ({composicao.importadosAgora.qtd})</span>
+            )}
+            {composicao.provisionadosAnteriores.qtd > 0 && (
+              <Tooltip title="Parcelas de compras de faturas ANTERIORES, provisionadas na época e vencendo neste mês. É normal somarem ao total — a importação concilia com elas em vez de duplicar.">
+                <span style={{ cursor: 'help' }}>Parcelas de faturas anteriores: <strong style={{ color: t.text }}>{formatBRL(composicao.provisionadosAnteriores.total)}</strong> ({composicao.provisionadosAnteriores.qtd})</span>
+              </Tooltip>
+            )}
+            {composicao.recorrencias.qtd > 0 && (
+              <span>Recorrências: <strong style={{ color: t.text }}>{formatBRL(composicao.recorrencias.total)}</strong> ({composicao.recorrencias.qtd})</span>
+            )}
+            {composicao.manuais.qtd > 0 && (
+              <span>Manuais: <strong style={{ color: t.text }}>{formatBRL(composicao.manuais.total)}</strong> ({composicao.manuais.qtd})</span>
+            )}
+          </div>
+          {composicao.totalExcedente > 0 && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginTop: 2 }}
+              message={`Possível duplicidade: ${formatBRL(composicao.totalExcedente)} a mais em ${composicao.suspeitas.length} compra(s)`}
+              description={
+                <div style={{ fontSize: 12 }}>
+                  {composicao.suspeitas.slice(0, 5).map((s) => (
+                    <div key={s.ids[0]}>
+                      {s.descricao}{s.parcela ? ` (${s.parcela})` : ''} — {s.qtd}× no mês (+{formatBRL(s.valorExcedente)})
+                    </div>
+                  ))}
+                  {composicao.suspeitas.length > 5 && <div>… e mais {composicao.suspeitas.length - 5}.</div>}
+                  <div style={{ marginTop: 4 }}>O botão &quot;Remover duplicados&quot; acima limpa mantendo 1 cópia de cada (a paga tem prioridade).</div>
+                </div>
+              }
+            />
           )}
         </div>
       )}

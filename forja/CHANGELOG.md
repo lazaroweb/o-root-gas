@@ -36,6 +36,30 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.245.0] — 2026-07-04
+
+### Corrigido
+
+- **"Remover importados do mês" preservava nada das faturas anteriores** —
+  apagava TUDO com a tag `fatura-importada` vencendo no mês, incluindo as
+  parcelas PROVISIONADAS pelas importações das faturas anteriores (o acidente
+  do "sumiu a fatura anterior", caso Bradesco). Agora, com competência
+  informada, essas provisões são preservadas (elas pertencem à cadeia da
+  fatura antiga e representam dívida real); a resposta e o toast mostram
+  quantas foram preservadas.
+
+### Adicionado
+
+- **Composição do mês na gaveta da fatura** — raio-X do total: quanto veio dos
+  importados desta fatura, das parcelas provisionadas por faturas anteriores
+  (o "a mais" legítimo), das recorrências e dos manuais. Inclui alerta de
+  **duplicidade suspeita** (mesma parcela x/y da mesma compra 2+ vezes no mês
+  — o sintoma da conciliação que falhou) com o valor excedente e o atalho pro
+  "Remover duplicados". Lógica pura em `src/lib/faturaComposicao.ts`, com
+  testes.
+
+---
+
 ## [1.244.0] — 2026-07-04
 
 ### Corrigido
