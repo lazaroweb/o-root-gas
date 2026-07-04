@@ -36,6 +36,29 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.248.0] — 2026-07-04
+
+### Corrigido
+
+- **Importação "engolia" a segunda compra parcelada do mesmo estabelecimento**
+  — causa raiz do total do mês não bater com o PDF (caso real: fatura Porto
+  com 2x "ATAKADAO ATAKAREJO 01/02", R$ 415,86 e R$ 97,36 → o total ficava
+  exatamente R$ 97,36 menor). A regra de conciliação de parcelas ("2 de 3
+  sinais: mês, valor, descrição") casava mês+descrição e fundia duas compras
+  DISTINTAS. Nova regra de identidade, com fonte única e testada
+  (`parcelaConfere` em `src/lib/faturaComposicao.ts`): **valor é obrigatório**
+  + pelo menos um de mês/descrição. Mantém o que a regra antiga resolvia
+  (parcela provisionada num mês e faturada no outro; descrição variando entre
+  faturas) sem nunca fundir compras diferentes. Aplicada na importação
+  (`_acharParcelaExistente`) e na limpeza de duplicados (`_mesmaParcela`),
+  que tinha o mesmo defeito.
+- **Painel de composição não acusa mais "duplicidade" entre linhas do MESMO
+  lote de importação** — se as duas linhas vieram juntas do mesmo PDF (mesmo
+  `criadoEm`), são compras distintas legítimas; duplicidade real de
+  conciliação falhada é sempre entre lotes.
+
+---
+
 ## [1.247.0] — 2026-07-04
 
 ### Adicionado

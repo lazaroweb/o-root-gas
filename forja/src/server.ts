@@ -9810,10 +9810,13 @@ function _vencimentoNoMes(comp: string, diaVenc: number): string {
 // compra cai no mesmo grupo (já existe) e é ignorada — só as compras novas
 // entram. Itens à vista têm dedupe por (cartão+mês+descrição+valor).
 // Duas linhas são a MESMA parcela/compra? (usado na limpeza de duplicados)
-// Parceladas (total>1): âncora cartão + total + nº da parcela e ≥2 de 3 sinais
-// (mês, valor, descrição) — robusto quando SÓ o mês difere (parcela provisionada
-// num mês e a reimportada no mês da fatura), que era o que escapava. À vista
-// (total<=1): exige valor + descrição + mês iguais (não funde recorrências).
+// Parceladas (total>1): âncora cartão + total + nº da parcela e a regra de
+// identidade `parcelaConfere` (fonte única, testada): VALOR obrigatório + mês
+// OU descrição — robusto quando SÓ o mês difere (parcela provisionada num mês
+// e a reimportada no mês da fatura) ou SÓ a descrição varia entre faturas,
+// mas NUNCA funde duas compras distintas do mesmo estabelecimento (mesmo x/y,
+// mesmo mês, valores diferentes). À vista (total<=1): exige valor + descrição
+// + mês iguais (não funde recorrências).
 function _mesmaParcela(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   const totA = Number(a['parcelas'] || 0), totB = Number(b['parcelas'] || 0);
   if (totA !== totB) return false;
@@ -9823,10 +9826,15 @@ function _mesmaParcela(a: Record<string, unknown>, b: Record<string, unknown>): 
   const mesB = (String(b['vencimento'] || '').substring(0, 7)) || _toYYYYMM(b['data']);
   const centsA = Math.round(Number(a['valor'] || 0) * 100), centsB = Math.round(Number(b['valor'] || 0) * 100);
   const descA = _normDescFatura(String(a['descricao'] || '')), descB = _normDescFatura(String(b['descricao'] || ''));
+  if (totA > 1) {
+    return parcelaConfere(
+      { valorCents: centsA, mes: mesA, desc: descA },
+      { valorCents: centsB, mes: mesB, desc: descB },
+    );
+  }
   const mesOk = !!mesA && mesA === mesB;
   const valOk = centsA === centsB;
   const descOk = !!descA && descA === descB;
-  if (totA > 1) return (mesOk ? 1 : 0) + (valOk ? 1 : 0) + (descOk ? 1 : 0) >= 2;
   return valOk && descOk && mesOk;
 }
 
@@ -9902,25 +9910,30 @@ function getDedupLog(cartaoId?: string): ServerResult {
 }
 
 // Procura uma parcela JÁ existente da MESMA compra, mesmo que tenha vindo com
-// outro parcelaGrupoId (provisão manual `pg_`, legado, ou variação de descrição/
-// valor entre faturas). Ancora nas coordenadas fortes (cartão + total de parcelas
-// + nº da parcela) e exige pelo menos 2 de 3 sinais casando: mês, valor, descrição.
-// Robusto a variação isolada de qualquer um dos três (que é o que quebrava a dedupe).
+// outro parcelaGrupoId (provisão manual `pg_`, legado, ou variação de descrição
+// entre faturas). Ancora nas coordenadas fortes (cartão + total de parcelas +
+// nº da parcela) e aplica a regra de identidade `parcelaConfere` (fonte única em
+// src/lib/faturaComposicao.ts, testada): VALOR obrigatório + mês OU descrição.
+// A antiga regra "2 de 3 sinais" fundia duas compras distintas do mesmo
+// estabelecimento (mesmo x/y, mesmo mês, valores diferentes) — uma sumia.
 function _acharParcelaExistente(
   existentes: Array<Record<string, unknown>>,
   cid: string, total: number, j: number, valorCents: number, compJ: string, merchantNorm: string,
 ): Record<string, unknown> | null {
+  const ref = { valorCents, mes: compJ, desc: merchantNorm };
   for (const l of existentes) {
     if (String(l['cartaoId'] || '') !== cid) continue;
     if (Number(l['parcelas'] || 0) !== total) continue;
     if (Number(l['parcelaAtual'] || 0) !== j) continue;
     const mesVenc = String(l['vencimento'] || '').substring(0, 7);
     const mesData = _toYYYYMM(l['data']);
-    const mesOk = (!!compJ) && (mesVenc === compJ || mesData === compJ);
-    const valOk = Math.round(Number(l['valor'] || 0) * 100) === valorCents;
-    const descOk = _normDescFatura(String(l['descricao'] || '')) === merchantNorm;
-    const sinais = (mesOk ? 1 : 0) + (valOk ? 1 : 0) + (descOk ? 1 : 0);
-    if (sinais >= 2) return l;
+    const cand = {
+      valorCents: Math.round(Number(l['valor'] || 0) * 100),
+      // O candidato "está" no mês de referência se vencimento OU data caem nele.
+      mes: (mesVenc === compJ || mesData === compJ) ? compJ : (mesVenc || mesData),
+      desc: _normDescFatura(String(l['descricao'] || '')),
+    };
+    if (parcelaConfere(cand, ref)) return l;
   }
   return null;
 }
@@ -12307,6 +12320,10 @@ declare function selecionarRemocaoImportacao(
   mes: string,
 ): { removerIds: string[]; futurasIds: string[]; preservados: number };
 declare function mesDeLancamento(l: { vencimento?: unknown; data?: unknown }): string;
+declare function parcelaConfere(
+  a: { valorCents: number; mes: string; desc: string },
+  b: { valorCents: number; mes: string; desc: string },
+): boolean;
 
 // Remove lançamentos importados de fatura. Se `competencia` (YYYY-MM) vier,
 // DESFAZ a importação daquele mês por completo:

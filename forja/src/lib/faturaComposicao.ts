@@ -91,6 +91,38 @@ export function normalizarDescricao(desc: string): string {
 
 const NOTA_PROVISIONADA = 'Parcela futura provisionada';
 
+// ─── Identidade de parcela (conciliação e dedupe) ─────────────────────────────
+// Decide se duas linhas de parcela x/y (JÁ ancoradas por cartão + total de
+// parcelas + nº da parcela) são a MESMA compra.
+//
+// Regra: VALOR é obrigatório + pelo menos um de (mês, descrição).
+//
+// Por quê valor obrigatório: duas compras DIFERENTES no mesmo estabelecimento,
+// parceladas no mesmo nº de vezes e vencendo no mesmo mês (ex.: duas idas ao
+// mercado, ambas em 2x, na mesma fatura) só se distinguem pelo VALOR. A regra
+// antiga ("2 de 3 sinais") casava mês+descrição e FUNDIA as duas — a segunda
+// compra sumia da fatura (caso real: 2x Atakarejo 01/02 na fatura Porto,
+// R$ 415,86 e R$ 97,36; o total ficava R$ 97,36 menor).
+//
+// Por quê mês OU descrição (não ambos): cobre os dois desvios legítimos —
+//   • parcela provisionada num mês e faturada no mês seguinte (mês difere);
+//   • descrição truncada/variando entre faturas (descrição difere).
+// Se o VALOR divergir (IA leu errado, juros embutido), NÃO concilia: a linha
+// duplicada fica visível no painel de composição pro humano decidir — melhor
+// um duplicado visível do que uma compra sumindo em silêncio.
+export interface SinaisParcela {
+  valorCents: number; // valor em centavos (arredondado)
+  mes: string;        // competência 'YYYY-MM' ('' se desconhecida)
+  desc: string;       // descrição normalizada (sem x/y, sem acento, minúscula)
+}
+
+export function parcelaConfere(a: SinaisParcela, b: SinaisParcela): boolean {
+  const valOk = a.valorCents === b.valorCents;
+  const mesOk = !!a.mes && a.mes === b.mes;
+  const descOk = !!a.desc && a.desc === b.desc;
+  return valOk && (mesOk || descOk);
+}
+
 function grupoVazio(): GrupoComposicao { return { total: 0, qtd: 0, ids: [] }; }
 
 function acumula(g: GrupoComposicao, l: LancComposicao): void {
@@ -149,6 +181,12 @@ export function composicaoFaturaMes(itens: LancComposicao[], mes: string): Compo
   for (const [chave, arr] of grupos) {
     if (arr.length < 2) continue;
     if (!normalizarDescricao(arr[0].descricao)) continue; // sem descrição útil, não acusa
+    // Mesmo LOTE de importação (mesmo criadoEm): as linhas vieram juntas do
+    // MESMO PDF — se a fatura listou as duas, são compras distintas legítimas
+    // (ex.: duas compras no mesmo mercado, ambas 01/02, valores diferentes).
+    // Duplicidade real de conciliação falhada é sempre ENTRE lotes/origens.
+    const lotes = new Set(arr.map((l) => String(l.criadoEm || '')));
+    if (lotes.size === 1 && !lotes.has('')) continue;
     // Mantém a "melhor" como referência: paga > agendada > pendente.
     const rank = (s?: string) => (s === 'pago' ? 0 : s === 'agendado' ? 1 : 2);
     const ordenado = [...arr].sort((a, b) => rank(a.status) - rank(b.status));

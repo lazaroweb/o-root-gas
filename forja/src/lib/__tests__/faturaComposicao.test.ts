@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  composicaoFaturaMes, mesDeLancamento, normalizarDescricao, selecionarRemocaoImportacao,
+  composicaoFaturaMes, mesDeLancamento, normalizarDescricao, parcelaConfere, selecionarRemocaoImportacao,
   type LancComposicao,
 } from '../faturaComposicao';
 
@@ -22,6 +22,36 @@ describe('mesDeLancamento / normalizarDescricao', () => {
   it('remove parcela e acentos da descrição', () => {
     expect(normalizarDescricao('SAMSUNG NO ITAÚ (15/21)')).toBe('samsung no itau');
     expect(normalizarDescricao('Loja X parcela 2/5')).toBe('loja x');
+  });
+});
+
+describe('parcelaConfere (identidade de parcela: valor obrigatório + mês OU descrição)', () => {
+  const atakarejo = { valorCents: 41586, mes: '2026-06', desc: 'atakadao atakarejo simoes fi' };
+
+  it('caso real Porto: duas compras no MESMO mercado, mesmo x/y, mesmo mês, valores diferentes → NÃO são a mesma', () => {
+    // Regra antiga ("2 de 3") casava mês+descrição e engolia a de R$ 97,36 —
+    // o total do mês ficava exatamente 97,36 menor que o PDF.
+    const outraCompra = { valorCents: 9736, mes: '2026-06', desc: 'atakadao atakarejo simoes fi' };
+    expect(parcelaConfere(atakarejo, outraCompra)).toBe(false);
+  });
+
+  it('mesma compra com mês deslocado (provisionada num mês, faturada no outro) → concilia', () => {
+    expect(parcelaConfere(atakarejo, { ...atakarejo, mes: '2026-07' })).toBe(true);
+  });
+
+  it('mesma compra com descrição variando entre faturas (mesmo valor e mês) → concilia', () => {
+    expect(parcelaConfere(atakarejo, { ...atakarejo, desc: 'atakadao atakarejo 999 simoes' })).toBe(true);
+  });
+
+  it('valor igual mas mês E descrição diferentes → NÃO concilia (coincidência de preço)', () => {
+    expect(parcelaConfere(atakarejo, { valorCents: 41586, mes: '2026-09', desc: 'loja qualquer' })).toBe(false);
+  });
+
+  it('meses/descrições vazios não contam como sinal', () => {
+    expect(parcelaConfere(
+      { valorCents: 100, mes: '', desc: '' },
+      { valorCents: 100, mes: '', desc: '' },
+    )).toBe(false);
   });
 });
 
@@ -76,6 +106,25 @@ describe('composicaoFaturaMes', () => {
     expect(comDup.suspeitas).toHaveLength(1);
     expect(comDup.suspeitas[0].ids[0]).toBe('paga'); // a paga é a mantida
     expect(comDup.suspeitas[0].valorExcedente).toBe(55.9);
+  });
+
+  it('duas compras do mesmo lote (mesmo criadoEm) NÃO são duplicidade — a fatura listou as duas', () => {
+    // Caso real Porto: 2x "ATAKADAO ATAKAREJO 01/02" na MESMA fatura (415,86 e
+    // 97,36). Vieram juntas do mesmo PDF → compras distintas legítimas.
+    const T = '2026-07-04T20:00:00.000Z';
+    const mesmoLote = composicaoFaturaMes([
+      lanc({ id: 'a1', descricao: 'ATAKADAO ATAKAREJO 01/02 SIMOES FI', valor: 415.86, parcelas: 2, parcelaAtual: 1, criadoEm: T }),
+      lanc({ id: 'a2', descricao: 'ATAKADAO ATAKAREJO 01/02 SIMOES FI', valor: 97.36, parcelas: 2, parcelaAtual: 1, criadoEm: T }),
+    ], MES);
+    expect(mesmoLote.suspeitas).toHaveLength(0);
+
+    // Já ENTRE lotes (criadoEm diferente) continua acusando: é o sintoma de
+    // conciliação que falhou entre a provisão antiga e a reimportação.
+    const entreLotes = composicaoFaturaMes([
+      lanc({ id: 'a1', descricao: 'ATAKADAO ATAKAREJO 01/02 SIMOES FI', valor: 415.86, parcelas: 2, parcelaAtual: 1, criadoEm: T }),
+      lanc({ id: 'a2', descricao: 'ATAKADAO ATAKAREJO 01/02 SIMOES FI', valor: 415.86, parcelas: 2, parcelaAtual: 1, criadoEm: '2026-06-01T09:00:00.000Z' }),
+    ], MES);
+    expect(entreLotes.suspeitas).toHaveLength(1);
   });
 
   it('parcelas de meses diferentes da mesma compra NÃO são duplicidade', () => {
