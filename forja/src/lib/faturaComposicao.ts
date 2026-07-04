@@ -26,6 +26,7 @@ export interface LancComposicao {
   recorrencia?: string;
   recorrenciaOrigemId?: string;
   status?: string;
+  criadoEm?: string;
 }
 
 export interface GrupoComposicao {
@@ -53,11 +54,25 @@ export interface ComposicaoMes {
   totalExcedente: number; // soma dos excedentes de todas as suspeitas
 }
 
+// 'YYYY-MM' de um valor que pode ser string ISO OU Date — no servidor (GAS) o
+// Sheets converte células de data em objetos Date, e String(Date) quebraria o
+// substring. No client os valores já chegam sanitizados como string.
+function _mesDe(v: unknown): string {
+  if (v && typeof v === 'object' && typeof (v as Date).getFullYear === 'function') {
+    const d = v as Date;
+    if (isNaN(d.getTime())) return '';
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }
+  const s = String(v || '');
+  return s.length >= 7 ? s.substring(0, 7) : '';
+}
+
 // Mês contábil da linha: vencimento manda; sem vencimento, mês da data.
-export function mesDeLancamento(l: { vencimento?: string; data?: string }): string {
-  const v = String(l.vencimento || '').substring(0, 7);
+export function mesDeLancamento(l: { vencimento?: unknown; data?: unknown }): string {
+  const v = _mesDe(l.vencimento);
   if (/^\d{4}-\d{2}$/.test(v)) return v;
-  return String(l.data || '').substring(0, 7);
+  const d = _mesDe(l.data);
+  return /^\d{4}-\d{2}$/.test(d) ? d : '';
 }
 
 // Espelha _normDescFatura/_descSemParcela do servidor: remove o "(x/y)" e
@@ -151,4 +166,38 @@ export function composicaoFaturaMes(itens: LancComposicao[], mes: string): Compo
   out.totalExcedente = Math.round(out.suspeitas.reduce((s, x) => s + x.valorExcedente, 0) * 100) / 100;
   out.total = Math.round(out.total * 100) / 100;
   return out;
+}
+
+// ─── Seleção do "desfazer importação do mês" ──────────────────────────────────
+// Regras (itens já filtrados pelo cartão; todos com tag fatura-importada):
+//   • REMOVE o que a importação do mês criou NO mês (parcela atual + à vista);
+//   • REMOVE as parcelas FUTURAS que ESSA MESMA importação provisionou nos
+//     meses à frente — identificadas pelo lote: toda linha de uma importação
+//     nasce com o MESMO `criadoEm` (timestamp único do batch);
+//   • PRESERVA as provisões criadas por importações ANTERIORES que vencem no
+//     mês (cadeia da fatura antiga — o acidente do "sumiu a fatura anterior").
+export interface SelecaoRemocaoImportacao {
+  removerIds: string[];        // linhas do mês criadas pela importação
+  futurasIds: string[];        // futuras provisionadas por ELA nos meses à frente
+  preservados: number;         // provisões de importações anteriores mantidas
+}
+
+export function selecionarRemocaoImportacao(itens: LancComposicao[], mes: string): SelecaoRemocaoImportacao {
+  const ehProvisao = (l: LancComposicao) => String(l.notas || '').indexOf(NOTA_PROVISIONADA) >= 0;
+  const doMes = itens.filter((l) => mesDeLancamento(l) === mes);
+  const remover = doMes.filter((l) => !ehProvisao(l));
+  const preservados = doMes.length - remover.length;
+
+  // Lote(s) da importação do mês: timestamps de criação das linhas removidas.
+  const lotes = new Set(remover.map((l) => String(l.criadoEm || '')).filter(Boolean));
+  const futuras = lotes.size === 0 ? [] : itens.filter((l) =>
+    ehProvisao(l)
+    && mesDeLancamento(l) > mes
+    && lotes.has(String(l.criadoEm || '')));
+
+  return {
+    removerIds: remover.map((l) => String(l.id)),
+    futurasIds: futuras.map((l) => String(l.id)),
+    preservados,
+  };
 }

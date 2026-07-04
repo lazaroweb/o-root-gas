@@ -79,6 +79,7 @@ async function libJs(caminho) {
 const serverJs = (await libJs('src/lib/schema.ts'))
   + '\n' + (await libJs('src/lib/score.ts'))
   + '\n' + (await libJs('src/lib/faturaJson.ts'))
+  + '\n' + (await libJs('src/lib/faturaComposicao.ts'))
   + '\n' + serverResult.code.replace(/^export\s*\{\s*\};?\s*$/gm, '');
 writeFileSync('dist/Server.js', serverJs);
 

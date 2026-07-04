@@ -1583,12 +1583,17 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
     if (!cartaoAberto || removendoImportados) return;
     setRemovendoImportados(true);
     const hide = message.loading('Removendo lançamentos importados deste mês…', 0);
-    callServer<ServerResponse<{ removidos: number; preservados?: number }>>('deletarLancamentosImportadosCartao', cartaoAberto.id, mes).then((res) => {
+    callServer<ServerResponse<{ removidos: number; futurasRemovidas?: number; preservados?: number }>>('deletarLancamentosImportadosCartao', cartaoAberto.id, mes).then((res) => {
       if (res.ok) {
-        const d = res.data as { removidos: number; preservados?: number } | undefined;
+        const d = res.data as { removidos: number; futurasRemovidas?: number; preservados?: number } | undefined;
         const n = d?.removidos ?? 0;
+        const f = d?.futurasRemovidas ?? 0;
         const p = d?.preservados ?? 0;
-        message.success(`${n} importado(s) removido(s) deste mês${p > 0 ? ` · ${p} parcela(s) de faturas anteriores preservada(s)` : ''}`);
+        message.success(
+          `${n} importado(s) removido(s)`
+          + (f > 0 ? ` + ${f} parcela(s) futura(s) desta importação` : '')
+          + (p > 0 ? ` · ${p} parcela(s) de faturas anteriores preservada(s)` : ''),
+        );
         if (cartaoAberto) carregarFatura(cartaoAberto);
         onRecarregar();
       } else message.error(res.error || 'Erro');
@@ -2473,7 +2478,7 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
           {qtdImportados > 0 && (
             <Popconfirm
               title={`Remover importados deste mês?`}
-              description="Desfaz a importação DESTE mês. Não mexe em outros meses e PRESERVA as parcelas provisionadas pelas faturas anteriores que vencem neste mês."
+              description="Desfaz a importação DESTE mês por completo: remove o que ela criou no mês E as parcelas futuras que ela provisionou nos meses à frente. PRESERVA as parcelas provisionadas pelas faturas anteriores."
               onConfirm={onRemoverImportados}
               okText="Remover deste mês"
               cancelText="Cancelar"

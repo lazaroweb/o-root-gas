@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.245.1] — 2026-07-04
+
+### Corrigido
+
+- **"Remover importados do mês" agora desfaz a importação por completo** —
+  além do que ela criou no mês, remove as parcelas FUTURAS que ela mesma
+  provisionou nos meses à frente (antes ficavam órfãs). Identificação pelo
+  lote: toda linha de uma importação nasce com o mesmo `criadoEm`. As
+  provisões de importações anteriores seguem preservadas. Seleção com fonte
+  única em `src/lib/faturaComposicao.ts` (mesma lógica do painel), testada.
+
+---
+
 ## [1.245.0] — 2026-07-04
 
 ### Corrigido

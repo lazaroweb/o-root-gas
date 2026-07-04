@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { composicaoFaturaMes, mesDeLancamento, normalizarDescricao, type LancComposicao } from '../faturaComposicao';
+import {
+  composicaoFaturaMes, mesDeLancamento, normalizarDescricao, selecionarRemocaoImportacao,
+  type LancComposicao,
+} from '../faturaComposicao';
 
 const MES = '2026-07';
 
@@ -81,5 +84,50 @@ describe('composicaoFaturaMes', () => {
       lanc({ id: 'p5', descricao: 'LOJA Z (05/10)', valor: 100, parcelas: 10, parcelaAtual: 5 }),
     ], MES);
     expect(c.suspeitas).toHaveLength(0);
+  });
+
+  it('tolera vencimento como Date (células do Sheets no servidor)', () => {
+    expect(mesDeLancamento({ vencimento: new Date(2026, 6, 10) })).toBe('2026-07');
+  });
+});
+
+describe('selecionarRemocaoImportacao (desfazer importação do mês)', () => {
+  // Cenário completo: importação de JUNHO (lote T1) provisionou parcelas pra
+  // julho e agosto; importação de JULHO (lote T2) criou itens do mês + futuras
+  // pra agosto/setembro. Desfazer JULHO deve: remover o que T2 criou (mês +
+  // futuras), preservar a provisão de T1 que vence em julho, e não tocar em
+  // nada de junho.
+  const T1 = '2026-06-05T10:00:00.000Z';
+  const T2 = '2026-07-04T22:00:00.000Z';
+  const base = [
+    // Lote T1 (fatura de junho)
+    lanc({ id: 'jun-avista', vencimento: '2026-06-10', tags: 'fatura-importada', notas: 'Importado da fatura via IA', criadoEm: T1 }),
+    lanc({ id: 'jul-prov-t1', vencimento: '2026-07-10', tags: 'fatura-importada', notas: 'Parcela futura provisionada na importação', criadoEm: T1, parcelas: 5, parcelaAtual: 2 }),
+    lanc({ id: 'ago-prov-t1', vencimento: '2026-08-10', tags: 'fatura-importada', notas: 'Parcela futura provisionada na importação', criadoEm: T1, parcelas: 5, parcelaAtual: 3 }),
+    // Lote T2 (fatura de julho)
+    lanc({ id: 'jul-avista-t2', vencimento: '2026-07-10', tags: 'fatura-importada', notas: 'Importado da fatura via IA', criadoEm: T2 }),
+    lanc({ id: 'jul-parc-t2', vencimento: '2026-07-10', tags: 'fatura-importada', notas: 'Importado da fatura via IA (parcelado)', criadoEm: T2, parcelas: 3, parcelaAtual: 1 }),
+    lanc({ id: 'ago-prov-t2', vencimento: '2026-08-10', tags: 'fatura-importada', notas: 'Parcela futura provisionada na importação', criadoEm: T2, parcelas: 3, parcelaAtual: 2 }),
+    lanc({ id: 'set-prov-t2', vencimento: '2026-09-10', tags: 'fatura-importada', notas: 'Parcela futura provisionada na importação', criadoEm: T2, parcelas: 3, parcelaAtual: 3 }),
+  ];
+
+  it('remove o lote do mês + suas futuras; preserva provisões anteriores e outros meses', () => {
+    const sel = selecionarRemocaoImportacao(base, '2026-07');
+    expect(sel.removerIds.sort()).toEqual(['jul-avista-t2', 'jul-parc-t2']);
+    expect(sel.futurasIds.sort()).toEqual(['ago-prov-t2', 'set-prov-t2']);
+    expect(sel.preservados).toBe(1); // jul-prov-t1 fica
+    const tocados = new Set([...sel.removerIds, ...sel.futurasIds]);
+    expect(tocados.has('jun-avista')).toBe(false);
+    expect(tocados.has('jul-prov-t1')).toBe(false);
+    expect(tocados.has('ago-prov-t1')).toBe(false);
+  });
+
+  it('mês sem importação própria: nada a remover, provisões preservadas', () => {
+    const sel = selecionarRemocaoImportacao(base, '2026-08');
+    // Agosto só tem provisões (T1 e T2) — nenhuma linha criada POR uma
+    // importação de agosto. Nada é removido; futuras não são arrastadas.
+    expect(sel.removerIds).toEqual([]);
+    expect(sel.futurasIds).toEqual([]);
+    expect(sel.preservados).toBe(2);
   });
 });

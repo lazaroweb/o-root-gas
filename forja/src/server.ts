@@ -12300,39 +12300,48 @@ function getLancamentosPorCartao(cartaoId: string): ServerResult {
 // cartão. Atalho pra desfazer uma importação feita no cartão errado. Como toda a
 // app deriva da tabela de lançamentos, apagar aqui já "baixa" de tudo (fatura,
 // a pagar, resumo, lançamentos do mês).
+// Seleção do "desfazer importação" — fonte única em src/lib/faturaComposicao.ts
+// (injetada no build; a MESMA lógica que o painel de composição da UI usa).
+declare function selecionarRemocaoImportacao(
+  itens: Array<{ id: string; descricao: string; valor: number; vencimento?: unknown; data?: unknown; notas?: string; criadoEm?: string }>,
+  mes: string,
+): { removerIds: string[]; futurasIds: string[]; preservados: number };
+
 // Remove lançamentos importados de fatura. Se `competencia` (YYYY-MM) vier,
-// apaga SÓ os do mês daquela fatura (pelo vencimento; fallback pela data) —
-// evita o acidente de zerar meses anteriores. Sem competência, apaga todos do
-// cartão (comportamento antigo, só usado se explicitamente pedido).
-//
-// PRESERVA as parcelas PROVISIONADAS por importações anteriores (notas
-// 'Parcela futura provisionada na importação') que vencem no mês: elas
-// pertencem à cadeia da fatura ANTIGA (foram criadas quando a fatura anterior
-// foi importada) e representam dívida real — apagá-las junto era o acidente
-// do "sumiu a fatura anterior" (caso Bradesco). Dentro de UMA importação, as
-// futuras criadas por ela mesma vencem em meses POSTERIORES ao da fatura,
-// então nada do lote atual escapa por esta regra.
+// DESFAZ a importação daquele mês por completo:
+//   • apaga o que ela criou NO mês (parcela atual + à vista);
+//   • apaga as parcelas FUTURAS que ELA provisionou nos meses à frente
+//     (identificadas pelo lote: toda linha de uma importação nasce com o
+//     mesmo `criadoEm`);
+//   • PRESERVA as provisões criadas por importações ANTERIORES que vencem no
+//     mês — cadeia da fatura antiga, dívida real (o acidente do "sumiu a
+//     fatura anterior", caso Bradesco).
+// Sem competência, apaga todos os importados do cartão (comportamento antigo,
+// só usado se explicitamente pedido).
 function deletarLancamentosImportadosCartao(cartaoId: string, competencia?: string): ServerResult {
   try {
     const alvo = String(cartaoId || '').trim();
     if (!alvo) return { ok: false, error: 'Cartão não informado.' };
     const comp = String(competencia || '').trim();
-    const mesDe = (l: Record<string, unknown>): string => {
-      const v = String(l['vencimento'] || '').substring(0, 7);
-      return v || _toYYYYMM(l['data']);
-    };
-    const ehProvisaoAnterior = (l: Record<string, unknown>): boolean =>
-      String(l['notas'] || '').indexOf('Parcela futura provisionada') >= 0;
-    const importadosDoMes = (dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>)
+    const importados = (dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>)
       .filter((l) => String(l['cartaoId'] || '').trim() === alvo
-        && String(l['tags'] || '').indexOf('fatura-importada') >= 0
-        && (!comp || mesDe(l) === comp));
-    // Com competência: só o que ESTA fatura importou; provisões de importações
-    // anteriores ficam. Sem competência ("apagar tudo do cartão"), vai tudo.
-    const alvos = comp ? importadosDoMes.filter((l) => !ehProvisaoAnterior(l)) : importadosDoMes;
-    const preservados = comp ? importadosDoMes.length - alvos.length : 0;
-    const removidos = dbDeleteMany('FinPessoalLancamentos', alvos.map((a) => String(a['id'])));
-    return { ok: true, data: { removidos, preservados } };
+        && String(l['tags'] || '').indexOf('fatura-importada') >= 0);
+    if (!comp) {
+      const removidos = dbDeleteMany('FinPessoalLancamentos', importados.map((a) => String(a['id'])));
+      return { ok: true, data: { removidos, futurasRemovidas: 0, preservados: 0 } };
+    }
+    const sel = selecionarRemocaoImportacao(importados.map((l) => ({
+      id: String(l['id'] || ''),
+      descricao: String(l['descricao'] || ''),
+      valor: Number(l['valor'] || 0),
+      vencimento: l['vencimento'],
+      data: l['data'],
+      notas: String(l['notas'] || ''),
+      criadoEm: String(l['criadoEm'] || ''),
+    })), comp);
+    const removidos = dbDeleteMany('FinPessoalLancamentos', sel.removerIds);
+    const futurasRemovidas = dbDeleteMany('FinPessoalLancamentos', sel.futurasIds);
+    return { ok: true, data: { removidos, futurasRemovidas, preservados: sel.preservados } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao remover importados' };
   }
