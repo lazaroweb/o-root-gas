@@ -36,6 +36,20 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.250.0] — 2026-07-05
+
+### Melhorado
+
+- **Aviso de importação dupla agora aparece LOGO NO INÍCIO** — assim que o
+  usuário escolhe cartão + mês no modal (novo RPC `verificarImportacaoFatura`),
+  antes de gastar ~1min de leitura da IA. Antes o aviso só vinha na hora de
+  salvar, depois da fatura inteira lida. O alerta cedo também sugere conferir
+  se o mês escolhido é o certo; a trava de verdade continua na gravação
+  (servidor), e o botão "Importar mesmo assim (duplicar)" só aparece na
+  etapa de revisão.
+
+---
+
 ## [1.249.0] — 2026-07-04
 
 ### Adicionado

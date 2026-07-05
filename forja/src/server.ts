@@ -9938,6 +9938,29 @@ function _acharParcelaExistente(
   return null;
 }
 
+// RPC: checagem ANTECIPADA da trava anti-importação dupla. A UI chama assim que
+// o usuário escolhe cartão + mês — ANTES de gastar a leitura da fatura pela IA
+// (~1min). A mesma regra roda de novo na gravação (importarFaturaLancamentos),
+// que é a trava de verdade; esta aqui é o aviso cedo.
+function verificarImportacaoFatura(cartaoId: string, competencia: string): ServerResult {
+  try {
+    const cid = String(cartaoId || '').trim();
+    const comp = String(competencia || '').substring(0, 7);
+    if (!cid || !/^\d{4}-\d{2}$/.test(comp)) return { ok: true, data: { jaImportada: false } };
+    const doCartao = (dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>)
+      .filter((l) => String(l['cartaoId'] || '').trim() === cid);
+    const ja = resumoImportacaoDoMes(doCartao, comp);
+    return {
+      ok: true,
+      data: ja
+        ? { jaImportada: true, competencia: comp, qtd: ja.qtd, total: ja.total, ultimaEm: ja.ultimaEm }
+        : { jaImportada: false },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao verificar importação' };
+  }
+}
+
 function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPadrao?: string, competenciaFatura?: string, forcar?: boolean): ServerResult {
   try {
     let itens: Array<Record<string, unknown>>;

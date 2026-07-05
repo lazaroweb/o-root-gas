@@ -4088,6 +4088,9 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
   // importação deste cartão. Fica num alerta com ação explícita — importar em
   // duplicidade só acontece se o usuário confirmar de propósito.
   const [avisoDupla, setAvisoDupla] = useState<{ competencia: string; qtd: number; total: number } | null>(null);
+  // Sequência da checagem antecipada — descarta resposta atrasada quando o
+  // usuário troca cartão/mês antes de a anterior voltar.
+  const checagemSeq = useRef(0);
   const [modoTexto, setModoTexto] = useState(false);
   const [textoColado, setTextoColado] = useState('');
   const [nomeArquivo, setNomeArquivo] = useState('');
@@ -4126,6 +4129,7 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
       setTotalFatura(0);
       setPeriodoFatura('');
       setConciliacao(null);
+      setAvisoDupla(null);
       setGeminiChecado(false);
       callServer<boolean>('geminiTemChave')
         .then((v) => setGeminiOn(!!v))
@@ -4141,6 +4145,24 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
     const id = window.setInterval(() => setSegundos((s) => s + 1), 1000);
     return () => window.clearInterval(id);
   }, [processando]);
+
+  // Checagem ANTECIPADA da trava anti-importação dupla: dispara assim que
+  // cartão + mês estão escolhidos — ANTES de gastar a leitura da IA (~1min).
+  // Best-effort (a trava de verdade fica na gravação, no servidor); resposta
+  // atrasada de uma troca anterior de cartão/mês é descartada pela sequência.
+  useEffect(() => {
+    if (!open || !cartaoId) return;
+    const seq = ++checagemSeq.current;
+    callServer<ServerResponse<{ jaImportada?: boolean; competencia?: string; qtd?: number; total?: number }>>(
+      'verificarImportacaoFatura', cartaoId, faturaMes.format('YYYY-MM'),
+    ).then((res) => {
+      if (seq !== checagemSeq.current) return;
+      const d = res?.ok ? (res.data as { jaImportada?: boolean; competencia?: string; qtd?: number; total?: number } | undefined) : undefined;
+      setAvisoDupla(d?.jaImportada
+        ? { competencia: d.competencia || '', qtd: d.qtd || 0, total: d.total || 0 }
+        : null);
+    }).catch(() => { /* aviso cedo é best-effort */ });
+  }, [open, cartaoId, faturaMes]);
 
   const aplicarResultado = (d: FaturaInterpretada) => {
     setItens(d.itens.map((it) => ({ ...it, incluir: true })));
@@ -4411,7 +4433,7 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
               closable
               onClose={() => setAvisoDupla(null)}
               style={{ background: `${t.accents.peach}1f`, border: `1px solid ${t.accents.peach}66` }}
-              message={<span style={{ color: t.text, fontWeight: 600 }}>Esta fatura já foi importada</span>}
+              message={<span style={{ color: t.text, fontWeight: 600 }}>Este mês já tem fatura importada neste cartão</span>}
               description={
                 <div style={{ color: t.textSecondary, display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <span>
@@ -4420,13 +4442,16 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
                   </span>
                   <span>
                     Se a intenção é reimportar (corrigir), primeiro use <b>“Remover importados do mês”</b> na
-                    gaveta do cartão e importe de novo. Se tem certeza de que quer duplicar, confirme abaixo.
+                    gaveta do cartão e importe de novo.
+                    {etapa === 'upload' && ' Ou confira se o mês escolhido acima é o certo — talvez esta fatura seja de outro mês.'}
                   </span>
-                  <div>
-                    <Button size="small" danger onClick={() => importar(true)} loading={importando}>
-                      Importar mesmo assim (duplicar)
-                    </Button>
-                  </div>
+                  {etapa === 'revisao' && (
+                    <div>
+                      <Button size="small" danger onClick={() => importar(true)} loading={importando}>
+                        Importar mesmo assim (duplicar)
+                      </Button>
+                    </div>
+                  )}
                 </div>
               }
             />
