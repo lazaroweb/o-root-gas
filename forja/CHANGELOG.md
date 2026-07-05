@@ -36,6 +36,16 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.257.1] — 2026-07-05
+
+### Mudado
+
+- **Pontos de restauração mudaram de endereço**: saíram de Relatórios →
+  Exportar e agora moram em **Configurações → Dados & Backup**, junto dos
+  outros backups (snapshot JSON, repositórios, conexões) — componente extraído
+  pra `components/PontosRestauracaoPanel.tsx`. O texto do "Exportar JSON"
+  aponta pro novo endereço.
+
 ## [1.257.0] — 2026-07-05
 
 ### Adicionado

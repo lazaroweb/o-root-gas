@@ -15,6 +15,7 @@ import RoteamentoIAPanel from '../components/RoteamentoIAPanel';
 import RegrasCategoriaPanel from '../components/RegrasCategoriaPanel';
 import ModelosDisponiveisWidget from '../components/ModelosDisponiveisWidget';
 import BackupRestorePanel from '../components/BackupRestorePanel';
+import PontosRestauracaoPanel from '../components/PontosRestauracaoPanel';
 import ConexoesBackupPanel from '../components/ConexoesBackupPanel';
 import ReposBackupPanel from '../components/ReposBackupPanel';
 import ScriptPropertiesPanel from '../components/ScriptPropertiesPanel';
@@ -377,6 +378,7 @@ export default function Configuracoes({ initialSecao }: ConfiguracoesProps = {})
       case 'dados':
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <PontosRestauracaoPanel />
             <BackupRestorePanel />
             <ReposBackupPanel />
             <ConexoesBackupPanel />
