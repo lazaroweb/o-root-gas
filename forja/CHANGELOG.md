@@ -36,6 +36,20 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.261.0] — 2026-07-05
+
+### Mudado
+
+- **"A fatura importada manda" — autocorreção no pipeline de importação**: a
+  regra do botão "Corrigir tudo automaticamente" agora roda sozinha ao final de
+  TODA importação com total de fatura conhecido. Provisões do mês que a fatura
+  não confirmou (por parcela+valor) são resolvidas na hora: duplicada sai (a
+  linha real fica e as atribuições de família migram pra ela), não cobrada é
+  adiada 1 mês. Invariante por construção: depois de importar, o total do mês
+  fecha com o total da fatura. A tela de conclusão informa o ajuste ("X
+  provisões duplicadas removidas · Y parcelas adiadas"). O botão manual
+  continua existindo como rede de segurança pra meses antigos.
+
 ## [1.260.0] — 2026-07-05
 
 ### Adicionado
