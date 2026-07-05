@@ -36,6 +36,20 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.258.0] — 2026-07-05
+
+### Adicionado
+
+- **Encargos e juros destacados na importação** (caso Porto jul/2026): quando a
+  fatura atrasa, o "total a pagar" inclui juros/multa/IOF que não são compras —
+  e a soma das compras parecia "errada". Agora: (a) o prompt da IA passou a
+  criar itens de encargos mesmo quando eles só aparecem no quadro-resumo da
+  fatura (sem duplicar os já listados e sem inventar item a partir de taxas
+  percentuais ou encargos previstos); (b) na revisão da importação, o total
+  mostra "inclui R$ X de encargos/juros" e cada item de encargo ganha um tag
+  `encargo/juros`; (c) a "Composição do mês" na gaveta destaca "Encargos e
+  juros neste mês: R$ X — sem eles, as compras somam R$ Y".
+
 ## [1.257.1] — 2026-07-05
 
 ### Mudado

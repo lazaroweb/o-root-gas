@@ -2720,6 +2720,13 @@ function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membr
   const composicao = mesFatura ? composicaoFaturaMes(todosItens, mesFatura) : null;
   const temComposicao = !!composicao
     && (composicao.importadosAgora.qtd + composicao.provisionadosAnteriores.qtd + composicao.recorrencias.qtd + composicao.manuais.qtd) > 0;
+  // Encargos/juros do mês exibido, destacados à parte na composição: quando a
+  // fatura atrasou, o total inclui juros/multa/IOF que não são compras — sem
+  // isso o usuário compara com "o que gastou" e acha que o valor está errado.
+  const encargosMes = mesFatura
+    ? todosItens.filter((l) => mesDeLanc(l) === mesFatura && String(l.categoria || '').toLowerCase() === 'encargos')
+    : [];
+  const totalEncargosMes = encargosMes.reduce((s, l) => s + Math.abs(Number(l.valor || 0)), 0);
   const temChipsFamilia = !!resumoMembros && resumoMembros.some((r) => r.total - (r.pago || 0) > 0.004);
 
   // Uso do limite considera tudo que está EM ABERTO no cartão (não pago),
@@ -2877,6 +2884,13 @@ function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membr
                   <span>Manuais: <strong style={{ color: t.text }}>{formatBRL(composicao.manuais.total)}</strong> ({composicao.manuais.qtd})</span>
                 )}
               </div>
+              {totalEncargosMes > 0 && (
+                <Tooltip title="Juros de atraso, multa, IOF, anuidade e seguros cobrados nesta fatura. Não são compras — por isso o total do mês fica acima da soma do que você comprou.">
+                  <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.accents.clay, cursor: 'help' }}>
+                    ⚠ Encargos e juros neste mês: <strong>{formatBRL(totalEncargosMes)}</strong> ({encargosMes.length} lançamento{encargosMes.length > 1 ? 's' : ''}) — sem eles, as compras somam {formatBRL(Math.max(0, (composicao?.total || 0) - totalEncargosMes))}
+                  </div>
+                </Tooltip>
+              )}
             </>
           )}
           {temComposicao && temChipsFamilia && (
@@ -4661,6 +4675,11 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
 
   const incluidos = itens.filter((it) => it.incluir);
   const totalIncluidos = incluidos.reduce((s, it) => s + Number(it.valor || 0), 0);
+  // Encargos (juros, multa, IOF, anuidade…) destacados à parte: quando a fatura
+  // atrasou, o "total a pagar" inclui esses valores que NÃO são compras — sem o
+  // destaque, o usuário compara com a soma das compras e acha que a IA errou.
+  const encargosIncluidos = incluidos.filter((it) => String(it.categoria || '').toLowerCase() === 'encargos');
+  const totalEncargos = encargosIncluidos.reduce((s, it) => s + Number(it.valor || 0), 0);
   // Espelha _detectarParcelaDesc do servidor: "x/y", "parcela x/y" e "x de y".
   // Usado pra mostrar, ANTES de importar, quais compras vão provisionar futuras.
   const parcelaInfo = (desc: string): { atual: number; total: number } | null => {
@@ -5065,8 +5084,17 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
                     </Tag>
                   )}
                 </div>
-                <div style={{ fontFamily: FONTS.display, fontSize: 18, fontWeight: 600, color: t.text, fontVariantNumeric: 'tabular-nums' }}>
-                  {formatBRL(totalIncluidos)}
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontFamily: FONTS.display, fontSize: 18, fontWeight: 600, color: t.text, fontVariantNumeric: 'tabular-nums' }}>
+                    {formatBRL(totalIncluidos)}
+                  </div>
+                  {totalEncargos > 0 && (
+                    <Tooltip title={`${encargosIncluidos.length} lançamento(s) de juros, multa, IOF, anuidade ou seguro. Compras: ${formatBRL(totalIncluidos - totalEncargos)}.`}>
+                      <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.accents.clay, fontVariantNumeric: 'tabular-nums', cursor: 'help' }}>
+                        inclui {formatBRL(totalEncargos)} de encargos/juros
+                      </div>
+                    </Tooltip>
+                  )}
                 </div>
               </div>
 
@@ -5146,6 +5174,11 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
                             </Tag>
                           );
                         })()}
+                        {String(it.categoria || '').toLowerCase() === 'encargos' && (
+                          <Tag bordered={false} style={{ margin: 0, fontSize: 10, lineHeight: '16px', background: `${t.accents.clay}22`, color: t.accents.clay }}>
+                            encargo/juros
+                          </Tag>
+                        )}
                         {(it.grupo || it.conta) && (
                           <span style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {it.grupo ? `${it.grupo} › ` : ''}{it.conta || ''}
