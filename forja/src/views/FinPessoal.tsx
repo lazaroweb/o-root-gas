@@ -43,7 +43,8 @@ import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import { gerarEbaixarPdf } from '../pdf-client';
-import { composicaoFaturaMes } from '../lib/faturaComposicao';
+import { composicaoFaturaMes, explicarDiferencaFatura } from '../lib/faturaComposicao';
+import type { LinhaFaturaImportada } from '../lib/faturaComposicao';
 import FinMesExecutivo from './FinMesExecutivo';
 import FinAssinaturas from './FinAssinaturas';
 import FinInteligencia from './FinInteligencia';
@@ -1568,6 +1569,41 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
     return () => { vivo = false; };
   }, [faturaOpen, cartaoAberto, mesFatura, membrosDe]);
 
+  // Log da importação do mês exibido (histórico permanente): total do PDF +
+  // linhas importadas. Alimenta o "explicador de diferença" da gaveta — cruza
+  // as provisões do mês com o que a fatura REALMENTE trouxe e aponta fantasmas.
+  const [logImportacao, setLogImportacao] = useState<{ totalPdf: number; linhas: LinhaFaturaImportada[] } | null>(null);
+  useEffect(() => {
+    if (!faturaOpen || !cartaoAberto) { setLogImportacao(null); return; }
+    let vivo = true;
+    callServer<ServerResponse<Array<Record<string, unknown>>>>('getHistoricoImportacoes', cartaoAberto.id)
+      .then((res) => {
+        if (!vivo) return;
+        const rows = res?.ok && Array.isArray(res.data) ? (res.data as Array<Record<string, unknown>>) : [];
+        // Mais recente primeiro (o servidor já ordena) — pega a importação do mês.
+        const doMes = rows.find((r) => String(r['competencia'] || '') === mesFatura);
+        if (!doMes) { setLogImportacao(null); return; }
+        let linhas: LinhaFaturaImportada[] = [];
+        try { linhas = JSON.parse(String(doMes['itensJson'] || '[]')) as LinhaFaturaImportada[]; } catch { linhas = []; }
+        setLogImportacao({ totalPdf: Number(doMes['totalFatura'] || 0), linhas });
+      })
+      .catch(() => { if (vivo) setLogImportacao(null); });
+    return () => { vivo = false; };
+  }, [faturaOpen, cartaoAberto, mesFatura]);
+
+  // Adia uma provisão fantasma em 1 mês (banco não cobrou neste ciclo): sai do
+  // total do mês exibido preservando a cadeia da parcela — nada é apagado.
+  const adiarLancamento = (id: string) => {
+    callServer<ServerResponse<{ para?: string }>>('adiarLancamentoUmMes', id).then((res) => {
+      if (res.ok) {
+        const d = res.data as { para?: string } | undefined;
+        message.success(`Parcela adiada pra ${d?.para || 'o mês seguinte'}`);
+        if (cartaoAberto) carregarFatura(cartaoAberto);
+        onRecarregar();
+      } else message.error(res.error || 'Erro ao adiar');
+    });
+  };
+
   const abrirNovo = () => { setEditando(null); setModalOpen(true); };
   const abrirEditar = (c: CartaoPessoal) => { setEditando(c); setModalOpen(true); };
 
@@ -1814,6 +1850,8 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
           onHistorico={() => setHistAberto(true)}
           resumoMembros={resumoMembros}
           onVerMembro={onVerMembro}
+          logImportacao={logImportacao}
+          onAdiarLancamento={adiarLancamento}
           removendoImportados={removendoImportados}
           onDeduplicar={deduplicar}
           deduplicando={deduplicando}
@@ -2235,6 +2273,10 @@ interface DetalheFaturaProps {
   // leva pro detalhe do membro na aba Família (onVerMembro).
   resumoMembros?: ResumoMembroFatura[];
   onVerMembro?: (membroId: string) => void;
+  // Log da importação do mês (histórico): total do PDF + linhas trazidas.
+  // Alimenta o explicador "por que o mês soma mais que a fatura?".
+  logImportacao?: { totalPdf: number; linhas: LinhaFaturaImportada[] } | null;
+  onAdiarLancamento?: (id: string) => void;
 }
 
 // 'YYYY-MM' → "junho de 2026" (pt-BR). Usado em notas que citam a competência.
@@ -2666,7 +2708,7 @@ function ProvisaoFaturas({ itens }: { itens: LancamentoPessoal[] }): React.React
   );
 }
 
-function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, onZerarDaquiPraFrente, onZerarImportados, onHistorico, removendoImportados, onDeduplicar, deduplicando, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs, resumoMembros, onVerMembro }: DetalheFaturaProps): React.ReactElement {
+function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, onZerarDaquiPraFrente, onZerarImportados, onHistorico, removendoImportados, onDeduplicar, deduplicando, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs, resumoMembros, onVerMembro, logImportacao, onAdiarLancamento }: DetalheFaturaProps): React.ReactElement {
   // Selo "já é assinatura": casa por id (rápido) OU por assinatura estável
   // valor+nome (sobrevive a reimportação que troca o id do lançamento).
   const temAssinaturaDe = (l: LancamentoPessoal): boolean =>
@@ -2727,6 +2769,13 @@ function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membr
     ? todosItens.filter((l) => mesDeLanc(l) === mesFatura && String(l.categoria || '').toLowerCase() === 'encargos')
     : [];
   const totalEncargosMes = encargosMes.reduce((s, l) => s + Math.abs(Number(l.valor || 0)), 0);
+  // Explicador: por que o mês soma MAIS que a fatura importada? Cruza as
+  // provisões do mês com as linhas que a fatura realmente trouxe (via log de
+  // importação) e lista as provisões "fantasma" — sem linha correspondente.
+  const explicacao = (logImportacao && logImportacao.totalPdf > 0 && mesFatura)
+    ? explicarDiferencaFatura(todosItens, mesFatura, logImportacao.totalPdf, logImportacao.linhas)
+    : null;
+  const temExplicacao = !!explicacao && Math.abs(explicacao.diferenca) > 0.02;
   const temChipsFamilia = !!resumoMembros && resumoMembros.some((r) => r.total - (r.pago || 0) > 0.004);
 
   // Uso do limite considera tudo que está EM ABERTO no cartão (não pago),
@@ -2928,6 +2977,58 @@ function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membr
                 );
               })}
             </div>
+          )}
+          {temExplicacao && explicacao && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginTop: 2 }}
+              message={
+                <span style={{ fontWeight: 600 }}>
+                  {explicacao.diferenca > 0
+                    ? `O mês soma ${formatBRL(explicacao.totalMes)}, mas a fatura importada era ${formatBRL(explicacao.totalPdf)} — ${formatBRL(Math.abs(explicacao.diferenca))} a mais`
+                    : `O mês soma ${formatBRL(explicacao.totalMes)} — ${formatBRL(Math.abs(explicacao.diferenca))} a menos que a fatura importada (${formatBRL(explicacao.totalPdf)})`}
+                </span>
+              }
+              description={
+                <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {explicacao.provisoesSemLinha.length > 0 && (
+                    <>
+                      <div>
+                        <strong>{explicacao.provisoesSemLinha.length} parcela(s) provisionada(s) por faturas anteriores ({formatBRL(explicacao.totalSemLinha)}) não vieram nesta fatura</strong> — ou o banco
+                        só cobra no mês seguinte (adie), ou a linha veio com outro nome/valor e não conciliou (veja a duplicidade abaixo):
+                      </div>
+                      {explicacao.provisoesSemLinha.slice(0, 6).map((p) => (
+                        <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span>• {p.descricao} — {formatBRL(p.valor)}</span>
+                          {onAdiarLancamento && (
+                            <Popconfirm
+                              title="Adiar esta parcela pro mês seguinte?"
+                              description="Ela sai do total deste mês e passa a vencer no próximo — nada é apagado. Use quando o banco não cobrou a parcela neste ciclo."
+                              onConfirm={() => onAdiarLancamento(p.id)}
+                              okText="Adiar 1 mês"
+                              cancelText="Cancelar"
+                            >
+                              <Button size="small" type="link" style={{ padding: 0, height: 'auto', fontSize: 12 }}>adiar 1 mês</Button>
+                            </Popconfirm>
+                          )}
+                        </div>
+                      ))}
+                      {explicacao.provisoesSemLinha.length > 6 && (
+                        <div>… e mais {explicacao.provisoesSemLinha.length - 6} (veja na lista de lançamentos abaixo).</div>
+                      )}
+                    </>
+                  )}
+                  {(() => {
+                    const excedente = composicao?.totalExcedente || 0;
+                    const resto = Math.round((Math.abs(explicacao.diferenca) - explicacao.totalSemLinha - excedente) * 100) / 100;
+                    return resto > 0.02 ? (
+                      <div>Outros {formatBRL(resto)}: lançamentos manuais/recorrências deste mês que não estavam na fatura, ou linhas editadas depois da importação.</div>
+                    ) : null;
+                  })()}
+                </div>
+              }
+            />
           )}
           {temComposicao && composicao && composicao.totalExcedente > 0 && (
             <Alert

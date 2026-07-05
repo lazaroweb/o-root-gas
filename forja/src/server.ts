@@ -10093,6 +10093,32 @@ function _acharParcelaExistente(
   return null;
 }
 
+// RPC: adia um lançamento em 1 mês (vencimento → mês seguinte, respeitando o
+// dia de vencimento do cartão). Usado pelo explicador de diferença da fatura:
+// provisão que o banco NÃO cobrou neste mês (vai cobrar no próximo) sai do
+// total do mês exibido sem ser apagada — preserva a cadeia da parcela.
+function adiarLancamentoUmMes(id: string): ServerResult {
+  try {
+    const l = dbGetById('FinPessoalLancamentos', String(id || ''));
+    if (!l) return { ok: false, error: 'Lançamento não encontrado.' };
+    if (String(l['status'] || '') === 'pago') return { ok: false, error: 'Lançamento já pago — não dá pra adiar.' };
+    const compAtual = mesDeLancamento({ vencimento: l['vencimento'], data: l['data'] });
+    if (!/^\d{4}-\d{2}$/.test(compAtual)) return { ok: false, error: 'Lançamento sem competência válida.' };
+    const compNova = _addMesesComp(compAtual, 1);
+    const cartao = l['cartaoId'] ? dbGetById('FinPessoalCartoes', String(l['cartaoId'])) : null;
+    const diaVenc = cartao ? Number(cartao['diaVencimento'] || 0) : 0;
+    const vencNovo = _vencimentoNoMes(compNova, diaVenc) || `${compNova}-01`;
+    const r = dbUpdate('FinPessoalLancamentos', String(l['id']), {
+      vencimento: vencNovo,
+      atualizadoEm: new Date().toISOString(),
+    });
+    if (!r) return { ok: false, error: 'Falha ao atualizar o lançamento.' };
+    return { ok: true, data: { id: String(l['id']), de: compAtual, para: compNova, vencimento: vencNovo } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao adiar lançamento' };
+  }
+}
+
 // RPC: histórico de importações de fatura (opcionalmente filtrado por cartão),
 // mais recente primeiro. Alimenta o modal "Histórico de importações" da gaveta.
 function getHistoricoImportacoes(cartaoId?: string): ServerResult {

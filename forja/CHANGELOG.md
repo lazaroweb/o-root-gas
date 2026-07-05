@@ -36,6 +36,24 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.259.0] — 2026-07-05
+
+### Adicionado
+
+- **Explicador da diferença na gaveta da fatura** (caso Porto jul/2026: mês
+  exibia 5.389,36 mas a fatura importada era 4.383,63): novo alerta na
+  "Composição do mês" que cruza as provisões de faturas anteriores com as
+  LINHAS que a fatura importada realmente trouxe (via histórico de
+  importações) e lista as provisões "fantasma" — parcelas provisionadas que o
+  banco não cobrou neste ciclo (ou vieram com outro nome/valor e não
+  conciliaram). Mostra "mês soma X, fatura era Y — Z a mais" com a conta
+  fechada: fantasmas + duplicidades + outros. Função pura
+  `explicarDiferencaFatura` em `faturaComposicao.ts`, com testes.
+- **Ação "adiar 1 mês"** em cada provisão fantasma: empurra o vencimento da
+  parcela pro mês seguinte (respeitando o dia de vencimento do cartão) sem
+  apagar nada — pro caso clássico "o banco só vai cobrar essa parcela na
+  próxima fatura". Novo RPC `adiarLancamentoUmMes` (bloqueia lançamento pago).
+
 ## [1.258.0] — 2026-07-05
 
 ### Adicionado

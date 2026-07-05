@@ -229,6 +229,77 @@ export function composicaoFaturaMes(itens: LancComposicao[], mes: string): Compo
   return out;
 }
 
+// ─── Explicador da diferença: mês exibido vs fatura importada (PDF) ───────────
+// Caso real (Porto jul/2026): o PDF somava 4.383,63 mas o mês exibia 5.389,36.
+// Motivo: o total do mês = importados novos + TODAS as provisões de faturas
+// anteriores que vencem nele — inclusive provisões que a fatura importada NÃO
+// trouxe (banco vai cobrar no mês seguinte, ou a linha veio com outro
+// valor/nome e não conciliou). Este explicador cruza as provisões do mês com
+// as LINHAS da fatura importada (registradas no histórico de importações) e
+// aponta exatamente quais provisões ficaram "sem linha" — os fantasmas que
+// inflam o total.
+
+export interface LinhaFaturaImportada { d: string; v: number; p: string }
+
+export interface ProvisaoSemLinha {
+  id: string;
+  descricao: string;
+  parcela: string; // 'x/y'
+  valor: number;
+}
+
+export interface ExplicacaoDiferencaFatura {
+  totalPdf: number;         // total declarado pela fatura importada
+  totalMes: number;         // soma dos lançamentos do mês no sistema
+  diferenca: number;        // totalMes − totalPdf (positivo = sistema acima)
+  provisoesSemLinha: ProvisaoSemLinha[];
+  totalSemLinha: number;
+}
+
+export function explicarDiferencaFatura(
+  itens: LancComposicao[],
+  mes: string,
+  totalPdf: number,
+  linhas: LinhaFaturaImportada[],
+): ExplicacaoDiferencaFatura | null {
+  if (!(totalPdf > 0) || !/^\d{4}-\d{2}$/.test(mes)) return null;
+  const doMes = itens.filter((l) => mesDeLancamento(l) === mes);
+  const totalMes = Math.round(doMes.reduce((s, l) => s + Number(l.valor || 0), 0) * 100) / 100;
+  const diferenca = Math.round((totalMes - totalPdf) * 100) / 100;
+
+  const provisoes = doMes.filter((l) =>
+    String(l.tags || '').indexOf('fatura-importada') >= 0
+    && String(l.notas || '').indexOf(NOTA_PROVISIONADA) >= 0);
+
+  // Multiconjunto das linhas da fatura por assinatura parcela+valor — a mesma
+  // régua da conciliação do servidor (valor obrigatório; o mês é o próprio).
+  // Cada linha "atende" no máximo UMA provisão: duas provisões idênticas
+  // (importação dupla) com uma linha só deixam a segunda como fantasma.
+  const saldo = new Map<string, number>();
+  for (const li of linhas) {
+    const p = String(li.p || '').trim();
+    if (!p) continue;
+    const k = `${p}|${Math.round(Number(li.v || 0) * 100)}`;
+    saldo.set(k, (saldo.get(k) || 0) + 1);
+  }
+  const semLinha: ProvisaoSemLinha[] = [];
+  for (const prov of provisoes) {
+    const p = `${Number(prov.parcelaAtual || 0)}/${Number(prov.parcelas || 0)}`;
+    const k = `${p}|${Math.round(Number(prov.valor || 0) * 100)}`;
+    const n = saldo.get(k) || 0;
+    if (n > 0) { saldo.set(k, n - 1); continue; }
+    semLinha.push({
+      id: String(prov.id),
+      descricao: String(prov.descricao || ''),
+      parcela: p,
+      valor: Number(prov.valor || 0),
+    });
+  }
+  semLinha.sort((a, b) => b.valor - a.valor);
+  const totalSemLinha = Math.round(semLinha.reduce((s, x) => s + x.valor, 0) * 100) / 100;
+  return { totalPdf, totalMes, diferenca, provisoesSemLinha: semLinha, totalSemLinha };
+}
+
 // ─── Seleção do "desfazer importação do mês" ──────────────────────────────────
 // Regras (itens já filtrados pelo cartão; todos com tag fatura-importada):
 //   • REMOVE o que a importação do mês criou NO mês (parcela atual + à vista);

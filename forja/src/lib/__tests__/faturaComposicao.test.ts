@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   composicaoFaturaMes, mesDeLancamento, normalizarDescricao, parcelaConfere,
-  resumoImportacaoDoMes, selecionarRemocaoImportacao,
+  resumoImportacaoDoMes, selecionarRemocaoImportacao, explicarDiferencaFatura,
   type LancComposicao,
 } from '../faturaComposicao';
 
@@ -201,5 +201,45 @@ describe('selecionarRemocaoImportacao (desfazer importação do mês)', () => {
     expect(sel.removerIds).toEqual([]);
     expect(sel.futurasIds).toEqual([]);
     expect(sel.preservados).toBe(2);
+  });
+});
+
+describe('explicarDiferencaFatura (caso Porto jul/2026: mês soma mais que a fatura)', () => {
+  const PROV = 'Parcela futura provisionada na importação';
+  const itens: LancComposicao[] = [
+    // Importados da fatura de julho (novos)
+    lanc({ id: 'novo1', descricao: 'LOJA A', valor: 300, tags: 'fatura-importada', notas: 'Importado da fatura via IA' }),
+    // Provisão de junho CONCILIÁVEL: a fatura trouxe a linha (mesma parcela, mesmo valor)
+    lanc({ id: 'prov-ok', descricao: 'SAMSUNG (2/3)', valor: 150, tags: 'fatura-importada', notas: PROV, parcelas: 3, parcelaAtual: 2 }),
+    // Provisão FANTASMA: a fatura NÃO trouxe linha 2/2 de 200,00
+    lanc({ id: 'prov-fantasma', descricao: 'CONSTANCE (2/2)', valor: 200, tags: 'fatura-importada', notas: PROV, parcelas: 2, parcelaAtual: 2 }),
+  ];
+  const linhasFatura = [
+    { d: 'LOJA A', v: 300, p: '' },
+    { d: 'SAMSUNG (2/3)', v: 150, p: '2/3' },
+  ];
+
+  it('aponta a provisão sem linha correspondente e fecha a conta da diferença', () => {
+    // PDF = 450 (o que a fatura cobrou); mês = 650 (novo + prov ok + fantasma).
+    const ex = explicarDiferencaFatura(itens, MES, 450, linhasFatura);
+    expect(ex).not.toBeNull();
+    expect(ex!.totalMes).toBe(650);
+    expect(ex!.diferenca).toBe(200);
+    expect(ex!.provisoesSemLinha.map((p) => p.id)).toEqual(['prov-fantasma']);
+    expect(ex!.totalSemLinha).toBe(200);
+  });
+
+  it('importação dupla: duas provisões idênticas com UMA linha na fatura → uma vira fantasma', () => {
+    const dupla = [
+      ...itens,
+      lanc({ id: 'prov-gemea', descricao: 'SAMSUNG (2/3)', valor: 150, tags: 'fatura-importada', notas: PROV, parcelas: 3, parcelaAtual: 2 }),
+    ];
+    const ex = explicarDiferencaFatura(dupla, MES, 450, linhasFatura);
+    expect(ex!.provisoesSemLinha.map((p) => p.id).sort()).toEqual(['prov-fantasma', 'prov-gemea']);
+    expect(ex!.totalSemLinha).toBe(350);
+  });
+
+  it('sem total do PDF não há explicação (retorna null)', () => {
+    expect(explicarDiferencaFatura(itens, MES, 0, linhasFatura)).toBeNull();
   });
 });
