@@ -859,6 +859,149 @@ function restaurarBackupConexoes(stamp: string): ServerResult {
   }
 }
 
+// ─── Backup COMPLETO do sistema (ponto de restauração) ─────────────────────────
+// Diferente do backup de conexões (que copia 3 abas pra dentro da própria
+// planilha), aqui o snapshot é uma CÓPIA INTEGRAL do arquivo da planilha-banco
+// no Drive — todas as tabelas do SCHEMA, incluindo o Financeiro Pessoal.
+// Restaurar reescreve o conteúdo de TODAS as tabelas a partir do snapshot
+// escolhido ("volta exatamente pra aquele momento"), criando antes um snapshot
+// 'pre-restore' do estado atual — então até um restore errado é reversível.
+
+const BACKUP_COMPLETO_MANTER_PADRAO = 10;
+
+function _pastaBackupsCompletos(): GoogleAppsScript.Drive.Folder {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('FORJA_BACKUP_COMPLETO_PASTA');
+  if (id) { try { return DriveApp.getFolderById(id); } catch { /* recria abaixo */ } }
+  const f = DriveApp.createFolder('Forja — Backups do Sistema');
+  props.setProperty('FORJA_BACKUP_COMPLETO_PASTA', f.getId());
+  return f;
+}
+
+function _criarBackupCompleto(motivo: string): { stamp: string; fileId: string; url: string; tabelas: number; linhas: number } {
+  const ss = getSpreadsheet();
+  SpreadsheetApp.flush(); // garante que tudo pendente está gravado antes da foto
+  const stamp = _bkpStamp();
+  const pasta = _pastaBackupsCompletos();
+  const rotulo = String(motivo || 'manual');
+  const copia = DriveApp.getFileById(ss.getId()).makeCopy(`forja-backup__${stamp} (${rotulo})`, pasta);
+
+  // Métricas do registro: quantas tabelas do schema e quantas linhas de dados.
+  let tabelas = 0; let linhas = 0;
+  for (const s of SCHEMA) {
+    const sheet = ss.getSheetByName(s.name);
+    if (!sheet) continue;
+    tabelas++;
+    linhas += Math.max(0, sheet.getLastRow() - 1);
+  }
+
+  const props = PropertiesService.getScriptProperties();
+  const manter = Math.max(1, Number(props.getProperty('FORJA_BACKUP_COMPLETO_MANTER') || BACKUP_COMPLETO_MANTER_PADRAO));
+  let reg: Array<Record<string, unknown>> = [];
+  try { reg = JSON.parse(props.getProperty('FORJA_BACKUPS_COMPLETOS') || '[]'); } catch { reg = []; }
+  reg.unshift({ stamp, motivo: rotulo, criadoEm: new Date().toISOString(), fileId: copia.getId(), url: copia.getUrl(), tabelas, linhas });
+  // Janela rolante: além do teto, manda o arquivo antigo pra lixeira do Drive.
+  for (const velho of reg.slice(manter)) {
+    try { DriveApp.getFileById(String(velho['fileId'])).setTrashed(true); } catch { /* já removido */ }
+  }
+  reg = reg.slice(0, manter);
+  props.setProperty('FORJA_BACKUPS_COMPLETOS', JSON.stringify(reg));
+  return { stamp, fileId: copia.getId(), url: copia.getUrl(), tabelas, linhas };
+}
+
+// RPC: cria um ponto de restauração manual (botão em Relatórios → Exportar).
+function criarBackupCompleto(): ServerResult {
+  try {
+    initDatabase();
+    return { ok: true, data: _criarBackupCompleto('manual') };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao criar backup completo' };
+  }
+}
+
+// RPC: lista os pontos de restauração (mais recentes primeiro) + configuração.
+function listarBackupsCompletos(): ServerResult {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    let reg: unknown[] = [];
+    try { reg = JSON.parse(props.getProperty('FORJA_BACKUPS_COMPLETOS') || '[]'); } catch { reg = []; }
+    let pastaUrl = '';
+    try { pastaUrl = _pastaBackupsCompletos().getUrl(); } catch { /* sem pasta ainda */ }
+    return {
+      ok: true,
+      data: {
+        backups: reg,
+        config: {
+          manter: Number(props.getProperty('FORJA_BACKUP_COMPLETO_MANTER') || BACKUP_COMPLETO_MANTER_PADRAO),
+          pastaUrl,
+        },
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar backups' };
+  }
+}
+
+// RPC: salva a retenção (janela rolante) dos backups completos.
+function setBackupCompletoConfig(input: Record<string, unknown>): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
+  try {
+    if (input['manter'] != null) {
+      const n = Math.max(1, Math.min(30, Math.round(Number(input['manter']) || BACKUP_COMPLETO_MANTER_PADRAO)));
+      PropertiesService.getScriptProperties().setProperty('FORJA_BACKUP_COMPLETO_MANTER', String(n));
+    }
+    return { ok: true, data: { salvo: true } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar configuração' };
+  }
+}
+
+// RPC: restaura o sistema INTEIRO a partir de um ponto de restauração (stamp).
+// Reescreve o conteúdo de todas as tabelas do SCHEMA presentes no snapshot.
+// Tabelas criadas DEPOIS do backup (não existem no snapshot) ficam intactas.
+// Antes de tocar em qualquer dado, tira um snapshot 'pre-restore' do estado
+// atual — restaurar nunca destrói informação de forma irreversível.
+function restaurarBackupCompleto(stamp: string): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
+  try {
+    initDatabase();
+    const alvo = String(stamp || '').trim();
+    if (!alvo) return { ok: false, error: 'Backup inválido' };
+    const props = PropertiesService.getScriptProperties();
+    let reg: Array<Record<string, unknown>> = [];
+    try { reg = JSON.parse(props.getProperty('FORJA_BACKUPS_COMPLETOS') || '[]'); } catch { reg = []; }
+    const entrada = reg.find((r) => String(r['stamp']) === alvo);
+    if (!entrada) return { ok: false, error: 'Ponto de restauração não encontrado no registro.' };
+
+    let origem: GoogleAppsScript.Spreadsheet.Spreadsheet;
+    try { origem = SpreadsheetApp.openById(String(entrada['fileId'])); }
+    catch { return { ok: false, error: 'O arquivo desse backup não existe mais no Drive (foi apagado ou está na lixeira).' }; }
+
+    // Rede de segurança: foto do estado atual ANTES de sobrescrever.
+    const preRestore = _criarBackupCompleto('pre-restore');
+
+    const ss = getSpreadsheet();
+    const restauradas: Array<{ tabela: string; linhas: number }> = [];
+    const puladas: string[] = [];
+    for (const s of SCHEMA) {
+      const bkp = origem.getSheetByName(s.name);
+      if (!bkp) { puladas.push(s.name); continue; }
+      const live = ss.getSheetByName(s.name);
+      if (!live) { puladas.push(s.name); continue; }
+      const vals = bkp.getDataRange().getValues();
+      live.clearContents();
+      if (vals.length > 0 && vals[0].length > 0) live.getRange(1, 1, vals.length, vals[0].length).setValues(vals);
+      try { live.setFrozenRows(1); } catch { /* cosmético */ }
+      restauradas.push({ tabela: s.name, linhas: Math.max(0, vals.length - 1) });
+    }
+    SpreadsheetApp.flush();
+    if (restauradas.length === 0) return { ok: false, error: 'Nenhuma tabela do snapshot pôde ser restaurada.' };
+    return { ok: true, data: { restauradas, puladas, preRestoreStamp: preRestore.stamp } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao restaurar backup completo' };
+  }
+}
+
 // Self-bootstrap: cadastra repoUrl do repo oficial Forja quando detecta o
 // sistema próprio cadastrado sem repoUrl. Idempotente (só preenche se vazio).
 function _migrarForjaSelfRepoUrl(): void {

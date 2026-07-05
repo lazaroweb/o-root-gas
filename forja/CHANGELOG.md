@@ -36,6 +36,27 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.257.0] — 2026-07-05
+
+### Adicionado
+
+- **Pontos de restauração do sistema completo** (Relatórios → Exportar): botão
+  que tira uma cópia integral da planilha-banco no Drive — TODAS as tabelas,
+  incluindo Financeiro Pessoal, cartões, família e histórico de importações.
+  **Restaurar** reescreve todas as tabelas pro estado exato daquele momento;
+  antes de tocar em qualquer dado, um snapshot `pre-restore` do estado atual é
+  criado automaticamente (o restore também é reversível). Janela rolante
+  configurável (padrão: 10 pontos; os antigos vão pra lixeira do Drive), lista
+  com data, tabelas/linhas, link pro arquivo e pasta no Drive. Novos RPCs:
+  `criarBackupCompleto`, `listarBackupsCompletos`, `restaurarBackupCompleto`
+  (guard admin), `setBackupCompletoConfig`.
+
+### Mudado
+
+- O painel "Backup completo" (JSON) foi renomeado pra **"Exportar JSON (QG do
+  negócio)"** e o texto agora deixa claro que ele NÃO inclui o Financeiro
+  Pessoal — quem quer proteção com restauração usa os Pontos de restauração.
+
 ## [1.256.0] — 2026-07-05
 
 ### Mudado
