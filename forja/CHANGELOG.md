@@ -36,6 +36,23 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.252.0] — 2026-07-05
+
+### Adicionado
+
+- **Importar fatura por PRINTS/fotos (múltiplas imagens de uma vez)** — quando
+  o PDF não está disponível, selecione/arraste vários prints da fatura juntos:
+  eles vão numa única chamada multimodal ao Gemini, com prompt que trata as
+  imagens como UM documento contínuo (deduplica a linha repetida na emenda
+  entre prints e localiza data/descrição/parcela x/y/valor mesmo em layout de
+  app, diferente do PDF). Toda a esteira existente vale igual: conciliação
+  com o total, revisão, trava anti-duplicidade e histórico. Requer Gemini
+  conectado (imagem não tem fallback de texto); lote limitado a ~14MB por
+  chamada. `interpretarFaturaGemini` agora aceita um JSON de lote
+  [{data,mime}] além do base64 único (compatível com o caminho antigo).
+
+---
+
 ## [1.251.0] — 2026-07-05
 
 ### Adicionado

@@ -4440,15 +4440,53 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
     }
   };
 
+  // Lote de PRINTS/fotos da mesma fatura (quando o PDF não está disponível).
+  // Exige Gemini (multimodal): as imagens vão juntas numa única chamada e o
+  // prompt trata como UM documento contínuo, deduplicando linhas na emenda.
+  const processarImagens = async (files: File[]) => {
+    if (!geminiOn) {
+      setErroImport('Ler prints/fotos exige o Gemini conectado — abra Configurações → Google Gemini e cole sua chave. (PDF funciona sem Gemini pelo modo texto; imagem não.)');
+      return;
+    }
+    const totalBytes = files.reduce((s, f) => s + f.size, 0);
+    if (totalBytes > 14 * 1024 * 1024) {
+      setErroImport('Os prints somam mais de 14MB. Envie menos imagens por vez ou reduza a resolução — dá pra importar em duas levas (a trava de duplicidade concilia).');
+      return;
+    }
+    setNomeArquivo(files.length === 1 ? files[0].name : `${files.length} prints da fatura`);
+    setProcessando(true);
+    setErroImport('');
+    try {
+      setStatusMsg(`Lendo ${files.length} print(s) com o Gemini… pode levar até 1 minuto.`);
+      const lote: Array<{ data: string; mime: string }> = [];
+      for (const f of files) lote.push({ data: await arquivoParaBase64(f), mime: f.type || 'image/png' });
+      const res = await callServer<ServerResponse<FaturaInterpretada>>('interpretarFaturaGemini', JSON.stringify(lote), 'lote-imagens');
+      if (res?.ok && res.data) { aplicarResultado(res.data as FaturaInterpretada); return; }
+      setErroImport(res?.error || 'Não consegui ler os prints. Tente imagens mais nítidas (texto legível) ou o modo colar texto.');
+    } catch (e) {
+      setErroImport(e instanceof Error ? e.message : 'Falha ao processar os prints. Tente de novo.');
+    } finally {
+      setProcessando(false);
+      setStatusMsg('');
+    }
+  };
+
+  const ehImagem = (f: File) => /^image\//i.test(f.type) || /\.(png|jpe?g|webp|heic|heif)$/i.test(f.name);
+  const processarSelecao = (files: File[]) => {
+    if (files.length === 0) return;
+    const imgs = files.filter(ehImagem);
+    if (imgs.length === files.length) { void processarImagens(files); return; }
+    if (files.length === 1) { void processarArquivo(files[0]); return; }
+    message.error('Envie OU um PDF OU um conjunto de prints (imagens) — sem misturar os dois.');
+  };
+
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (f) void processarArquivo(f);
+    processarSelecao(Array.from(e.target.files || []));
     e.target.value = '';
   };
   const onDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    const f = e.dataTransfer.files?.[0];
-    if (f) void processarArquivo(f);
+    processarSelecao(Array.from(e.dataTransfer.files || []));
   };
 
   const setItem = (idx: number, patch: Partial<ItemRevisao>) => {
@@ -4780,7 +4818,7 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
                     background: t.surfaceMuted, transition: 'border-color 0.15s',
                   }}
                 >
-                  <input ref={inputRef} type="file" accept="application/pdf,.pdf" style={{ display: 'none' }} onChange={onFile} />
+                  <input ref={inputRef} type="file" accept="application/pdf,.pdf,image/*" multiple style={{ display: 'none' }} onChange={onFile} />
                   {processando ? (
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '12px 0' }}>
                       <Sparkles size={30} color={t.accents.peach} className="forja-spin" />
@@ -4799,14 +4837,14 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
                       <Upload size={30} color={t.textTertiary} />
                       <div style={{ fontFamily: FONTS.display, fontSize: 16, fontWeight: 500, color: t.text }}>
-                        Arraste o PDF da fatura ou clique pra escolher
+                        Arraste o PDF da fatura — ou vários prints dela — ou clique pra escolher
                       </div>
-                      <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textTertiary, maxWidth: 400 }}>
+                      <div style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textTertiary, maxWidth: 420 }}>
                         {!geminiChecado
                           ? 'A IA lê as compras e monta a lista pra você revisar.'
                           : geminiOn
-                            ? 'O Gemini lê o PDF direto, extrai as compras e já classifica nos seus centros de custo.'
-                            : 'A IA lê as compras e monta a lista pra você revisar. Dica: conecte o Gemini em Configurações pra leitura mais precisa.'}
+                            ? 'O Gemini lê o PDF direto, extrai as compras e já classifica nos seus centros de custo. Sem PDF? Selecione VÁRIOS prints/fotos da fatura de uma vez — a IA junta tudo como um documento só (traga a parcela x/y visível nos prints).'
+                            : 'A IA lê as compras e monta a lista pra você revisar. Dica: conecte o Gemini em Configurações pra leitura mais precisa (e pra poder importar por prints/fotos).'}
                       </div>
                       {geminiChecado && (
                         <Tag bordered={false} style={{ marginTop: 2, background: geminiOn ? `${t.accents.sage}22` : `${t.accents.peach}22`, color: geminiOn ? t.accents.sage : t.accents.peach }}>

@@ -10232,12 +10232,34 @@ function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPa
 // Lê a fatura (PDF/imagem) DIRETO com o Gemini multimodal — sem extração de
 // texto no cliente. Mais preciso pra layout em tabela e funciona em PDF
 // escaneado. Classifica cada compra numa conta do plano de contas (se existir).
+//
+// `base64` aceita DOIS formatos:
+//   • string base64 de UM arquivo (PDF ou imagem) — caminho clássico;
+//   • JSON '[{"data":"<b64>","mime":"image/png"}, ...]' — LOTE de prints da
+//     MESMA fatura (quando o PDF não está disponível e o usuário fotografa/
+//     printa a fatura em partes). O prompt instrui a unir tudo num documento
+//     único e deduplicar linhas repetidas na sobreposição entre prints.
 function interpretarFaturaGemini(base64: string, mimeType: string): ServerResult {
   try {
     const t0 = Date.now();
     if (!geminiTemChave()) return { ok: false, error: 'Configure a chave do Gemini em Configurações pra usar a leitura direta.' };
-    const dados = String(base64 || '').replace(/^data:[^;]+;base64,/, '');
-    if (dados.length < 50) return { ok: false, error: 'Arquivo vazio ou inválido.' };
+    const bruto = String(base64 || '');
+    let arquivos: Array<{ data: string; mime: string }> = [];
+    if (/^\s*\[/.test(bruto)) {
+      try {
+        const lote = JSON.parse(bruto) as Array<{ data?: string; mime?: string }>;
+        arquivos = (Array.isArray(lote) ? lote : [])
+          .map((a) => ({
+            data: String(a.data || '').replace(/^data:[^;]+;base64,/, ''),
+            mime: String(a.mime || 'image/png'),
+          }))
+          .filter((a) => a.data.length > 50);
+      } catch { arquivos = []; }
+    } else {
+      const d = bruto.replace(/^data:[^;]+;base64,/, '');
+      if (d.length >= 50) arquivos = [{ data: d, mime: mimeType || 'application/pdf' }];
+    }
+    if (arquivos.length === 0) return { ok: false, error: 'Arquivo vazio ou inválido.' };
 
     const plano = dbGetAll('FinPlanoContas') as Array<Record<string, unknown>>;
     const contasLista = plano
@@ -10248,7 +10270,15 @@ function interpretarFaturaGemini(base64: string, mimeType: string): ServerResult
 
     const sys = 'Você é um extrator de dados de faturas de cartão de crédito brasileiras. '
       + 'Lê o documento e extrai TODAS as compras/lançamentos com precisão. Português do Brasil.';
-    const instr = 'Extraia os LANÇAMENTOS desta fatura: TODAS as compras, os encargos e os ESTORNOS/DEVOLUÇÕES/REEMBOLSOS. '
+    // Lote de prints: as imagens são PARTES da mesma fatura, em ordem. Prints
+    // costumam se sobrepor (a última linha de um aparece no topo do outro) —
+    // sem essa instrução o modelo duplicaria a linha da emenda.
+    const instrLote = arquivos.length > 1
+      ? `ATENÇÃO: você vai receber ${arquivos.length} IMAGENS que são PARTES/PRINTS da MESMA fatura, na ordem. `
+        + 'Trate-as como UM documento contínuo. Se a mesma linha aparecer no fim de uma imagem e no começo da seguinte (sobreposição de print), extraia UMA vez só. '
+        + 'O layout dos prints (app do banco) pode diferir do PDF: localize data, descrição, parcela (x/y) e valor de cada lançamento mesmo assim. '
+      : '';
+    const instr = instrLote + 'Extraia os LANÇAMENTOS desta fatura: TODAS as compras, os encargos e os ESTORNOS/DEVOLUÇÕES/REEMBOLSOS. '
       + 'Para cada lançamento devolva: data (YYYY-MM-DD; se faltar o ano use o do período; encargo sem data usa a data de fechamento/vencimento), descricao, valor e categoria (slug curto, minúsculo, sem acento; use "encargos" para juros, multa, IOF, anuidade e seguro). '
       + _REGRAS_FATURA_COMUNS + ' '
       + (contasLista
@@ -10275,10 +10305,8 @@ function interpretarFaturaGemini(base64: string, mimeType: string): ServerResult
       catch { try { return extrairJsonFatura(texto) as Record<string, unknown>; } catch { return null; } }
     };
 
-    const partes: GeminiParte[] = [
-      { text: instr },
-      { inline_data: { mime_type: mimeType || 'application/pdf', data: dados } },
-    ];
+    const anexos: GeminiParte[] = arquivos.map((a) => ({ inline_data: { mime_type: a.mime, data: a.data } }));
+    const partes: GeminiParte[] = [{ text: instr }, ...anexos];
     // 32768 tokens de saída: fatura longa (Porto/Itaú, cartões adicionais,
     // dezenas de parcelas) estourava os 8192 antigos e o JSON vinha decepado —
     // era a causa nº 1 do "não retornou um JSON válido" depois de minutos.
@@ -10298,7 +10326,7 @@ function interpretarFaturaGemini(base64: string, mimeType: string): ServerResult
       tentativas++;
       const partesCorr: GeminiParte[] = [
         { text: instr + '\n\n' + _instrucaoCorrecaoFatura(itens, c) },
-        { inline_data: { mime_type: mimeType || 'application/pdf', data: dados } },
+        ...anexos,
       ];
       const corr = geminiGenerateContent(partesCorr, { system: sys, json: true, maxTokens: 32768, temperature: 0.1 });
       const p2 = parseGem(corr.texto);
