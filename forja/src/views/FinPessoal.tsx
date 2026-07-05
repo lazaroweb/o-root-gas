@@ -300,6 +300,13 @@ export default function FinPessoal(): React.ReactElement {
   // Deep-link: clicar num cartão na visão "Meu mês" leva pra aba Cartões já
   // abrindo a fatura daquele cartão.
   const [cartaoParaAbrir, setCartaoParaAbrir] = useState<string | null>(null);
+  // Deep-link inverso: clicar num chip de membro na gaveta da fatura leva pra
+  // aba Família já com o drawer de detalhe daquele membro aberto.
+  const [membroParaAbrir, setMembroParaAbrir] = useState<string | null>(null);
+  const abrirMembroNaFamilia = useCallback((membroId: string) => {
+    setMembroParaAbrir(membroId);
+    setView('familia');
+  }, []);
   const abrirCartaoNoPainel = useCallback((cartaoId: string) => {
     setCartaoParaAbrir(cartaoId);
     setView('cartoes');
@@ -765,6 +772,8 @@ export default function FinPessoal(): React.ReactElement {
           onRecarregar={recarregar}
           onSelecionarMes={setMes}
           secao={view === 'familia-recebiveis' ? 'recebiveis' : view === 'familia-cobrar' ? 'cobrar' : 'visao'}
+          abrirMembroId={membroParaAbrir}
+          onConsumirAbrirMembro={() => setMembroParaAbrir(null)}
         />
       )}
       {view === 'cartoes' && (
@@ -783,6 +792,7 @@ export default function FinPessoal(): React.ReactElement {
           onLancarFatura={() => setModalFaturaOpen(true)}
           abrirCartaoId={cartaoParaAbrir}
           onConsumirAbrir={() => setCartaoParaAbrir(null)}
+          onVerMembro={abrirMembroNaFamilia}
         />
       )}
       {view === 'pagar' && (
@@ -1508,7 +1518,17 @@ function ListaLancamentos({ lancamentos, cartoes, loading, onEditar, onRecarrega
 
 // ─── Sub-view: cartões ─────────────────────────────────────────────────────────
 
-function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, assinaturaEspelhoSigs, onRecarregar, onAssinaturaCriada, onImportar, onEditarLancamento, onAtribuir, onLancarFatura, abrirCartaoId, onConsumirAbrir }: { cartoes: CartaoPessoal[]; mes: string; membros: FamiliaMembro[]; membrosDe: (lancId: string) => FamiliaMembro[]; lancAssinaturaIds?: Set<string>; assinaturaEspelhoSigs?: Set<string>; onRecarregar: () => void; onAssinaturaCriada?: (nova?: AssinaturaPessoal) => void; onImportar: (cartaoId?: string) => void; onEditarLancamento: (l: LancamentoPessoal) => void; onAtribuir: (l: LancamentoPessoal) => void; onLancarFatura: () => void; abrirCartaoId?: string | null; onConsumirAbrir?: () => void }): React.ReactElement {
+// Uma linha do resumo "quem deve o quê nesta fatura" (RPC
+// getResumoMembrosFaturaCartao): total atribuído, quanto já devolveu e quantos
+// itens, por membro, na competência exibida na gaveta.
+interface ResumoMembroFatura {
+  membroId: string;
+  total: number;
+  pago: number;
+  qtd: number;
+}
+
+function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, assinaturaEspelhoSigs, onRecarregar, onAssinaturaCriada, onImportar, onEditarLancamento, onAtribuir, onLancarFatura, abrirCartaoId, onConsumirAbrir, onVerMembro }: { cartoes: CartaoPessoal[]; mes: string; membros: FamiliaMembro[]; membrosDe: (lancId: string) => FamiliaMembro[]; lancAssinaturaIds?: Set<string>; assinaturaEspelhoSigs?: Set<string>; onRecarregar: () => void; onAssinaturaCriada?: (nova?: AssinaturaPessoal) => void; onImportar: (cartaoId?: string) => void; onEditarLancamento: (l: LancamentoPessoal) => void; onAtribuir: (l: LancamentoPessoal) => void; onLancarFatura: () => void; abrirCartaoId?: string | null; onConsumirAbrir?: () => void; onVerMembro?: (membroId: string) => void }): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [modalOpen, setModalOpen] = useState(false);
@@ -1530,6 +1550,20 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
   // Permite navegar ‹ › entre faturas (ex.: importei junho mas hoje é julho) e
   // é o mês que TODAS as ações da gaveta usam (remover importados, pagar, etc).
   const [mesFatura, setMesFatura] = useState(mes);
+  // Resumo "quem da família deve o quê" NESTA fatura (cobranças nascidas de
+  // lançamentos deste cartão na competência exibida). Alimenta os chips
+  // discretos da gaveta. `membrosDe` na dependência é proposital: a identidade
+  // dele muda quando o mapa de atribuições recarrega (após atribuir/editar),
+  // então os chips se atualizam sem precisar fechar a gaveta.
+  const [resumoMembros, setResumoMembros] = useState<ResumoMembroFatura[]>([]);
+  useEffect(() => {
+    if (!faturaOpen || !cartaoAberto) { setResumoMembros([]); return; }
+    let vivo = true;
+    callServer<ServerResponse<ResumoMembroFatura[]>>('getResumoMembrosFaturaCartao', cartaoAberto.id, mesFatura)
+      .then((res) => { if (vivo && res.ok && Array.isArray(res.data)) setResumoMembros(res.data as ResumoMembroFatura[]); })
+      .catch(() => { /* sem chips — informação acessória, não bloqueia a gaveta */ });
+    return () => { vivo = false; };
+  }, [faturaOpen, cartaoAberto, mesFatura, membrosDe]);
 
   const abrirNovo = () => { setEditando(null); setModalOpen(true); };
   const abrirEditar = (c: CartaoPessoal) => { setEditando(c); setModalOpen(true); };
@@ -1775,6 +1809,8 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
           onZerarDaquiPraFrente={zerarDaquiPraFrente}
           onZerarImportados={zerarImportados}
           onHistorico={() => setHistAberto(true)}
+          resumoMembros={resumoMembros}
+          onVerMembro={onVerMembro}
           removendoImportados={removendoImportados}
           onDeduplicar={deduplicar}
           deduplicando={deduplicando}
@@ -2192,6 +2228,10 @@ interface DetalheFaturaProps {
   onPromoverAssinatura?: (l: LancamentoPessoal) => void;
   lancAssinaturaIds?: Set<string>;
   assinaturaEspelhoSigs?: Set<string>;
+  // Resumo discreto "quem da família deve o quê" nesta fatura. Clicar num chip
+  // leva pro detalhe do membro na aba Família (onVerMembro).
+  resumoMembros?: ResumoMembroFatura[];
+  onVerMembro?: (membroId: string) => void;
 }
 
 // 'YYYY-MM' → "junho de 2026" (pt-BR). Usado em notas que citam a competência.
@@ -2623,7 +2663,7 @@ function ProvisaoFaturas({ itens }: { itens: LancamentoPessoal[] }): React.React
   );
 }
 
-function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, onZerarDaquiPraFrente, onZerarImportados, onHistorico, removendoImportados, onDeduplicar, deduplicando, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs }: DetalheFaturaProps): React.ReactElement {
+function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, onZerarDaquiPraFrente, onZerarImportados, onHistorico, removendoImportados, onDeduplicar, deduplicando, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs, resumoMembros, onVerMembro }: DetalheFaturaProps): React.ReactElement {
   // Selo "já é assinatura": casa por id (rápido) OU por assinatura estável
   // valor+nome (sobrevive a reimportação que troca o id do lançamento).
   const temAssinaturaDe = (l: LancamentoPessoal): boolean =>
@@ -2846,6 +2886,41 @@ function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membr
               }
             />
           )}
+        </div>
+      )}
+
+      {/* Chips discretos "quem da família deve nesta fatura": só nome + valor
+          em aberto. Clicar leva pro detalhe do membro na aba Família — o lugar
+          dos detalhes continua sendo lá, aqui é só o resumo de relance. */}
+      {resumoMembros && resumoMembros.some((r) => r.total - (r.pago || 0) > 0.004) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, letterSpacing: 0.4 }}>
+            FAMÍLIA NESTA FATURA
+          </span>
+          {resumoMembros.map((r) => {
+            const m = membros.find((x) => x.id === r.membroId);
+            const aberto = r.total - (r.pago || 0);
+            if (!m || aberto <= 0.004) return null;
+            return (
+              <Tooltip key={r.membroId} title={`${m.nome} deve ${formatBRL(aberto)} desta fatura (${r.qtd} item${r.qtd > 1 ? 's' : ''}) · clique pra ver o detalhe na Família`}>
+                <button
+                  type="button"
+                  onClick={() => onVerMembro?.(r.membroId)}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
+                    borderRadius: 999, padding: '3px 10px 3px 4px',
+                    cursor: onVerMembro ? 'pointer' : 'default',
+                    fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary,
+                  }}
+                >
+                  <MembroChip membro={m} style={{ width: 18, height: 18, fontSize: 10, lineHeight: '18px' }} />
+                  <span>{m.nome}</span>
+                  <strong style={{ color: t.text, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(aberto)}</strong>
+                </button>
+              </Tooltip>
+            );
+          })}
         </div>
       )}
 

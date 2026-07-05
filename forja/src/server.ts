@@ -11054,6 +11054,47 @@ function getAtribuicoesLancamentos(): ServerResult {
   }
 }
 
+// Resumo por MEMBRO do que está atribuído aos lançamentos DESTE cartão numa
+// competência — alimenta os chips discretos na gaveta da fatura ("quem deve
+// quanto nesta fatura"), sem precisar sair pra aba Família. Só nome+valor;
+// o detalhe continua na Família.
+function getResumoMembrosFaturaCartao(cartaoId: string, competencia: string): ServerResult {
+  try {
+    const cid = String(cartaoId || '').trim();
+    const comp = String(competencia || '').substring(0, 7);
+    if (!cid || !/^\d{4}-\d{2}$/.test(comp)) return { ok: true, data: [] };
+    const idsCartao = new Set(
+      (dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>)
+        .filter((l) => String(l['cartaoId'] || '').trim() === cid)
+        .map((l) => String(l['id'])),
+    );
+    const acc = new Map<string, { total: number; pago: number; qtd: number }>();
+    for (const c of dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>) {
+      if (String(c['origem']) !== 'lancamento') continue;
+      if (!idsCartao.has(String(c['origemId'] || ''))) continue;
+      if (_toYYYYMM(c['competencia']) !== comp) continue;
+      const m = String(c['membroId'] || '').trim();
+      if (!m) continue;
+      const cur = acc.get(m) || { total: 0, pago: 0, qtd: 0 };
+      cur.total += Math.abs(Number(c['valor'] || 0));
+      cur.pago += Math.abs(Number(c['valorPago'] || 0));
+      cur.qtd += 1;
+      acc.set(m, cur);
+    }
+    const out = Array.from(acc.entries())
+      .map(([membroId, v]) => ({
+        membroId,
+        total: Math.round(v.total * 100) / 100,
+        pago: Math.round(v.pago * 100) / 100,
+        qtd: v.qtd,
+      }))
+      .sort((a, b) => b.total - a.total);
+    return { ok: true, data: out };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao resumir membros da fatura' };
+  }
+}
+
 // Dado o lançamento de origem, devolve os lançamentos-ALVO da atribuição:
 // a própria parcela + (quando for compra parcelada e `propagar`) as parcelas
 // IRMÃS dali pra frente ainda NÃO pagas (mesmo parcelaGrupoId, parcelaAtual >=

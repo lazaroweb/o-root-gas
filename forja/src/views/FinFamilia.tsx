@@ -81,9 +81,13 @@ interface FinFamiliaProps {
   onRecarregar: () => void;
   onSelecionarMes?: (comp: string) => void;
   secao?: SecaoFamilia;
+  // Deep-link: vindo da gaveta da fatura (chip do membro), já abre o drawer de
+  // detalhe daquele membro. Consumido uma vez pra não reabrir em re-renders.
+  abrirMembroId?: string | null;
+  onConsumirAbrirMembro?: () => void;
 }
 
-export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinaturas, onRecarregar, onSelecionarMes, secao = 'visao' }: FinFamiliaProps): React.ReactElement {
+export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinaturas, onRecarregar, onSelecionarMes, secao = 'visao', abrirMembroId, onConsumirAbrirMembro }: FinFamiliaProps): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
   const [resumo, setResumo] = useState<ResumoFamilia | null>(null);
@@ -114,6 +118,15 @@ export default function FinFamilia({ mes, membros, cartoes, lancamentos, assinat
       .catch(() => { /* visão por mês fica indisponível, lista normal segue */ });
   }, []);
   useEffect(() => { carregarDetalheMembro(drawerMembro); }, [drawerMembro, carregarDetalheMembro]);
+
+  // Deep-link vindo da gaveta da fatura: abre direto o detalhe do membro.
+  useEffect(() => {
+    if (!abrirMembroId) return;
+    const alvo = membros.find((m) => m.id === abrirMembroId);
+    if (alvo) setDrawerMembro(alvo);
+    onConsumirAbrirMembro?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [abrirMembroId, membros]);
 
   const baixarPdfMembro = (membro: FamiliaMembro, competencia?: string, incluirPagos?: boolean) => {
     setPdfLoading(true);

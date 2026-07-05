@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.255.0] — 2026-07-05
+
+### Adicionado
+
+- **Família na gaveta da fatura**: chips discretos "FAMÍLIA NESTA FATURA" na
+  gaveta do cartão — nome do membro + valor em aberto que ele deve na fatura
+  exibida (respeita a navegação ‹ › de mês). Clicar no chip leva direto ao
+  detalhe do membro na aba Família (deep-link, abre o drawer dele). Novo RPC
+  `getResumoMembrosFaturaCartao(cartaoId, competencia)` soma as cobranças
+  nascidas de lançamentos daquele cartão na competência. Os chips se atualizam
+  sozinhos após atribuir/editar (reconsultam quando o mapa de atribuições
+  recarrega).
+
 ## [1.254.0] — 2026-07-05
 
 ### Melhorado
