@@ -17,12 +17,15 @@ import React, { useState, useEffect, useMemo, useCallback, useRef, createContext
 import {
   Button, Modal, Form, Input, InputNumber, Select, DatePicker, Tag, AutoComplete,
   App as AntApp, Popconfirm, Empty, Tooltip, Drawer, Progress, Radio, Alert, Tabs, Checkbox,
+  Dropdown,
 } from 'antd';
+import type { MenuProps } from 'antd';
 import {
   Plus, ChevronLeft, ChevronRight, Wallet, TrendingDown, TrendingUp,
   CreditCard, Smartphone, Banknote, FileText, ArrowLeftRight, AlertCircle,
   Pencil, Trash2, Calendar, CheckCircle2, Clock, ArrowDownRight, ArrowUpRight,
   RotateCcw, Layers as LayersIcon, Target, Sparkles, PauseCircle, PlayCircle, Repeat, History,
+  Eraser,
   Upload, FileUp, Compass, Users, CalendarRange, FileDown, BadgeCheck, BadgePlus,
   // Ícones de categoria — outline lucide, mesmo padrão da sidebar
   ShoppingCart, Car, Utensils, Gamepad2, Pill, Home, Lightbulb, Tv, BookOpen, Shirt,
@@ -2670,6 +2673,9 @@ function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membr
     !!lancAssinaturaIds?.has(l.id) ||
     !!assinaturaEspelhoSigs?.has(sigEspelho(String(l.descricao || ''), Number(l.valor || 0)));
   const t = useTokens();
+  // Confirmações das ações de limpeza (que agora vivem num Dropdown — Popconfirm
+  // não funciona dentro de menu, então usamos modal.confirm do App do antd).
+  const { modal } = AntApp.useApp();
   // Modo de atribuição em lote: escolhe um membro e marca itens (ou a fatura
   // toda) pra dizer "isso é do fulano". 100% do valor de cada item vai pro membro.
   const [modoLote, setModoLote] = useState(false);
@@ -2712,6 +2718,9 @@ function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membr
   // parcelas provisionadas por faturas anteriores, recorrências, manuais) +
   // duplicidade suspeita (mesma parcela x/y da mesma compra 2+ vezes).
   const composicao = mesFatura ? composicaoFaturaMes(todosItens, mesFatura) : null;
+  const temComposicao = !!composicao
+    && (composicao.importadosAgora.qtd + composicao.provisionadosAnteriores.qtd + composicao.recorrencias.qtd + composicao.manuais.qtd) > 0;
+  const temChipsFamilia = !!resumoMembros && resumoMembros.some((r) => r.total - (r.pago || 0) > 0.004);
 
   // Uso do limite considera tudo que está EM ABERTO no cartão (não pago),
   // independente da janela de fechamento. A "fatura da janela atual" (mês
@@ -2752,13 +2761,47 @@ function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membr
     </div>
   );
 
+  // Menu único de LIMPEZA: dedup + remoções escopadas que antes eram 4 botões
+  // vermelhos empilhados no topo do modal (matavam o respiro). São ações raras
+  // e destrutivas — merecem morar atrás de um clique, não gritar na primeira
+  // dobra. Cada item abre confirmação com o mesmo texto/garantias de antes.
+  const itensLimpeza: MenuProps['items'] = [];
+  if (todosItens.length > 0 && onDeduplicar) {
+    itensLimpeza.push({ key: 'dedup', icon: <LayersIcon size={13} />, label: 'Remover duplicados' });
+  }
+  if (qtdImportados > 0) {
+    itensLimpeza.push({ key: 'mes', danger: true, icon: <Trash2 size={13} />, label: `Remover importados do mês (${qtdImportados})` });
+  }
+  if (onZerarDaquiPraFrente && qtdImportadosAPartir > 0 && qtdImportadosAPartir < qtdImportadosTotal) {
+    itensLimpeza.push({ key: 'frente', danger: true, icon: <RotateCcw size={13} />, label: `Zerar deste mês em diante (${qtdImportadosAPartir})` });
+  }
+  if (onZerarImportados && qtdImportadosTotal > 0) {
+    if (itensLimpeza.length > 0) itensLimpeza.push({ type: 'divider' });
+    itensLimpeza.push({ key: 'tudo', danger: true, icon: <RotateCcw size={13} />, label: `Zerar importados do cartão (${qtdImportadosTotal})` });
+  }
+  const confirmarLimpeza: NonNullable<NonNullable<React.ComponentProps<typeof Dropdown>['menu']>['onClick']> = ({ key }) => {
+    const abrir = (titulo: string, texto: string, okText: string, onOk?: () => void) =>
+      modal.confirm({
+        title: titulo,
+        content: texto,
+        okText,
+        cancelText: 'Cancelar',
+        okButtonProps: { danger: true },
+        onOk,
+      });
+    if (key === 'dedup') abrir('Remover parcelas/itens duplicados?', 'Mantém uma cópia de cada parcela (a paga tem prioridade) e apaga as repetidas deste cartão.', 'Remover duplicados', onDeduplicar);
+    if (key === 'mes') abrir('Remover importados deste mês?', 'Desfaz a importação DESTE mês por completo: remove o que ela criou no mês E as parcelas futuras que ela provisionou nos meses à frente. PRESERVA as parcelas provisionadas pelas faturas anteriores.', 'Remover deste mês', onRemoverImportados);
+    if (key === 'frente') abrir('Zerar importados deste mês em diante?', `Apaga os ${qtdImportadosAPartir} importado(s) de ${mesFatura} e dos meses à frente — inclusive parcelas provisionadas por faturas antigas nesses meses. Os meses PASSADOS ficam intactos, com as atribuições a membros da família preservadas. Depois, reimporte a fatura deste mês: ela recria o mês e reprovisiona as parcelas futuras.`, 'Zerar daqui pra frente', onZerarDaquiPraFrente);
+    if (key === 'tudo') abrir('Zerar TODOS os importados deste cartão?', `Começar do zero: apaga os ${qtdImportadosTotal} lançamento(s) importados de fatura deste cartão em TODOS os meses (passado e futuro), incluindo parcelas provisionadas e restos de importações antigas. Lançamentos manuais e recorrências ficam. Depois, reimporte a fatura mais recente.`, 'Zerar tudo e recomeçar', onZerarImportados);
+  };
+  const limpando = !!removendoImportados || !!deduplicando;
+
   const abaLancamentos = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, height: '100%', minHeight: 0 }}>
-      {/* Ações no TOPO do drawer — antes ficavam no cabeçalho de "Todos os
-          lançamentos" e desciam pro meio quando a janela atual tinha itens.
-          Agora ficam sempre acessíveis aqui em cima. */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%', minHeight: 0 }}>
+      {/* Barra de ações do topo: no dia a dia só Histórico e Atribuir ficam à
+          vista, em botões calmos de texto. A Limpeza inteira vive num menu. */}
       {!modoLote && ((todosItens.length > 0 && (membros.length > 0 || qtdImportadosTotal > 0)) || !!onHistorico) && (
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', alignItems: 'center' }}>
           {/* Histórico de importações — discreto mas "vivo" (anel de luz girando
               no ícone). Sempre disponível: o registro sobrevive a remoções. */}
           {onHistorico && (
@@ -2775,99 +2818,104 @@ function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membr
             </Tooltip>
           )}
           {todosItens.length > 0 && membros.length > 0 && (
-            <Button size="small" icon={<Users size={13} />} onClick={() => setModoLote(true)}>
+            <Button
+              size="small"
+              type="text"
+              icon={<Users size={13} />}
+              onClick={() => setModoLote(true)}
+              style={{ color: t.textSecondary, fontFamily: FONTS.ui, fontSize: 12 }}
+            >
               Atribuir a membro
             </Button>
           )}
-          {todosItens.length > 0 && onDeduplicar && (
-            <Popconfirm
-              title="Remover parcelas/itens duplicados?"
-              description="Mantém uma cópia de cada parcela (a paga tem prioridade) e apaga as repetidas deste cartão."
-              onConfirm={onDeduplicar}
-              okText="Remover duplicados"
-              cancelText="Cancelar"
-              okButtonProps={{ danger: true, loading: deduplicando }}
-            >
-              <Button size="small" icon={<LayersIcon size={13} />} loading={deduplicando}>
-                {deduplicando ? 'Limpando…' : 'Remover duplicados'}
-              </Button>
-            </Popconfirm>
-          )}
-          {qtdImportados > 0 && (
-            <Popconfirm
-              title={`Remover importados deste mês?`}
-              description="Desfaz a importação DESTE mês por completo: remove o que ela criou no mês E as parcelas futuras que ela provisionou nos meses à frente. PRESERVA as parcelas provisionadas pelas faturas anteriores."
-              onConfirm={onRemoverImportados}
-              okText="Remover deste mês"
-              cancelText="Cancelar"
-              okButtonProps={{ danger: true, loading: removendoImportados }}
-            >
-              <Button size="small" danger icon={<Trash2 size={13} />} loading={removendoImportados}>
-                {removendoImportados ? 'Removendo…' : `Remover importados do mês (${qtdImportados})`}
-              </Button>
-            </Popconfirm>
-          )}
-          {onZerarDaquiPraFrente && qtdImportadosAPartir > 0 && qtdImportadosAPartir < qtdImportadosTotal && (
-            <Popconfirm
-              title="Zerar importados deste mês em diante?"
-              description={`Apaga os ${qtdImportadosAPartir} importado(s) de ${mesFatura} e dos meses à frente — inclusive parcelas provisionadas por faturas antigas nesses meses. Os meses PASSADOS ficam intactos, com as atribuições a membros da família preservadas. Depois, reimporte a fatura deste mês: ela recria o mês e reprovisiona as parcelas futuras.`}
-              onConfirm={onZerarDaquiPraFrente}
-              okText="Zerar daqui pra frente"
-              cancelText="Cancelar"
-              okButtonProps={{ danger: true, loading: removendoImportados }}
-            >
-              <Button size="small" danger icon={<RotateCcw size={13} />} loading={removendoImportados}>
-                Zerar deste mês em diante ({qtdImportadosAPartir})
-              </Button>
-            </Popconfirm>
-          )}
-          {onZerarImportados && qtdImportadosTotal > 0 && (
-            <Popconfirm
-              title="Zerar TODOS os importados deste cartão?"
-              description={`Começar do zero: apaga os ${qtdImportadosTotal} lançamento(s) importados de fatura deste cartão em TODOS os meses (passado e futuro), incluindo parcelas provisionadas e restos de importações antigas. Lançamentos manuais e recorrências ficam. Depois, reimporte a fatura mais recente.`}
-              onConfirm={onZerarImportados}
-              okText="Zerar tudo e recomeçar"
-              cancelText="Cancelar"
-              okButtonProps={{ danger: true, loading: removendoImportados }}
-            >
-              <Button size="small" danger type="dashed" icon={<RotateCcw size={13} />} loading={removendoImportados}>
-                Zerar importados do cartão ({qtdImportadosTotal})
-              </Button>
-            </Popconfirm>
+          {itensLimpeza.length > 0 && (
+            <>
+              <div style={{ width: 1, height: 14, background: t.borderSoft, margin: '0 4px' }} />
+              <Dropdown menu={{ items: itensLimpeza, onClick: confirmarLimpeza }} trigger={['click']} placement="bottomRight">
+                <Button
+                  size="small"
+                  type="text"
+                  loading={limpando}
+                  icon={<Eraser size={13} />}
+                  style={{ color: t.textSecondary, fontFamily: FONTS.ui, fontSize: 12 }}
+                >
+                  {limpando ? 'Limpando…' : 'Limpeza'}
+                </Button>
+              </Dropdown>
+            </>
           )}
         </div>
       )}
 
-      {/* Raio-X do total do mês: responde "por que o total não bate com o PDF?"
-          mostrando quanto veio de cada origem. A linha de provisionadas explica
-          o valor "a mais" LEGÍTIMO (parcelas de faturas antigas que vencem
-          agora); o alerta de duplicidade pega a conciliação que falhou. */}
-      {composicao && (composicao.importadosAgora.qtd + composicao.provisionadosAnteriores.qtd + composicao.recorrencias.qtd + composicao.manuais.qtd) > 0 && (
+      {/* Cartão de CONTEXTO do mês: composição (de onde vem cada real) e, na
+          mesma moldura, os chips "família nesta fatura". Um bloco só, calmo —
+          antes eram dois fragmentos soltos disputando espaço com os botões. */}
+      {(temComposicao || temChipsFamilia) && (
         <div style={{
           background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
-          borderRadius: 10, padding: '10px 14px',
-          display: 'flex', flexDirection: 'column', gap: 6,
+          borderRadius: 12, padding: '12px 16px',
+          display: 'flex', flexDirection: 'column', gap: 8,
         }}>
-          <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, letterSpacing: 0.4 }}>
-            COMPOSIÇÃO DO MÊS {dayjs(mesFatura + '-01').format('MMM/YYYY').toUpperCase()} · {formatBRL(composicao.total)}
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 18px', fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary }}>
-            {composicao.importadosAgora.qtd > 0 && (
-              <span>Importados desta fatura: <strong style={{ color: t.text }}>{formatBRL(composicao.importadosAgora.total)}</strong> ({composicao.importadosAgora.qtd})</span>
-            )}
-            {composicao.provisionadosAnteriores.qtd > 0 && (
-              <Tooltip title="Parcelas de compras de faturas ANTERIORES, provisionadas na época e vencendo neste mês. É normal somarem ao total — a importação concilia com elas em vez de duplicar.">
-                <span style={{ cursor: 'help' }}>Parcelas de faturas anteriores: <strong style={{ color: t.text }}>{formatBRL(composicao.provisionadosAnteriores.total)}</strong> ({composicao.provisionadosAnteriores.qtd})</span>
-              </Tooltip>
-            )}
-            {composicao.recorrencias.qtd > 0 && (
-              <span>Recorrências: <strong style={{ color: t.text }}>{formatBRL(composicao.recorrencias.total)}</strong> ({composicao.recorrencias.qtd})</span>
-            )}
-            {composicao.manuais.qtd > 0 && (
-              <span>Manuais: <strong style={{ color: t.text }}>{formatBRL(composicao.manuais.total)}</strong> ({composicao.manuais.qtd})</span>
-            )}
-          </div>
-          {composicao.totalExcedente > 0 && (
+          {temComposicao && composicao && (
+            <>
+              <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, letterSpacing: 0.4 }}>
+                COMPOSIÇÃO DO MÊS {dayjs(mesFatura + '-01').format('MMM/YYYY').toUpperCase()} · {formatBRL(composicao.total)}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 18px', fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary }}>
+                {composicao.importadosAgora.qtd > 0 && (
+                  <span>Importados desta fatura: <strong style={{ color: t.text }}>{formatBRL(composicao.importadosAgora.total)}</strong> ({composicao.importadosAgora.qtd})</span>
+                )}
+                {composicao.provisionadosAnteriores.qtd > 0 && (
+                  <Tooltip title="Parcelas de compras de faturas ANTERIORES, provisionadas na época e vencendo neste mês. É normal somarem ao total — a importação concilia com elas em vez de duplicar.">
+                    <span style={{ cursor: 'help' }}>Parcelas de faturas anteriores: <strong style={{ color: t.text }}>{formatBRL(composicao.provisionadosAnteriores.total)}</strong> ({composicao.provisionadosAnteriores.qtd})</span>
+                  </Tooltip>
+                )}
+                {composicao.recorrencias.qtd > 0 && (
+                  <span>Recorrências: <strong style={{ color: t.text }}>{formatBRL(composicao.recorrencias.total)}</strong> ({composicao.recorrencias.qtd})</span>
+                )}
+                {composicao.manuais.qtd > 0 && (
+                  <span>Manuais: <strong style={{ color: t.text }}>{formatBRL(composicao.manuais.total)}</strong> ({composicao.manuais.qtd})</span>
+                )}
+              </div>
+            </>
+          )}
+          {temComposicao && temChipsFamilia && (
+            <div style={{ height: 1, background: t.borderSoft, margin: '2px 0' }} />
+          )}
+          {/* Chips discretos "quem da família deve nesta fatura": só nome +
+              valor em aberto. Clicar leva pro detalhe do membro na Família. */}
+          {temChipsFamilia && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, letterSpacing: 0.4 }}>
+                FAMÍLIA NESTA FATURA
+              </span>
+              {(resumoMembros || []).map((r) => {
+                const m = membros.find((x) => x.id === r.membroId);
+                const aberto = r.total - (r.pago || 0);
+                if (!m || aberto <= 0.004) return null;
+                return (
+                  <Tooltip key={r.membroId} title={`${m.nome} deve ${formatBRL(aberto)} desta fatura (${r.qtd} item${r.qtd > 1 ? 's' : ''}) · clique pra ver o detalhe na Família`}>
+                    <button
+                      type="button"
+                      onClick={() => onVerMembro?.(r.membroId)}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 6,
+                        background: t.surface, border: `1px solid ${t.borderSoft}`,
+                        borderRadius: 999, padding: '3px 10px 3px 4px',
+                        cursor: onVerMembro ? 'pointer' : 'default',
+                        fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary,
+                      }}
+                    >
+                      <MembroChip membro={m} style={{ width: 18, height: 18, fontSize: 10, lineHeight: '18px' }} />
+                      <span>{m.nome}</span>
+                      <strong style={{ color: t.text, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(aberto)}</strong>
+                    </button>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          )}
+          {temComposicao && composicao && composicao.totalExcedente > 0 && (
             <Alert
               type="warning"
               showIcon
@@ -2881,46 +2929,11 @@ function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membr
                     </div>
                   ))}
                   {composicao.suspeitas.length > 5 && <div>… e mais {composicao.suspeitas.length - 5}.</div>}
-                  <div style={{ marginTop: 4 }}>O botão &quot;Remover duplicados&quot; acima limpa mantendo 1 cópia de cada (a paga tem prioridade).</div>
+                  <div style={{ marginTop: 4 }}>&quot;Limpeza → Remover duplicados&quot; acima limpa mantendo 1 cópia de cada (a paga tem prioridade).</div>
                 </div>
               }
             />
           )}
-        </div>
-      )}
-
-      {/* Chips discretos "quem da família deve nesta fatura": só nome + valor
-          em aberto. Clicar leva pro detalhe do membro na aba Família — o lugar
-          dos detalhes continua sendo lá, aqui é só o resumo de relance. */}
-      {resumoMembros && resumoMembros.some((r) => r.total - (r.pago || 0) > 0.004) && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary, letterSpacing: 0.4 }}>
-            FAMÍLIA NESTA FATURA
-          </span>
-          {resumoMembros.map((r) => {
-            const m = membros.find((x) => x.id === r.membroId);
-            const aberto = r.total - (r.pago || 0);
-            if (!m || aberto <= 0.004) return null;
-            return (
-              <Tooltip key={r.membroId} title={`${m.nome} deve ${formatBRL(aberto)} desta fatura (${r.qtd} item${r.qtd > 1 ? 's' : ''}) · clique pra ver o detalhe na Família`}>
-                <button
-                  type="button"
-                  onClick={() => onVerMembro?.(r.membroId)}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 6,
-                    background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
-                    borderRadius: 999, padding: '3px 10px 3px 4px',
-                    cursor: onVerMembro ? 'pointer' : 'default',
-                    fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary,
-                  }}
-                >
-                  <MembroChip membro={m} style={{ width: 18, height: 18, fontSize: 10, lineHeight: '18px' }} />
-                  <span>{m.nome}</span>
-                  <strong style={{ color: t.text, fontVariantNumeric: 'tabular-nums' }}>{formatBRL(aberto)}</strong>
-                </button>
-              </Tooltip>
-            );
-          })}
         </div>
       )}
 

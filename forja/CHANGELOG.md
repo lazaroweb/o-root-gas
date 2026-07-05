@@ -36,6 +36,22 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.256.0] — 2026-07-05
+
+### Mudado
+
+- **Respiro de volta na gaveta da fatura** (design premium): as 4 ações
+  destrutivas que empilhavam botões vermelhos no topo (Remover duplicados,
+  Remover importados do mês, Zerar deste mês em diante, Zerar importados do
+  cartão) agora vivem num único menu discreto **"Limpeza"** (ícone borracha),
+  cada uma com sua confirmação — mesmos textos e garantias de antes. A barra
+  visível ficou só com o dia a dia: Histórico · Atribuir a membro · Limpeza,
+  em botões calmos de texto separados por um fio.
+- **Um cartão de contexto só**: a "Composição do mês" e os chips "Família
+  nesta fatura" se fundiram numa única moldura (separados por um fio interno),
+  em vez de dois fragmentos soltos. Espaçamento e raios ajustados (gap 16,
+  radius 12, padding maior).
+
 ## [1.255.0] — 2026-07-05
 
 ### Adicionado
