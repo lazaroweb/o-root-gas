@@ -1525,6 +1525,7 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
   const [deduplicando, setDeduplicando] = useState(false);
   const [dedupRes, setDedupRes] = useState<DedupResultado | null>(null);
   const [pagandoFatura, setPagandoFatura] = useState(false);
+  const [histAberto, setHistAberto] = useState(false);
 
   const abrirNovo = () => { setEditando(null); setModalOpen(true); };
   const abrirEditar = (c: CartaoPessoal) => { setEditando(c); setModalOpen(true); };
@@ -1758,6 +1759,7 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
           onRemoverImportados={removerImportados}
           onZerarDaquiPraFrente={zerarDaquiPraFrente}
           onZerarImportados={zerarImportados}
+          onHistorico={() => setHistAberto(true)}
           removendoImportados={removendoImportados}
           onDeduplicar={deduplicar}
           deduplicando={deduplicando}
@@ -1772,6 +1774,12 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
       </Modal>
 
       <DedupResultadoModal res={dedupRes} onClose={() => setDedupRes(null)} />
+
+      <HistoricoImportacoesModal
+        open={histAberto}
+        cartao={cartaoAberto}
+        onClose={() => setHistAberto(false)}
+      />
 
       <PromoverAssinaturaModal
         open={!!promoverLanc}
@@ -1888,6 +1896,195 @@ interface DedupItem { id: string; descricao: string; valor: number; data: string
 interface DedupLogRun { cartaoId: string; cartaoNome: string; quando: string; removidos: number; itens: DedupItem[] }
 interface DedupResultado { removidos: number; itens: DedupItem[]; quando: string; cartaoNome: string; historico: DedupLogRun[] }
 
+// ─── Histórico de importações ─────────────────────────────────────────────────
+// Registro PERMANENTE de cada importação de fatura (tabela FinPessoalImportacoes):
+// sobrevive a "remover importados"/"zerar". Modal central premium: timeline com
+// resumo numérico de cada importação + itens expandíveis (descrição, parcela x/y,
+// valor). É a memória de referência pra conferir "o que entrou, quanto e quando".
+interface ImportacaoLog {
+  id: string;
+  competencia: string;
+  quando: string;
+  totalFatura: number;
+  totalImportado: number;
+  qtdItens: number;
+  criados: number;
+  conciliados: number;
+  duplicados: number;
+  parcelasFuturas: number;
+  gruposNovos: number;
+  status: string;
+  itensJson: string;
+}
+
+function HistoricoImportacoesModal({ open, cartao, onClose }: {
+  open: boolean;
+  cartao: CartaoPessoal | null;
+  onClose: () => void;
+}): React.ReactElement {
+  const t = useTokens();
+  const [carregando, setCarregando] = useState(false);
+  const [registros, setRegistros] = useState<ImportacaoLog[]>([]);
+  const [expandido, setExpandido] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || !cartao) return;
+    setCarregando(true);
+    setExpandido(null);
+    callServer<ServerResponse<ImportacaoLog[]>>('getHistoricoImportacoes', cartao.id)
+      .then((res) => setRegistros(res?.ok ? ((res.data as ImportacaoLog[]) || []) : []))
+      .catch(() => setRegistros([]))
+      .finally(() => setCarregando(false));
+  }, [open, cartao]);
+
+  const chip = (label: string, cor: string) => (
+    <span style={{
+      fontFamily: FONTS.ui, fontSize: 11, color: cor, background: `${cor}18`,
+      border: `1px solid ${cor}44`, borderRadius: 999, padding: '1px 9px', whiteSpace: 'nowrap',
+    }}>
+      {label}
+    </span>
+  );
+
+  const itensDe = (r: ImportacaoLog): Array<{ d: string; v: number; p: string }> => {
+    try {
+      const arr = JSON.parse(String(r.itensJson || '[]')) as Array<{ d?: string; v?: number; p?: string }>;
+      return Array.isArray(arr) ? arr.map((x) => ({ d: String(x.d || ''), v: Number(x.v || 0), p: String(x.p || '') })) : [];
+    } catch { return []; }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      width={660}
+      centered
+      title={
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{
+            width: 34, height: 34, borderRadius: 10, background: `${t.accents.peach}1c`,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <History size={17} color={t.accents.peach} />
+          </span>
+          <div>
+            <div style={{ fontFamily: FONTS.display, fontSize: 17, fontWeight: 500, color: t.text }}>
+              Histórico de importações
+            </div>
+            <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, fontWeight: 400 }}>
+              {cartao ? (cartao.apelido || cartao.nome) : ''} · registro permanente — sobrevive a remoções e reimportações
+            </div>
+          </div>
+        </div>
+      }
+    >
+      <div className="forja-scroll-y" style={{ maxHeight: '62vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, paddingRight: 4, marginTop: 6 }}>
+        {carregando && (
+          <div style={{ textAlign: 'center', padding: 32, color: t.textTertiary, fontFamily: FONTS.ui, fontSize: 13 }}>
+            Carregando histórico…
+          </div>
+        )}
+        {!carregando && registros.length === 0 && (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={
+              <span style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.textTertiary }}>
+                Nenhuma importação registrada ainda — o registro é gravado automaticamente a cada importação daqui pra frente.
+              </span>
+            }
+          />
+        )}
+        {!carregando && registros.map((r) => {
+          const itens = itensDe(r);
+          const parcelados = itens.filter((i) => i.p).length;
+          const temPdf = Number(r.totalFatura || 0) > 0;
+          const delta = Math.round((Number(r.totalImportado || 0) - Number(r.totalFatura || 0)) * 100) / 100;
+          const bateu = temPdf && Math.abs(delta) < 0.01;
+          const aberto = expandido === r.id;
+          return (
+            <div
+              key={r.id}
+              style={{
+                border: `1px solid ${t.border}`, borderRadius: 12, padding: '12px 14px',
+                background: t.surface, display: 'flex', flexDirection: 'column', gap: 9,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+                <div>
+                  <span style={{ fontFamily: FONTS.display, fontSize: 15.5, fontWeight: 500, color: t.text }}>
+                    Fatura {r.competencia}
+                  </span>
+                  <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, marginLeft: 8 }}>
+                    importada em {dayjs(r.quando).isValid() ? dayjs(r.quando).format('DD/MM/YYYY HH:mm') : String(r.quando)}
+                  </span>
+                </div>
+                <div style={{ fontFamily: FONTS.display, fontSize: 19, fontWeight: 500, color: t.text, fontVariantNumeric: 'tabular-nums' }}>
+                  {formatBRL(Number(r.totalImportado || 0))}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                {chip(`${r.qtdItens} itens`, t.accents.peach)}
+                {parcelados > 0 && chip(`${parcelados} parcelados`, t.accents.lavender)}
+                {Number(r.conciliados || 0) > 0 && chip(`${r.conciliados} conciliados c/ provisão`, t.accents.sage)}
+                {Number(r.parcelasFuturas || 0) > 0 && chip(`${r.parcelasFuturas} futuras provisionadas`, t.accents.blue)}
+                {Number(r.duplicados || 0) > 0 && chip(`${r.duplicados} ignorados (já existiam)`, t.accents.rose)}
+                {temPdf && chip(
+                  bateu ? `bateu com o PDF (${formatBRL(Number(r.totalFatura))})` : `PDF ${formatBRL(Number(r.totalFatura))} · Δ ${formatBRL(delta)}`,
+                  bateu ? t.accents.sage : t.accents.rose,
+                )}
+                {chip(r.status === 'pago' ? 'lançada como paga' : 'lançada como pendente', t.textTertiary)}
+              </div>
+              {itens.length > 0 && (
+                <div>
+                  <Button
+                    size="small"
+                    type="text"
+                    style={{ color: t.accents.peach, fontFamily: FONTS.ui, fontSize: 12, paddingLeft: 0 }}
+                    onClick={() => setExpandido(aberto ? null : r.id)}
+                  >
+                    {aberto ? 'Ocultar itens' : `Ver os ${itens.length} itens`}
+                  </Button>
+                  {aberto && (
+                    <div className="forja-scroll-y" style={{
+                      maxHeight: 240, overflowY: 'auto', marginTop: 6,
+                      border: `1px solid ${t.border}`, borderRadius: 10,
+                    }}>
+                      {itens.map((i, idx) => (
+                        <div key={idx} style={{
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10,
+                          padding: '6px 12px', borderTop: idx > 0 ? `1px solid ${t.border}` : 'none',
+                        }}>
+                          <span style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {i.d}
+                          </span>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                            {i.p && (
+                              <span style={{
+                                fontFamily: FONTS.mono, fontSize: 10.5, color: t.accents.peach,
+                                background: `${t.accents.peach}14`, borderRadius: 6, padding: '0 6px',
+                              }}>
+                                {i.p}
+                              </span>
+                            )}
+                            <span style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: i.v < 0 ? t.accents.sage : t.text, fontVariantNumeric: 'tabular-nums' }}>
+                              {formatBRL(i.v)}
+                            </span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Modal>
+  );
+}
+
 // Mostra o resultado da limpeza de duplicados: quantos e QUAIS foram removidos,
 // com um histórico das limpezas anteriores (o "log" pedido).
 function DedupResultadoModal({ res, onClose }: { res: DedupResultado | null; onClose: () => void }): React.ReactElement {
@@ -1968,6 +2165,7 @@ interface DetalheFaturaProps {
   onRemoverImportados: () => void;
   onZerarDaquiPraFrente?: () => void;
   onZerarImportados?: () => void;
+  onHistorico?: () => void;
   removendoImportados?: boolean;
   onDeduplicar?: () => void;
   deduplicando?: boolean;
@@ -2409,7 +2607,7 @@ function ProvisaoFaturas({ itens }: { itens: LancamentoPessoal[] }): React.React
   );
 }
 
-function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, onZerarDaquiPraFrente, onZerarImportados, removendoImportados, onDeduplicar, deduplicando, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs }: DetalheFaturaProps): React.ReactElement {
+function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, onZerarDaquiPraFrente, onZerarImportados, onHistorico, removendoImportados, onDeduplicar, deduplicando, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs }: DetalheFaturaProps): React.ReactElement {
   // Selo "já é assinatura": casa por id (rápido) OU por assinatura estável
   // valor+nome (sobrevive a reimportação que troca o id do lançamento).
   const temAssinaturaDe = (l: LancamentoPessoal): boolean =>
@@ -2502,14 +2700,29 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
       {/* Ações no TOPO do drawer — antes ficavam no cabeçalho de "Todos os
           lançamentos" e desciam pro meio quando a janela atual tinha itens.
           Agora ficam sempre acessíveis aqui em cima. */}
-      {todosItens.length > 0 && !modoLote && (membros.length > 0 || qtdImportadosTotal > 0) && (
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-          {membros.length > 0 && (
+      {!modoLote && ((todosItens.length > 0 && (membros.length > 0 || qtdImportadosTotal > 0)) || !!onHistorico) && (
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap', alignItems: 'center' }}>
+          {/* Histórico de importações — discreto mas "vivo" (anel de luz girando
+              no ícone). Sempre disponível: o registro sobrevive a remoções. */}
+          {onHistorico && (
+            <Tooltip title="Registro permanente de cada importação: itens, parcelas e totais">
+              <Button
+                size="small"
+                type="text"
+                onClick={onHistorico}
+                style={{ color: t.textSecondary, fontFamily: FONTS.ui, fontSize: 12 }}
+                icon={<span className="forja-live-icon" style={{ color: t.accents.peach }}><History size={13} /></span>}
+              >
+                Histórico
+              </Button>
+            </Tooltip>
+          )}
+          {todosItens.length > 0 && membros.length > 0 && (
             <Button size="small" icon={<Users size={13} />} onClick={() => setModoLote(true)}>
               Atribuir a membro
             </Button>
           )}
-          {onDeduplicar && (
+          {todosItens.length > 0 && onDeduplicar && (
             <Popconfirm
               title="Remover parcelas/itens duplicados?"
               description="Mantém uma cópia de cada parcela (a paga tem prioridade) e apaga as repetidas deste cartão."
@@ -4312,7 +4525,7 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
     setEtapa('importando');
     try {
       const payload = incluidos.map((it) => ({ data: it.data, descricao: it.descricao, valor: it.valor, categoria: it.categoria }));
-      const res = await callServer<ServerResponse<{ criados: number; parcelasFuturas?: number; gruposNovos?: number; duplicados?: number; conciliados?: number; cobrancasReorganizadas?: number }>>('importarFaturaLancamentos', cartaoId, JSON.stringify(payload), statusImport, faturaMes.format('YYYY-MM'), forcar);
+      const res = await callServer<ServerResponse<{ criados: number; parcelasFuturas?: number; gruposNovos?: number; duplicados?: number; conciliados?: number; cobrancasReorganizadas?: number }>>('importarFaturaLancamentos', cartaoId, JSON.stringify(payload), statusImport, faturaMes.format('YYYY-MM'), forcar, totalFatura);
       // `res?.ok` com optional chaining: o google.script.run pode devolver null
       // (resposta truncada/erro silencioso) — sem isso a tela ficava "importando"
       // pra sempre. Agora cai no else e volta pra revisão sem perder os dados.

@@ -285,6 +285,16 @@ const SCHEMA: SheetSchema[] = [
   // `diaFechamento` e `diaVencimento`: 1-31 (a UI lida com meses curtos).
   // `cor`: hex pra UI (ex: '#8b5cf6'). `ativo`: 'sim'|'nao'.
   { name: 'FinPessoalCartoes', columns: ['id', 'nome', 'bandeira', 'limite', 'diaFechamento', 'diaVencimento', 'cor', 'apelido', 'ativo', 'criadoEm', 'atualizadoEm'] },
+  // FinPessoalImportacoes (v1.251): histórico PERMANENTE de importações de
+  // fatura — um registro por importação, gravado no fim de importarFatura-
+  // Lancamentos. Sobrevive a "remover importados"/"zerar" (os lançamentos
+  // somem, o registro fica): é a memória de referência pra próxima importação
+  // e pra auditoria rápida ("o que entrou? quanto? qual parcela?").
+  // `competencia` YYYY-MM da fatura. `totalFatura` = total do PDF (informado
+  // pela IA); `totalImportado` = soma dos itens efetivamente processados.
+  // `itensJson` = JSON compacto [{d,v,p}] (descrição, valor, parcela 'x/y')
+  // capado pra caber na célula. `status` = pago|pendente escolhido no modal.
+  { name: 'FinPessoalImportacoes', columns: ['id', 'cartaoId', 'competencia', 'quando', 'totalFatura', 'totalImportado', 'qtdItens', 'criados', 'conciliados', 'duplicados', 'parcelasFuturas', 'gruposNovos', 'status', 'itensJson', 'criadoEm', 'atualizadoEm'] },
   // FinPessoalOrcamentos: limite mensal por categoria. UI mostra barra de
   // progresso "gasto / limite" no mês corrente. Quando estoura → alerta visual.
   // `cor` opcional pra customização da barra; default herda da categoria.
@@ -438,7 +448,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.93-lancamento-reembolso';
+const SCHEMA_VERSION = 'v1.251-historico-importacoes';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -9938,6 +9948,27 @@ function _acharParcelaExistente(
   return null;
 }
 
+// RPC: histórico de importações de fatura (opcionalmente filtrado por cartão),
+// mais recente primeiro. Alimenta o modal "Histórico de importações" da gaveta.
+function getHistoricoImportacoes(cartaoId?: string): ServerResult {
+  try {
+    const cid = String(cartaoId || '').trim();
+    const rows = (dbGetAll('FinPessoalImportacoes') as Array<Record<string, unknown>>)
+      .filter((r) => !cid || String(r['cartaoId'] || '').trim() === cid)
+      // Sheets pode converter 'quando'/'competencia' em Date — normaliza pra
+      // string antes de devolver (o client formata com dayjs).
+      .map((r) => ({
+        ...r,
+        competencia: _toYYYYMM(r['competencia']) || String(r['competencia'] || ''),
+        quando: r['quando'] instanceof Date ? (r['quando'] as Date).toISOString() : String(r['quando'] || ''),
+      }))
+      .sort((a, b) => String(b['quando']).localeCompare(String(a['quando'])));
+    return { ok: true, data: rows.slice(0, 50) };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao ler histórico' };
+  }
+}
+
 // RPC: checagem ANTECIPADA da trava anti-importação dupla. A UI chama assim que
 // o usuário escolhe cartão + mês — ANTES de gastar a leitura da fatura pela IA
 // (~1min). A mesma regra roda de novo na gravação (importarFaturaLancamentos),
@@ -9961,7 +9992,7 @@ function verificarImportacaoFatura(cartaoId: string, competencia: string): Serve
   }
 }
 
-function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPadrao?: string, competenciaFatura?: string, forcar?: boolean): ServerResult {
+function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPadrao?: string, competenciaFatura?: string, forcar?: boolean, totalFaturaPdf?: number): ServerResult {
   try {
     let itens: Array<Record<string, unknown>>;
     try { itens = JSON.parse(String(itensJson || '[]')) as Array<Record<string, unknown>>; }
@@ -10006,6 +10037,9 @@ function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPa
     let gruposNovos = 0;     // compras parceladas novas
     let duplicados = 0;      // ignorados por já existirem
     let conciliados = 0;     // parcelas já provisionadas que esta fatura confirmou
+    // Histórico: itens efetivamente processados (descrição, valor, parcela x/y).
+    const itensLog: Array<{ d: string; v: number; p: string }> = [];
+    let totalProcessado = 0;
 
     for (const it of itens) {
       // Preserva o SINAL: estornos/créditos entram como despesa NEGATIVA, que
@@ -10024,6 +10058,8 @@ function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPa
         || (Number(it['parcelas']) > 1
           ? { atual: Math.max(1, Number(it['parcelaAtual'] || 1)), total: Number(it['parcelas']) }
           : null);
+      itensLog.push({ d: descricao, v: valor, p: parc ? `${parc.atual}/${parc.total}` : '' });
+      totalProcessado += valor;
 
       // Competência da parcela ATUAL: o mês da fatura (se informado), senão pelo
       // ciclo do cartão a partir da data da compra.
@@ -10156,6 +10192,36 @@ function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPa
         cobrancasReorganizadas = (d.corrigidas || 0) + (d.criadas || 0) + (d.removidas || 0);
       }
     } catch { /* segue baile */ }
+
+    // Registro PERMANENTE da importação (memória de referência + auditoria).
+    // Best-effort: falha aqui nunca derruba uma importação que já gravou tudo.
+    try {
+      // Cap pro JSON caber na célula do Sheets (limite ~50k chars): derruba
+      // itens do fim até caber — o resumo numérico fica sempre íntegro.
+      let itensCap = itensLog;
+      let json = JSON.stringify(itensCap);
+      while (json.length > 45000 && itensCap.length > 0) {
+        itensCap = itensCap.slice(0, itensCap.length - 20);
+        json = JSON.stringify(itensCap);
+      }
+      dbCreate('FinPessoalImportacoes', {
+        cartaoId: cid,
+        competencia: compFat,
+        quando: agora,
+        totalFatura: Number(totalFaturaPdf || 0),
+        totalImportado: Math.round(totalProcessado * 100) / 100,
+        qtdItens: itensLog.length,
+        criados,
+        conciliados,
+        duplicados,
+        parcelasFuturas,
+        gruposNovos,
+        status,
+        itensJson: json,
+        criadoEm: agora,
+        atualizadoEm: agora,
+      });
+    } catch { /* histórico é best-effort */ }
 
     return { ok: true, data: { criados, parcelasFuturas, gruposNovos, duplicados, conciliados, reclassificados, cobrancasReorganizadas } };
   } catch (e: unknown) {

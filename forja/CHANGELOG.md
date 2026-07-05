@@ -36,6 +36,24 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.251.0] — 2026-07-05
+
+### Adicionado
+
+- **Histórico permanente de importações de fatura** — nova tabela
+  `FinPessoalImportacoes`: cada importação grava um registro com competência,
+  data/hora, total do PDF, total importado, contagens (criados, conciliados,
+  duplicados ignorados, parcelas futuras, grupos novos) e a lista compacta
+  dos itens (descrição, valor, parcela x/y). O registro SOBREVIVE a "remover
+  importados"/"zerar" — é memória de referência pra próxima importação e
+  auditoria rápida. Novo botão discreto "Histórico" (ícone vivo) na gaveta
+  do cartão abre um modal central premium: timeline por importação, chips de
+  resumo, badge "bateu com o PDF"/divergência e itens expandíveis.
+  RPC `getHistoricoImportacoes`; gravação best-effort no fim de
+  `importarFaturaLancamentos` (nunca derruba uma importação concluída).
+
+---
+
 ## [1.250.0] — 2026-07-05
 
 ### Melhorado
