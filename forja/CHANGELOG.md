@@ -36,6 +36,23 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.249.0] — 2026-07-04
+
+### Adicionado
+
+- **Trava anti-importação dupla (todos os cartões)** — importar a mesma
+  fatura duas vezes agora é BLOQUEADO pelo servidor: se o cartão já tem
+  lançamentos importados naquela competência (provisões de faturas
+  anteriores não contam), a importação não grava nada e a UI mostra um
+  aviso com os detalhes (quantos lançamentos, total, quando). Reimportar de
+  propósito exige ação explícita: remover a importação anterior ("Remover
+  importados do mês") ou confirmar "Importar mesmo assim (duplicar)".
+  Detecção com fonte única testada (`resumoImportacaoDoMes` em
+  `src/lib/faturaComposicao.ts`); o guard fica no RPC
+  `importarFaturaLancamentos`, então vale pra qualquer cartão.
+
+---
+
 ## [1.248.0] — 2026-07-04
 
 ### Corrigido

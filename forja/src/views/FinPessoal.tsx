@@ -4084,6 +4084,10 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
   // Último erro da importação — fica FIXO num alerta (antes era só um toast que
   // sumia, então o usuário via a tela de upload de novo sem entender o porquê).
   const [erroImport, setErroImport] = useState('');
+  // Guarda anti-importação dupla: o servidor detectou que ESTE mês já tem uma
+  // importação deste cartão. Fica num alerta com ação explícita — importar em
+  // duplicidade só acontece se o usuário confirmar de propósito.
+  const [avisoDupla, setAvisoDupla] = useState<{ competencia: string; qtd: number; total: number } | null>(null);
   const [modoTexto, setModoTexto] = useState(false);
   const [textoColado, setTextoColado] = useState('');
   const [nomeArquivo, setNomeArquivo] = useState('');
@@ -4274,7 +4278,7 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
     setItens((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  const importar = async () => {
+  const importar = async (forcar = false) => {
     if (!cartaoId) { message.error('Escolha o cartão.'); return; }
     if (incluidos.length === 0) { message.error('Marque ao menos um lançamento.'); return; }
     const cartaoNome = cartoes.find((c) => c.id === cartaoId)?.apelido
@@ -4282,10 +4286,11 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
     const totalEnviado = totalIncluidos;
     setImportando(true);
     setErroImport('');
+    setAvisoDupla(null);
     setEtapa('importando');
     try {
       const payload = incluidos.map((it) => ({ data: it.data, descricao: it.descricao, valor: it.valor, categoria: it.categoria }));
-      const res = await callServer<ServerResponse<{ criados: number; parcelasFuturas?: number; gruposNovos?: number; duplicados?: number; conciliados?: number; cobrancasReorganizadas?: number }>>('importarFaturaLancamentos', cartaoId, JSON.stringify(payload), statusImport, faturaMes.format('YYYY-MM'));
+      const res = await callServer<ServerResponse<{ criados: number; parcelasFuturas?: number; gruposNovos?: number; duplicados?: number; conciliados?: number; cobrancasReorganizadas?: number }>>('importarFaturaLancamentos', cartaoId, JSON.stringify(payload), statusImport, faturaMes.format('YYYY-MM'), forcar);
       // `res?.ok` com optional chaining: o google.script.run pode devolver null
       // (resposta truncada/erro silencioso) — sem isso a tela ficava "importando"
       // pra sempre. Agora cai no else e volta pra revisão sem perder os dados.
@@ -4302,7 +4307,15 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
         });
         setEtapa('concluido');
       } else {
-        setErroImport(res?.error || 'Erro ao gravar os lançamentos. Seus dados foram mantidos — tente de novo.');
+        // Bloqueio consciente do servidor: este mês JÁ foi importado neste
+        // cartão. Não é erro — é a trava anti-duplicação. Mostra aviso com
+        // ação explícita em vez do alerta vermelho genérico.
+        const dupla = (res?.data as { jaImportada?: boolean; competencia?: string; qtd?: number; total?: number } | undefined);
+        if (dupla?.jaImportada) {
+          setAvisoDupla({ competencia: dupla.competencia || '', qtd: dupla.qtd || 0, total: dupla.total || 0 });
+        } else {
+          setErroImport(res?.error || 'Erro ao gravar os lançamentos. Seus dados foram mantidos — tente de novo.');
+        }
         setEtapa('revisao');
       }
     } catch (e) {
@@ -4330,7 +4343,7 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
       footer={
         etapa === 'revisao' ? [
           <Button key="voltar" onClick={() => setEtapa('upload')}>Voltar</Button>,
-          <Button key="importar" type="primary" loading={importando} onClick={importar} style={{ background: t.accents.peach, borderColor: t.accents.peach }}>
+          <Button key="importar" type="primary" loading={importando} onClick={() => importar()} style={{ background: t.accents.peach, borderColor: t.accents.peach }}>
             Importar {incluidos.length} lançamento(s)
           </Button>,
         ] : etapa === 'concluido' ? [
@@ -4387,6 +4400,36 @@ function ModalImportarFatura({ open, onClose, cartoes, cartaoInicial, onSaved, o
             <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, marginTop: -8 }}>
               Toda a fatura entra no mês de vencimento escolhido — é o mês em que você paga, não o da compra.
             </div>
+          )}
+
+          {/* Trava anti-importação dupla: o mês já tem importação deste cartão.
+              Bloqueia por padrão; duplicar exige clique explícito. */}
+          {avisoDupla && etapa !== 'importando' && (
+            <Alert
+              type="warning"
+              showIcon
+              closable
+              onClose={() => setAvisoDupla(null)}
+              style={{ background: `${t.accents.peach}1f`, border: `1px solid ${t.accents.peach}66` }}
+              message={<span style={{ color: t.text, fontWeight: 600 }}>Esta fatura já foi importada</span>}
+              description={
+                <div style={{ color: t.textSecondary, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <span>
+                    O cartão já tem <b>{avisoDupla.qtd} lançamento(s)</b> importados em <b>{avisoDupla.competencia}</b>,
+                    somando <b>{formatBRL(avisoDupla.total)}</b>. Importar de novo vai <b>duplicar</b> a fatura.
+                  </span>
+                  <span>
+                    Se a intenção é reimportar (corrigir), primeiro use <b>“Remover importados do mês”</b> na
+                    gaveta do cartão e importe de novo. Se tem certeza de que quer duplicar, confirme abaixo.
+                  </span>
+                  <div>
+                    <Button size="small" danger onClick={() => importar(true)} loading={importando}>
+                      Importar mesmo assim (duplicar)
+                    </Button>
+                  </div>
+                </div>
+              }
+            />
           )}
 
           {/* Erro fixo — fica visível até a próxima ação (não some como o toast) */}

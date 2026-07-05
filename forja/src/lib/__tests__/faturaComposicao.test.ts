@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  composicaoFaturaMes, mesDeLancamento, normalizarDescricao, parcelaConfere, selecionarRemocaoImportacao,
+  composicaoFaturaMes, mesDeLancamento, normalizarDescricao, parcelaConfere,
+  resumoImportacaoDoMes, selecionarRemocaoImportacao,
   type LancComposicao,
 } from '../faturaComposicao';
 
@@ -137,6 +138,28 @@ describe('composicaoFaturaMes', () => {
 
   it('tolera vencimento como Date (células do Sheets no servidor)', () => {
     expect(mesDeLancamento({ vencimento: new Date(2026, 6, 10) })).toBe('2026-07');
+  });
+});
+
+describe('resumoImportacaoDoMes (guarda anti-importação dupla)', () => {
+  it('mês sem importação: null (provisões de faturas anteriores não contam)', () => {
+    expect(resumoImportacaoDoMes([
+      lanc({ id: 'manual', valor: 50 }),
+      lanc({ id: 'prov', tags: 'fatura-importada', notas: 'Parcela futura provisionada na importação', valor: 200 }),
+    ], MES)).toBeNull();
+  });
+
+  it('mês já importado: devolve qtd, total e quando', () => {
+    const r = resumoImportacaoDoMes([
+      lanc({ id: 'i1', tags: 'fatura-importada', notas: 'Importado da fatura via IA', valor: 100.5, criadoEm: '2026-07-01T10:00:00.000Z' }),
+      lanc({ id: 'i2', tags: 'fatura-importada', notas: 'Importado da fatura via IA (parcelado)', valor: 49.5, criadoEm: '2026-07-02T10:00:00.000Z' }),
+      lanc({ id: 'prov', tags: 'fatura-importada', notas: 'Parcela futura provisionada na importação', valor: 200 }),
+      lanc({ id: 'outro-mes', tags: 'fatura-importada', notas: 'Importado da fatura via IA', vencimento: '2026-08-10', valor: 77 }),
+    ], MES);
+    expect(r).not.toBeNull();
+    expect(r!.qtd).toBe(2);
+    expect(r!.total).toBe(150);
+    expect(r!.ultimaEm).toBe('2026-07-02T10:00:00.000Z');
   });
 });
 

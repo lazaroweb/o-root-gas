@@ -9938,7 +9938,7 @@ function _acharParcelaExistente(
   return null;
 }
 
-function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPadrao?: string, competenciaFatura?: string): ServerResult {
+function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPadrao?: string, competenciaFatura?: string, forcar?: boolean): ServerResult {
   try {
     let itens: Array<Record<string, unknown>>;
     try { itens = JSON.parse(String(itensJson || '[]')) as Array<Record<string, unknown>>; }
@@ -9961,6 +9961,22 @@ function importarFaturaLancamentos(cartaoId: string, itensJson: string, statusPa
     // Snapshot ANTES do loop pra dedupe. Empurramos os novos aqui dentro pra
     // deduplicar também DENTRO do mesmo lote (fatura com linha repetida).
     const existentes = dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>;
+
+    // Guarda anti-importação dupla: se este cartão JÁ tem uma importação nesta
+    // competência (linhas criadas por importação — provisões de faturas
+    // anteriores não contam), bloqueia e devolve os detalhes pra UI avisar.
+    // O usuário decide conscientemente: remove a anterior ou força (forcar).
+    if (temCompFat && !forcar) {
+      const doCartao = existentes.filter((l) => String(l['cartaoId'] || '').trim() === cid);
+      const ja = resumoImportacaoDoMes(doCartao, compFat);
+      if (ja) {
+        return {
+          ok: false,
+          error: `Este cartão já tem uma fatura importada em ${compFat} (${ja.qtd} lançamento(s), total R$ ${ja.total.toFixed(2).replace('.', ',')}). Pra reimportar, remova a importação anterior primeiro (Remover importados do mês) — ou confirme a importação em duplicidade.`,
+          data: { jaImportada: true, competencia: compFat, qtd: ja.qtd, total: ja.total, ultimaEm: ja.ultimaEm },
+        };
+      }
+    }
 
     let criados = 0;        // parcelas atuais + itens à vista gravados
     let parcelasFuturas = 0; // parcelas futuras provisionadas
@@ -12324,6 +12340,10 @@ declare function parcelaConfere(
   a: { valorCents: number; mes: string; desc: string },
   b: { valorCents: number; mes: string; desc: string },
 ): boolean;
+declare function resumoImportacaoDoMes(
+  itens: Array<Record<string, unknown>>,
+  mes: string,
+): { qtd: number; total: number; ultimaEm: string } | null;
 
 // Remove lançamentos importados de fatura. Se `competencia` (YYYY-MM) vier,
 // DESFAZ a importação daquele mês por completo:

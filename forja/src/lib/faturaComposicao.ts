@@ -131,6 +131,29 @@ function acumula(g: GrupoComposicao, l: LancComposicao): void {
   g.ids.push(String(l.id));
 }
 
+// ─── Guarda anti-importação dupla ─────────────────────────────────────────────
+// Resumo da importação JÁ existente de um mês (linhas com tag fatura-importada
+// criadas POR uma importação daquele mês — provisões de faturas anteriores não
+// contam). Se devolver algo, o mês já foi importado: o servidor bloqueia uma
+// nova importação e a UI avisa, exigindo ação consciente (remover a anterior
+// ou forçar). Vale pra qualquer cartão — a regra é sobre o conjunto de linhas.
+export interface ImportacaoExistente {
+  qtd: number;      // linhas criadas pela importação do mês
+  total: number;    // soma delas
+  ultimaEm: string; // criadoEm mais recente (quando foi importada)
+}
+
+export function resumoImportacaoDoMes(itens: LancComposicao[], mes: string): ImportacaoExistente | null {
+  const doMes = itens.filter((l) =>
+    String(l.tags || '').indexOf('fatura-importada') >= 0
+    && String(l.notas || '').indexOf(NOTA_PROVISIONADA) < 0
+    && mesDeLancamento(l) === mes);
+  if (doMes.length === 0) return null;
+  const total = Math.round(doMes.reduce((s, l) => s + Number(l.valor || 0), 0) * 100) / 100;
+  const ultimaEm = doMes.reduce((m, l) => (String(l.criadoEm || '') > m ? String(l.criadoEm || '') : m), '');
+  return { qtd: doMes.length, total, ultimaEm };
+}
+
 export function composicaoFaturaMes(itens: LancComposicao[], mes: string): ComposicaoMes {
   const doMes = itens.filter((l) => mesDeLancamento(l) === mes);
 
