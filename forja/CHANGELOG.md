@@ -36,6 +36,18 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.254.0] — 2026-07-05
+
+### Melhorado
+
+- **"Todos os lançamentos" da gaveta agrupados por mês da fatura** — a lista
+  completa do cartão misturava os meses numa sequência única, e um item de
+  junho "parecia estar em julho" (fonte clássica de confusão ao conferir a
+  fatura). Agora cada competência tem um cabeçalho com total e contagem, e o
+  mês exibido na gaveta ganha destaque (pêssego, marcado "mês exibido").
+
+---
+
 ## [1.253.0] — 2026-07-05
 
 ### Melhorado

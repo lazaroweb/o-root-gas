@@ -2923,22 +2923,57 @@ function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membr
         </div>
       )}
 
-      {/* Todos os lançamentos do cartão — qualquer mês/status. É aqui que você
-          encontra (e remove) itens importados no cartão errado ou fora da
-          janela da fatura atual. */}
+      {/* Todos os lançamentos do cartão — qualquer mês/status, AGRUPADOS por
+          competência (mês da fatura em que cada item vence). Sem os cabeçalhos
+          de mês, um item de junho "parecia estar em julho" e confundia. O mês
+          exibido na gaveta ganha destaque; os demais ficam neutros. */}
       <div>
         <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, letterSpacing: 0.4, marginBottom: 8 }}>
           TODOS OS LANÇAMENTOS DESTE CARTÃO ({todosItens.length})
           {todosItens.length > 0 && <span style={{ marginInlineStart: 6 }}>· {formatBRL(totalTodos)}</span>}
+          {todosItens.length > 0 && <span style={{ marginInlineStart: 6 }}>· agrupados por mês da fatura</span>}
         </div>
 
         {todosItens.length === 0 ? (
           <Empty description="Nenhum lançamento neste cartão" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
-          todosItens.map((l) => (
-            <LinhaLancamentoFatura key={l.id} l={l} membros={membros} atribuidos={membrosDe(l.id)} onRemover={onRemover} onEditar={onEditar} onAtribuir={onAtribuir} onPromoverAssinatura={onPromoverAssinatura} temAssinatura={temAssinaturaDe(l)} mostrarMes
-              selecionavel={modoLote} selecionado={selecionados.has(l.id)} onToggleSel={toggleSel} />
-          ))
+          (() => {
+            const porMes = new Map<string, LancamentoPessoal[]>();
+            for (const l of todosItens) {
+              const m = mesDeLanc(l) || 'sem-data';
+              const arr = porMes.get(m) || [];
+              arr.push(l);
+              porMes.set(m, arr);
+            }
+            const meses = Array.from(porMes.keys()).sort().reverse();
+            return meses.map((m) => {
+              const doGrupo = porMes.get(m) || [];
+              const totalGrupo = doGrupo.reduce((s, l) => s + l.valor, 0);
+              const ehExibido = m === mesFatura;
+              const rotulo = m === 'sem-data' ? 'SEM DATA' : dayjs(`${m}-01`).format('MMM/YYYY').toUpperCase();
+              return (
+                <div key={m} style={{ marginBottom: 14 }}>
+                  <div style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '5px 10px', borderRadius: 8, marginBottom: 6,
+                    background: ehExibido ? `${t.accents.peach}16` : t.surfaceMuted,
+                    border: `1px solid ${ehExibido ? `${t.accents.peach}55` : t.borderSoft}`,
+                  }}>
+                    <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, fontWeight: 600, letterSpacing: 0.5, color: ehExibido ? t.accents.peach : t.textSecondary }}>
+                      {rotulo}{ehExibido ? ' · mês exibido' : ''}
+                    </span>
+                    <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, fontVariantNumeric: 'tabular-nums' }}>
+                      {doGrupo.length} item(ns) · {formatBRL(totalGrupo)}
+                    </span>
+                  </div>
+                  {doGrupo.map((l) => (
+                    <LinhaLancamentoFatura key={l.id} l={l} membros={membros} atribuidos={membrosDe(l.id)} onRemover={onRemover} onEditar={onEditar} onAtribuir={onAtribuir} onPromoverAssinatura={onPromoverAssinatura} temAssinatura={temAssinaturaDe(l)} mostrarMes
+                      selecionavel={modoLote} selecionado={selecionados.has(l.id)} onToggleSel={toggleSel} />
+                  ))}
+                </div>
+              );
+            });
+          })()
         )}
       </div>
       </div>
