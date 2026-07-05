@@ -36,6 +36,26 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.260.0] — 2026-07-05
+
+### Adicionado
+
+- **Botão "Corrigir tudo automaticamente"** no explicador da diferença: novo RPC
+  `corrigirDiferencaFatura` aplica, de uma vez e com regra determinística, o
+  destino certo pra cada provisão fantasma do mês: se a fatura trouxe a mesma
+  compra (mesma parcela x/y + mesma descrição) com outro valor, a provisão
+  duplicada é removida — a linha real da fatura fica e as **atribuições de
+  família migram pra ela**; se o banco simplesmente não cobrou a parcela neste
+  ciclo, ela é adiada 1 mês. Lançamentos pagos nunca são tocados.
+
+### Corrigido
+
+- **Modal da fatura sem scroll quando o diagnóstico crescia**: o cartão de
+  contexto (composição + alertas + explicador) era fixo acima da lista; com
+  muitos achados ele estourava a altura do modal e cortava o conteúdo sem dar
+  scroll. Agora o cartão de contexto rola junto com as listas numa área única;
+  só o cabeçalho, as ações e a barra de atribuição em lote ficam fixos.
+
 ## [1.259.0] — 2026-07-05
 
 ### Adicionado

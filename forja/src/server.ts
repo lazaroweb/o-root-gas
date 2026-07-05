@@ -10119,6 +10119,81 @@ function adiarLancamentoUmMes(id: string): ServerResult {
   }
 }
 
+// RPC: correção AUTOMÁTICA da diferença fatura×mês. Cruza as provisões do mês
+// com as linhas que a fatura importada realmente trouxe (log de importações) e,
+// pra cada provisão "fantasma" (sem linha correspondente por parcela+valor):
+//   • se existe uma GÊMEA no mês (linha não-provisão, mesma parcela x/y, mesma
+//     descrição normalizada) → conciliação que falhou por divergência de valor:
+//     REMOVE a provisão (a linha importada, com o valor real da fatura, fica) e
+//     TRANSFERE as cobranças de família da provisão pra gêmea;
+//   • senão → o banco não cobrou a parcela neste ciclo: ADIA o vencimento em
+//     1 mês (nada é apagado; a cadeia da parcela continua íntegra).
+// Lançamentos pagos nunca são tocados.
+function corrigirDiferencaFatura(cartaoId: string, competencia: string): ServerResult {
+  try {
+    initDatabase();
+    const cid = String(cartaoId || '').trim();
+    const comp = String(competencia || '').substring(0, 7);
+    if (!cid || !/^\d{4}-\d{2}$/.test(comp)) return { ok: false, error: 'Cartão/competência inválidos.' };
+
+    const logs = (dbGetAll('FinPessoalImportacoes') as Array<Record<string, unknown>>)
+      .filter((r) => String(r['cartaoId'] || '').trim() === cid && (_toYYYYMM(r['competencia']) || String(r['competencia'] || '')) === comp)
+      .sort((a, b) => String(b['quando'] || '').localeCompare(String(a['quando'] || '')));
+    if (logs.length === 0) return { ok: false, error: 'Este mês não tem importação registrada no histórico — não há fatura pra cruzar.' };
+    const log = logs[0];
+    let linhas: Array<{ d: string; v: number; p: string }> = [];
+    try { linhas = JSON.parse(String(log['itensJson'] || '[]')) as Array<{ d: string; v: number; p: string }>; } catch { linhas = []; }
+    const totalPdf = Number(log['totalFatura'] || 0);
+    if (!(totalPdf > 0)) return { ok: false, error: 'A importação deste mês não registrou o total da fatura — não dá pra cruzar.' };
+
+    const doCartao = (dbGetAll('FinPessoalLancamentos') as Array<Record<string, unknown>>)
+      .filter((l) => String(l['cartaoId'] || '').trim() === cid);
+    const ex = explicarDiferencaFatura(doCartao, comp, totalPdf, linhas);
+    if (!ex || ex.provisoesSemLinha.length === 0) {
+      return { ok: true, data: { duplicatasRemovidas: 0, adiadas: 0, detalhes: [] } };
+    }
+
+    const cartao = dbGetById('FinPessoalCartoes', cid);
+    const diaVenc = cartao ? Number(cartao['diaVencimento'] || 0) : 0;
+    const agora = new Date().toISOString();
+    let duplicatasRemovidas = 0;
+    let adiadas = 0;
+    const detalhes: Array<{ acao: string; descricao: string; valor: number }> = [];
+
+    for (const f of ex.provisoesSemLinha) {
+      const prov = doCartao.find((l) => String(l['id']) === f.id);
+      if (!prov || String(prov['status'] || '') === 'pago') continue;
+      const provDesc = _normDescFatura(String(prov['descricao'] || ''));
+      const gemea = doCartao.find((l) =>
+        String(l['id']) !== f.id
+        && mesDeLancamento({ vencimento: l['vencimento'], data: l['data'] }) === comp
+        && String(l['notas'] || '').indexOf('Parcela futura provisionada') < 0
+        && Number(l['parcelas'] || 0) === Number(prov['parcelas'] || 0)
+        && Number(l['parcelaAtual'] || 0) === Number(prov['parcelaAtual'] || 0)
+        && _normDescFatura(String(l['descricao'] || '')) === provDesc);
+      if (gemea) {
+        // Duplicata (conciliação falhou por valor divergente): fica a linha da
+        // fatura real; as cobranças de família da provisão migram pra ela.
+        const cobr = (dbGetAll('FinPessoalCobrancas') as Array<Record<string, unknown>>)
+          .filter((c) => String(c['origem']) === 'lancamento' && String(c['origemId']) === f.id);
+        for (const c of cobr) dbUpdate('FinPessoalCobrancas', String(c['id']), { origemId: String(gemea['id']), atualizadoEm: agora });
+        dbDelete('FinPessoalLancamentos', f.id);
+        duplicatasRemovidas++;
+        detalhes.push({ acao: 'duplicata removida', descricao: f.descricao, valor: f.valor });
+      } else {
+        const compNova = _addMesesComp(comp, 1);
+        const vencNovo = _vencimentoNoMes(compNova, diaVenc) || `${compNova}-01`;
+        dbUpdate('FinPessoalLancamentos', f.id, { vencimento: vencNovo, atualizadoEm: agora });
+        adiadas++;
+        detalhes.push({ acao: 'adiada pro mês seguinte', descricao: f.descricao, valor: f.valor });
+      }
+    }
+    return { ok: true, data: { duplicatasRemovidas, adiadas, detalhes } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao corrigir a diferença' };
+  }
+}
+
 // RPC: histórico de importações de fatura (opcionalmente filtrado por cartão),
 // mais recente primeiro. Alimenta o modal "Histórico de importações" da gaveta.
 function getHistoricoImportacoes(cartaoId?: string): ServerResult {
@@ -12673,6 +12748,15 @@ declare function resumoImportacaoDoMes(
   itens: Array<Record<string, unknown>>,
   mes: string,
 ): { qtd: number; total: number; ultimaEm: string } | null;
+declare function explicarDiferencaFatura(
+  itens: Array<Record<string, unknown>>,
+  mes: string,
+  totalPdf: number,
+  linhas: Array<{ d: string; v: number; p: string }>,
+): {
+  totalPdf: number; totalMes: number; diferenca: number; totalSemLinha: number;
+  provisoesSemLinha: Array<{ id: string; descricao: string; parcela: string; valor: number }>;
+} | null;
 
 // Remove lançamentos importados de fatura. Se `competencia` (YYYY-MM) vier,
 // DESFAZ a importação daquele mês por completo:

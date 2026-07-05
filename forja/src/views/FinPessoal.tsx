@@ -1591,6 +1591,29 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
     return () => { vivo = false; };
   }, [faturaOpen, cartaoAberto, mesFatura]);
 
+  // Correção automática da diferença fatura×mês: remove provisões duplicadas
+  // (mantendo a linha real da fatura + migrando atribuições de família) e adia
+  // as que o banco não cobrou neste ciclo. Regra determinística no servidor.
+  const [corrigindo, setCorrigindo] = useState(false);
+  const corrigirDiferenca = () => {
+    if (!cartaoAberto || corrigindo) return;
+    setCorrigindo(true);
+    const hide = message.loading('Corrigindo a diferença da fatura…', 0);
+    callServer<ServerResponse<{ duplicatasRemovidas: number; adiadas: number }>>('corrigirDiferencaFatura', cartaoAberto.id, mesFatura)
+      .then((res) => {
+        if (res.ok) {
+          const d = res.data as { duplicatasRemovidas: number; adiadas: number } | undefined;
+          const dup = d?.duplicatasRemovidas ?? 0;
+          const adi = d?.adiadas ?? 0;
+          if (dup + adi === 0) message.info('Nada pra corrigir — nenhuma provisão fantasma encontrada.');
+          else message.success(`${dup} duplicata(s) removida(s) · ${adi} parcela(s) adiada(s) pro mês seguinte`);
+          if (cartaoAberto) carregarFatura(cartaoAberto);
+          onRecarregar();
+        } else message.error(res.error || 'Erro ao corrigir');
+      })
+      .finally(() => { hide(); setCorrigindo(false); });
+  };
+
   // Adia uma provisão fantasma em 1 mês (banco não cobrou neste ciclo): sai do
   // total do mês exibido preservando a cadeia da parcela — nada é apagado.
   const adiarLancamento = (id: string) => {
@@ -1852,6 +1875,8 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
           onVerMembro={onVerMembro}
           logImportacao={logImportacao}
           onAdiarLancamento={adiarLancamento}
+          onCorrigirDiferenca={corrigirDiferenca}
+          corrigindoDiferenca={corrigindo}
           removendoImportados={removendoImportados}
           onDeduplicar={deduplicar}
           deduplicando={deduplicando}
@@ -2277,6 +2302,9 @@ interface DetalheFaturaProps {
   // Alimenta o explicador "por que o mês soma mais que a fatura?".
   logImportacao?: { totalPdf: number; linhas: LinhaFaturaImportada[] } | null;
   onAdiarLancamento?: (id: string) => void;
+  // Correção 1-clique da diferença: duplicatas removidas + fantasmas adiadas.
+  onCorrigirDiferenca?: () => void;
+  corrigindoDiferenca?: boolean;
 }
 
 // 'YYYY-MM' → "junho de 2026" (pt-BR). Usado em notas que citam a competência.
@@ -2708,7 +2736,7 @@ function ProvisaoFaturas({ itens }: { itens: LancamentoPessoal[] }): React.React
   );
 }
 
-function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, onZerarDaquiPraFrente, onZerarImportados, onHistorico, removendoImportados, onDeduplicar, deduplicando, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs, resumoMembros, onVerMembro, logImportacao, onAdiarLancamento }: DetalheFaturaProps): React.ReactElement {
+function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, onZerarDaquiPraFrente, onZerarImportados, onHistorico, removendoImportados, onDeduplicar, deduplicando, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs, resumoMembros, onVerMembro, logImportacao, onAdiarLancamento, onCorrigirDiferenca, corrigindoDiferenca }: DetalheFaturaProps): React.ReactElement {
   // Selo "já é assinatura": casa por id (rápido) OU por assinatura estável
   // valor+nome (sobrevive a reimportação que troca o id do lançamento).
   const temAssinaturaDe = (l: LancamentoPessoal): boolean =>
@@ -2903,6 +2931,68 @@ function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membr
         </div>
       )}
 
+      {/* Barra de atribuição em lote: escolhe o membro e diz "essa fatura toda
+          é dele" ou marca só alguns itens. 100% do valor de cada item.
+          Fica ANTES da área rolável pra ação nunca sumir durante a seleção. */}
+      {modoLote && (
+        <div style={{
+          background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
+          borderRadius: 10, padding: 12,
+          display: 'flex', flexDirection: 'column', gap: 10,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>Atribuir para:</span>
+            <Select
+              size="small"
+              placeholder="Escolha um membro"
+              value={membroLote || undefined}
+              onChange={(v) => setMembroLote(v)}
+              style={{ minWidth: 200, flex: '1 1 200px' }}
+              options={membros.map((m) => ({
+                value: m.id,
+                label: (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <MembroChip membro={m} style={{ width: 16, height: 16, fontSize: 9, lineHeight: '16px' }} />
+                    {m.nome}
+                  </span>
+                ),
+              }))}
+            />
+            <Button size="small" type="text" onClick={sairModoLote}>Cancelar</Button>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Popconfirm
+              title="Atribuir a fatura inteira?"
+              description={`Todos os ${todosItens.length} lançamento(s) deste cartão vão para o membro escolhido (100% de cada).`}
+              onConfirm={() => atribuir(todosItens.map((l) => l.id))}
+              okText="Atribuir tudo"
+              cancelText="Cancelar"
+              disabled={!membroLote}
+            >
+              <Button size="small" type="primary" loading={salvandoLote} disabled={!membroLote}
+                style={{ background: t.accents.sage, borderColor: t.accents.sage }}>
+                Atribuir fatura inteira ({todosItens.length})
+              </Button>
+            </Popconfirm>
+            <Button size="small" loading={salvandoLote} disabled={!membroLote || selecionados.size === 0}
+              onClick={() => atribuir([...selecionados])}>
+              Atribuir selecionados ({selecionados.size})
+            </Button>
+            {selecionados.size > 0 && (
+              <Button size="small" type="text" onClick={() => setSelecionados(new Set())}>Limpar seleção</Button>
+            )}
+          </div>
+          <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary }}>
+            Marque os itens de um membro e atribua; depois troque o membro e marque o restante.
+          </div>
+        </div>
+      )}
+
+      {/* Daqui pra baixo TUDO rola numa área só: o cartão de contexto (composição,
+          alertas e explicador da diferença) e as listas de lançamentos. Antes o
+          cartão era fixo — quando o diagnóstico crescia, estourava a altura do
+          modal e cortava o conteúdo sem scroll. */}
+      <div className="forja-scroll-y" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', paddingRight: 6, display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Cartão de CONTEXTO do mês: composição (de onde vem cada real) e, na
           mesma moldura, os chips "família nesta fatura". Um bloco só, calmo —
           antes eram dois fragmentos soltos disputando espaço com os botões. */}
@@ -2992,6 +3082,27 @@ function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membr
               }
               description={
                 <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {explicacao.provisoesSemLinha.length > 0 && onCorrigirDiferenca && (
+                    <div style={{ marginBottom: 2 }}>
+                      <Popconfirm
+                        title="Corrigir tudo automaticamente?"
+                        description={
+                          <div style={{ maxWidth: 340, fontSize: 12 }}>
+                            Pra cada parcela fantasma: se a fatura trouxe a mesma compra com outro valor,
+                            a provisão duplicada é removida (a linha real fica, e as atribuições de família migram pra ela);
+                            se o banco simplesmente não cobrou, a parcela é adiada 1 mês. Nada pago é tocado.
+                          </div>
+                        }
+                        onConfirm={onCorrigirDiferenca}
+                        okText="Corrigir tudo"
+                        cancelText="Cancelar"
+                      >
+                        <Button size="small" type="primary" loading={corrigindoDiferenca}>
+                          Corrigir tudo automaticamente
+                        </Button>
+                      </Popconfirm>
+                    </div>
+                  )}
                   {explicacao.provisoesSemLinha.length > 0 && (
                     <>
                       <div>
@@ -3052,66 +3163,6 @@ function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membr
         </div>
       )}
 
-      {/* Barra de atribuição em lote: escolhe o membro e diz "essa fatura toda
-          é dele" ou marca só alguns itens. 100% do valor de cada item. */}
-      {modoLote && (
-        <div style={{
-          background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
-          borderRadius: 10, padding: 12,
-          display: 'flex', flexDirection: 'column', gap: 10,
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary }}>Atribuir para:</span>
-            <Select
-              size="small"
-              placeholder="Escolha um membro"
-              value={membroLote || undefined}
-              onChange={(v) => setMembroLote(v)}
-              style={{ minWidth: 200, flex: '1 1 200px' }}
-              options={membros.map((m) => ({
-                value: m.id,
-                label: (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    <MembroChip membro={m} style={{ width: 16, height: 16, fontSize: 9, lineHeight: '16px' }} />
-                    {m.nome}
-                  </span>
-                ),
-              }))}
-            />
-            <Button size="small" type="text" onClick={sairModoLote}>Cancelar</Button>
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <Popconfirm
-              title="Atribuir a fatura inteira?"
-              description={`Todos os ${todosItens.length} lançamento(s) deste cartão vão para o membro escolhido (100% de cada).`}
-              onConfirm={() => atribuir(todosItens.map((l) => l.id))}
-              okText="Atribuir tudo"
-              cancelText="Cancelar"
-              disabled={!membroLote}
-            >
-              <Button size="small" type="primary" loading={salvandoLote} disabled={!membroLote}
-                style={{ background: t.accents.sage, borderColor: t.accents.sage }}>
-                Atribuir fatura inteira ({todosItens.length})
-              </Button>
-            </Popconfirm>
-            <Button size="small" loading={salvandoLote} disabled={!membroLote || selecionados.size === 0}
-              onClick={() => atribuir([...selecionados])}>
-              Atribuir selecionados ({selecionados.size})
-            </Button>
-            {selecionados.size > 0 && (
-              <Button size="small" type="text" onClick={() => setSelecionados(new Set())}>Limpar seleção</Button>
-            )}
-          </div>
-          <div style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary }}>
-            Marque os itens de um membro e atribua; depois troque o membro e marque o restante.
-          </div>
-        </div>
-      )}
-
-      {/* SÓ esta área rola — as ações acima (Atribuir / Remover, barra de lote)
-          ficam fixas junto do topo, pra a ação nunca "sumir" enquanto você
-          percorre os lançamentos. */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', paddingRight: 6, display: 'flex', flexDirection: 'column', gap: 18 }}>
       {/* A janela atual costuma estar vazia logo após o fechamento — nesse caso
           não mostramos placeholder, porque a lista completa do cartão (com os
           itens em aberto) vem logo abaixo. Só renderiza se houver itens. */}
