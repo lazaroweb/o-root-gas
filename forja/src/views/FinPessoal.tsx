@@ -1526,6 +1526,10 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
   const [dedupRes, setDedupRes] = useState<DedupResultado | null>(null);
   const [pagandoFatura, setPagandoFatura] = useState(false);
   const [histAberto, setHistAberto] = useState(false);
+  // Mês (competência) exibido na GAVETA — independente do mês global do painel.
+  // Permite navegar ‹ › entre faturas (ex.: importei junho mas hoje é julho) e
+  // é o mês que TODAS as ações da gaveta usam (remover importados, pagar, etc).
+  const [mesFatura, setMesFatura] = useState(mes);
 
   const abrirNovo = () => { setEditando(null); setModalOpen(true); };
   const abrirEditar = (c: CartaoPessoal) => { setEditando(c); setModalOpen(true); };
@@ -1537,12 +1541,13 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
     });
   };
 
-  const carregarFatura = (c: CartaoPessoal) => {
+  const carregarFatura = (c: CartaoPessoal, m?: string) => {
+    const alvo = m || mesFatura;
     setLoadingFatura(true);
     setFaturaAtual(null);
     setItensCartao([]);
     Promise.all([
-      callServer<ServerResponse<FaturaAberta>>('getFaturaAberta', c.id, mes),
+      callServer<ServerResponse<FaturaAberta>>('getFaturaAberta', c.id, alvo),
       callServer<ServerResponse<LancamentosCartao>>('getLancamentosPorCartao', c.id),
     ])
       .then(([fR, lR]) => {
@@ -1555,7 +1560,16 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
   const verFatura = (c: CartaoPessoal) => {
     setCartaoAberto(c);
     setFaturaOpen(true);
-    carregarFatura(c);
+    setMesFatura(mes);
+    carregarFatura(c, mes);
+  };
+
+  // Navegação ‹ › de mês DENTRO da gaveta: recarrega a fatura da competência
+  // escolhida sem fechar nada. Ex.: hoje é julho, mas você quer ver/pagar junho.
+  const mudarMesFatura = (novo: string) => {
+    if (!/^\d{4}-\d{2}$/.test(novo)) return;
+    setMesFatura(novo);
+    if (cartaoAberto) carregarFatura(cartaoAberto, novo);
   };
 
   // Deep-link vindo da visão "Meu mês": abre direto a fatura do cartão pedido.
@@ -1584,7 +1598,7 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
     if (!cartaoAberto || removendoImportados) return;
     setRemovendoImportados(true);
     const hide = message.loading('Removendo lançamentos importados deste mês…', 0);
-    callServer<ServerResponse<{ removidos: number; futurasRemovidas?: number; preservados?: number }>>('deletarLancamentosImportadosCartao', cartaoAberto.id, mes).then((res) => {
+    callServer<ServerResponse<{ removidos: number; futurasRemovidas?: number; preservados?: number }>>('deletarLancamentosImportadosCartao', cartaoAberto.id, mesFatura).then((res) => {
       if (res.ok) {
         const d = res.data as { removidos: number; futurasRemovidas?: number; preservados?: number } | undefined;
         const n = d?.removidos ?? 0;
@@ -1609,12 +1623,12 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
     if (!cartaoAberto || removendoImportados) return;
     setRemovendoImportados(true);
     const hide = message.loading('Zerando importados deste mês em diante…', 0);
-    callServer<ServerResponse<{ removidos: number; preservados?: number }>>('deletarLancamentosImportadosCartao', cartaoAberto.id, mes, true).then((res) => {
+    callServer<ServerResponse<{ removidos: number; preservados?: number }>>('deletarLancamentosImportadosCartao', cartaoAberto.id, mesFatura, true).then((res) => {
       if (res.ok) {
         const d = res.data as { removidos: number; preservados?: number } | undefined;
         const n = d?.removidos ?? 0;
         const p = d?.preservados ?? 0;
-        message.success(`${n} importado(s) removido(s) de ${mes} em diante${p > 0 ? ` · ${p} do passado preservado(s) (com as atribuições)` : ''} — reimporte a fatura atual`);
+        message.success(`${n} importado(s) removido(s) de ${mesFatura} em diante${p > 0 ? ` · ${p} do passado preservado(s) (com as atribuições)` : ''} — reimporte a fatura atual`);
         if (cartaoAberto) carregarFatura(cartaoAberto);
         onRecarregar();
       } else message.error(res.error || 'Erro');
@@ -1678,7 +1692,7 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
   // (4º arg true) parcelas futuras das compras parceladas pro mesmo membro.
   const atribuirLote = (ids: string[], membroId: string): Promise<boolean> => {
     if (ids.length === 0 || !membroId) return Promise.resolve(false);
-    return callServer<ServerResponse<{ criadas: number }>>('atribuirLancamentosLote', JSON.stringify(ids), membroId, mes, true).then((res) => {
+    return callServer<ServerResponse<{ criadas: number }>>('atribuirLancamentosLote', JSON.stringify(ids), membroId, mesFatura, true).then((res) => {
       if (res?.ok) {
         const n = (res.data as { criadas: number } | undefined)?.criadas ?? ids.length;
         message.success(`${n} cobrança(s) gerada(s)`);
@@ -1751,6 +1765,7 @@ function PainelCartoes({ cartoes, mes, membros, membrosDe, lancAssinaturaIds, as
         <DetalheFatura
           fatura={faturaAtual}
           loading={loadingFatura}
+          onMudarMes={mudarMesFatura}
           todosItens={itensCartao}
           membros={membros}
           membrosDe={membrosDe}
@@ -2162,6 +2177,7 @@ interface DetalheFaturaProps {
   membrosDe: (lancId: string) => FamiliaMembro[];
   onRemover: (id: string) => void;
   onEditar: (l: LancamentoPessoal) => void;
+  onMudarMes?: (novoMes: string) => void;
   onRemoverImportados: () => void;
   onZerarDaquiPraFrente?: () => void;
   onZerarImportados?: () => void;
@@ -2607,7 +2623,7 @@ function ProvisaoFaturas({ itens }: { itens: LancamentoPessoal[] }): React.React
   );
 }
 
-function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, onZerarDaquiPraFrente, onZerarImportados, onHistorico, removendoImportados, onDeduplicar, deduplicando, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs }: DetalheFaturaProps): React.ReactElement {
+function DetalheFatura({ fatura, loading, onMudarMes, todosItens, membros, membrosDe, onRemover, onEditar, onRemoverImportados, onZerarDaquiPraFrente, onZerarImportados, onHistorico, removendoImportados, onDeduplicar, deduplicando, onPagarFatura, pagandoFatura, onAtribuir, onAtribuirLote, onPromoverAssinatura, lancAssinaturaIds, assinaturaEspelhoSigs }: DetalheFaturaProps): React.ReactElement {
   // Selo "já é assinatura": casa por id (rápido) OU por assinatura estável
   // valor+nome (sobrevive a reimportação que troca o id do lançamento).
   const temAssinaturaDe = (l: LancamentoPessoal): boolean =>
@@ -2673,12 +2689,13 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
     : pctUso < 80 ? t.accents.peach
     : t.accents.rose;
 
-  // "Pagar fatura" dá baixa no que está VENCIDO ou vence neste mês — NÃO toca
-  // nas parcelas futuras (que não devem ser quitadas antecipadamente). Define a
-  // fatura a pagar como tudo não-pago com vencimento/data até o fim do mês atual.
-  const fimMesAtual = dayjs().endOf('month');
+  // "Pagar fatura" dá baixa no que está VENCIDO ou vence até o fim do MÊS
+  // EXIBIDO na gaveta — NÃO toca nas parcelas futuras (que não devem ser
+  // quitadas antecipadamente). Com a navegação de mês, dá pra voltar pra junho
+  // e pagar SÓ junho, mesmo que a fatura de julho já esteja formada.
+  const fimMesExibido = (mesFatura ? dayjs(`${mesFatura}-01`) : dayjs()).endOf('month');
   const aPagarAgora = todosItens.filter((l) =>
-    l.status !== 'pago' && !dayjs(l.vencimento || l.data).isAfter(fimMesAtual)
+    l.status !== 'pago' && !dayjs(l.vencimento || l.data).isAfter(fimMesExibido)
   );
   const totalAPagarAgora = aPagarAgora.reduce((s, l) => s + l.valor, 0);
 
@@ -2898,7 +2915,7 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
       {fatura.lancamentos.length > 0 && (
         <div>
           <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, marginBottom: 8, letterSpacing: 0.4 }}>
-            LANÇAMENTOS DA FATURA (JANELA ATUAL)
+            LANÇAMENTOS DA FATURA {mesFatura ? `DE ${dayjs(`${mesFatura}-01`).format('MMM/YYYY').toUpperCase()}` : '(JANELA ATUAL)'}
           </div>
           {fatura.lancamentos.map((l) => (
             <LinhaLancamentoFatura key={l.id} l={l} membros={membros} atribuidos={membrosDe(l.id)} onRemover={onRemover} onEditar={onEditar} onAtribuir={onAtribuir} onPromoverAssinatura={onPromoverAssinatura} temAssinatura={temAssinaturaDe(l)} selecionavel={modoLote} selecionado={selecionados.has(l.id)} onToggleSel={toggleSel} />
@@ -2944,9 +2961,35 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
         background: t.surfaceMuted, border: `1px solid ${t.borderSoft}`,
         borderRadius: 12, padding: 16, flexShrink: 0,
       }}>
+        {/* Navegador de competência: ‹ mês › — a gaveta abre no mês corrente,
+            mas a fatura que interessa pode ser a anterior (importei junho e já
+            é julho). Tudo abaixo (fatura, composição, pagar, remover) segue o
+            mês escolhido aqui. */}
+        {onMudarMes && mesFatura && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+            <Button
+              size="small" type="text" icon={<ChevronLeft size={15} />}
+              onClick={() => onMudarMes(dayjs(`${mesFatura}-01`).subtract(1, 'month').format('YYYY-MM'))}
+              style={{ color: t.textSecondary }}
+            />
+            <span style={{ fontFamily: FONTS.display, fontSize: 15, fontWeight: 500, color: t.text, minWidth: 86, textAlign: 'center', textTransform: 'capitalize' }}>
+              {dayjs(`${mesFatura}-01`).format('MMM/YYYY')}
+            </span>
+            <Button
+              size="small" type="text" icon={<ChevronRight size={15} />}
+              onClick={() => onMudarMes(dayjs(`${mesFatura}-01`).add(1, 'month').format('YYYY-MM'))}
+              style={{ color: t.textSecondary }}
+            />
+            {mesFatura !== dayjs().format('YYYY-MM') && (
+              <Button size="small" type="link" style={{ fontSize: 12, color: t.accents.peach }} onClick={() => onMudarMes(dayjs().format('YYYY-MM'))}>
+                voltar pro mês atual
+              </Button>
+            )}
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           {blocoNumero(
-            `FATURA ATUAL · vence dia ${fatura.diaVencimento}`,
+            `FATURA ${mesFatura ? dayjs(`${mesFatura}-01`).format('MMM/YYYY').toUpperCase() : 'ATUAL'} · vence dia ${fatura.diaVencimento}`,
             fatura.total,
             `janela ${dayjs(fatura.inicio).format('DD/MM')} a ${dayjs(fatura.fim).format('DD/MM')} · ${fatura.qtdLancamentos} lanç.`,
           )}
@@ -2972,7 +3015,7 @@ function DetalheFatura({ fatura, loading, todosItens, membros, membrosDe, onRemo
         {aPagarAgora.length > 0 && (
           <Popconfirm
             title="Pagar a fatura?"
-            description={`Dá baixa em ${aPagarAgora.length} lançamento(s) vencido(s) ou deste mês (${formatBRL(totalAPagarAgora)}). Parcelas futuras não são afetadas.`}
+            description={`Dá baixa em ${aPagarAgora.length} lançamento(s) vencido(s) ou que vencem até ${mesFatura ? dayjs(`${mesFatura}-01`).format('MMM/YYYY') : 'este mês'} (${formatBRL(totalAPagarAgora)}). Parcelas de meses seguintes não são afetadas — navegue no mês pra pagar outra fatura.`}
             onConfirm={() => onPagarFatura(aPagarAgora.map((l) => l.id))}
             okText="Pagar tudo"
             cancelText="Cancelar"

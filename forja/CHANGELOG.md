@@ -36,6 +36,22 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.253.0] — 2026-07-05
+
+### Melhorado
+
+- **Navegação de mês DENTRO da gaveta do cartão (‹ mês ›)** — a gaveta abre no
+  mês corrente, mas agora dá pra voltar/avançar a competência sem fechar nada
+  (ex.: hoje é julho, mas a fatura que importei e quero conferir/pagar é a de
+  junho). TUDO na gaveta segue o mês escolhido: resumo da fatura, composição
+  do mês, "Remover importados do mês", "Zerar deste mês em diante", atribuição
+  em lote e — principalmente — o **"Pagar fatura"**, que passa a dar baixa só
+  no que vence até o fim do mês exibido (antes usava o mês corrente e
+  arrastava a fatura seguinte junto). Rótulos mostram o mês explícito
+  ("FATURA JUN/2026") e há atalho "voltar pro mês atual".
+
+---
+
 ## [1.252.0] — 2026-07-05
 
 ### Adicionado
