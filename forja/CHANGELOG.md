@@ -36,6 +36,24 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.265.1] — 2026-07-07
+
+### Corrigido
+
+- **"Classificar agora" rodava e voltava como se nada tivesse acontecido**:
+  duas causas-raiz em `skillsClassificar`.
+  1. O critério de "pendente" do servidor só olhava `tipoIA` — skills que já
+     tinham categoria (triadas na importação) entravam TODAS na chamada de
+     classificação, inflando o prompt com centenas de itens. Agora o servidor
+     usa o mesmo critério do banner: classificada = tem `tipoIA` OU `categoria`.
+  2. Era UMA chamada de LLM com todas as pendentes — com muitos itens a
+     resposta estourava o limite de tokens, o JSON voltava truncado, o parse
+     falhava em silêncio e a função retornava `classificadas: 0` como sucesso
+     (a UI dizia "todas já estavam classificadas" e o banner continuava lá).
+     Agora classifica em lotes de 40 (mesmo padrão do "Avaliar com a Lume"),
+     o frontend repete até zerar, e parse vazio vira ERRO visível com
+     instrução de tratativa (conferir modelo no Roteamento de IA).
+
 ## [1.265.0] — 2026-07-07
 
 ### Adicionado

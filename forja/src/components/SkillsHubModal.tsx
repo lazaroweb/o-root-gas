@@ -792,18 +792,33 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
     } finally { hide(); setTraduzindoTudo(false); }
   };
 
+  // v1.265.1 — loop chunked (o backend classifica ~40 por chamada e devolve
+  // `restantes`). Antes era 1 chamada com tudo: com muitas pendentes a resposta
+  // da IA vinha truncada, o parse falhava em silêncio e nada era gravado.
   const classificarSkills = async () => {
     setClassificando(true);
     const hide = message.loading('Classificando skills por tema (IA)…', 0);
     try {
-      const r = await callServer<ServerResult>('skillsClassificar');
-      if (r.ok) {
-        const d = (r.data as { classificadas: number }) || { classificadas: 0 };
-        message.success(d.classificadas > 0 ? `${d.classificadas} skill(s) classificada(s) por tema.` : 'Todas as skills já estavam classificadas.');
-        carregar();
-      } else {
-        message.error(r.error || 'Não consegui classificar');
+      let totalFeitas = 0;
+      let guarda = 0;
+      for (;;) {
+        guarda++;
+        if (guarda > 100) break;
+        // eslint-disable-next-line no-await-in-loop
+        const r = await callServer<ServerResult>('skillsClassificar');
+        if (!r.ok) {
+          message.error(r.error || 'Não consegui classificar');
+          break;
+        }
+        const d = (r.data as { classificadas: number; restantes?: number }) || { classificadas: 0 };
+        totalFeitas += d.classificadas;
+        if (!d.restantes || d.restantes <= 0) {
+          if (totalFeitas > 0) message.success(`${totalFeitas} skill(s) classificada(s) por tema.`);
+          else message.info('Nenhuma skill pendente de classificação.');
+          break;
+        }
       }
+      carregar();
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Erro ao classificar');
     } finally { hide(); setClassificando(false); }

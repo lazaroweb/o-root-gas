@@ -24422,20 +24422,35 @@ const SKILL_TEMAS = [
 ];
 
 // Classifica por IA cada skill num tema de alto nível (SKILL_TEMAS) a partir do
-// nome + descrição, persistindo em `tipoIA`. Faz UMA chamada à LLM com todas as
-// pendentes (JSON in/out) pra economizar tokens. Idempotente: só reclassifica
-// quem não tem `tipoIA`, salvo `forcar`.
+// nome + descrição, persistindo em `tipoIA`.
+//
+// v1.265.1 — dois bugs consertados aqui (caso real: "Classificar agora" rodava
+// e voltava como se nada tivesse acontecido):
+//   1. O critério de "pendente" só olhava tipoIA — skills importadas com
+//      categoria (triagem) mas sem tema entravam TODAS na chamada, virando
+//      centenas de itens. Agora usa o MESMO critério do banner (v1.151.2):
+//      classificada = tem tipoIA OU categoria.
+//   2. Era UMA chamada de LLM com todas as pendentes — com muitos itens a
+//      resposta estourava o maxTokens, o JSON voltava truncado, o parse
+//      falhava em silêncio e retornava classificadas=0 como se fosse sucesso.
+//      Agora processa um CHUNK por chamada (padrão skillsAvaliar) devolvendo
+//      `restantes` pro frontend loopar, e parse vazio vira ERRO visível.
+const CHUNK_CLASSIFICACAO = 40;
+
 function skillsClassificar(forcar?: boolean): ServerResult {
   try {
     const linhas = dbGetAll('Skills') as Array<Record<string, unknown>>;
     const pendentes = linhas.filter((s) => {
       const temTexto = String(s.nome || '').trim() || String(s.descricao || '').trim();
-      return temTexto && (forcar || !String(s.tipoIA || '').trim());
+      if (!temTexto) return false;
+      if (forcar) return true;
+      return !String(s.tipoIA || '').trim() && !String(s.categoria || '').trim();
     });
     if (pendentes.length === 0) {
-      return { ok: true, data: { classificadas: 0, total: linhas.length } };
+      return { ok: true, data: { classificadas: 0, restantes: 0, total: linhas.length } };
     }
-    const itens = pendentes.map((s, i) => ({
+    const chunk = pendentes.slice(0, CHUNK_CLASSIFICACAO);
+    const itens = chunk.map((s, i) => ({
       i,
       id: String(s.id || ''),
       nome: String(s.nome || ''),
@@ -24456,7 +24471,10 @@ function skillsClassificar(forcar?: boolean): ServerResult {
       const tema = _temaValido(mapa[it.i]);
       if (tema) { try { dbUpdate('Skills', it.id, { tipoIA: tema }); n++; } catch { /* segue */ } }
     }
-    return { ok: true, data: { classificadas: n, total: linhas.length } };
+    if (n === 0) {
+      return { ok: false, error: 'A IA respondeu, mas não num formato utilizável — nenhuma skill foi classificada. Tente de novo (ou confira o modelo do serviço "Tradução de skills" no Roteamento de IA).' };
+    }
+    return { ok: true, data: { classificadas: n, restantes: Math.max(0, pendentes.length - chunk.length), total: linhas.length } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao classificar skills' };
   }
