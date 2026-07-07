@@ -58,6 +58,8 @@ interface AgentSummary {
   tipo?: string;            // "agente-autonomo" / "orquestrador" / etc.
   diretrizFinal?: string;   // 1 frase resumo (vira preview do card)
   dominios?: string[];      // áreas de expertise (### dentro de DOMÍNIOS)
+  // v1.266.0 — selo "Revisada" pelo Otimizador IA do Atelier.
+  revisadaIAEm?: string;
   // v1.152.0 — nota global de qualidade (0-5).
   estrelas?: number;
   estrelasMotivo?: string;
@@ -506,6 +508,7 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
         aberto={otimizadorAberto}
         onClose={() => setOtimizadorAberto(false)}
         tipo="agents"
+        categoriasExistentes={categoriasExistentes}
         onAplicado={() => { void carregar(); }}
       />
 
@@ -758,8 +761,26 @@ function AgentCard({ agent, onOpen, onToggleFavorita }: {
       </div>
 
       {/* Nota de qualidade da Lume (some quando 0) */}
-      {!!(agent.estrelas && agent.estrelas > 0) && (
-        <EstrelasQualidade valor={agent.estrelas} motivo={agent.estrelasMotivo} avaliadaEm={agent.avaliadaEm} size={12} />
+      {(!!(agent.estrelas && agent.estrelas > 0) || !!agent.revisadaIAEm) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          {!!(agent.estrelas && agent.estrelas > 0) && (
+            <EstrelasQualidade valor={agent.estrelas} motivo={agent.estrelasMotivo} avaliadaEm={agent.avaliadaEm} size={12} />
+          )}
+          {/* v1.266.0 — selo "Revisada": passou pelo Otimizador IA do Atelier. */}
+          {!!agent.revisadaIAEm && (
+            <Tooltip title={`Revisado pelo Otimizador IA da Forja em ${new Date(agent.revisadaIAEm).toLocaleDateString('pt-BR')} — sai das rodadas "Ainda não revisadas".`}>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 3,
+                fontFamily: FONTS.ui, fontSize: 9.5, fontWeight: 600,
+                color: t.accents.sage, background: `${t.accents.sage}1f`,
+                border: `1px solid ${t.accents.sage}55`,
+                borderRadius: 999, padding: '1px 7px', letterSpacing: 0.2,
+              }}>
+                <CheckCircle2 size={9} /> Revisado · IA
+              </span>
+            </Tooltip>
+          )}
+        </div>
       )}
 
       {/* Preview — diretriz final em itálico (a "alma" do agent) */}

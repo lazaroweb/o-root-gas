@@ -47,6 +47,8 @@ interface SkillSummary {
   estrelas?: number;
   estrelasMotivo?: string;
   avaliadaEm?: string;
+  // v1.266.0 — selo "Revisada" pelo Otimizador IA do Atelier.
+  revisadaIAEm?: string;
 }
 
 // ─── Fontes (pastas) ──────────────────────────────────────────────────────────
@@ -1543,6 +1545,7 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
         aberto={otimizadorAberto}
         onClose={() => setOtimizadorAberto(false)}
         tipo="skills"
+        categoriasExistentes={categoriasExistentes}
         onAplicado={() => { void carregar(); }}
       />
 
@@ -2215,9 +2218,25 @@ function SkillCard({ skill, onOpen, selMode = false, selecionado = false, onTogg
             {skill.nome || '(sem nome)'}
           </div>
           {/* v1.152.0 — nota de qualidade da Lume (some quando 0) */}
-          {!!(skill.estrelas && skill.estrelas > 0) && (
-            <div style={{ marginTop: 3 }}>
-              <EstrelasQualidade valor={skill.estrelas} motivo={skill.estrelasMotivo} avaliadaEm={skill.avaliadaEm} size={12} />
+          {(!!(skill.estrelas && skill.estrelas > 0) || !!skill.revisadaIAEm) && (
+            <div style={{ marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              {!!(skill.estrelas && skill.estrelas > 0) && (
+                <EstrelasQualidade valor={skill.estrelas} motivo={skill.estrelasMotivo} avaliadaEm={skill.avaliadaEm} size={12} />
+              )}
+              {/* v1.266.0 — selo "Revisada": passou pelo Otimizador IA do Atelier. */}
+              {!!skill.revisadaIAEm && (
+                <Tooltip title={`Revisada pelo Otimizador IA da Forja em ${new Date(skill.revisadaIAEm).toLocaleDateString('pt-BR')} — sai das rodadas "Ainda não revisadas".`}>
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 3,
+                    fontFamily: FONTS.ui, fontSize: 9.5, fontWeight: 600,
+                    color: t.accents.sage, background: `${t.accents.sage}1f`,
+                    border: `1px solid ${t.accents.sage}55`,
+                    borderRadius: 999, padding: '1px 7px', letterSpacing: 0.2,
+                  }}>
+                    <CheckCircle2 size={9} /> Revisada · IA
+                  </span>
+                </Tooltip>
+              )}
             </div>
           )}
         </div>

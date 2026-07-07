@@ -1,12 +1,14 @@
-// OtimizadorIAModal — v1.265.0
+// OtimizadorIAModal — v1.266.0
 // Otimização IA em massa de Skills/Agents no Atelier, com modelo dedicado
 // (serviço 'atelier' no Roteamento de IA — ex.: Fable 5).
 //
-// Fluxo: configurar escopo → análise chunked (25/chamada, com progresso) →
-// revisão das sugestões (aceita/rejeita por item) → aplicar só o aceito.
+// Fluxo: configurar escopo (com filtro de categorias) → análise chunked
+// (12/chamada, com progresso; lote com falha é PULADO, não aborta) → revisão
+// das sugestões (aceita/rejeita por item) → aplicar só o aceito. Itens
+// analisados ganham o selo "Revisada" (revisadaIAEm) — re-rodadas pulam eles.
 // NADA é gravado sem passar pela revisão.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Button, Checkbox, Progress, Segmented, Tag, message, Empty } from 'antd';
+import { Modal, Button, Checkbox, Progress, Segmented, Select, Tag, message, Empty } from 'antd';
 import { Sparkles, Wand2, CheckCircle2, ArrowRight } from 'lucide-react';
 import ModeloBadge from './ModeloBadge';
 import { useTokens } from '../themeContext';
@@ -25,22 +27,27 @@ interface Props {
   aberto: boolean;
   onClose: () => void;
   tipo: 'skills' | 'agents';
+  // Categorias já usadas na base — viram opções do filtro de escopo.
+  categoriasExistentes?: string[];
   // Chamado depois de aplicar com sucesso (recarrega a lista do hub).
   onAplicado: () => void;
 }
 
 type Fase = 'config' | 'analisando' | 'revisao' | 'aplicando';
 
-export default function OtimizadorIAModal({ aberto, onClose, tipo, onAplicado }: Props): React.ReactElement {
+export default function OtimizadorIAModal({ aberto, onClose, tipo, categoriasExistentes = [], onAplicado }: Props): React.ReactElement {
   const t = useTokens();
   const isSkills = tipo === 'skills';
   const label = isSkills ? 'skill' : 'agent';
   const cor = t.accents.lavender;
 
   const [fase, setFase] = useState<Fase>('config');
-  const [escopo, setEscopo] = useState<'pendentes' | 'todas'>('pendentes');
+  const [escopo, setEscopo] = useState<'nao-revisadas' | 'pendentes' | 'todas'>('nao-revisadas');
+  const [categorias, setCategorias] = useState<string[]>([]);
   const [prog, setProg] = useState<{ feitas: number; total: number } | null>(null);
   const [sugestoes, setSugestoes] = useState<SugestaoOtimizacao[]>([]);
+  const [semMudanca, setSemMudanca] = useState<string[]>([]);
+  const [lotesPulados, setLotesPulados] = useState(0);
   const [aceitas, setAceitas] = useState<Set<string>>(new Set());
   const [erroAnalise, setErroAnalise] = useState('');
   // Ref (não state): o loop de análise lê o valor atual a cada iteração —
@@ -52,6 +59,8 @@ export default function OtimizadorIAModal({ aberto, onClose, tipo, onAplicado }:
       setFase('config');
       setProg(null);
       setSugestoes([]);
+      setSemMudanca([]);
+      setLotesPulados(0);
       setAceitas(new Set());
       setErroAnalise('');
       canceladoRef.current = false;
@@ -62,28 +71,35 @@ export default function OtimizadorIAModal({ aberto, onClose, tipo, onAplicado }:
     setFase('analisando');
     setErroAnalise('');
     const acumulado: SugestaoOtimizacao[] = [];
+    const okIds: string[] = [];
+    let pulados = 0;
     let offset = 0;
     let guarda = 0;
     try {
-      // Loop chunked: cada chamada analisa ~25 itens e devolve `restantes`.
-      // 200 iterações cobre 5000 itens — folga pra base de ~1000.
+      // Loop chunked: cada chamada analisa ~12 itens e devolve `restantes`.
+      // Lote que falhar (modelo instável) é PULADO — a análise continua.
       for (;;) {
         guarda++;
         if (guarda > 200 || canceladoRef.current) break;
         // eslint-disable-next-line no-await-in-loop
-        const r = await callServer<ServerResult>('hubOtimizarComIA', { tipo, escopo, offset });
+        const r = await callServer<ServerResult>('hubOtimizarComIA', { tipo, escopo, categorias, offset });
         if (!r.ok) { setErroAnalise(r.error || 'Erro na análise'); break; }
-        const d = r.data as { sugestoes: SugestaoOtimizacao[]; processados: number; restantes: number; total: number };
+        const d = r.data as { sugestoes: SugestaoOtimizacao[]; semMudancaIds?: string[]; falhou?: boolean; processados: number; restantes: number; total: number };
+        if (d.falhou) pulados++;
         acumulado.push(...(d.sugestoes || []));
+        okIds.push(...(d.semMudancaIds || []));
         offset += d.processados;
         setProg({ feitas: offset, total: d.total });
         setSugestoes([...acumulado]);
+        setLotesPulados(pulados);
         if (d.restantes <= 0 || d.processados === 0) break;
       }
     } catch (e) {
       setErroAnalise(e instanceof Error ? e.message : 'Erro na análise');
     }
     setSugestoes(acumulado);
+    setSemMudanca(okIds);
+    setLotesPulados(pulados);
     setAceitas(new Set(acumulado.map((s) => s.id)));
     setFase('revisao');
   };
@@ -99,18 +115,33 @@ export default function OtimizadorIAModal({ aberto, onClose, tipo, onAplicado }:
         estrelas: s.sugestao.estrelas,
         motivo: s.sugestao.motivo,
       }));
-    if (itens.length === 0) { onClose(); return; }
     setFase('aplicando');
     try {
       let atualizados = 0;
-      // hubOtimizacaoAplicar aceita até 300 por chamada.
-      for (let i = 0; i < itens.length; i += 300) {
-        // eslint-disable-next-line no-await-in-loop
-        const r = await callServer<ServerResult>('hubOtimizacaoAplicar', { tipo, itens: itens.slice(i, i + 300) });
-        if (!r.ok) { message.error(r.error || 'Erro ao aplicar'); setFase('revisao'); return; }
-        atualizados += ((r.data as { atualizados: number })?.atualizados || 0);
+      let selados = 0;
+      // hubOtimizacaoAplicar aceita até 300 itens (+600 selos) por chamada.
+      // Selos dos "sem mudança" vão junto na primeira chamada em fatias de 600.
+      const chamadas: Array<{ itens: typeof itens; selarIds: string[] }> = [];
+      const maxChamadas = Math.max(Math.ceil(itens.length / 300), Math.ceil(semMudanca.length / 600), 1);
+      for (let c = 0; c < maxChamadas; c++) {
+        chamadas.push({
+          itens: itens.slice(c * 300, (c + 1) * 300),
+          selarIds: semMudanca.slice(c * 600, (c + 1) * 600),
+        });
       }
-      message.success(`Otimização aplicada em ${atualizados} ${label}(s).`);
+      for (const ch of chamadas) {
+        if (ch.itens.length === 0 && ch.selarIds.length === 0) continue;
+        // eslint-disable-next-line no-await-in-loop
+        const r = await callServer<ServerResult>('hubOtimizacaoAplicar', { tipo, itens: ch.itens, selarIds: ch.selarIds });
+        if (!r.ok) { message.error(r.error || 'Erro ao aplicar'); setFase('revisao'); return; }
+        const d = r.data as { atualizados: number; selados?: number };
+        atualizados += (d?.atualizados || 0);
+        selados += (d?.selados || 0);
+      }
+      const partes = [];
+      if (atualizados > 0) partes.push(`${atualizados} ${label}(s) atualizado(s)`);
+      if (selados > 0) partes.push(`${selados} selado(s) como revisado(s) sem mudança`);
+      message.success(partes.length > 0 ? `Otimização: ${partes.join(' · ')}.` : 'Nada a aplicar.');
       onAplicado();
       onClose();
     } catch (e) {
@@ -172,10 +203,12 @@ export default function OtimizadorIAModal({ aberto, onClose, tipo, onAplicado }:
             key="aplicar" type="primary" icon={<CheckCircle2 size={14} />}
             onClick={() => { void aplicar(); }}
             loading={fase === 'aplicando'}
-            disabled={nAceitas === 0}
+            disabled={nAceitas === 0 && semMudanca.length === 0}
             style={{ background: cor, borderColor: cor }}
           >
-            Aplicar {nAceitas} aceita{nAceitas === 1 ? '' : 's'}
+            {nAceitas > 0
+              ? `Aplicar ${nAceitas} aceita${nAceitas === 1 ? '' : 's'}${semMudanca.length > 0 ? ` + selar ${semMudanca.length}` : ''}`
+              : `Selar ${semMudanca.length} como revisada${semMudanca.length === 1 ? '' : 's'}`}
           </Button>,
         ]
       }
@@ -207,16 +240,36 @@ export default function OtimizadorIAModal({ aberto, onClose, tipo, onAplicado }:
             <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary }}>Escopo:</span>
             <Segmented
               value={escopo}
-              onChange={(v) => setEscopo(v as 'pendentes' | 'todas')}
+              onChange={(v) => setEscopo(v as 'nao-revisadas' | 'pendentes' | 'todas')}
               options={[
-                { label: 'Só incompletas (sem categoria, nota ou descrição)', value: 'pendentes' },
+                { label: 'Ainda não revisadas', value: 'nao-revisadas' },
+                { label: 'Só incompletas', value: 'pendentes' },
                 { label: 'Base inteira', value: 'todas' },
               ]}
             />
           </div>
+          {categoriasExistentes.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary }}>Categorias:</span>
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder="Todas (ou escolha as principais)"
+                value={categorias}
+                onChange={(v) => setCategorias(v as string[])}
+                options={Array.from(new Set(categoriasExistentes.map((c) => c.trim()).filter(Boolean)))
+                  .sort((a, b) => a.localeCompare(b))
+                  .map((c) => ({ value: c, label: c }))}
+                style={{ minWidth: 280, flex: 1 }}
+                maxTagCount="responsive"
+              />
+            </div>
+          )}
           <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, lineHeight: 1.5 }}>
-            A análise roda em lotes de 25 — pra base inteira (~1000 itens) leva alguns minutos e gasta tokens
-            proporcionais. Você pode parar no meio e revisar o que já foi analisado.
+            A análise roda em lotes de 12 (lotes que falharem são pulados e relatados — não abortam mais).
+            Quem for analisado ganha o selo <strong style={{ color: t.textSecondary }}>Revisada · IA</strong> e sai
+            das próximas rodadas de "Ainda não revisadas" — dá pra fazer a base inteira aos poucos.
+            Você pode parar no meio e revisar o que já foi analisado.
           </div>
         </div>
       )}
@@ -249,10 +302,20 @@ export default function OtimizadorIAModal({ aberto, onClose, tipo, onAplicado }:
               A análise parou com erro: {erroAnalise} — o que foi analisado até ali está abaixo.
             </div>
           )}
+          {lotesPulados > 0 && (
+            <div style={{
+              fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, marginBottom: 10,
+              background: `${t.accents.peach}1f`, border: `1px solid ${t.accents.peach}55`,
+              borderRadius: 10, padding: '8px 12px',
+            }}>
+              {lotesPulados} lote(s) (~{lotesPulados * 12} itens) foram pulados porque o modelo não respondeu em
+              formato utilizável — eles NÃO ganham selo e entram de novo na próxima rodada de "Ainda não revisadas".
+            </div>
+          )}
           {sugestoes.length === 0 ? (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={`A IA não encontrou nada pra melhorar nesse escopo — ${prog?.total ?? 0} ${label}(s) analisado(s), tudo em ordem.`}
+              description={`A IA não encontrou nada pra melhorar nesse escopo — ${prog?.total ?? 0} ${label}(s) analisado(s), tudo em ordem.${semMudanca.length > 0 ? ` Clique em "Selar" pra marcar ${semMudanca.length} como revisada(s).` : ''}`}
             />
           ) : (
             <>

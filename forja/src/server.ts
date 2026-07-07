@@ -186,7 +186,9 @@ const SCHEMA: SheetSchema[] = [
   // pra export parametrizado — evita re-gastar tokens no mesmo ambiente.
   // v1.152.0 — `estrelas` (0-5): nota global de qualidade dada pela Lume (ou
   // manual). `estrelasMotivo`: justificativa curta da Lume. `avaliadaEm`: ISO.
-  { name: 'Skills', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes', 'favorita', 'favoritadaEm', 'slug', 'idExterno', 'usos', 'relacionadas', 'quandoUsar', 'identidadePapel', 'secoesJson', 'estrelas', 'estrelasMotivo', 'avaliadaEm'] },
+  // v1.266.0 — `revisadaIAEm`: ISO de quando o item passou pelo Otimizador IA
+  // do Atelier (selo "Revisada"). Re-rodadas pulam quem já tem o selo.
+  { name: 'Skills', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes', 'favorita', 'favoritadaEm', 'slug', 'idExterno', 'usos', 'relacionadas', 'quandoUsar', 'identidadePapel', 'secoesJson', 'estrelas', 'estrelasMotivo', 'avaliadaEm', 'revisadaIAEm'] },
   // v1.150.0 — Agents: a estrutura específica do pack do user chegou.
   // Campos novos first-class (filtros/buscas rápidas):
   // - `tipo`: agente-autonomo, orquestrador, etc.
@@ -194,7 +196,7 @@ const SCHEMA: SheetSchema[] = [
   // - `dominios`: CSV das áreas de expertise (extraídas dos ### dentro de
   //   ## DOMÍNIOS DE CONHECIMENTO). Permite agrupar agents por domínio.
   // `relacionadas` reaproveita a coluna pra "integrações com outros agents".
-  { name: 'Agents', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes', 'favorita', 'favoritadaEm', 'slug', 'idExterno', 'usos', 'relacionadas', 'quandoUsar', 'identidadePapel', 'secoesJson', 'modelo', 'ferramentas', 'metaJson', 'tipo', 'diretrizFinal', 'dominios', 'estrelas', 'estrelasMotivo', 'avaliadaEm'] },
+  { name: 'Agents', columns: ['id', 'nome', 'descricao', 'categoria', 'tags', 'conteudo', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'traducaoPt', 'descricaoPt', 'tipoIA', 'adaptacoes', 'favorita', 'favoritadaEm', 'slug', 'idExterno', 'usos', 'relacionadas', 'quandoUsar', 'identidadePapel', 'secoesJson', 'modelo', 'ferramentas', 'metaJson', 'tipo', 'diretrizFinal', 'dominios', 'estrelas', 'estrelasMotivo', 'avaliadaEm', 'revisadaIAEm'] },
   // SkillFontes: metadados das "pastas" de skills. `chave` é o prefixo usado em
   // Skills.fonte ("<chave>/<skill>"); `nome`/`descricao`/`cor` são editáveis.
   { name: 'SkillFontes', columns: ['id', 'chave', 'nome', 'descricao', 'cor', 'criadoEm', 'atualizadoEm'] },
@@ -448,7 +450,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.251-historico-importacoes';
+const SCHEMA_VERSION = 'v1.266-selo-revisao-ia';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -24740,7 +24742,9 @@ interface SugestaoOtimizacao {
 
 function hubOtimizarComIA(payload: {
   tipo: 'skills' | 'agents';
-  escopo?: 'todas' | 'pendentes';
+  escopo?: 'todas' | 'pendentes' | 'nao-revisadas';
+  // v1.266.0 — limita a análise a categorias escolhidas (casa categoria OU tipoIA).
+  categorias?: string[];
   offset?: number;
 }): ServerResult {
   try {
@@ -24752,10 +24756,18 @@ function hubOtimizarComIA(payload: {
         (!String(l.categoria || '').trim() && !String(l.tipoIA || '').trim())
         || !(Number(l.estrelas || 0) > 0)
         || !String(l.descricao || '').trim());
+    } else if (payload?.escopo === 'nao-revisadas') {
+      alvo = alvo.filter((l) => !String(l.revisadaIAEm || '').trim());
+    }
+    if (Array.isArray(payload?.categorias) && payload.categorias.length > 0) {
+      const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+      const set: Record<string, boolean> = {};
+      for (const c of payload.categorias) set[norm(String(c))] = true;
+      alvo = alvo.filter((l) => set[norm(String(l.categoria || ''))] || set[norm(String(l.tipoIA || ''))]);
     }
     const total = alvo.length;
     const offset = Math.max(0, Math.floor(Number(payload?.offset || 0)));
-    if (offset >= total) return { ok: true, data: { sugestoes: [], processados: 0, restantes: 0, total } };
+    if (offset >= total) return { ok: true, data: { sugestoes: [], semMudancaIds: [], processados: 0, restantes: 0, total } };
 
     const chunk = alvo.slice(offset, offset + CHUNK_OTIMIZACAO);
 
@@ -24788,17 +24800,29 @@ function hubOtimizarComIA(payload: {
       + 'Se o item já está bom, devolva só {"i":N}. '
       + 'Responda SOMENTE com um array JSON cobrindo TODOS os itens, sem texto extra, no formato '
       + '[{"i":0,"categoria":"...","tags":"...","descricao":"...","estrelas":4,"motivo":"..."}].';
+    // v1.266.0 — falha de UM lote não aborta mais a análise inteira: retry
+    // único e, se ainda assim falhar, devolvemos ok com `falhou: true` e o
+    // frontend PULA este lote e segue pro próximo (relata os pulados no fim).
     const mensagens: LlmMessage[] = [{ role: 'system', content: sys }, { role: 'user', content: JSON.stringify(itens) }];
-    let resp = forjaCallLLM(mensagens, 8000, undefined, 'atelier');
-    let arr = _parseJsonArrayTolerante(resp);
-    if (arr.length === 0) {
-      // Retry único: modelos com raciocínio ocasionalmente devolvem texto em
-      // volta do JSON ou truncam — uma segunda tentativa costuma resolver.
-      resp = forjaCallLLM(mensagens, 8000, undefined, 'atelier');
-      arr = _parseJsonArrayTolerante(resp);
-    }
-    if (arr.length === 0) {
-      return { ok: false, error: 'A IA não devolveu JSON utilizável (2 tentativas) — tente de novo ou troque o modelo do serviço "Atelier" no Roteamento de IA.' };
+    let arr: Array<Record<string, unknown>> = [];
+    let falhou = false;
+    try {
+      arr = _parseJsonArrayTolerante(forjaCallLLM(mensagens, 8000, undefined, 'atelier'));
+      if (arr.length === 0) {
+        arr = _parseJsonArrayTolerante(forjaCallLLM(mensagens, 8000, undefined, 'atelier'));
+      }
+      if (arr.length === 0) falhou = true;
+    } catch { falhou = true; }
+    if (falhou) {
+      return {
+        ok: true,
+        data: {
+          sugestoes: [], semMudancaIds: [], falhou: true,
+          processados: chunk.length,
+          restantes: Math.max(0, total - offset - chunk.length),
+          total,
+        },
+      };
     }
 
     const sugestoes: SugestaoOtimizacao[] = [];
@@ -24828,30 +24852,45 @@ function hubOtimizarComIA(payload: {
         sugestao: sug,
       });
     }
+    // Ids analisados que a IA considerou OK (sem sugestão) — recebem o selo
+    // "Revisada" no aplicar, pra re-rodadas não re-analisarem quem já está bom.
+    const comSugestao: Record<string, boolean> = {};
+    for (const s of sugestoes) comSugestao[s.id] = true;
+    const semMudancaIds = itens.filter((it) => !comSugestao[it.id]).map((it) => it.id);
     const processados = chunk.length;
-    return { ok: true, data: { sugestoes, processados, restantes: Math.max(0, total - offset - processados), total } };
+    return { ok: true, data: { sugestoes, semMudancaIds, processados, restantes: Math.max(0, total - offset - processados), total } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao otimizar com IA' };
   }
 }
 
 // Grava o que o usuário ACEITOU na revisão. Campos undefined não sobrescrevem.
+// `selarIds` (v1.266.0): itens analisados SEM mudança — só recebem o selo
+// "Revisada" (revisadaIAEm), pra re-rodadas pularem quem já está bom.
 function hubOtimizacaoAplicar(payload: {
   tipo: 'skills' | 'agents';
   itens: Array<{ id: string; categoria?: string; tags?: string; descricao?: string; estrelas?: number; motivo?: string }>;
+  selarIds?: string[];
 }): ServerResult {
   try {
     const tabela = payload?.tipo === 'agents' ? 'Agents' : 'Skills';
     const itens = Array.isArray(payload?.itens) ? payload.itens : [];
-    if (itens.length === 0) return { ok: true, data: { atualizados: 0 } };
-    if (itens.length > 300) return { ok: false, error: 'Acima de 300 itens — fatie em lotes menores.' };
+    const selarIds = Array.isArray(payload?.selarIds) ? payload.selarIds : [];
+    if (itens.length === 0 && selarIds.length === 0) return { ok: true, data: { atualizados: 0, selados: 0 } };
+    if (itens.length > 300 || selarIds.length > 600) return { ok: false, error: 'Lote grande demais — fatie em lotes menores.' };
     const agora = new Date().toISOString();
     let atualizados = 0;
+    let selados = 0;
     const erros: Array<{ id: string; msg: string }> = [];
+    for (const sid of selarIds) {
+      const id = String(sid || '').trim();
+      if (!id) continue;
+      try { if (dbUpdate(tabela, id, { revisadaIAEm: agora })) selados++; } catch { /* segue */ }
+    }
     for (const it of itens) {
       const id = String(it.id || '').trim();
       if (!id) continue;
-      const upd: Record<string, unknown> = { atualizadoEm: agora };
+      const upd: Record<string, unknown> = { atualizadoEm: agora, revisadaIAEm: agora };
       if (it.categoria !== undefined && String(it.categoria).trim()) upd.categoria = String(it.categoria).trim();
       if (it.tags !== undefined && String(it.tags).trim()) upd.tags = String(it.tags).trim();
       if (it.descricao !== undefined && String(it.descricao).trim()) {
@@ -24868,7 +24907,7 @@ function hubOtimizacaoAplicar(payload: {
           upd.avaliadaEm = agora;
         }
       }
-      if (Object.keys(upd).length === 1) continue;
+      if (Object.keys(upd).length === 2) continue; // só timestamps — nada a aplicar
       try {
         const r = dbUpdate(tabela, id, upd);
         if (r) atualizados++;
@@ -24877,7 +24916,7 @@ function hubOtimizacaoAplicar(payload: {
         erros.push({ id, msg: e instanceof Error ? e.message : 'Erro' });
       }
     }
-    return { ok: true, data: { atualizados, erros } };
+    return { ok: true, data: { atualizados, selados, erros } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao aplicar otimização' };
   }
@@ -24960,6 +24999,8 @@ function hubRevisaoProfundaAplicar(payload: { tipo: 'skills' | 'agents'; id: str
       secoesJson: JSON.stringify(parsed.blocos || []),
       // Conteúdo mudou → caches de tradução/adaptação ficaram obsoletos.
       traducaoPt: '', descricaoPt: '', adaptacoes: '',
+      // Revisão profunda também vale como selo "Revisada" (v1.266.0).
+      revisadaIAEm: agora,
     };
     if (parsed.nome) upd.nome = parsed.nome;
     if (parsed.descricao) upd.descricao = parsed.descricao;
@@ -25504,6 +25545,8 @@ function skillsList(): ServerResult {
         estrelas: Number(s.estrelas || 0),
         estrelasMotivo: String(s.estrelasMotivo || ''),
         avaliadaEm: String(s.avaliadaEm || ''),
+        // v1.266.0 — selo "Revisada" pelo Otimizador IA do Atelier.
+        revisadaIAEm: String(s.revisadaIAEm || ''),
       }))
       // Ordena favoritas primeiro (mais recente favoritada no topo), depois resto por atualizadoEm.
       .sort((a, b) => {
@@ -25632,6 +25675,8 @@ function agentsList(): ServerResult {
         estrelas: Number(a.estrelas || 0),
         estrelasMotivo: String(a.estrelasMotivo || ''),
         avaliadaEm: String(a.avaliadaEm || ''),
+        // v1.266.0 — selo "Revisada" pelo Otimizador IA do Atelier.
+        revisadaIAEm: String(a.revisadaIAEm || ''),
       }))
       .sort((x, y) => {
         if (x.favorita !== y.favorita) return x.favorita ? -1 : 1;

@@ -36,6 +36,30 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.266.0] — 2026-07-07
+
+### Adicionado — Otimizador IA resiliente + selo "Revisada" + filtro por categorias
+
+- **Lote com falha não aborta mais a análise**: se o modelo responder em
+  formato inutilizável (mesmo após retry), aquele lote de 12 é PULADO e a
+  análise segue pro próximo. No fim, um aviso mostra quantos lotes/itens foram
+  pulados — eles não ganham selo e entram de novo na próxima rodada. Antes,
+  uma falha no meio jogava fora o progresso (caso real: 1 sugestão de 985).
+- **Selo "Revisada · IA"** (pedido do usuário): todo item analisado ganha
+  `revisadaIAEm` ao aplicar — tanto os que você aceitou mudança quanto os que
+  a IA considerou OK ("selados sem mudança"). O selo aparece como pill verde
+  no card da skill/agent, e o novo escopo padrão **"Ainda não revisadas"**
+  pula quem já tem selo: dá pra revisar a base inteira aos poucos, sem
+  re-gastar tokens. A revisão profunda também sela o item.
+  (`SCHEMA_VERSION` → `v1.266-selo-revisao-ia`; coluna nova `revisadaIAEm`
+  em Skills e Agents.)
+- **Filtro por categorias no escopo**: multi-select com as categorias da base
+  — selecione as principais e a análise roda só nelas (casa contra
+  `categoria` OU `tipoIA`).
+- Lotes de 50 foram avaliados e descartados: com modelos com raciocínio
+  (Fable 5), resposta longa = risco de truncamento, que era exatamente o bug.
+  O lote fica em 12; o selo + o pular-e-seguir tornam rodadas longas seguras.
+
 ## [1.265.2] — 2026-07-07
 
 ### Corrigido
