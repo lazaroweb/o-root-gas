@@ -36,6 +36,22 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.265.2] — 2026-07-07
+
+### Corrigido
+
+- **Otimizador IA parava com "A IA não devolveu JSON utilizável" na base
+  inteira**: modelos com raciocínio (ex. Fable 5) gastam parte do orçamento de
+  tokens "pensando" — com lotes de 25 itens e teto de 3500 tokens, a resposta
+  vinha truncada, o JSON quebrava e a análise abortava. Três defesas novas em
+  `hubOtimizarComIA`:
+  1. Lote reduzido de 25 → 12 itens e teto de saída de 3500 → 8000 tokens.
+  2. Parse tolerante a truncamento: remove cercas de código e, se o array JSON
+     veio cortado no meio, recupera os objetos completos descartando só o
+     último parcial (`_parseJsonArrayTolerante`).
+  3. Retry automático: se mesmo assim não vier JSON utilizável, tenta a mesma
+     chamada uma segunda vez antes de reportar erro.
+
 ## [1.265.1] — 2026-07-07
 
 ### Corrigido

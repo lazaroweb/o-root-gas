@@ -24703,7 +24703,33 @@ function hubTriagemAplicar(payload: {
 //   2. hubOtimizacaoAplicar → grava só o que o usuário aceitou na revisão
 //   3. hubRevisarProfundo → reescreve o CONTEÚDO de 1 item por chamada
 //                           (preview; aplicar é via skillsSave/agentsSave)
-const CHUNK_OTIMIZACAO = 25;
+// v1.265.2 — lote menor + teto de tokens maior: modelos com raciocínio (ex.
+// Fable/Claude thinking) gastam parte do budget "pensando" e com 25 itens a
+// resposta vinha truncada → JSON quebrado → análise parava com erro.
+const CHUNK_OTIMIZACAO = 12;
+
+// Parse tolerante de array JSON vindo de LLM: remove cercas de código, extrai
+// o trecho [ ... ] e, se o JSON veio TRUNCADO (estourou max_tokens), recupera
+// os objetos completos descartando só o último parcial.
+function _parseJsonArrayTolerante(resp: string): Array<Record<string, unknown>> {
+  let txt = String(resp || '').trim().replace(/```(?:json)?/gi, '');
+  const ini = txt.indexOf('[');
+  if (ini < 0) return [];
+  const fim = txt.lastIndexOf(']');
+  txt = fim > ini ? txt.slice(ini, fim + 1) : txt.slice(ini);
+  try {
+    const p = JSON.parse(txt);
+    return Array.isArray(p) ? (p as Array<Record<string, unknown>>) : [];
+  } catch { /* tenta salvamento do truncado abaixo */ }
+  const corte = txt.lastIndexOf('},');
+  if (corte > 0) {
+    try {
+      const p = JSON.parse(txt.slice(0, corte + 1) + ']');
+      return Array.isArray(p) ? (p as Array<Record<string, unknown>>) : [];
+    } catch { /* sem salvação */ }
+  }
+  return [];
+}
 
 interface SugestaoOtimizacao {
   id: string;
@@ -24762,19 +24788,18 @@ function hubOtimizarComIA(payload: {
       + 'Se o item já está bom, devolva só {"i":N}. '
       + 'Responda SOMENTE com um array JSON cobrindo TODOS os itens, sem texto extra, no formato '
       + '[{"i":0,"categoria":"...","tags":"...","descricao":"...","estrelas":4,"motivo":"..."}].';
-    const resp = forjaCallLLM(
-      [{ role: 'system', content: sys }, { role: 'user', content: JSON.stringify(itens) }],
-      3500, undefined, 'atelier',
-    );
-
-    // Parse defensivo (mesmo espírito de _parseAvaliacao).
-    let txt = String(resp || '').trim();
-    const ini = txt.indexOf('[');
-    const fim = txt.lastIndexOf(']');
-    if (ini >= 0 && fim > ini) txt = txt.slice(ini, fim + 1);
-    let arr: Array<Record<string, unknown>> = [];
-    try { const p = JSON.parse(txt); if (Array.isArray(p)) arr = p as Array<Record<string, unknown>>; }
-    catch { return { ok: false, error: 'A IA não devolveu JSON utilizável — tente de novo (ou troque o modelo do serviço Atelier).' }; }
+    const mensagens: LlmMessage[] = [{ role: 'system', content: sys }, { role: 'user', content: JSON.stringify(itens) }];
+    let resp = forjaCallLLM(mensagens, 8000, undefined, 'atelier');
+    let arr = _parseJsonArrayTolerante(resp);
+    if (arr.length === 0) {
+      // Retry único: modelos com raciocínio ocasionalmente devolvem texto em
+      // volta do JSON ou truncam — uma segunda tentativa costuma resolver.
+      resp = forjaCallLLM(mensagens, 8000, undefined, 'atelier');
+      arr = _parseJsonArrayTolerante(resp);
+    }
+    if (arr.length === 0) {
+      return { ok: false, error: 'A IA não devolveu JSON utilizável (2 tentativas) — tente de novo ou troque o modelo do serviço "Atelier" no Roteamento de IA.' };
+    }
 
     const sugestoes: SugestaoOtimizacao[] = [];
     for (const o of arr) {
