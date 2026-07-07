@@ -36,6 +36,32 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.265.0] — 2026-07-07
+
+### Adicionado
+
+- **Otimizador IA no Atelier (Skills e Agents) com modelo dedicado**: novo botão
+  "Otimizar com IA" na Curadoria dos dois hubs. A IA analisa os metadados de
+  cada item (categoria, tags, descrição, estrelas) em lotes de 25 e devolve
+  SUGESTÕES — nada é gravado sem revisão: um modal mostra cada mudança
+  (atual → sugerido, com motivo) e você aceita/rejeita item por item antes de
+  aplicar. Escopo configurável: só incompletas (default, economiza tokens) ou
+  a base inteira. Dá pra parar a análise no meio e revisar o que já foi feito.
+  - **Revisão profunda por item**: botão "Revisar (IA)" no drawer da skill/agent
+    reescreve o conteúdo completo (clareza, estrutura, especificidade,
+    preservando formato e idioma), mostra antes/depois lado a lado + resumo
+    do que mudou, e só grava se você aplicar. Aplicação cirúrgica: preserva
+    categoria, tags, estrelas e favoritos já triados.
+  - **Novo serviço roteável "Atelier"** no Roteamento de IA
+    (`LLM_MODEL_ATELIER`): configure o modelo que quiser pra essas análises
+    (ex.: Fable 5) em Configurações → IA → Roteamento, sem afetar os demais
+    serviços. O badge de modelo nos modais mostra o modelo efetivo do serviço.
+  - Novos RPCs: `hubOtimizarComIA` (análise paginada), `hubOtimizacaoAplicar`
+    (grava só o aceito), `hubRevisarProfundo` (preview da reescrita) e
+    `hubRevisaoProfundaAplicar` (aplica preservando triagem).
+  - `getModeloAtual` agora respeita o override por serviço do Roteamento de
+    IA — badges de serviços com modelo próprio mostram o modelo certo.
+
 ## [1.264.0] — 2026-07-07
 
 ### Segurança

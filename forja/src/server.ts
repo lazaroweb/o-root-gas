@@ -14408,6 +14408,7 @@ const SERVICOS_IA: ServicoIA[] = [
   { id: 'entrevista', label: 'Entrevistas & discovery', descricao: 'Análise de entrevista + roteiro de discovery.',       stack: 'proxy',  complexidade: 'media',   propKey: 'LLM_MODEL_ENTREVISTA', roteavel: true },
   { id: 'acoes',     label: 'Ações rápidas da IA', descricao: 'Resumo executivo, preço, release notes, ideias, risco, refinar prompt.', stack: 'proxy', complexidade: 'media', propKey: 'LLM_MODEL_ACOES', roteavel: true },
   { id: 'avaliacao', label: 'Avaliação de skills/agents (Lume)', descricao: 'Dá nota 0-5 de qualidade pra skills e agents em lote.', stack: 'proxy', complexidade: 'media', propKey: 'LLM_MODEL_AVALIACAO', roteavel: true },
+  { id: 'atelier', label: 'Atelier — otimização de skills/agents', descricao: 'Analisa a base e sugere ajustes de metadados + revisão profunda de conteúdo.', stack: 'proxy', complexidade: 'pesada', propKey: 'LLM_MODEL_ATELIER', roteavel: true },
   { id: 'kit',       label: 'Montagem de kits (Lume)', descricao: 'Seleciona as melhores skills+agents pra um objetivo de kit.', stack: 'proxy', complexidade: 'pesada', propKey: 'LLM_MODEL_KIT', roteavel: true },
   { id: 'financasPlano', label: 'Finanças — planos (IA)', descricao: 'Plano de redução, mapa ideal e plano por fases.',  stack: 'proxy',  complexidade: 'pesada',  propKey: 'LLM_MODEL_FIN_PLANO', roteavel: true },
   { id: 'financasLeitura', label: 'Finanças — leitura de fatura', descricao: 'Interpreta texto de fatura de cartão.',     stack: 'proxy',  complexidade: 'media',   propKey: 'LLM_MODEL_FIN_FATURA', roteavel: true },
@@ -14467,12 +14468,15 @@ function _classificarModelo(modeloId: string): { tier: ModeloTier; familia: stri
 
 // Devolve o status do modelo ATUAL configurado pra UI mostrar no badge.
 // Inclui sugestão contextual baseada no uso (chat/blueprint/diagrama/audit).
-function getModeloAtual(input?: { uso?: 'chat' | 'blueprint' | 'diagrama' | 'audit' }): ServerResult {
+function getModeloAtual(input?: { uso?: string }): ServerResult {
   try {
     const cfg = getLlmConfig();
-    if (!cfg.modelo) return { ok: true, data: { configurado: false, modelo: '', tier: 'desconhecido', familia: 'outros', rotulo: '—' } };
+    // v1.265.0 — respeita o override por serviço (Roteamento de IA): o badge
+    // de um serviço com modelo próprio (ex. 'atelier') mostra o modelo efetivo.
+    const modeloEfetivo = getModeloParaUso(input?.uso) || cfg.modelo;
+    if (!modeloEfetivo) return { ok: true, data: { configurado: false, modelo: '', tier: 'desconhecido', familia: 'outros', rotulo: '—' } };
 
-    const meta = _classificarModelo(cfg.modelo);
+    const meta = _classificarModelo(modeloEfetivo);
     const uso = input?.uso || 'chat';
 
     // Sugestão contextual: pra blueprint/diagrama (geração longa) recomendamos
@@ -14505,7 +14509,7 @@ function getModeloAtual(input?: { uso?: 'chat' | 'blueprint' | 'diagrama' | 'aud
       ok: true,
       data: {
         configurado: true,
-        modelo: cfg.modelo,
+        modelo: modeloEfetivo,
         tier: meta.tier,
         familia: meta.familia,
         rotulo: meta.rotulo,
@@ -24670,6 +24674,257 @@ function hubTriagemAplicar(payload: {
     return { ok: true, data: { atualizados, erros } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro na triagem' };
+  }
+}
+
+// ─── Otimizador IA do Atelier (v1.265.0) ────────────────────────────────────
+// Análise em massa de skills/agents com modelo dedicado (uso 'atelier', vira
+// configurável no Roteamento de IA — ex.: Fable 5). Fluxo em 3 RPCs:
+//   1. hubOtimizarComIA   → analisa UM chunk de metadados e devolve SUGESTÕES
+//                           (não grava nada; frontend pagina via offset)
+//   2. hubOtimizacaoAplicar → grava só o que o usuário aceitou na revisão
+//   3. hubRevisarProfundo → reescreve o CONTEÚDO de 1 item por chamada
+//                           (preview; aplicar é via skillsSave/agentsSave)
+const CHUNK_OTIMIZACAO = 25;
+
+interface SugestaoOtimizacao {
+  id: string;
+  nome: string;
+  atual: { categoria: string; tags: string; descricao: string; estrelas: number };
+  sugestao: { categoria?: string; tags?: string; descricao?: string; estrelas?: number; motivo: string };
+}
+
+function hubOtimizarComIA(payload: {
+  tipo: 'skills' | 'agents';
+  escopo?: 'todas' | 'pendentes';
+  offset?: number;
+}): ServerResult {
+  try {
+    const tabela = payload?.tipo === 'agents' ? 'Agents' : 'Skills';
+    const linhas = dbGetAll(tabela) as Array<Record<string, unknown>>;
+    let alvo = linhas.filter((l) => String(l.nome || '').trim() || String(l.descricao || '').trim());
+    if (payload?.escopo === 'pendentes') {
+      alvo = alvo.filter((l) =>
+        (!String(l.categoria || '').trim() && !String(l.tipoIA || '').trim())
+        || !(Number(l.estrelas || 0) > 0)
+        || !String(l.descricao || '').trim());
+    }
+    const total = alvo.length;
+    const offset = Math.max(0, Math.floor(Number(payload?.offset || 0)));
+    if (offset >= total) return { ok: true, data: { sugestoes: [], processados: 0, restantes: 0, total } };
+
+    const chunk = alvo.slice(offset, offset + CHUNK_OTIMIZACAO);
+
+    // Categorias já usadas na base — a IA deve preferir reusar em vez de inventar.
+    const cats = new Set<string>();
+    for (const l of linhas) {
+      const c = String(l.categoria || l.tipoIA || '').trim();
+      if (c) cats.add(c);
+    }
+    const listaCats = Array.from(cats).slice(0, 60).join(', ') || '(nenhuma ainda)';
+
+    const itens = chunk.map((s, i) => ({
+      i,
+      id: String(s.id || ''),
+      nome: String(s.nome || ''),
+      descricao: String(s.descricaoPt || s.descricao || s.diretrizFinal || '').slice(0, 300),
+      categoria: String(s.categoria || s.tipoIA || ''),
+      tags: String(s.tags || '').slice(0, 120),
+      estrelas: Number(s.estrelas || 0),
+    }));
+
+    const oque = tabela === 'Agents' ? 'agents de IA' : 'skills de desenvolvimento';
+    const sys = `Você é curador de uma biblioteca de ${oque}. Analise os METADADOS de cada item e sugira `
+      + 'melhorias SOMENTE onde houver ganho real: '
+      + `"categoria" (prefira reusar uma existente: ${listaCats}), `
+      + '"tags" (3-6, minúsculas, separadas por vírgula), '
+      + '"descricao" (pt-BR, 1-2 frases, específica e útil), '
+      + '"estrelas" (0-5, qualidade geral). '
+      + 'Inclua sempre "motivo" (máx 15 palavras, pt-BR) quando sugerir algo. '
+      + 'Se o item já está bom, devolva só {"i":N}. '
+      + 'Responda SOMENTE com um array JSON cobrindo TODOS os itens, sem texto extra, no formato '
+      + '[{"i":0,"categoria":"...","tags":"...","descricao":"...","estrelas":4,"motivo":"..."}].';
+    const resp = forjaCallLLM(
+      [{ role: 'system', content: sys }, { role: 'user', content: JSON.stringify(itens) }],
+      3500, undefined, 'atelier',
+    );
+
+    // Parse defensivo (mesmo espírito de _parseAvaliacao).
+    let txt = String(resp || '').trim();
+    const ini = txt.indexOf('[');
+    const fim = txt.lastIndexOf(']');
+    if (ini >= 0 && fim > ini) txt = txt.slice(ini, fim + 1);
+    let arr: Array<Record<string, unknown>> = [];
+    try { const p = JSON.parse(txt); if (Array.isArray(p)) arr = p as Array<Record<string, unknown>>; }
+    catch { return { ok: false, error: 'A IA não devolveu JSON utilizável — tente de novo (ou troque o modelo do serviço Atelier).' }; }
+
+    const sugestoes: SugestaoOtimizacao[] = [];
+    for (const o of arr) {
+      const i = Number(o.i);
+      if (Number.isNaN(i) || !itens[i]) continue;
+      const it = itens[i];
+      const sug: SugestaoOtimizacao['sugestao'] = { motivo: String(o.motivo || '').slice(0, 160) };
+      const cat = String(o.categoria || '').trim();
+      if (cat && cat !== it.categoria) sug.categoria = cat;
+      const tags = String(o.tags || '').trim();
+      if (tags && tags.toLowerCase() !== it.tags.toLowerCase()) sug.tags = tags;
+      const desc = String(o.descricao || '').trim();
+      if (desc && desc !== it.descricao) sug.descricao = desc.slice(0, 400);
+      if (o.estrelas !== undefined && o.estrelas !== null) {
+        let n = Math.round(Number(o.estrelas));
+        if (!Number.isNaN(n)) {
+          n = Math.max(0, Math.min(5, n));
+          if (n !== it.estrelas) sug.estrelas = n;
+        }
+      }
+      if (sug.categoria === undefined && sug.tags === undefined && sug.descricao === undefined && sug.estrelas === undefined) continue;
+      sugestoes.push({
+        id: it.id,
+        nome: it.nome,
+        atual: { categoria: it.categoria, tags: it.tags, descricao: it.descricao, estrelas: it.estrelas },
+        sugestao: sug,
+      });
+    }
+    const processados = chunk.length;
+    return { ok: true, data: { sugestoes, processados, restantes: Math.max(0, total - offset - processados), total } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao otimizar com IA' };
+  }
+}
+
+// Grava o que o usuário ACEITOU na revisão. Campos undefined não sobrescrevem.
+function hubOtimizacaoAplicar(payload: {
+  tipo: 'skills' | 'agents';
+  itens: Array<{ id: string; categoria?: string; tags?: string; descricao?: string; estrelas?: number; motivo?: string }>;
+}): ServerResult {
+  try {
+    const tabela = payload?.tipo === 'agents' ? 'Agents' : 'Skills';
+    const itens = Array.isArray(payload?.itens) ? payload.itens : [];
+    if (itens.length === 0) return { ok: true, data: { atualizados: 0 } };
+    if (itens.length > 300) return { ok: false, error: 'Acima de 300 itens — fatie em lotes menores.' };
+    const agora = new Date().toISOString();
+    let atualizados = 0;
+    const erros: Array<{ id: string; msg: string }> = [];
+    for (const it of itens) {
+      const id = String(it.id || '').trim();
+      if (!id) continue;
+      const upd: Record<string, unknown> = { atualizadoEm: agora };
+      if (it.categoria !== undefined && String(it.categoria).trim()) upd.categoria = String(it.categoria).trim();
+      if (it.tags !== undefined && String(it.tags).trim()) upd.tags = String(it.tags).trim();
+      if (it.descricao !== undefined && String(it.descricao).trim()) {
+        upd.descricao = String(it.descricao).trim();
+        // Descrição nova já vem em pt-BR — o cache de tradução antigo ficou obsoleto.
+        upd.descricaoPt = '';
+      }
+      if (it.estrelas !== undefined && it.estrelas !== null) {
+        let n = Math.round(Number(it.estrelas));
+        if (!Number.isNaN(n)) {
+          n = Math.max(0, Math.min(5, n));
+          upd.estrelas = n;
+          upd.estrelasMotivo = String(it.motivo || 'Otimização IA (Atelier)').slice(0, 160);
+          upd.avaliadaEm = agora;
+        }
+      }
+      if (Object.keys(upd).length === 1) continue;
+      try {
+        const r = dbUpdate(tabela, id, upd);
+        if (r) atualizados++;
+        else erros.push({ id, msg: 'Não encontrado' });
+      } catch (e: unknown) {
+        erros.push({ id, msg: e instanceof Error ? e.message : 'Erro' });
+      }
+    }
+    return { ok: true, data: { atualizados, erros } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao aplicar otimização' };
+  }
+}
+
+// Revisão profunda do CONTEÚDO de 1 skill/agent. Devolve preview (não grava);
+// aplicar é responsabilidade da UI via skillsSave/agentsSave (que já invalida
+// caches de tradução/classificação quando o conteúdo muda).
+// Usa marcadores em vez de JSON: markdown longo com escapes JSON quebra fácil.
+const _LIMITE_REVISAO_CHARS = 28000;
+
+function hubRevisarProfundo(payload: { tipo: 'skills' | 'agents'; id: string }): ServerResult {
+  try {
+    const tabela = payload?.tipo === 'agents' ? 'Agents' : 'Skills';
+    const id = String(payload?.id || '').trim();
+    if (!id) return { ok: false, error: 'Item não informado.' };
+    const linhas = dbGetAll(tabela) as Array<Record<string, unknown>>;
+    const row = linhas.find((l) => String(l.id || '') === id);
+    if (!row) return { ok: false, error: 'Item não encontrado.' };
+    const conteudo = String(row.conteudo || '');
+    if (!conteudo.trim()) return { ok: false, error: 'Este item não tem conteúdo pra revisar.' };
+    if (conteudo.length > _LIMITE_REVISAO_CHARS) {
+      return { ok: false, error: `Conteúdo muito grande (${Math.round(conteudo.length / 1024)}KB) — a revisão profunda suporta até ${Math.round(_LIMITE_REVISAO_CHARS / 1024)}KB por item.` };
+    }
+    const oque = tabela === 'Agents' ? 'um agent de IA (prompt de sistema estruturado)' : 'uma skill (playbook markdown pra agentes de IA)';
+    const sys = `Você é especialista em engenharia de prompts. Revise o markdown de ${oque} abaixo. `
+      + 'Melhore: clareza, estrutura, especificidade das instruções, remoção de redundância e ambiguidade. '
+      + 'PRESERVE: o formato (frontmatter YAML se houver, headings, blocos de código), o idioma original do texto e o propósito. '
+      + 'NÃO invente capacidades, ferramentas ou exemplos que não existem no original. '
+      + 'Responda EXATAMENTE neste formato, sem nada antes ou depois:\n'
+      + '<<<CONTEUDO>>>\n(markdown revisado completo)\n<<<FIM>>>\n<<<RESUMO>>>\n- (mudança 1, pt-BR, 1 linha)\n- (mudança 2)\n';
+    const resp = forjaCallLLM(
+      [{ role: 'system', content: sys }, { role: 'user', content: conteudo }],
+      Math.min(8000, Math.ceil(conteudo.length / 2.5) + 800), undefined, 'atelier',
+    );
+    const txt = String(resp || '');
+    const mIni = txt.indexOf('<<<CONTEUDO>>>');
+    const mFim = txt.indexOf('<<<FIM>>>');
+    if (mIni < 0 || mFim <= mIni) {
+      return { ok: false, error: 'A IA não devolveu a revisão no formato esperado — tente de novo (ou troque o modelo do serviço Atelier).' };
+    }
+    const revisado = txt.slice(mIni + '<<<CONTEUDO>>>'.length, mFim).trim();
+    if (!revisado || revisado.length < conteudo.length * 0.3) {
+      return { ok: false, error: 'A revisão veio truncada/vazia — não vou arriscar sobrescrever. Tente de novo.' };
+    }
+    const rIni = txt.indexOf('<<<RESUMO>>>');
+    const resumo = rIni > 0
+      ? txt.slice(rIni + '<<<RESUMO>>>'.length).split('\n').map((l) => l.replace(/^[-*]\s*/, '').trim()).filter(Boolean).slice(0, 12)
+      : [];
+    return {
+      ok: true,
+      data: { id, nome: String(row.nome || ''), conteudoOriginal: conteudo, conteudoRevisado: revisado, resumo },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro na revisão profunda' };
+  }
+}
+
+// Aplica a revisão profunda aceita pelo usuário. Update CIRÚRGICO: troca o
+// conteúdo + campos derivados do markdown, PRESERVANDO categoria, tags,
+// estrelas, favorita, modelo/ferramentas/metaJson (agents) — que o skillsSave/
+// agentsSave sobrescreveriam com o parse do arquivo novo.
+function hubRevisaoProfundaAplicar(payload: { tipo: 'skills' | 'agents'; id: string; conteudo: string }): ServerResult {
+  try {
+    const tabela = payload?.tipo === 'agents' ? 'Agents' : 'Skills';
+    const id = String(payload?.id || '').trim();
+    const conteudo = String(payload?.conteudo || '');
+    if (!id || !conteudo.trim()) return { ok: false, error: 'Revisão vazia — nada a aplicar.' };
+    const linhas = dbGetAll(tabela) as Array<Record<string, unknown>>;
+    const row = linhas.find((l) => String(l.id || '') === id);
+    if (!row) return { ok: false, error: 'Item não encontrado.' };
+    const parsed = _parseSkillMd(conteudo);
+    const agora = new Date().toISOString();
+    const upd: Record<string, unknown> = {
+      conteudo,
+      tamanhoBytes: conteudo.length,
+      atualizadoEm: agora,
+      quandoUsar: parsed.quandoUsar || String(row.quandoUsar || ''),
+      identidadePapel: parsed.identidadePapel || String(row.identidadePapel || ''),
+      secoesJson: JSON.stringify(parsed.blocos || []),
+      // Conteúdo mudou → caches de tradução/adaptação ficaram obsoletos.
+      traducaoPt: '', descricaoPt: '', adaptacoes: '',
+    };
+    if (parsed.nome) upd.nome = parsed.nome;
+    if (parsed.descricao) upd.descricao = parsed.descricao;
+    if (tabela === 'Agents' && parsed.diretrizFinal) upd.diretrizFinal = parsed.diretrizFinal;
+    dbUpdate(tabela, id, upd);
+    return { ok: true, data: { id, nome: String(upd.nome || row.nome || '') } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao aplicar revisão' };
   }
 }
 

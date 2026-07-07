@@ -8,13 +8,14 @@ import { Button, Empty, Input, Spin, Tag, Tooltip, Drawer, message, Skeleton, Se
 import {
   Bot, Search, Star, Copy, Download, Trash2, Sparkles, Upload as UploadIcon,
   FileText, ListChecks, BookMarked, Package, CheckCircle2, GitBranch, Workflow,
-  Network, Quote, Zap, Boxes, Heart, ArrowDownWideNarrow, Folder,
+  Network, Quote, Zap, Boxes, Heart, ArrowDownWideNarrow, Folder, Wand2,
 } from 'lucide-react';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import type { ServerResult } from '../types';
 import ImportarLoteModal from './ImportarLoteModal';
+import OtimizadorIAModal, { RevisaoProfundaModal } from './OtimizadorIAModal';
 import TriagemImportacaoModal, { type ItemTriagem } from './TriagemImportacaoModal';
 import EstrelasQualidade from './EstrelasQualidade';
 import { FiltroChip, ChipGroup, GrupoAcoes, GrupoDivisor, CommandBar } from './HubToolbar';
@@ -107,6 +108,9 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
   const [importLoteAberto, setImportLoteAberto] = useState(false);
   // v1.262.0 — triagem pós-import avulso: categoria + estrelas do recém-criado.
   const [triagemItens, setTriagemItens] = useState<ItemTriagem[]>([]);
+  // v1.265.0 — Otimizador IA (metadados em massa) + revisão profunda (conteúdo).
+  const [otimizadorAberto, setOtimizadorAberto] = useState(false);
+  const [revisaoProfundaAberta, setRevisaoProfundaAberta] = useState(false);
   // v1.152.0 — estrelas: filtro top, ordenação e avaliação Lume.
   const [soTop, setSoTop] = useState(false);
   const [ordenarPorEstrelas, setOrdenarPorEstrelas] = useState(false);
@@ -429,6 +433,15 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
                 {avaliando && avalProg ? `Avaliando ${avalProg.feitas}/${avalProg.total}…` : 'Avaliar com a Lume'}
               </Button>
             </Tooltip>
+            <Tooltip title="A IA (modelo configurável — serviço 'Atelier' no Roteamento de IA) analisa categoria, tags, descrição e estrelas de cada agent e sugere ajustes. Você revisa tudo antes de aplicar.">
+              <Button
+                icon={<Wand2 size={14} />}
+                onClick={() => setOtimizadorAberto(true)}
+                style={{ borderColor: `${t.accents.lavender}66`, color: t.accents.lavender, background: `${t.accents.lavender}0d` }}
+              >
+                Otimizar com IA
+              </Button>
+            </Tooltip>
           </GrupoAcoes>
         )}
 
@@ -487,6 +500,29 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
         categoriasExistentes={categoriasExistentes}
         onAplicado={() => { void carregar(); }}
       />
+
+      {/* v1.265.0 — Otimização IA em massa (metadados; sugestão → revisão → aplicar). */}
+      <OtimizadorIAModal
+        aberto={otimizadorAberto}
+        onClose={() => setOtimizadorAberto(false)}
+        tipo="agents"
+        onAplicado={() => { void carregar(); }}
+      />
+
+      {/* v1.265.0 — Revisão profunda do conteúdo do agent aberto no drawer. */}
+      {aberto && (
+        <RevisaoProfundaModal
+          aberto={revisaoProfundaAberta}
+          onClose={() => setRevisaoProfundaAberta(false)}
+          tipo="agents"
+          id={aberto.id}
+          nome={aberto.nome}
+          onAplicado={(novoConteudo) => {
+            setAberto((prev) => prev ? { ...prev, conteudo: novoConteudo } : prev);
+            void carregar();
+          }}
+        />
+      )}
 
       {/* Lista */}
       {loading && agents.length === 0 ? (
@@ -604,6 +640,15 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
                 document.body.appendChild(a); a.click(); a.remove();
                 setTimeout(() => URL.revokeObjectURL(url), 1000);
               }} />
+            </Tooltip>
+            <Tooltip title="A IA reescreve o conteúdo completo (clareza, estrutura, especificidade) e mostra o antes/depois — você decide se aplica.">
+              <Button
+                icon={<Wand2 size={14} />}
+                onClick={() => setRevisaoProfundaAberta(true)}
+                style={{ borderColor: `${t.accents.lavender}66`, color: t.accents.lavender }}
+              >
+                Revisar (IA)
+              </Button>
             </Tooltip>
             <Tooltip title="Remover">
               <Button danger icon={<Trash2 size={14} />} onClick={() => apagar(aberto.id)} />

@@ -18,6 +18,7 @@ import type { ServerResult } from '../types';
 import { GAS_APP_KIT_SKILLS } from '../data/gasAppKitSkills';
 import ComoUsarSkill from './ComoUsarSkill';
 import ImportarLoteModal from './ImportarLoteModal';
+import OtimizadorIAModal, { RevisaoProfundaModal } from './OtimizadorIAModal';
 import TriagemImportacaoModal, { type ItemTriagem } from './TriagemImportacaoModal';
 import EstrelasQualidade from './EstrelasQualidade';
 import { FiltroChip, ChipGroup, GrupoAcoes, GrupoDivisor, CommandBar } from './HubToolbar';
@@ -278,6 +279,9 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
   const [importLoteAberto, setImportLoteAberto] = useState(false);
   // v1.262.0 — triagem pós-import avulso: categoria + estrelas do recém-criado.
   const [triagemItens, setTriagemItens] = useState<ItemTriagem[]>([]);
+  // v1.265.0 — Otimizador IA (metadados em massa) + revisão profunda (conteúdo).
+  const [otimizadorAberto, setOtimizadorAberto] = useState(false);
+  const [revisaoProfundaAberta, setRevisaoProfundaAberta] = useState(false);
   const [openSources, setOpenSources] = useState<string[]>([]);
   // Categorias abertas por pasta: { [chaveDaPasta]: string[] }. Tudo recolhido
   // por padrão; o usuário expande só o tema que quer ver.
@@ -1060,6 +1064,15 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                             Traduzir descrições
                           </Button>
                         </Tooltip>
+                        <Tooltip title="A IA (modelo configurável — serviço 'Atelier' no Roteamento de IA) analisa categoria, tags, descrição e estrelas de cada skill e sugere ajustes. Você revisa tudo antes de aplicar.">
+                          <Button
+                            icon={<Wand2 size={14} />}
+                            onClick={() => setOtimizadorAberto(true)}
+                            style={{ borderColor: `${t.accents.lavender}66`, color: t.accents.lavender, background: `${t.accents.lavender}0d` }}
+                          >
+                            Otimizar com IA
+                          </Button>
+                        </Tooltip>
                       </GrupoAcoes>
                     )}
 
@@ -1510,6 +1523,30 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
         onAplicado={() => { void carregar(); }}
       />
 
+      {/* v1.265.0 — Otimização IA em massa (metadados; sugestão → revisão → aplicar). */}
+      <OtimizadorIAModal
+        aberto={otimizadorAberto}
+        onClose={() => setOtimizadorAberto(false)}
+        tipo="skills"
+        onAplicado={() => { void carregar(); }}
+      />
+
+      {/* v1.265.0 — Revisão profunda do conteúdo da skill aberta no drawer. */}
+      {aberta && (
+        <RevisaoProfundaModal
+          aberto={revisaoProfundaAberta}
+          onClose={() => setRevisaoProfundaAberta(false)}
+          tipo="skills"
+          id={aberta.id}
+          nome={aberta.nome}
+          onAplicado={(novoConteudo) => {
+            setAberta((prev) => prev ? { ...prev, conteudo: novoConteudo } : prev);
+            setTraduzido(null);
+            void carregar();
+          }}
+        />
+      )}
+
       {/* Drawer: detalhe de uma skill */}
       <Drawer
         open={!!aberta || carregandoAberta}
@@ -1582,6 +1619,15 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                   <Button icon={<FolderInput size={14} />} loading={movendo}>Mover</Button>
                 </Tooltip>
               </Dropdown>
+              <Tooltip title="A IA reescreve o conteúdo completo (clareza, estrutura, especificidade) e mostra o antes/depois — você decide se aplica.">
+                <Button
+                  icon={<Wand2 size={14} />}
+                  onClick={() => setRevisaoProfundaAberta(true)}
+                  style={{ borderColor: `${t.accents.lavender}66`, color: t.accents.lavender }}
+                >
+                  Revisar (IA)
+                </Button>
+              </Tooltip>
               <Button icon={<Sparkles size={14} />} onClick={() => editarSkill(aberta)}>Editar</Button>
               <Popconfirm
                 title="Remover essa skill?"

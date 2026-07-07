@@ -28,8 +28,10 @@ export interface ModeloBadgeProps {
   // Quando passa stampedModelo, mostra esse — útil pra histórico de artefatos
   // gerados em sessões anteriores (pode ser diferente do modelo atual).
   stampedModelo?: string;
-  // Contexto de uso pra que a sugestão seja relevante (chat=tudo, blueprint=longo, etc)
-  uso?: 'chat' | 'blueprint' | 'diagrama' | 'audit';
+  // Contexto de uso pra que a sugestão seja relevante (chat=tudo, blueprint=longo, etc).
+  // Aceita também qualquer id de serviço do Roteamento de IA (ex. 'atelier') —
+  // o badge mostra o modelo EFETIVO daquele serviço (override ou global).
+  uso?: 'chat' | 'blueprint' | 'diagrama' | 'audit' | 'atelier';
   size?: 'small' | 'medium';
   // Quando true, omite o label "Modelo:" pra economizar espaço (chip puro).
   inline?: boolean;
