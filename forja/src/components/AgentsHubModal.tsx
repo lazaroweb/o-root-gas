@@ -300,11 +300,16 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
       try {
         const r = await callServer<ServerResult>('agentsSave', { conteudo, fonte: file.name });
         if (r.ok) {
-          message.success('Agent importado');
+          const d = r.data as { id?: string; nome?: string; descricao?: string; categoria?: string; jaExistia?: boolean; duplicatasRemovidas?: number } | undefined;
+          if (d?.jaExistia) {
+            message.success(`Esse agent já existia — atualizado sem duplicar${d.duplicatasRemovidas ? ` (${d.duplicatasRemovidas} cópia duplicada removida)` : ''}.`);
+          } else message.success('Agent importado');
           // Triagem do recém-importado: categoria + estrelas na hora, pra não
-          // sumir no meio dos agents já classificados.
-          const d = r.data as { id?: string; nome?: string; descricao?: string; categoria?: string } | undefined;
-          if (d?.id) setTriagemItens([{ id: d.id, nome: d.nome || '', descricao: d.descricao, categoria: d.categoria }]);
+          // sumir no meio dos agents já classificados. No upsert, só reabre
+          // se o existente ainda estiver sem categoria.
+          if (d?.id && (!d.jaExistia || !(d.categoria || '').trim())) {
+            setTriagemItens([{ id: d.id, nome: d.nome || '', descricao: d.descricao, categoria: d.categoria }]);
+          }
           void carregar();
         } else message.error(r.error || 'Falha ao importar');
       } catch (err) {

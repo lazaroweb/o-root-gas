@@ -36,6 +36,18 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.263.0] — 2026-07-07
+
+### Corrigido
+
+- **Import avulso duplicava skill/agent reimportado**: o caminho avulso
+  (`skillsSave`/`agentsSave` sem id) sempre criava linha nova — reimportar o
+  mesmo arquivo gerava cópia (caso real: 2 "sem categoria" que eram a mesma
+  skill). Agora o avulso também faz **upsert por slug** (como o lote já
+  fazia): atualiza a existente, preserva categoria/tags/estrelas já triadas
+  quando o arquivo não traz, e **colapsa cópias duplicadas antigas** mantendo
+  a mais triada. A triagem só reabre se a skill continuar sem categoria.
+
 ## [1.262.0] — 2026-07-07
 
 ### Adicionado

@@ -533,12 +533,16 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
         tagsOverride,
       });
       if (r.ok) {
-        message.success(editandoId ? 'Skill atualizada.' : 'Skill salva.');
-        // Import novo (não edição): abre a triagem pra categoria + estrelas —
-        // sem isso a skill some no meio das centenas já classificadas.
-        if (!editandoId && r.data) {
-          const d = r.data as { id: string; nome: string; descricao?: string; categoria?: string };
-          if (d.id) setTriagemItens([{ id: d.id, nome: d.nome, descricao: d.descricao, categoria: d.categoria }]);
+        const d = r.data as { id: string; nome: string; descricao?: string; categoria?: string; jaExistia?: boolean; duplicatasRemovidas?: number } | undefined;
+        if (editandoId) message.success('Skill atualizada.');
+        else if (d?.jaExistia) {
+          message.success(`Essa skill já existia — atualizada sem duplicar${d.duplicatasRemovidas ? ` (${d.duplicatasRemovidas} cópia duplicada removida)` : ''}.`);
+        } else message.success('Skill salva.');
+        // Import (não edição): abre a triagem pra categoria + estrelas — sem
+        // isso a skill some no meio das centenas já classificadas. No upsert,
+        // só reabre se a existente ainda estiver sem categoria.
+        if (!editandoId && d?.id && (!d.jaExistia || !(d.categoria || '').trim())) {
+          setTriagemItens([{ id: d.id, nome: d.nome, descricao: d.descricao, categoria: d.categoria }]);
         }
         resetForm();
         setTab('lista');

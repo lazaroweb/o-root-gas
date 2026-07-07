@@ -23853,6 +23853,50 @@ function _parseSkillMd(conteudo: string): SkillParsed {
 
 // Cria/atualiza uma skill a partir do conteúdo Markdown + nome de origem.
 // Se id for fornecido, atualiza; senão cria nova.
+// v1.263.0 — Upsert por slug pro caminho AVULSO de Skills/Agents (o lote já
+// tinha essa proteção; o avulso criava duplicata a cada reimport do mesmo
+// arquivo). Se encontra o slug: atualiza a MELHOR cópia (a mais triada —
+// estrelas/categoria — e, em empate, a mais recente), APAGA as demais cópias
+// duplicadas e preserva categoria/tags já triadas quando o arquivo não traz.
+// Retorna null quando o slug não existe (o chamador cria normalmente).
+function _upsertAvulsoPorSlug(
+  tabela: 'Skills' | 'Agents',
+  slug: string,
+  conteudo: string,
+  row: Record<string, unknown>,
+): { id: string; categoria: string; tags: string; jaExistia: true; duplicatasRemovidas: number } | null {
+  const sl = String(slug || '').trim();
+  if (!sl) return null;
+  const copias = (dbGetAll(tabela) as Array<Record<string, unknown>>)
+    .filter((l) => String(l.slug || '').trim() === sl);
+  if (copias.length === 0) return null;
+
+  const triagemScore = (l: Record<string, unknown>): number =>
+    (Number(l.estrelas || 0) > 0 ? 2 : 0) + (String(l.categoria || '').trim() ? 1 : 0);
+  const melhor = [...copias].sort((a, b) =>
+    triagemScore(b) - triagemScore(a)
+    || String(b.atualizadoEm || '').localeCompare(String(a.atualizadoEm || '')))[0];
+
+  let duplicatasRemovidas = 0;
+  for (const c of copias) {
+    if (String(c.id) === String(melhor.id)) continue;
+    try { dbDelete(tabela, String(c.id)); duplicatasRemovidas++; } catch { /* segue */ }
+  }
+
+  const conteudoMudou = String(melhor.conteudo || '') !== conteudo;
+  const categoria = String(row.categoria || '').trim() || String(melhor.categoria || '');
+  const tags = String(row.tags || '').trim() || String(melhor.tags || '');
+  dbUpdate(tabela, String(melhor.id), {
+    ...row,
+    categoria,
+    tags,
+    conteudo,
+    fonte: String(row.fonte || '') || String(melhor.fonte || ''),
+    ...(conteudoMudou ? { traducaoPt: '', descricaoPt: '', adaptacoes: '' } : {}),
+  });
+  return { id: String(melhor.id), categoria, tags, jaExistia: true, duplicatasRemovidas };
+}
+
 function skillsSave(payload: {
   id?: string;
   conteudo: string;
@@ -23902,6 +23946,20 @@ function skillsSave(payload: {
       });
       return { ok: true, data: { id: payload.id, nome, descricao, categoria, tags, ...extra } };
     }
+
+    // v1.263.0 — UPSERT por slug também no caminho avulso (o lote já fazia):
+    // reimportar o mesmo arquivo ATUALIZA a skill existente em vez de duplicar.
+    // Categoria/tags já triadas são preservadas quando o arquivo não traz.
+    // Se já houver CÓPIAS duplicadas do mesmo slug (importadas antes desta
+    // regra), mantém a mais triada (estrelas/categoria) e apaga as demais.
+    const upsert = _upsertAvulsoPorSlug('Skills', extra.slug, payload.conteudo, {
+      nome, descricao, categoria, tags,
+      fonte: payload.fonte || '',
+      tamanhoBytes: tamanho,
+      atualizadoEm: agora,
+      ...extra,
+    });
+    if (upsert) return { ok: true, data: { ...extra, nome, descricao, ...upsert } };
 
     const novo = dbCreate('Skills', {
       nome,
@@ -25395,6 +25453,18 @@ function agentsSave(payload: {
       });
       return { ok: true, data: { id: payload.id, nome, descricao, categoria, tags, ...extra } };
     }
+
+    // v1.263.0 — UPSERT por slug também no caminho avulso (o lote já fazia):
+    // reimportar o mesmo arquivo ATUALIZA o agent existente em vez de duplicar,
+    // e colapsa cópias duplicadas antigas mantendo a mais triada.
+    const upsert = _upsertAvulsoPorSlug('Agents', extra.slug, payload.conteudo, {
+      nome, descricao, categoria, tags,
+      fonte: payload.fonte || '',
+      tamanhoBytes: tamanho,
+      atualizadoEm: agora,
+      ...extra,
+    });
+    if (upsert) return { ok: true, data: { ...extra, nome, descricao, ...upsert } };
 
     const novo = dbCreate('Agents', {
       nome, descricao, categoria, tags,
