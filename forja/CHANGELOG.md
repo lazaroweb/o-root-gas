@@ -36,6 +36,18 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.264.0] — 2026-07-07
+
+### Segurança
+
+- **SEC-4: guard `admin` nas RPCs que gravam segredos/credenciais**: `saveSettings`,
+  `saveSecret`, `driveOAuthSetCredenciais` e `estudoYoutubeSetCred` agora exigem
+  papel `admin` via `_exigirPapel('admin')` antes de escrever em Script Properties.
+  Antes, qualquer usuário autenticado no app (mesmo `leitor`) podia sobrescrever
+  chave de API do LLM/Gemini, token do GitHub e credenciais OAuth chamando essas
+  funções direto por `google.script.run`. Usuário sem permissão recebe
+  `PERMISSAO_NEGADA` (mesmo padrão dos demais guards do RBAC).
+
 ## [1.263.0] — 2026-07-07
 
 ### Corrigido

@@ -4334,6 +4334,7 @@ function getProjecaoCaixa(meses?: number, saldoInicial?: number): ServerResult {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function saveSecret(chave: string, valor: string): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
   try {
     if (!chave) return { ok: false, error: 'Chave inválida' };
     const props = PropertiesService.getScriptProperties();
@@ -4381,6 +4382,7 @@ function getSettings(): ServerResult {
 }
 
 function saveSettings(settings: Record<string, unknown>): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
   try {
     const props = PropertiesService.getScriptProperties();
     const set = (k: string, v: unknown) => {
@@ -23331,6 +23333,7 @@ function driveOAuthGetCredenciaisStatus(): ServerResult {
 }
 
 function driveOAuthSetCredenciais(payload: { provedor: string; clientId: string; clientSecret: string }): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
   try {
     const provedor = String(payload.provedor || '').trim();
     if (!_OAUTH_PROVIDERS[provedor]) throw new Error('Provedor sem OAuth suportado: ' + provedor);
@@ -27083,6 +27086,7 @@ function estudoYoutubeStatus(): ServerResult {
 
 // Salva as credenciais OAuth do provedor 'google-youtube' (reusa a infra do Driver).
 function estudoYoutubeSetCred(payload: { clientId: string; clientSecret: string }): ServerResult {
+  const guard = _exigirPapel('admin'); if (guard) return guard;
   return driveOAuthSetCredenciais({ provedor: 'google-youtube', clientId: payload.clientId, clientSecret: payload.clientSecret });
 }
 
