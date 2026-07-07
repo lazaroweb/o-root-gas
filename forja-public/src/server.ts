@@ -2,9 +2,11 @@
 // FORJA — Formulário público de Discovery (projeto Apps Script SEPARADO)
 //
 // Segurança (OWASP 2025):
-//  • Superfície mínima: este projeto expõe SÓ doGet + 2 funções (ler form por
-//    token; gravar resposta). Nenhuma função administrativa da Forja existe aqui,
-//    então não há o que vazar via google.script.run (A01 por construção).
+//  • Superfície mínima: este projeto expõe SÓ doGet + getFormPublico +
+//    submitRespostaPublica + autorizar. TODO helper interno tem SUFIXO `_`, que
+//    no GAS o torna PRIVADO (não-chamável via google.script.run). ATENÇÃO: o
+//    prefixo `_` NÃO protege — só o sufixo. Sem isso, um anônimo chamaria
+//    _readRows/_append e leria/gravaria qualquer aba da planilha (A01).
 //  • executeAs = dono (USER_DEPLOYING): grava na MESMA planilha (FORJA_SHEET_ID),
 //    sem o visitante precisar autenticar.
 //  • Toda entrada é tratada como hostil: validada, truncada e sanitizada (A05).
@@ -40,7 +42,7 @@ interface ServerOk { ok: boolean; error?: string; [k: string]: unknown; }
 
 // ─── Planilha compartilhada ───────────────────────────────────────────────────
 
-function _ss(): GoogleAppsScript.Spreadsheet.Spreadsheet {
+function ss_(): GoogleAppsScript.Spreadsheet.Spreadsheet {
   var props = PropertiesService.getScriptProperties();
   var id = '';
   try { id = String(props.getProperty('FORJA_SHEET_ID') || '').trim(); } catch (e) { id = ''; }
@@ -58,25 +60,25 @@ function _ss(): GoogleAppsScript.Spreadsheet.Spreadsheet {
 
 // Rode 1x no editor (botão Executar) para autorizar os escopos do projeto.
 function autorizar(): string {
-  try { _ss(); } catch (e) { /* o consentimento já terá sido solicitado */ }
+  try { ss_(); } catch (e) { /* o consentimento já terá sido solicitado */ }
   return 'ok';
 }
 
-function _readRows(sheetName: string, cols: string[]): Record<string, unknown>[] {
-  var sheet = _ss().getSheetByName(sheetName);
+function readRows_(sheetName: string, cols: string[]): Record<string, unknown>[] {
+  var sheet = ss_().getSheetByName(sheetName);
   if (!sheet) return [];
   var lastRow = sheet.getLastRow();
   if (lastRow <= 1) return [];
   var values = sheet.getRange(2, 1, lastRow - 1, cols.length).getValues();
   return values.map(function (row) {
     var obj: Record<string, unknown> = {};
-    cols.forEach(function (c, i) { obj[c] = row[i]; });
+    cols.forEach(function (c, i) {     obj[c] = row[i]; });
     return obj;
   });
 }
 
-function _append(sheetName: string, cols: string[], data: Record<string, unknown>): void {
-  var sheet = _ss().getSheetByName(sheetName);
+function append_(sheetName: string, cols: string[], data: Record<string, unknown>): void {
+  var sheet = ss_().getSheetByName(sheetName);
   if (!sheet) throw new Error('Planilha sem a aba ' + sheetName + '. Abra a Forja uma vez para criá-la.');
   var id = Utilities.getUuid();
   var row = cols.map(function (c) {
@@ -86,10 +88,10 @@ function _append(sheetName: string, cols: string[], data: Record<string, unknown
   sheet.appendRow(row);
 }
 
-function _setEmailPessoaSeVazio(pessoaId: string, email: string): void {
+function setEmailPessoaSeVazio_(pessoaId: string, email: string): void {
   if (!pessoaId || !email) return;
   try {
-    var sheet = _ss().getSheetByName('Pessoas');
+    var sheet = ss_().getSheetByName('Pessoas');
     if (!sheet) return;
     var lastRow = sheet.getLastRow();
     if (lastRow <= 1) return;
@@ -109,14 +111,14 @@ function _setEmailPessoaSeVazio(pessoaId: string, email: string): void {
 
 // ─── Sanitização / validação ──────────────────────────────────────────────────
 
-function _str(v: unknown, max: number): string {
+function str_(v: unknown, max: number): string {
   var s = (v === undefined || v === null) ? '' : String(v);
   s = s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim();
   if (s.length > max) s = s.slice(0, max);
   return s;
 }
 
-function _emailValido(e: string): boolean {
+function emailValido_(e: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && e.length <= MAX_EMAIL;
 }
 
@@ -124,24 +126,24 @@ function _emailValido(e: string): boolean {
 // no topo do Server.js pelo esbuild.mjs.
 declare function sanitizeTokenCore(t: unknown): string;
 
-function _sanitizeToken(t: unknown): string {
+function sanitizeToken_(t: unknown): string {
   return sanitizeTokenCore(t);
 }
 
 // Aceita perguntas como string (formato Leva 1) ou objeto estruturado.
-function _normalizeBlocos(raw: unknown): Array<{ tema: string; perguntas: Array<{ id: string; texto: string; tipo: string; opcoes?: string[]; obrigatorio?: boolean; ajuda?: string }> }> {
+function normalizeBlocos_(raw: unknown): Array<{ tema: string; perguntas: Array<{ id: string; texto: string; tipo: string; opcoes?: string[]; obrigatorio?: boolean; ajuda?: string }> }> {
   var blocos: unknown[] = [];
   try { var v = JSON.parse(String(raw || '[]')); if (Array.isArray(v)) blocos = v; } catch (e) { blocos = []; }
   return blocos.map(function (b: any, bi: number) {
     var perguntas = Array.isArray(b && b.perguntas) ? b.perguntas : [];
     return {
-      tema: _str(b && b.tema, 160) || ('Bloco ' + (bi + 1)),
+      tema: str_(b && b.tema, 160) || ('Bloco ' + (bi + 1)),
       perguntas: perguntas.map(function (p: any, pi: number) {
         if (typeof p === 'string') {
-          return { id: 'b' + bi + 'q' + pi, texto: _str(p, 400), tipo: 'texto' };
+          return { id: 'b' + bi + 'q' + pi, texto: str_(p, 400), tipo: 'texto' };
         }
         var tipo = String((p && p.tipo) || 'texto');
-        var opcoes = Array.isArray(p && p.opcoes) ? p.opcoes.map(function (o: unknown) { return _str(o, 80); }).filter(Boolean).slice(0, 8) : undefined;
+        var opcoes = Array.isArray(p && p.opcoes) ? p.opcoes.map(function (o: unknown) { return str_(o, 80); }).filter(Boolean).slice(0, 8) : undefined;
         // Auto-injeta "Outro" como última opção em listas não-exaustivas (unica/multipla)
         // — assim roteiros antigos também ganham o campo aberto sem precisar republicar.
         if ((tipo === 'unica' || tipo === 'multipla') && opcoes && opcoes.length >= 2) {
@@ -149,12 +151,12 @@ function _normalizeBlocos(raw: unknown): Array<{ tema: string; perguntas: Array<
           if (!temOutro) opcoes = opcoes.concat(['Outro']);
         }
         return {
-          id: _str((p && p.id) || ('b' + bi + 'q' + pi), 40),
-          texto: _str(p && p.texto, 400),
+          id: str_((p && p.id) || ('b' + bi + 'q' + pi), 40),
+          texto: str_(p && p.texto, 400),
           tipo: tipo,
           opcoes: opcoes,
           obrigatorio: !!(p && p.obrigatorio),
-          ajuda: _str(p && p.ajuda, 200) || undefined,
+          ajuda: str_(p && p.ajuda, 200) || undefined,
         };
       }).filter(function (p: { texto: string }) { return !!p.texto; }),
     };
@@ -171,7 +173,7 @@ declare function scoreOportunidadeCore(input: {
   querAmostra?: boolean; agendaPref?: string; nome?: string; email?: string; totalPerguntas?: number;
 }): { score: number; breakdown: Record<string, number> };
 
-function _scoreOportunidade(input: {
+function scoreOportunidade_(input: {
   respostas: Record<string, unknown>; ferramentas: string[];
   querAmostra: boolean; agendaPref: string; nome: string; email: string; totalPerguntas: number;
 }): { score: number; breakdown: Record<string, number> } {
@@ -180,8 +182,8 @@ function _scoreOportunidade(input: {
 
 // ─── Endpoints públicos ────────────────────────────────────────────────────────
 
-function _formPorToken(token: string): Record<string, unknown> | null {
-  var rows = _readRows('DiscoveryForms', COLS_FORMS);
+function formPorToken_(token: string): Record<string, unknown> | null {
+  var rows = readRows_('DiscoveryForms', COLS_FORMS);
   for (var i = 0; i < rows.length; i++) {
     if (String(rows[i]['token']) === token) return rows[i];
   }
@@ -190,23 +192,23 @@ function _formPorToken(token: string): Record<string, unknown> | null {
 
 function getFormPublico(token: unknown): ServerOk {
   try {
-    var t = _sanitizeToken(token);
+    var t = sanitizeToken_(token);
     if (!t) return { ok: false, error: 'Formulário não encontrado.' };
-    var form = _formPorToken(t);
+    var form = formPorToken_(t);
     if (!form || String(form['status']) !== 'publicado') {
       return { ok: false, error: 'Este formulário não está disponível.' };
     }
-    var blocos = _normalizeBlocos(form['perguntasJson']);
+    var blocos = normalizeBlocos_(form['perguntasJson']);
     var empresa = '';
     var primeiroNome = '';
     try {
       var pessoaId = String(form['pessoaId'] || '');
       if (pessoaId) {
-        var ps = _readRows('Pessoas', COLS_PESSOAS);
+        var ps = readRows_('Pessoas', COLS_PESSOAS);
         for (var i = 0; i < ps.length; i++) {
           if (String(ps[i]['id']) === pessoaId) {
-            empresa = _str(ps[i]['empresa'], 120) || _str(ps[i]['nome'], 120);
-            var nomeContato = _str(ps[i]['nomeContato'], 120);
+            empresa = str_(ps[i]['empresa'], 120) || str_(ps[i]['nome'], 120);
+            var nomeContato = str_(ps[i]['nomeContato'], 120);
             if (nomeContato) primeiroNome = nomeContato.split(/\s+/)[0];
             break;
           }
@@ -233,7 +235,7 @@ declare function throttleOkCore(
   token: string, janelaSeg: number, log?: (msg: string) => void,
 ): boolean;
 
-function _throttleOk(token: string): boolean {
+function throttleOk_(token: string): boolean {
   return throttleOkCore(
     function () { return CacheService.getScriptCache(); },
     token, THROTTLE_SEG,
@@ -244,54 +246,54 @@ function _throttleOk(token: string): boolean {
 function submitRespostaPublica(payload: unknown): ServerOk {
   try {
     var p = (payload || {}) as Record<string, unknown>;
-    var token = _sanitizeToken(p['token']);
+    var token = sanitizeToken_(p['token']);
     if (!token) return { ok: false, error: 'Link inválido.' };
-    if (!_throttleOk(token)) return { ok: false, error: 'Aguarde um instante e tente novamente.' };
+    if (!throttleOk_(token)) return { ok: false, error: 'Aguarde um instante e tente novamente.' };
 
-    var form = _formPorToken(token);
+    var form = formPorToken_(token);
     if (!form || String(form['status']) !== 'publicado') return { ok: false, error: 'Este formulário não está disponível.' };
     var formId = String(form['id'] || '');
     var formPessoaId = String(form['pessoaId'] || '');
     var formPerguntas = form['perguntasJson'];
 
-    var nome = _str(p['nome'], MAX_NOME);
-    var email = _str(p['email'], MAX_EMAIL).toLowerCase();
+    var nome = str_(p['nome'], MAX_NOME);
+    var email = str_(p['email'], MAX_EMAIL).toLowerCase();
     if (!nome) return { ok: false, error: 'Conte pra gente seu nome.' };
-    if (!_emailValido(email)) return { ok: false, error: 'Confira seu e-mail.' };
+    if (!emailValido_(email)) return { ok: false, error: 'Confira seu e-mail.' };
 
     // Sanitiza respostas: cap de chaves, cap de tamanho por valor.
     var respIn = (p['respostas'] && typeof p['respostas'] === 'object') ? p['respostas'] as Record<string, unknown> : {};
     var respostas: Record<string, unknown> = {};
     var keys = Object.keys(respIn).slice(0, MAX_RESPOSTAS);
     keys.forEach(function (k) {
-      var key = _str(k, 60);
+      var key = str_(k, 60);
       var v = respIn[k];
       if (Array.isArray(v)) {
-        respostas[key] = v.slice(0, 12).map(function (x) { return _str(x, MAX_RESP_LEN); }).filter(Boolean);
+        respostas[key] = v.slice(0, 12).map(function (x) { return str_(x, MAX_RESP_LEN); }).filter(Boolean);
       } else if (typeof v === 'number' || typeof v === 'boolean') {
         respostas[key] = v;
       } else {
-        respostas[key] = _str(v, MAX_RESP_LEN);
+        respostas[key] = str_(v, MAX_RESP_LEN);
       }
     });
 
     var ferrIn = Array.isArray(p['ferramentas']) ? p['ferramentas'] as unknown[] : [];
-    var ferramentas = ferrIn.slice(0, MAX_FERRAMENTAS).map(function (x) { return _str(x, MAX_FERR_LEN); }).filter(Boolean);
+    var ferramentas = ferrIn.slice(0, MAX_FERRAMENTAS).map(function (x) { return str_(x, MAX_FERR_LEN); }).filter(Boolean);
 
     var querAmostra = p['querAmostra'] === true || String(p['querAmostra']) === 'true';
-    var agendaPref = _str(p['agendaPref'], MAX_AGENDA);
+    var agendaPref = str_(p['agendaPref'], MAX_AGENDA);
 
     // Teto de respostas por formulário (anti-spam).
-    var existentes = _readRows('DiscoveryRespostas', COLS_RESP).filter(function (r) { return String(r['formId']) === formId; });
+    var existentes = readRows_('DiscoveryRespostas', COLS_RESP).filter(function (r) { return String(r['formId']) === formId; });
     if (existentes.length >= MAX_RESP_POR_FORM) return { ok: false, error: 'Recebemos respostas demais para este link. Fale com quem te enviou.' };
 
-    var totalPerguntas = _normalizeBlocos(formPerguntas).reduce(function (s, b) { return s + b.perguntas.length; }, 0);
-    var sc = _scoreOportunidade({
+    var totalPerguntas = normalizeBlocos_(formPerguntas).reduce(function (s, b) { return s + b.perguntas.length; }, 0);
+    var sc = scoreOportunidade_({
       respostas: respostas, ferramentas: ferramentas, querAmostra: querAmostra,
       agendaPref: agendaPref, nome: nome, email: email, totalPerguntas: totalPerguntas,
     });
 
-    _append('DiscoveryRespostas', COLS_RESP, {
+    append_('DiscoveryRespostas', COLS_RESP, {
       formId: formId,
       pessoaId: formPessoaId,
       emailRespondente: email,
@@ -305,7 +307,7 @@ function submitRespostaPublica(payload: unknown): ServerOk {
       criadoEm: new Date().toISOString(),
     });
 
-    _setEmailPessoaSeVazio(formPessoaId, email);
+    setEmailPessoaSeVazio_(formPessoaId, email);
 
     return { ok: true, mensagem: 'Recebido! Obrigado, ' + nome.split(' ')[0] + '.' };
   } catch (e) {
@@ -317,7 +319,7 @@ function submitRespostaPublica(payload: unknown): ServerOk {
 
 function doGet(e: GoogleAppsScript.Events.DoGet): GoogleAppsScript.HTML.HtmlOutput {
   var token = '';
-  try { token = (e && e.parameter && e.parameter.f) ? _sanitizeToken(e.parameter.f) : ''; } catch (x) { token = ''; }
+  try { token = (e && e.parameter && e.parameter.f) ? sanitizeToken_(e.parameter.f) : ''; } catch (x) { token = ''; }
   var content = HtmlService.createHtmlOutputFromFile('FormApp').getContent();
   content = content.replace('%%FORM_TOKEN%%', token);
   return HtmlService.createHtmlOutput(content)
