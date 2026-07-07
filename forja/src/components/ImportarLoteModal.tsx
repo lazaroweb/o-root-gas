@@ -10,6 +10,7 @@ import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import type { ServerResult } from '../types';
+import TriagemImportacaoModal, { type ItemTriagem } from './TriagemImportacaoModal';
 
 interface ItemLote {
   markdown: string;
@@ -29,6 +30,8 @@ interface RelatorioLote {
   // v1.151.3 — descartados pela trava de segurança (incompletos, duplicados
   // no lote, downgrade evitado). Não são erros — é a proteção funcionando.
   ignorados?: Array<{ slug: string; msg: string }>;
+  // v1.262.0 — resumo dos RECÉM-CRIADOS (alimenta a triagem pós-importação).
+  novos?: ItemTriagem[];
 }
 
 // v1.151.1 — Cada arquivo selecionado vira um "Lote" com estado próprio.
@@ -108,9 +111,11 @@ interface Props {
   tipo: 'skills' | 'agents';
   rpcBulkSave: 'skillsBulkSave' | 'agentsBulkSave';
   onConcluido: () => void;
+  // v1.262.0 — categorias já usadas na base (sugestões da triagem pós-import).
+  categoriasExistentes?: string[];
 }
 
-export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, onConcluido }: Props): React.ReactElement {
+export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, onConcluido, categoriasExistentes }: Props): React.ReactElement {
   const t = useTokens();
   // v1.151.2 — ref no <input file>. AntD <Button> é um <button> real e, dentro
   // de <label>, ele captura o clique e NÃO dispara o input. Disparamos via ref.
@@ -126,6 +131,9 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
   const [progGlobal, setProgGlobal] = useState({ loteAtual: 0, totalLotes: 0, itensFeitos: 0, totalItens: 0 });
   // Quando termina tudo, mostra resumo consolidado.
   const [resumoFinal, setResumoFinal] = useState<{ arquivos: number; total: number; criados: number; atualizados: number; pulados: number; ignorados: number; erros: number } | null>(null);
+  // v1.262.0 — itens recém-criados nesta importação (pra triagem no final).
+  const [novosImportados, setNovosImportados] = useState<ItemTriagem[]>([]);
+  const [triagemAberta, setTriagemAberta] = useState(false);
 
   const isSkills = tipo === 'skills';
   const corDestaque = isSkills ? t.accents.lavender : t.accents.blue;
@@ -177,6 +185,8 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
     setProgGlobal({ loteAtual: 0, totalLotes: validos.length, itensFeitos: 0, totalItens: total });
 
     const consolidado = { arquivos: 0, total: 0, criados: 0, atualizados: 0, pulados: 0, ignorados: 0, erros: 0 };
+    const novosAcum: ItemTriagem[] = [];
+    setNovosImportados([]);
     let itensFeitos = 0;
 
     for (let li = 0; li < validos.length; li++) {
@@ -210,6 +220,7 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
           relAcc.pulados += rep.pulados;
           relAcc.erros.push(...rep.erros);
           if (rep.ignorados) relAcc.ignorados!.push(...rep.ignorados);
+          if (rep.novos) novosAcum.push(...rep.novos);
           itensFeitos += chunk.length;
           setProgGlobal((p) => ({ ...p, itensFeitos }));
         }
@@ -231,6 +242,7 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
     }
 
     setResumoFinal(consolidado);
+    setNovosImportados(novosAcum);
     setImportando(false);
     onConcluido();
     if (consolidado.erros === 0) {
@@ -245,6 +257,8 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
     setCategoriaDefault('');
     setSegmento('');
     setResumoFinal(null);
+    setNovosImportados([]);
+    setTriagemAberta(false);
     setProgGlobal({ loteAtual: 0, totalLotes: 0, itensFeitos: 0, totalItens: 0 });
   };
 
@@ -542,6 +556,28 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
 
       {resumoFinal && (
         <>
+          {/* v1.262.0 — Triagem dos novos: em vez do importado sumir no meio
+              de centenas já triadas, o resumo convida a categorizar+estrelar
+              SÓ o que acabou de entrar. */}
+          {novosImportados.length > 0 && (
+            <div style={{
+              background: `${corDestaque}12`, border: `1px solid ${corDestaque}55`,
+              borderRadius: 10, padding: 14, marginBottom: 14,
+              display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap',
+            }}>
+              <div style={{ flex: '1 1 280px', fontFamily: FONTS.ui, fontSize: 12.5, color: t.text, lineHeight: 1.5 }}>
+                <strong>{novosImportados.length} {label} nova{novosImportados.length === 1 ? '' : 's'}</strong> entraram na base.
+                Faça a triagem agora (categoria + estrelas) pra não perdê-las no meio das já classificadas.
+              </div>
+              <Button
+                type="primary"
+                onClick={() => setTriagemAberta(true)}
+                style={{ background: corDestaque, borderColor: corDestaque }}
+              >
+                Fazer triagem ({novosImportados.length})
+              </Button>
+            </div>
+          )}
           <div style={{
             background: `${t.accents.sage}1a`, border: `1px solid ${t.accents.sage}40`,
             borderRadius: 10, padding: 14, marginBottom: 14,
@@ -659,6 +695,15 @@ export default function ImportarLoteModal({ aberto, onClose, tipo, rpcBulkSave, 
           </div>
         </>
       )}
+
+      <TriagemImportacaoModal
+        aberto={triagemAberta}
+        onClose={() => setTriagemAberta(false)}
+        tipo={tipo}
+        itens={novosImportados}
+        categoriasExistentes={categoriasExistentes || []}
+        onAplicado={() => { setNovosImportados([]); onConcluido(); }}
+      />
     </Modal>
   );
 }

@@ -24207,14 +24207,26 @@ function _bulkSaveGenerico(
 
     // Criações em batch (a economia real).
     let criados = 0;
+    // Resumo dos RECÉM-CRIADOS (id/nome/categoria) — alimenta a triagem
+    // pós-importação na UI ("manda pra qual categoria? quantas estrelas?").
+    // Só os novos: os existentes já passaram por triagem um dia.
+    const novosResumo: Array<{ id: string; nome: string; slug: string; categoria: string; descricao: string }> = [];
+    const resumoDe = (o: Record<string, unknown>) => ({
+      id: String(o.id || ''),
+      nome: String(o.nome || ''),
+      slug: String(o.slug || ''),
+      categoria: String(o.categoria || ''),
+      descricao: String(o.descricao || '').slice(0, 200),
+    });
     if (paraCriar.length > 0) {
       try {
         const novos = dbBatchCreate(tabela, paraCriar);
         criados = novos.length;
+        for (const n of novos) novosResumo.push(resumoDe(n));
       } catch (e: unknown) {
         // Fallback: tenta um por um pra ao menos salvar o que der.
         for (const c of paraCriar) {
-          try { dbCreate(tabela, c); criados++; }
+          try { const n = dbCreate(tabela, c); criados++; novosResumo.push(resumoDe(n)); }
           catch (e2: unknown) { erros.push({ slug: String(c.slug || ''), msg: e2 instanceof Error ? e2.message : 'Erro create' }); }
         }
       }
@@ -24229,6 +24241,7 @@ function _bulkSaveGenerico(
         pulados,
         erros,
         ignorados,
+        novos: novosResumo,
       },
     };
   } catch (e: unknown) {
@@ -24549,6 +24562,54 @@ function skillsDefinirEstrelas(id: string, estrelas: number): ServerResult {
 
 function agentsDefinirEstrelas(id: string, estrelas: number): ServerResult {
   return _definirEstrelasGenerico('Agents', id, estrelas);
+}
+
+// RPC: triagem pós-importação (Skills e Agents). Depois de importar, a UI
+// mostra o resumo dos itens recém-criados e o usuário decide categoria
+// (existente ou nova) e estrelas de cada um — aqui aplicamos tudo num lote só.
+// Campos undefined/vazios não sobrescrevem o que já está salvo.
+function hubTriagemAplicar(payload: {
+  tipo: 'skills' | 'agents';
+  itens: Array<{ id: string; categoria?: string; estrelas?: number }>;
+}): ServerResult {
+  try {
+    const tabela = payload?.tipo === 'agents' ? 'Agents' : 'Skills';
+    const itens = Array.isArray(payload?.itens) ? payload.itens : [];
+    if (itens.length === 0) return { ok: true, data: { atualizados: 0 } };
+    if (itens.length > 300) return { ok: false, error: 'Triagem acima de 300 itens — fatie em lotes menores.' };
+    const agora = new Date().toISOString();
+    let atualizados = 0;
+    const erros: Array<{ id: string; msg: string }> = [];
+    for (const it of itens) {
+      const id = String(it.id || '').trim();
+      if (!id) continue;
+      const upd: Record<string, unknown> = { atualizadoEm: agora };
+      const cat = it.categoria !== undefined ? String(it.categoria).trim() : '';
+      if (cat) upd.categoria = cat;
+      if (it.estrelas !== undefined && it.estrelas !== null) {
+        let n = Math.round(Number(it.estrelas));
+        if (!Number.isNaN(n)) {
+          n = Math.max(0, Math.min(5, n));
+          if (n > 0) {
+            upd.estrelas = n;
+            upd.estrelasMotivo = 'Triagem pós-importação';
+            upd.avaliadaEm = agora;
+          }
+        }
+      }
+      if (Object.keys(upd).length === 1) continue; // só o timestamp — nada a aplicar
+      try {
+        const r = dbUpdate(tabela, id, upd);
+        if (r) atualizados++;
+        else erros.push({ id, msg: 'Não encontrado' });
+      } catch (e: unknown) {
+        erros.push({ id, msg: e instanceof Error ? e.message : 'Erro' });
+      }
+    }
+    return { ok: true, data: { atualizados, erros } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro na triagem' };
+  }
 }
 
 // ─── Kits dos sonhos (v1.152.0) ─────────────────────────────────────────────

@@ -15,6 +15,7 @@ import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import type { ServerResult } from '../types';
 import ImportarLoteModal from './ImportarLoteModal';
+import TriagemImportacaoModal, { type ItemTriagem } from './TriagemImportacaoModal';
 import EstrelasQualidade from './EstrelasQualidade';
 import { FiltroChip, ChipGroup, GrupoAcoes, GrupoDivisor, CommandBar } from './HubToolbar';
 
@@ -104,6 +105,8 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
   const [carregandoAberto, setCarregandoAberto] = useState(false);
   // v1.151.0 — modal de import em lote.
   const [importLoteAberto, setImportLoteAberto] = useState(false);
+  // v1.262.0 — triagem pós-import avulso: categoria + estrelas do recém-criado.
+  const [triagemItens, setTriagemItens] = useState<ItemTriagem[]>([]);
   // v1.152.0 — estrelas: filtro top, ordenação e avaliação Lume.
   const [soTop, setSoTop] = useState(false);
   const [ordenarPorEstrelas, setOrdenarPorEstrelas] = useState(false);
@@ -171,6 +174,15 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
   }, [agents, filtro, soFavoritas, soTop, ordenarPorEstrelas]);
 
   const qtdFavoritas = useMemo(() => agents.filter((a) => !!a.favorita).length, [agents]);
+
+  // v1.262.0 — categorias já usadas na base (sugestões da triagem pós-import).
+  const categoriasExistentes = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of agents) {
+      if ((a.categoria || '').trim()) set.add(a.categoria.trim());
+    }
+    return Array.from(set);
+  }, [agents]);
   const qtdAvaliados = useMemo(() => agents.filter((a) => (a.estrelas || 0) > 0).length, [agents]);
 
   const fonteMeta = useMemo(() => {
@@ -287,8 +299,14 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
       if (!conteudo.trim()) { message.error('Arquivo vazio'); return; }
       try {
         const r = await callServer<ServerResult>('agentsSave', { conteudo, fonte: file.name });
-        if (r.ok) { message.success('Agent importado'); void carregar(); }
-        else message.error(r.error || 'Falha ao importar');
+        if (r.ok) {
+          message.success('Agent importado');
+          // Triagem do recém-importado: categoria + estrelas na hora, pra não
+          // sumir no meio dos agents já classificados.
+          const d = r.data as { id?: string; nome?: string; descricao?: string; categoria?: string } | undefined;
+          if (d?.id) setTriagemItens([{ id: d.id, nome: d.nome || '', descricao: d.descricao, categoria: d.categoria }]);
+          void carregar();
+        } else message.error(r.error || 'Falha ao importar');
       } catch (err) {
         message.error(err instanceof Error ? err.message : 'Erro');
       }
@@ -452,6 +470,17 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
         tipo="agents"
         rpcBulkSave="agentsBulkSave"
         onConcluido={() => { void carregar(); }}
+        categoriasExistentes={categoriasExistentes}
+      />
+
+      {/* v1.262.0 — Triagem do import avulso (categoria + estrelas do novo). */}
+      <TriagemImportacaoModal
+        aberto={triagemItens.length > 0}
+        onClose={() => setTriagemItens([])}
+        tipo="agents"
+        itens={triagemItens}
+        categoriasExistentes={categoriasExistentes}
+        onAplicado={() => { void carregar(); }}
       />
 
       {/* Lista */}

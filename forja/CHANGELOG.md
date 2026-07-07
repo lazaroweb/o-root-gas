@@ -36,6 +36,25 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.262.0] — 2026-07-07
+
+### Adicionado
+
+- **Triagem pós-importação no Atelier (Skills e Agents)**: importou, triou.
+  Depois de qualquer importação (avulsa ou em lote), um modal mostra SÓ os
+  itens recém-criados — os antigos não aparecem porque já passaram por isso —
+  pra você definir a **categoria** (escolhe uma existente com autocomplete ou
+  digita uma nova pra criá-la) e as **estrelas** de cada um. Com "Aplicar a
+  todos" pro caso comum de lote homogêneo. Sem triagem, o item novo sumia no
+  meio das ~990 skills já classificadas.
+  - Novo RPC `hubTriagemAplicar` (categoria + estrelas em lote; vazios não
+    sobrescrevem o que já está salvo).
+  - `skillsBulkSave`/`agentsBulkSave` agora retornam o resumo dos
+    recém-criados (`novos`), e o relatório final do lote ganha o botão
+    "Fazer triagem (N)".
+  - Import avulso (1 SKILL.md ou 1 agent) abre a triagem automaticamente
+    após salvar.
+
 ## [1.261.0] — 2026-07-05
 
 ### Mudado

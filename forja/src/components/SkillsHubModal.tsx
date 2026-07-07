@@ -18,6 +18,7 @@ import type { ServerResult } from '../types';
 import { GAS_APP_KIT_SKILLS } from '../data/gasAppKitSkills';
 import ComoUsarSkill from './ComoUsarSkill';
 import ImportarLoteModal from './ImportarLoteModal';
+import TriagemImportacaoModal, { type ItemTriagem } from './TriagemImportacaoModal';
 import EstrelasQualidade from './EstrelasQualidade';
 import { FiltroChip, ChipGroup, GrupoAcoes, GrupoDivisor, CommandBar } from './HubToolbar';
 
@@ -275,6 +276,8 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
   const [avalProg, setAvalProg] = useState<{ feitas: number; total: number } | null>(null);
   // v1.151.0 — modal de import em lote (JSON/MD com categoria-no-import).
   const [importLoteAberto, setImportLoteAberto] = useState(false);
+  // v1.262.0 — triagem pós-import avulso: categoria + estrelas do recém-criado.
+  const [triagemItens, setTriagemItens] = useState<ItemTriagem[]>([]);
   const [openSources, setOpenSources] = useState<string[]>([]);
   // Categorias abertas por pasta: { [chaveDaPasta]: string[] }. Tudo recolhido
   // por padrão; o usuário expande só o tema que quer ver.
@@ -465,6 +468,17 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, embedded]);
 
+  // v1.262.0 — categorias já usadas na base (manuais + tipoIA da classificação):
+  // viram sugestões na triagem pós-importação.
+  const categoriasExistentes = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of skills) {
+      if ((s.categoria || '').trim()) set.add(s.categoria.trim());
+      if ((s.tipoIA || '').trim()) set.add(String(s.tipoIA).trim());
+    }
+    return Array.from(set);
+  }, [skills]);
+
   const resetForm = () => {
     setEditandoId(null);
     setConteudo('');
@@ -520,6 +534,12 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
       });
       if (r.ok) {
         message.success(editandoId ? 'Skill atualizada.' : 'Skill salva.');
+        // Import novo (não edição): abre a triagem pra categoria + estrelas —
+        // sem isso a skill some no meio das centenas já classificadas.
+        if (!editandoId && r.data) {
+          const d = r.data as { id: string; nome: string; descricao?: string; categoria?: string };
+          if (d.id) setTriagemItens([{ id: d.id, nome: d.nome, descricao: d.descricao, categoria: d.categoria }]);
+        }
         resetForm();
         setTab('lista');
         carregar();
@@ -1473,6 +1493,17 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
         tipo="skills"
         rpcBulkSave="skillsBulkSave"
         onConcluido={() => { void carregar(); }}
+        categoriasExistentes={categoriasExistentes}
+      />
+
+      {/* v1.262.0 — Triagem do import avulso (categoria + estrelas do novo). */}
+      <TriagemImportacaoModal
+        aberto={triagemItens.length > 0}
+        onClose={() => setTriagemItens([])}
+        tipo="skills"
+        itens={triagemItens}
+        categoriasExistentes={categoriasExistentes}
+        onAplicado={() => { void carregar(); }}
       />
 
       {/* Drawer: detalhe de uma skill */}
