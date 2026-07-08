@@ -36,6 +36,25 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.271.0] — 2026-07-08
+
+### Adicionado — Widget "Como usar na sua IDE" nas estações Skills, Agents e Kits
+
+Pedido do usuário: um widget de instruções com mini prompt padrão pras IDEs.
+
+- **`InstrucoesIDEWidget`** (componente novo): barra fina colapsável logo
+  abaixo da barra de comandos de cada estação. Aberta, mostra:
+  - Segmented **Cursor / Claude Code / Genérico** — troca a pasta de
+    instalação (`.cursor/` · `.claude/` · `.agents/`) e a dica de onde colar
+    (chat + `.cursor/rules/`, sessão + `CLAUDE.md`, conversa + `AGENTS.md`).
+  - **Mini prompt pronto pra copiar** (CopyBlock), adaptado ao contexto:
+    só skills, só agents, ou kit misto. O prompt ensina a IA a ler os
+    SKILL.md antes de qualquer tarefa, assumir o papel do agent certo
+    (planejar → executar → revisar), nunca entregar código sem revisão,
+    manter UI premium e declarar quais skills/agents usou.
+- Presente nas 3 estações: Skills (`contexto="skills"`), Agents
+  (`contexto="agents"`) e Kits (`contexto="kit"`).
+
 ## [1.270.0] — 2026-07-08
 
 ### Mudado — Grid de kits enxuto: 10 templates → 3 packs

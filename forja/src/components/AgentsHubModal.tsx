@@ -17,6 +17,7 @@ import type { ServerResult } from '../types';
 import ImportarLoteModal from './ImportarLoteModal';
 import OtimizadorIAModal, { RevisaoProfundaModal } from './OtimizadorIAModal';
 import RevisaoFilaModal from './RevisaoFilaModal';
+import InstrucoesIDEWidget from './InstrucoesIDEWidget';
 import TriagemImportacaoModal, { type ItemTriagem } from './TriagemImportacaoModal';
 import EstrelasQualidade from './EstrelasQualidade';
 import { FiltroChip, ChipGroup, GrupoAcoes, GrupoDivisor, CommandBar } from './HubToolbar';
@@ -494,6 +495,9 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
         </GrupoAcoes>
       </CommandBar>
       <div style={{ height: 14 }} />
+
+      {/* v1.271.0 — widget "como usar na IDE" (mini prompt por IDE). */}
+      <InstrucoesIDEWidget contexto="agents" />
 
       {/* v1.152.0 — progresso da avaliação Lume */}
       {avaliando && avalProg && (

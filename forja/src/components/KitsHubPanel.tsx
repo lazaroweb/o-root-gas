@@ -15,6 +15,7 @@ import type { ServerResult } from '../types';
 import { criarZipBlob, baixarBlob, type ZipEntry } from '../zip';
 import EstrelasQualidade from './EstrelasQualidade';
 import KitMontagemModal, { type MontagemParams } from './KitMontagemModal';
+import InstrucoesIDEWidget from './InstrucoesIDEWidget';
 
 interface KitTemplate {
   id: string;
@@ -472,6 +473,9 @@ export default function KitsHubPanel(): React.ReactElement {
           </div>
         </div>
       </div>
+
+      {/* v1.271.0 — widget "como usar na IDE" (mini prompt por IDE). */}
+      <InstrucoesIDEWidget contexto="kit" />
 
       {loading && templates.length === 0 ? (
         <div style={{ padding: 60, textAlign: 'center' }}><Spin /></div>
