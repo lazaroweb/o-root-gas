@@ -36,6 +36,32 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.267.2] — 2026-07-08
+
+### Corrigido — Revisão profunda truncada + montagem de kit com Lume falhando
+
+Mesma causa-raiz nos dois (caso real do usuário): modelos com raciocínio (ex.
+Fable 5) gastam parte do `max_tokens` "pensando" ANTES de escrever a resposta —
+com teto apertado, a saída vem truncada ou vazia.
+
+- **"Revisar (IA)" devolvia "revisão truncada/vazia" ou "formato esperado"**
+  (`hubRevisarProfundo`):
+  1. Orçamento de tokens recalculado: saída estimada (tamanho/2) + folga de
+     raciocínio de 3.500 tokens (teto 14.000) — antes era tamanho/2.5 + 800,
+     insuficiente pra pensar E escrever o markdown inteiro.
+  2. Parse tolerante (`_extrairRevisaoProfunda`): remove cercas de código e,
+     se o `<<<FIM>>>` se perdeu mas o `<<<RESUMO>>>` chegou, recupera o
+     conteúdo (que está completo até ali) em vez de falhar.
+  3. Retry automático: 2 tentativas (a 2ª com folga de 6.000) antes de
+     desistir, com mensagem dizendo qual serviço trocar no Roteamento.
+  Vale também pra "Revisão profunda em fila", que usa a mesma função.
+- **"Montar com a Lume" (kits) demorava e falhava** (`_montarKitCore`): o teto
+  era 1.500 tokens — o modelo pensava, estourava o limite e o JSON da seleção
+  vinha truncado → "A Lume não retornou uma seleção válida". Teto agora 6.000
+  (9.000 na 2ª tentativa) + retry inclusive pra erro transitório de rede.
+  Vale pra kits-template (inclusive o Fundação Vibe Code), coleções por
+  domínio e kit de segmento — todos passam pelo mesmo núcleo.
+
 ## [1.267.1] — 2026-07-07
 
 ### Mudado — Kit "Fundação Vibe Code" curado por especialista

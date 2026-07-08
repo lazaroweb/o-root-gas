@@ -24928,6 +24928,34 @@ function hubOtimizacaoAplicar(payload: {
 // Usa marcadores em vez de JSON: markdown longo com escapes JSON quebra fácil.
 const _LIMITE_REVISAO_CHARS = 28000;
 
+// Extrai a revisão dos marcadores tolerando variações comuns de modelos:
+// cercas de código em volta, <<<FIM>>> ausente mas <<<RESUMO>>> presente
+// (recuperável — o conteúdo termina onde o resumo começa), e saída realmente
+// truncada (irrecuperável, melhor falhar do que sobrescrever pela metade).
+function _extrairRevisaoProfunda(txt: string, tamanhoOriginal: number):
+  { ok: true; conteudo: string; resumo: string[] } | { ok: false; motivo: string } {
+  const limpo = txt.replace(/```(?:markdown|md)?\s*/gi, '').replace(/```/g, '');
+  const mIni = limpo.indexOf('<<<CONTEUDO>>>');
+  if (mIni < 0) {
+    return { ok: false, motivo: 'A IA não devolveu a revisão no formato esperado (marcador de início ausente).' };
+  }
+  const rIni = limpo.indexOf('<<<RESUMO>>>');
+  let mFim = limpo.indexOf('<<<FIM>>>');
+  // <<<FIM>>> perdido mas o resumo chegou: o conteúdo está completo até ali.
+  if (mFim <= mIni && rIni > mIni) mFim = rIni;
+  if (mFim <= mIni) {
+    return { ok: false, motivo: 'A revisão veio truncada no meio (a IA estourou o limite de resposta).' };
+  }
+  const conteudo = limpo.slice(mIni + '<<<CONTEUDO>>>'.length, mFim).trim();
+  if (!conteudo || conteudo.length < tamanhoOriginal * 0.3) {
+    return { ok: false, motivo: 'A revisão veio truncada/vazia — não vou arriscar sobrescrever.' };
+  }
+  const resumo = rIni > mIni
+    ? limpo.slice(rIni + '<<<RESUMO>>>'.length).split('\n').map((l) => l.replace(/^[-*]\s*/, '').trim()).filter(Boolean).slice(0, 12)
+    : [];
+  return { ok: true, conteudo, resumo };
+}
+
 function hubRevisarProfundo(payload: { tipo: 'skills' | 'agents'; id: string }): ServerResult {
   try {
     const tabela = payload?.tipo === 'agents' ? 'Agents' : 'Skills';
@@ -24948,28 +24976,28 @@ function hubRevisarProfundo(payload: { tipo: 'skills' | 'agents'; id: string }):
       + 'NÃO invente capacidades, ferramentas ou exemplos que não existem no original. '
       + 'Responda EXATAMENTE neste formato, sem nada antes ou depois:\n'
       + '<<<CONTEUDO>>>\n(markdown revisado completo)\n<<<FIM>>>\n<<<RESUMO>>>\n- (mudança 1, pt-BR, 1 linha)\n- (mudança 2)\n';
-    const resp = forjaCallLLM(
-      [{ role: 'system', content: sys }, { role: 'user', content: conteudo }],
-      Math.min(8000, Math.ceil(conteudo.length / 2.5) + 800), undefined, 'atelier',
-    );
-    const txt = String(resp || '');
-    const mIni = txt.indexOf('<<<CONTEUDO>>>');
-    const mFim = txt.indexOf('<<<FIM>>>');
-    if (mIni < 0 || mFim <= mIni) {
-      return { ok: false, error: 'A IA não devolveu a revisão no formato esperado — tente de novo (ou troque o modelo do serviço Atelier).' };
+    // v1.267.2 — orçamento com folga pra modelos com raciocínio (Fable/Claude
+    // thinking): eles gastam parte do max_tokens "pensando" ANTES de escrever.
+    // O teto antigo (len/2.5 + 800) truncava a saída → "formato esperado" /
+    // "truncada". Agora: saída estimada (len/2) + folga de raciocínio, e na 2ª
+    // tentativa a folga aumenta. 2 tentativas antes de desistir.
+    let motivoFalha = '';
+    for (let tentativa = 1; tentativa <= 2; tentativa++) {
+      const folgaRaciocinio = tentativa === 1 ? 3500 : 6000;
+      const resp = forjaCallLLM(
+        [{ role: 'system', content: sys }, { role: 'user', content: conteudo }],
+        Math.min(14000, Math.ceil(conteudo.length / 2) + folgaRaciocinio), undefined, 'atelier',
+      );
+      const p = _extrairRevisaoProfunda(String(resp || ''), conteudo.length);
+      if (p.ok) {
+        return {
+          ok: true,
+          data: { id, nome: String(row.nome || ''), conteudoOriginal: conteudo, conteudoRevisado: p.conteudo, resumo: p.resumo },
+        };
+      }
+      motivoFalha = p.motivo;
     }
-    const revisado = txt.slice(mIni + '<<<CONTEUDO>>>'.length, mFim).trim();
-    if (!revisado || revisado.length < conteudo.length * 0.3) {
-      return { ok: false, error: 'A revisão veio truncada/vazia — não vou arriscar sobrescrever. Tente de novo.' };
-    }
-    const rIni = txt.indexOf('<<<RESUMO>>>');
-    const resumo = rIni > 0
-      ? txt.slice(rIni + '<<<RESUMO>>>'.length).split('\n').map((l) => l.replace(/^[-*]\s*/, '').trim()).filter(Boolean).slice(0, 12)
-      : [];
-    return {
-      ok: true,
-      data: { id, nome: String(row.nome || ''), conteudoOriginal: conteudo, conteudoRevisado: revisado, resumo },
-    };
+    return { ok: false, error: `${motivoFalha} Já tentei 2 vezes — se persistir, troque o modelo do serviço Atelier (Configurações → IA → Roteamento) por um sem raciocínio longo.` };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro na revisão profunda' };
   }
@@ -25237,16 +25265,29 @@ function _montarKitCore(opts: {
     skills: catSkills,
     agents: catAgents,
   });
-  const resp = forjaCallLLM(
-    [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
-    1500, undefined, 'kit',
-  );
-  const sel = _parseKitSelecao(resp);
+  // v1.267.2 — teto de tokens com folga pra modelos com raciocínio (o JSON de
+  // saída é pequeno, mas o "pensamento" também consome max_tokens; com 1500 a
+  // resposta vinha truncada/vazia e a montagem falhava depois de longa espera).
+  // 2 tentativas antes de desistir.
+  let sel: { skills: number[]; agents: number[]; justificativa: string } = { skills: [], agents: [], justificativa: '' };
+  for (let tentativa = 1; tentativa <= 2; tentativa++) {
+    try {
+      const resp = forjaCallLLM(
+        [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
+        tentativa === 1 ? 6000 : 9000, undefined, 'kit',
+      );
+      sel = _parseKitSelecao(resp);
+      if (sel.skills.length > 0 || sel.agents.length > 0) break;
+    } catch (e) {
+      // 1ª tentativa com erro de rede/timeout → tenta de novo; na 2ª, propaga.
+      if (tentativa === 2) throw e;
+    }
+  }
 
   const skillIds = sel.skills.map((i) => String(poolSkills[i]?.id || '')).filter(Boolean);
   const agentIds = sel.agents.map((i) => String(poolAgents[i]?.id || '')).filter(Boolean);
   if (skillIds.length === 0 && agentIds.length === 0) {
-    throw new Error('A Lume não retornou uma seleção válida. Tente novamente.');
+    throw new Error('A Lume não retornou uma seleção válida (tentei 2 vezes). Se persistir, troque o modelo do serviço "Kits" no Roteamento de IA por um sem raciocínio longo.');
   }
 
   const agora = new Date().toISOString();
