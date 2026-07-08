@@ -25116,22 +25116,23 @@ interface KitTemplate {
   alvoAgents: number;     // qtd-alvo de agents
 }
 
+// v1.270.0 — grid enxuto: 3 kits. Removidos 7 templates redundantes ("Fundação
+// Essencial" era a versão antiga do Fundação Vibe Code; os 2 Squads foram
+// FUNDIDOS nos essenciais como seção AGENTS do objetivo; Full-stack Web, Dados,
+// DevOps, Segurança e Produtividade já eram pilares dos essenciais ou casos
+// pra "Coleções por domínio"). Kits já montados desses templates continuam na
+// tabela `Kits` — kitsGetContent/kitExportar seguem funcionando por id.
 const KIT_TEMPLATES: KitTemplate[] = [
-  {
-    id: 'fundacao', nome: 'Fundação Essencial', accent: 'lavender', alvoSkills: 12, alvoAgents: 5,
-    descricao: 'A base mínima e perfeita pra iniciar QUALQUER desenvolvimento.',
-    objetivo: 'Montar a base fundacional pra iniciar qualquer projeto de software do zero, '
-      + 'independente da stack: planejamento, arquitetura, versionamento (git), qualidade de código, '
-      + 'testes, revisão de código, documentação e boas práticas. Priorize skills e agents genéricos, '
-      + 'de altíssimo impacto e reuso, que todo dev deveria ter desde o primeiro dia.',
-  },
   {
     // v1.267.0 — grupo-fundação pra vibe coding; alvo da revisão profunda em fila.
     // v1.267.1 — pilares redefinidos POR ESPECIALISTA (não pelas dicas do usuário)
     // e ancorados no vocabulário SKILL_TEMAS que a classificação da base já usa —
     // o campo `tema` que a Lume recebe no pool é exatamente tipoIA/categoria.
-    id: 'fundacao-vibe', nome: 'Fundação Vibe Code', accent: 'clay', alvoSkills: 20, alvoAgents: 6,
-    descricao: 'A fundação de elite pro desenvolvimento assistido por IA: os 8 pilares que TODO projeto precisa, com as melhores skills da base.',
+    // v1.270.0 — absorve o "Squad dos Sonhos (Agentes)": em vez de dois kits
+    // (skills num, time noutro), este é o PACK completo — alvoAgents 6→10 e o
+    // objetivo enumera os papéis do squad. Um kit, um zip, tudo junto.
+    id: 'fundacao-vibe', nome: 'Fundação Vibe Code', accent: 'clay', alvoSkills: 20, alvoAgents: 10,
+    descricao: 'O pack fundação de elite pro desenvolvimento assistido por IA: os 8 pilares de skills + o squad dos sonhos de agents, tudo num kit só.',
     objetivo: 'Você é ESPECIALISTA em desenvolvimento assistido por IA (vibe coding com Cursor/Claude/ChatGPT). '
       + 'Monte a FUNDAÇÃO definitiva: o conjunto de skills e agents que deve estar carregado em TODO projeto, '
       + 'independente de stack ou vertical. Os pilares abaixo estão em ORDEM DE PRIORIDADE e usam os MESMOS '
@@ -25152,8 +25153,12 @@ const KIT_TEMPLATES: KitTemplate[] = [
       + 'e reuso no front; modelagem de dados, design de API e arquitetura no back (1-2 de cada). '
       + 'PILAR 7 · Documentação — specs, ADRs e docs curtas que viram CONTEXTO pra IA nas próximas sessões. '
       + 'PILAR 8 · Automação/Produtividade — git workflow, refatoração assistida, debugging sistemático. '
-      + 'AGENTS: selecione papéis complementares cobrindo orquestração/tech-lead, revisão de código, '
-      + 'segurança e design — sem redundância. '
+      + 'AGENTS — monte junto o SQUAD DOS SONHOS: um TIME de agents com papéis DISTINTOS e complementares '
+      + '(evite redundância — nada de 2 agents que fazem a mesma coisa): um orquestrador/tech-lead, '
+      + 'um arquiteto, um revisor de código, um de QA/testes, um de segurança/AppSec, um especialista em '
+      + 'frontend, um de backend/API, um de depuração, um de documentação e OBRIGATORIAMENTE um especialista '
+      + 'em DESIGN/UI/UX de alto nível (interface premium, minimalista, com identidade própria — que pareça '
+      + 'feita por designer humano sênior, não com cara genérica de app gerado por IA). '
       + 'REGRAS FINAIS: estrelas primeiro; em empate, prefira o mais GENÉRICO (serve em qualquer projeto). '
       + 'EXCLUA itens hiper-específicos de vertical de negócio (contabilidade, CRM…) e de infra pesada '
       + '(Kubernetes, cloud) — fundação é o que se usa TODO dia, em TODO projeto.',
@@ -25163,8 +25168,11 @@ const KIT_TEMPLATES: KitTemplate[] = [
     // revisão anti-alucinação como pilares próprios). Motivo: este é o kit de
     // USO DIÁRIO do usuário (100% dos projetos GAS); sem esses pilares, usar
     // só ele perdia justamente o método vibe-code — caso real apontado por ele.
+    // v1.270.0 — absorve também o "Squad GAS — Agentes dos Sonhos": o objetivo
+    // agora enumera os papéis do time (o kit já mirava 10 agents, mas sem
+    // especificar os papéis a seleção saía mais fraca que a do kit dedicado).
     id: 'gas', nome: 'Google Apps Script — Completo', accent: 'sage', alvoSkills: 34, alvoAgents: 10,
-    descricao: 'O kit de uso diário da SUA stack: fundação vibe code (IA/prompts + revisão) + segurança + design + dados + o específico de GAS, tudo junto.',
+    descricao: 'O pack de uso diário da SUA stack: fundação vibe code + segurança + design + dados + o específico de GAS + o squad dos sonhos de agents, tudo num kit só.',
     objetivo: 'Montar o kit COMPLETO e definitivo pro DIA A DIA de desenvolvimento assistido por IA (vibe coding '
       + 'com Cursor/Claude/ChatGPT) na stack Google Apps Script (GAS) — exatamente como a Forja é feita. '
       + 'Este kit é AUTOSSUFICIENTE: quem o carrega não precisa de nenhum outro. Deve cobrir, de forma BALANCEADA, '
@@ -25189,6 +25197,13 @@ const KIT_TEMPLATES: KitTemplate[] = [
       + 'V8, cotas e limites de execução, deploy automatizado e planilha auto-criada (skills do GAS App Kit); '
       + '(H) Documentação & Produtividade — specs/ADRs curtas que viram contexto pra IA, automação, '
       + 'refatoração e fluxos que economizam tempo. '
+      + 'AGENTS — monte junto o SQUAD DOS SONHOS da stack GAS: um TIME de agents com papéis DISTINTOS e '
+      + 'complementares (evite redundância — nada de 2 agents que fazem a mesma coisa): um orquestrador/'
+      + 'tech-lead, um arquiteto, um revisor de código, um de QA/testes, um de segurança/AppSec, um '
+      + 'especialista em frontend React/TypeScript, um de backend/dados adaptado a Sheets + '
+      + 'google.script.run (RPC), um de depuração, um de documentação e OBRIGATORIAMENTE um especialista em '
+      + 'DESIGN/UI/UX de alto nível (interface premium, minimalista, com identidade própria — que pareça '
+      + 'feita por designer humano sênior, não com cara genérica de app gerado por IA). '
       + 'RESTRIÇÕES da plataforma que TODO item escolhido deve respeitar: runtime V8 do Apps Script SEM '
       + 'ecossistema npm/node (nada de instalar pacote arbitrário); LIMITE de ~6 minutos por execução, '
       + 'sem servidor sempre ligado nem websockets; persistência em Google Sheets (SheetDB: full-scan, '
@@ -25199,69 +25214,11 @@ const KIT_TEMPLATES: KitTemplate[] = [
       + 'ou servidores de longa duração.',
   },
   {
-    id: 'squad-gas', nome: 'Squad GAS — Agentes dos Sonhos', accent: 'sage', alvoSkills: 4, alvoAgents: 10,
-    descricao: 'O time de agents dos sonhos pra SUA stack: papéis distintos que colaboram no GAS.',
-    objetivo: 'Montar o SQUAD dos sonhos para a stack Google Apps Script (GAS) — um TIME de agents de IA '
-      + 'que colaboram pra desenvolver na Forja. Priorize PRINCIPALMENTE agents (bem acima de skills), '
-      + 'com papéis DISTINTOS e complementares (evite redundância — nada de 3 agents que fazem a mesma coisa): '
-      + 'um orquestrador/tech-lead, um arquiteto, um revisor de código, um de QA/testes, um de '
-      + 'segurança/AppSec, um especialista em frontend React/TypeScript, um de backend/dados adaptado a '
-      + 'Sheets + google.script.run (RPC), e OBRIGATORIAMENTE um especialista em DESIGN/UI/UX de alto nível '
-      + '(interface premium, minimalista, com identidade própria — que pareça feita por designer humano sênior, '
-      + 'não com cara genérica de app gerado por IA). Todo agent escolhido deve respeitar as restrições do Apps Script: '
-      + 'runtime V8 SEM npm, ~6 minutos por execução, Sheets como banco (full-scan, cotas) + Properties/Cache, '
-      + 'frontend HtmlService + google.script.run (NÃO REST), HTTP só por UrlFetchApp, deploy via clasp. '
-      + 'Inclua só POUCAS skills de apoio que potencializem o time. Priorize agents de mais estrelas e com '
-      + 'papéis claros. EVITE itens que dependam de npm, containers ou bancos relacionais.',
-  },
-  {
-    id: 'squad', nome: 'Squad dos Sonhos (Agentes)', accent: 'peach', alvoSkills: 4, alvoAgents: 12,
-    descricao: 'Um time de agents de IA que colaboram pra cobrir todo o ciclo de desenvolvimento.',
-    objetivo: 'Montar o SQUAD dos sonhos: um TIME de agents de IA que colaboram entre si pra cobrir um ciclo '
-      + 'de desenvolvimento completo, independente de stack. Selecione PRINCIPALMENTE agents (priorize agents '
-      + 'bem acima de skills), com papéis DISTINTOS e complementares (evite redundância): um orquestrador/'
-      + 'tech-lead, e especialistas em arquitetura, revisão de código, testes/QA, segurança/AppSec, frontend, '
-      + 'DESIGN/UI/UX de alto nível (OBRIGATÓRIO — interface premium e com identidade própria, que pareça feita '
-      + 'por designer humano sênior, não com cara genérica de app gerado por IA), '
-      + 'backend/API, depuração e documentação. Inclua apenas algumas poucas skills de apoio que potencializem '
-      + 'o time. Priorize os agents de mais estrelas e com papéis claros e bem definidos.',
-  },
-  {
-    id: 'fullstack-web', nome: 'Full-stack Web', accent: 'blue', alvoSkills: 14, alvoAgents: 6,
-    descricao: 'Front + back + banco + deploy de aplicações web modernas.',
-    objetivo: 'Desenvolvimento full-stack web moderno: frontend (UI, componentes, React/JS), '
-      + 'backend e APIs, banco de dados, autenticação/autorização, performance e deploy.',
-  },
-  {
     id: 'ai-dev', nome: 'AI Dev / Agentes', accent: 'peach', alvoSkills: 14, alvoAgents: 8,
     descricao: 'Construir produtos com LLMs, RAG e agentes que colaboram.',
     objetivo: 'Construção de produtos com IA: engenharia de prompt, RAG, orquestração de múltiplos '
       + 'agentes, ferramentas/function-calling, avaliação de qualidade e LLMOps. Combine skills de '
       + 'prompt com agents orquestradores e especialistas que trabalham juntos.',
-  },
-  {
-    id: 'dados', nome: 'Dados & Analytics', accent: 'sage', alvoSkills: 12, alvoAgents: 5,
-    descricao: 'Pipelines, modelagem, análise e visualização de dados.',
-    objetivo: 'Engenharia e análise de dados: ETL/pipelines, SQL, modelagem dimensional, '
-      + 'qualidade de dados, analytics e visualização/dashboards.',
-  },
-  {
-    id: 'devops', nome: 'Infra & DevOps', accent: 'blue', alvoSkills: 12, alvoAgents: 5,
-    descricao: 'CI/CD, containers, IaC, observabilidade e cloud.',
-    objetivo: 'Infraestrutura e operações: CI/CD, containers/Kubernetes, infraestrutura como código, '
-      + 'observabilidade/monitoramento, cloud e confiabilidade (SRE).',
-  },
-  {
-    id: 'seguranca', nome: 'Segurança', accent: 'peach', alvoSkills: 10, alvoAgents: 5,
-    descricao: 'AppSec, revisão segura, hardening e compliance.',
-    objetivo: 'Segurança de aplicações: revisão de código segura, AppSec, gestão de segredos, '
-      + 'threat modeling, testes de segurança e compliance.',
-  },
-  {
-    id: 'produtividade', nome: 'Produtividade', accent: 'lavender', alvoSkills: 10, alvoAgents: 4,
-    descricao: 'Acelerar o dia a dia de quem desenvolve.',
-    objetivo: 'Produtividade do desenvolvedor: automações, documentação, escrita técnica, '
-      + 'gestão de tarefas, refatoração e fluxos de trabalho que economizam tempo.',
   },
 ];
 

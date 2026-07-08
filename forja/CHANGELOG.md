@@ -36,6 +36,29 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.270.0] — 2026-07-08
+
+### Mudado — Grid de kits enxuto: 10 templates → 3 packs
+
+Pedido do usuário: "quero algo organizado mas funcional" + "o Squad dos Sonhos
+deveria ir junto com o meu canônico GAS Completo, tipo um pack". Análise
+confirmou sobreposição pesada entre os 10 templates.
+
+- **Squads fundidos nos essenciais (viraram packs)**: o objetivo do
+  **Fundação Vibe Code** (agents 6→10) e do **GAS Completo** agora enumeram os
+  papéis do squad dos sonhos (orquestrador/tech-lead, arquiteto, revisor, QA,
+  AppSec, frontend, backend/dados, depuração, documentação e design/UI/UX
+  obrigatório). Um kit = skills + time completo, num zip só.
+- **Removidos 7 templates redundantes**: Fundação Essencial (versão antiga do
+  Vibe Code), Squad GAS e Squad dos Sonhos (fundidos acima), Full-stack Web,
+  Dados & Analytics, Infra & DevOps (contradizia a stack GAS), Segurança e
+  Produtividade (já são pilares dos essenciais). Necessidade pontual → usar
+  "Coleções por domínio".
+- **Mantidos 3**: Fundação Vibe Code, Google Apps Script — Completo e
+  AI Dev / Agentes (único com tema não coberto: RAG, LLMOps, orquestração).
+- Kits já montados dos templates removidos permanecem na tabela `Kits`
+  (nenhum dado apagado); saem do grid mas podem voltar se o template voltar.
+
 ## [1.269.0] — 2026-07-08
 
 ### Adicionado — Estrelas e favorito nos Kits
