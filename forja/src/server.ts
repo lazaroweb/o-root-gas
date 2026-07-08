@@ -203,7 +203,9 @@ const SCHEMA: SheetSchema[] = [
   // v1.152.0 — Kits: "kits dos sonhos" curados. `templateId` aponta pro
   // KIT_TEMPLATES fixo. `skillIds`/`agentIds` são CSV. `justificativa`: texto da
   // Lume explicando a curadoria. `montadoPorLume`: 'true' quando veio da IA.
-  { name: 'Kits', columns: ['id', 'templateId', 'nome', 'descricao', 'skillIds', 'agentIds', 'justificativa', 'montadoPorLume', 'criadoEm', 'atualizadoEm'] },
+  // v1.269.0 — `estrelas` (0-5, nota manual do usuário), `favorito` + `favoritadoEm`
+  // (kits favoritos sobem pro topo). Colunas novas SEMPRE no fim (migração append-only).
+  { name: 'Kits', columns: ['id', 'templateId', 'nome', 'descricao', 'skillIds', 'agentIds', 'justificativa', 'montadoPorLume', 'criadoEm', 'atualizadoEm', 'estrelas', 'favorito', 'favoritadoEm'] },
   { name: 'Provedores', columns: ['id', 'nome', 'categoria', 'urlSite', 'freeTier', 'precoBase', 'beneficios', 'limitacoes', 'idealPara', 'notas', 'status', 'tags', 'criadoEm', 'atualizadoEm'] },
   { name: 'Cofre', columns: ['id', 'label', 'categoria', 'urlRef', 'usuario', 'iv', 'cipher', 'notas', 'criadoEm', 'atualizadoEm'] },
   { name: 'Snippets', columns: ['id', 'titulo', 'descricao', 'linguagem', 'codigo', 'tags', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm'] },
@@ -450,7 +452,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.266-selo-revisao-ia';
+const SCHEMA_VERSION = 'v1.269-kits-estrelas-favorito';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -25800,11 +25802,53 @@ function kitsList(): ServerResult {
         montadoPorLume: String(k.montadoPorLume || '') === 'true',
         criadoEm: String(k.criadoEm || ''),
         atualizadoEm: String(k.atualizadoEm || ''),
+        // v1.269.0 — nota manual do usuário + favorito.
+        estrelas: Number(k.estrelas || 0),
+        favorito: String(k.favorito || '') === 'true' || k.favorito === true,
+        favoritadoEm: String(k.favoritadoEm || ''),
       };
-    });
+    })
+      // Favoritos primeiro (favoritado mais recente no topo); resto por atualizadoEm.
+      .sort((a, b) => {
+        if (a.favorito !== b.favorito) return a.favorito ? -1 : 1;
+        if (a.favorito) return b.favoritadoEm.localeCompare(a.favoritadoEm);
+        return b.atualizadoEm.localeCompare(a.atualizadoEm);
+      });
     return { ok: true, data: kits };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao listar kits' };
+  }
+}
+
+// v1.269.0 — nota manual (0-5) do kit. Diferente de skills/agents (onde a Lume
+// avalia), aqui a estrela é a SUA opinião sobre o kit montado.
+function kitDefinirEstrelas(id: string, estrelas: number): ServerResult {
+  try {
+    let n = Math.round(Number(estrelas || 0));
+    if (Number.isNaN(n)) n = 0;
+    n = Math.max(0, Math.min(5, n));
+    const atual = dbGetById('Kits', String(id));
+    if (!atual) return { ok: false, error: 'Kit não encontrado.' };
+    dbUpdate('Kits', String(id), { estrelas: n });
+    return { ok: true, data: { id, estrelas: n } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao definir estrelas' };
+  }
+}
+
+// v1.269.0 — toggle favorito. Kits favoritos sobem pro topo da listagem.
+function kitToggleFavorito(id: string): ServerResult {
+  try {
+    const atual = dbGetById('Kits', String(id));
+    if (!atual) return { ok: false, error: 'Kit não encontrado.' };
+    const eraFavorito = String(atual.favorito || '') === 'true' || atual.favorito === true;
+    dbUpdate('Kits', String(id), {
+      favorito: eraFavorito ? '' : 'true',
+      favoritadoEm: eraFavorito ? '' : new Date().toISOString(),
+    });
+    return { ok: true, data: { id, favorito: !eraFavorito } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao favoritar' };
   }
 }
 

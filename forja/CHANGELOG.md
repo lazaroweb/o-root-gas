@@ -36,6 +36,22 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.269.0] — 2026-07-08
+
+### Adicionado — Estrelas e favorito nos Kits
+
+Pedido do usuário: "quero poder classificar esses kits também com estrelas e
+favoritar". Agora todo kit montado (template ou coleção) tem:
+
+- **Estrelas 0-5 clicáveis** no card — nota MANUAL sua (diferente de
+  skills/agents, onde a Lume avalia; kit é opinião do dono).
+- **Coração de favorito** — favoritos ganham borda rosa e sobem pro topo:
+  o grid de templates reordena (sort estável) e as coleções vêm ordenadas do
+  servidor (favorito mais recente primeiro).
+- UI otimista: estrela/coração respondem na hora; persistência em background.
+- Schema: tabela `Kits` + `estrelas`, `favorito`, `favoritadoEm` (append-only,
+  `SCHEMA_VERSION` v1.269). RPCs novas: `kitDefinirEstrelas`, `kitToggleFavorito`.
+
 ## [1.268.7] — 2026-07-08
 
 ### Mudado — "Google Apps Script — Completo" vira o kit AUTOSSUFICIENTE do dia a dia

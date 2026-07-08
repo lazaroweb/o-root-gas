@@ -6,7 +6,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Empty, Spin, Tag, Tooltip, Drawer, message, Skeleton, Modal, Segmented, Input } from 'antd';
 import {
   Boxes, Sparkles, Bot, BookMarked, Package, RefreshCw, Eye, Layers, Wand2, Apple, Monitor, MousePointer2,
-  Briefcase, Plus, Trash2,
+  Briefcase, Plus, Trash2, Heart,
 } from 'lucide-react';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
@@ -36,6 +36,9 @@ interface KitResumo {
   justificativa: string;
   montadoPorLume: boolean;
   atualizadoEm: string;
+  // v1.269.0 — nota manual (0-5) + favorito.
+  estrelas?: number;
+  favorito?: boolean;
 }
 
 interface DominioSeed {
@@ -254,6 +257,17 @@ export default function KitsHubPanel(): React.ReactElement {
     return m;
   }, [kits]);
 
+  // v1.269.0 — templates cujo kit foi favoritado sobem pro topo do grid
+  // (sort estável: o resto mantém a ordem original).
+  const templatesOrdenados = useMemo(
+    () => [...templates].sort((a, b) => {
+      const fa = kitPorTemplate[a.id]?.favorito ? 1 : 0;
+      const fb = kitPorTemplate[b.id]?.favorito ? 1 : 0;
+      return fb - fa;
+    }),
+    [templates, kitPorTemplate],
+  );
+
   // Coleções = kits por domínio ("dominio:") ou por segmento ("segmento:",
   // gerados a partir das seções dos hubs de Skills/Agents).
   const colecoes = useMemo(
@@ -287,6 +301,49 @@ export default function KitsHubPanel(): React.ReactElement {
     setMontando(`segmento:${segKey}`);
     setMontagemParams({ tipo: 'segmento', segKey, nome: nomeKit, accent: t.accents.blue });
   };
+
+  // v1.269.0 — nota manual + favorito do kit. Update otimista (a UI responde
+  // na hora; o servidor persiste em background).
+  const definirEstrelasKit = (id: string, n: number) => {
+    setKits((prev) => prev.map((k) => (k.id === id ? { ...k, estrelas: n } : k)));
+    void callServer<ServerResult>('kitDefinirEstrelas', id, n).catch(() => { /* silencioso */ });
+  };
+
+  const toggleFavoritoKit = (kit: KitResumo) => {
+    setKits((prev) => prev.map((k) => (k.id === kit.id ? { ...k, favorito: !k.favorito } : k)));
+    void callServer<ServerResult>('kitToggleFavorito', kit.id)
+      .then((r) => {
+        if (!r.ok) { message.error(r.error || 'Não consegui favoritar'); void carregar(); }
+      })
+      .catch(() => void carregar());
+  };
+
+  // Coração + estrelas que aparecem em todo card de kit montado.
+  const CurtidaKit = ({ kit }: { kit: KitResumo }): React.ReactElement => (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      <EstrelasQualidade
+        valor={kit.estrelas || 0}
+        size={13}
+        editavel
+        onChange={(n) => definirEstrelasKit(kit.id, n)}
+      />
+      <Tooltip title={kit.favorito ? 'Remover dos favoritos' : 'Favoritar — sobe pro topo da lista'}>
+        <button
+          onClick={(e) => { e.stopPropagation(); toggleFavoritoKit(kit); }}
+          style={{
+            border: 'none', background: 'transparent', cursor: 'pointer', padding: 2,
+            display: 'inline-flex', alignItems: 'center',
+            color: kit.favorito ? t.accents.rose : t.textTertiary,
+            transition: 'color 0.18s, transform 0.18s',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.15)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
+        >
+          <Heart size={15} fill={kit.favorito ? t.accents.rose : 'none'} strokeWidth={1.8} />
+        </button>
+      </Tooltip>
+    </span>
+  );
 
   const removerColecao = async (kit: KitResumo) => {
     try {
@@ -422,7 +479,7 @@ export default function KitsHubPanel(): React.ReactElement {
         <Empty description="Nenhum template de kit disponível." />
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14 }}>
-          {templates.map((tpl) => {
+          {templatesOrdenados.map((tpl) => {
             const kit = kitPorTemplate[tpl.id];
             const cor = accentDe(tpl.accent);
             const emMontagem = montando === tpl.id;
@@ -430,7 +487,7 @@ export default function KitsHubPanel(): React.ReactElement {
               <div
                 key={tpl.id}
                 style={{
-                  background: t.surface, border: `1.5px solid ${kit ? `${cor}55` : t.border}`,
+                  background: t.surface, border: `1.5px solid ${kit?.favorito ? `${t.accents.rose}66` : kit ? `${cor}55` : t.border}`,
                   borderRadius: 14, padding: 16, display: 'flex', flexDirection: 'column', gap: 10,
                   position: 'relative', minHeight: 180,
                 }}
@@ -451,6 +508,7 @@ export default function KitsHubPanel(): React.ReactElement {
                       alvo: ~{tpl.alvoSkills} skills · ~{tpl.alvoAgents} agents
                     </div>
                   </div>
+                  {kit && <CurtidaKit kit={kit} />}
                 </div>
 
                 <p style={{
@@ -535,7 +593,7 @@ export default function KitsHubPanel(): React.ReactElement {
                 || montando === kit.templateId;
               return (
                 <div key={kit.id} style={{
-                  background: t.surface, border: `1.5px solid ${t.accents.blue}55`,
+                  background: t.surface, border: `1.5px solid ${kit.favorito ? `${t.accents.rose}66` : `${t.accents.blue}55`}`,
                   borderRadius: 14, padding: 16, display: 'flex', flexDirection: 'column', gap: 10,
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -553,6 +611,7 @@ export default function KitsHubPanel(): React.ReactElement {
                         coleção por domínio
                       </div>
                     </div>
+                    <CurtidaKit kit={kit} />
                   </div>
                   <p style={{ margin: 0, fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, lineHeight: 1.5, flex: 1 }}>
                     {kit.descricao}
