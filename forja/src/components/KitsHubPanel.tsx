@@ -14,6 +14,7 @@ import callServer from '../gas-client';
 import type { ServerResult } from '../types';
 import { criarZipBlob, baixarBlob, type ZipEntry } from '../zip';
 import EstrelasQualidade from './EstrelasQualidade';
+import KitMontagemModal, { type MontagemParams } from './KitMontagemModal';
 
 interface KitTemplate {
   id: string;
@@ -226,6 +227,8 @@ export default function KitsHubPanel(): React.ReactElement {
   const [novaColAberta, setNovaColAberta] = useState(false);
   const [colNome, setColNome] = useState('');
   const [colObjetivo, setColObjetivo] = useState('');
+  // v1.268.0 — montagem acompanhada em modal (fases + cronômetro + retry).
+  const [montagemParams, setMontagemParams] = useState<MontagemParams | null>(null);
 
   const carregar = async () => {
     setLoading(true);
@@ -261,58 +264,28 @@ export default function KitsHubPanel(): React.ReactElement {
     [kits],
   );
 
-  const montar = async (templateId: string) => {
+  // v1.268.0 — a montagem virou 4 etapas comandadas pelo KitMontagemModal
+  // (fases reais + cronômetro + retry por etapa). Estas funções só abrem o
+  // modal com os parâmetros certos; nada de RPC gigante + toast que some.
+  const montar = (templateId: string) => {
+    const tpl = templates.find((x) => x.id === templateId);
     setMontando(templateId);
-    const hide = message.loading('A Lume está montando o kit com as melhores skills + agents…', 0);
-    try {
-      const r = await callServer<ServerResult>('kitMontarComLume', templateId);
-      if (r.ok) {
-        const d = r.data as { id: string; skills: number; agents: number };
-        message.success(`Kit montado: ${d.skills} skills + ${d.agents} agents.`);
-        await carregar();
-        void abrir(d.id);
-      } else {
-        message.error(r.error || 'Não consegui montar o kit');
-      }
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : 'Erro ao montar kit');
-    } finally { hide(); setMontando(null); }
+    setMontagemParams({
+      tipo: 'template', templateId,
+      nome: tpl?.nome || templateId,
+      accent: tpl ? accentDe(tpl.accent) : undefined,
+    });
   };
 
-  const montarDominio = async (nome: string, objetivo: string) => {
-    const chave = `dominio:${nome}`;
-    setMontando(chave);
-    const hide = message.loading(`A Lume está montando a coleção "${nome}"…`, 0);
-    try {
-      const r = await callServer<ServerResult>('kitMontarDominio', nome, objetivo);
-      if (r.ok) {
-        const d = r.data as { id: string; skills: number; agents: number };
-        message.success(`Coleção "${nome}": ${d.skills} skills + ${d.agents} agents.`);
-        setNovaColAberta(false); setColNome(''); setColObjetivo('');
-        await carregar();
-        void abrir(d.id);
-      } else {
-        message.error(r.error || 'Não consegui montar a coleção');
-      }
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : 'Erro ao montar coleção');
-    } finally { hide(); setMontando(null); }
+  const montarDominio = (nome: string, objetivo: string) => {
+    setMontando(`dominio:${nome}`);
+    setNovaColAberta(false);
+    setMontagemParams({ tipo: 'dominio', nome, objetivo, accent: t.accents.blue });
   };
 
-  const remontarSegmento = async (segKey: string, nomeKit: string) => {
+  const remontarSegmento = (segKey: string, nomeKit: string) => {
     setMontando(`segmento:${segKey}`);
-    const hide = message.loading(`A Lume está re-montando "${nomeKit}"…`, 0);
-    try {
-      const r = await callServer<ServerResult>('kitMontarSegmento', segKey, nomeKit.replace(/^Segmento\s*[—-]\s*/, ''));
-      if (r.ok) {
-        const d = r.data as { id: string; skills: number; agents: number };
-        message.success(`Coleção re-montada: ${d.skills} skills + ${d.agents} agents.`);
-        await carregar();
-        void abrir(d.id);
-      } else message.error(r.error || 'Não consegui re-montar');
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : 'Erro ao re-montar');
-    } finally { hide(); setMontando(null); }
+    setMontagemParams({ tipo: 'segmento', segKey, nome: nomeKit, accent: t.accents.blue });
   };
 
   const removerColecao = async (kit: KitResumo) => {
@@ -685,6 +658,16 @@ export default function KitsHubPanel(): React.ReactElement {
           </div>
         </div>
       </Modal>
+
+      {/* v1.268.0 — acompanhamento da montagem (fases reais + cronômetro). */}
+      <KitMontagemModal
+        params={montagemParams}
+        onClose={() => { setMontagemParams(null); setMontando(null); }}
+        onConcluido={(kitId) => {
+          setColNome(''); setColObjetivo('');
+          void (async () => { await carregar(); void abrir(kitId); })();
+        }}
+      />
 
       {/* Drawer: detalhe do kit */}
       <Drawer

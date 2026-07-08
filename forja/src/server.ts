@@ -25230,76 +25230,118 @@ function _parseKitSelecao(resp: string): { skills: number[]; agents: number[]; j
   } catch { return { skills: [], agents: [], justificativa: '' }; }
 }
 
-// Núcleo de montagem reutilizado por kits-template e por coleções de domínio.
-// Faz o upsert por templateId (cada template/domínio tem no máximo 1 kit salvo).
-function _montarKitCore(opts: {
+// ─── Montagem de kit em ETAPAS (v1.268.0) ───────────────────────────────────
+// CAUSA-RAIZ do "monta, demora e volta como se nada": a montagem era UMA
+// chamada de LLM com o catálogo inteiro (120 skills + 60 agents) escolhendo
+// skills E agents de uma vez. Com modelos de raciocínio (Fable 5), essa
+// chamada passa dos ~60s — teto FIXO do UrlFetchApp no GAS — e morre em
+// timeout; o retry repetia a mesma chamada gigante e morria de novo.
+// Solução: 4 etapas curtas comandadas pelo frontend (iniciar → selecionar
+// skills → selecionar agents → finalizar), cada uma com 1 chamada de LLM
+// menor (metade do catálogo, metade da saída), estado entre etapas no
+// CacheService. Bônus: as etapas alimentam o modal de acompanhamento com
+// fases REAIS, e cada etapa pode ser re-tentada isoladamente.
+
+interface MontagemKit {
   templateId: string; nome: string; descricao: string; objetivo: string;
   alvoSkills: number; alvoAgents: number; fonteEscopo?: string;
-}): ServerResult {
-  const poolSkills = _poolCandidatos('Skills', 120, opts.fonteEscopo);
-  const poolAgents = _poolCandidatos('Agents', 60, opts.fonteEscopo);
-  if (poolSkills.length === 0 && poolAgents.length === 0) {
-    throw new Error(opts.fonteEscopo
-      ? 'Esse segmento não tem skills nem agents ainda — importe um pack pra ele antes.'
-      : 'Sua base de skills/agents está vazia — importe antes de montar kits.');
-  }
+  skillIds?: string[]; agentIds?: string[];
+  justSkills?: string; justAgents?: string;
+}
 
-  const compacto = (l: Record<string, unknown>, i: number) => ({
+function _montagemLer(chave: string): MontagemKit | null {
+  try {
+    const raw = CacheService.getScriptCache().get('FORJA_KIT_MONT_' + chave);
+    if (!raw) return null;
+    return JSON.parse(raw) as MontagemKit;
+  } catch { return null; }
+}
+
+function _montagemSalvar(chave: string, m: MontagemKit): void {
+  // 30 min de validade — de sobra pro fluxo do modal (e pros retries).
+  CacheService.getScriptCache().put('FORJA_KIT_MONT_' + chave, JSON.stringify(m), 1800);
+}
+
+function _kitCompacto(l: Record<string, unknown>, i: number): Record<string, unknown> {
+  return {
     i,
     nome: String(l.nome || ''),
     tema: String(l.tipoIA || l.categoria || ''),
     estrelas: Number(l.estrelas || 0),
     desc: String(l.descricaoPt || l.descricao || l.diretrizFinal || '').slice(0, 140),
-  });
-  const catSkills = poolSkills.map(compacto);
-  const catAgents = poolAgents.map(compacto);
+  };
+}
 
-  const sys = 'Você é a Lume, curadora de kits de desenvolvimento. A partir de um OBJETIVO e de '
-    + 'catálogos de skills e agents (cada um com índice `i`, nome, tema, estrelas 0-5 e descrição), '
-    + `selecione os MELHORES pra esse objetivo. Alvo: ~${opts.alvoSkills} skills e ~${opts.alvoAgents} agents `
-    + '(pode variar um pouco). Priorize itens com mais estrelas e alta aderência ao objetivo; evite '
-    + 'redundância. Responda SOMENTE com um objeto JSON, sem texto extra, no formato '
-    + '{"skills":[indices],"agents":[indices],"justificativa":"2-3 frases explicando a curadoria"}.';
+function _parseSelecaoLado(resp: string, lado: 'skills' | 'agents'): { indices: number[]; justificativa: string } {
+  let txt = String(resp || '').trim();
+  const ini = txt.indexOf('{');
+  const fim = txt.lastIndexOf('}');
+  if (ini >= 0 && fim > ini) txt = txt.slice(ini, fim + 1);
+  try {
+    const o = JSON.parse(txt) as Record<string, unknown>;
+    const toNums = (v: unknown): number[] => Array.isArray(v)
+      ? v.map((x) => Number(x)).filter((n) => !Number.isNaN(n)) : [];
+    // Aceita "selecao" (formato pedido) ou a chave do lado ("skills"/"agents")
+    // — modelos às vezes respondem no formato antigo.
+    const indices = toNums(o.selecao).length > 0 ? toNums(o.selecao) : toNums(o[lado]);
+    return { indices, justificativa: String(o.justificativa || o.motivo || '').slice(0, 800) };
+  } catch { return { indices: [], justificativa: '' }; }
+}
+
+// Uma chamada de LLM selecionando SÓ skills ou SÓ agents. Catálogo e saída
+// pela metade = latência bem abaixo do timeout de 60s do UrlFetchApp.
+function _selecionarLadoKit(m: MontagemKit, lado: 'skills' | 'agents'): { ids: string[]; justificativa: string } {
+  const tabela = lado === 'skills' ? 'Skills' : 'Agents';
+  const teto = lado === 'skills' ? 120 : 60;
+  const alvo = lado === 'skills' ? m.alvoSkills : m.alvoAgents;
+  const pool = _poolCandidatos(tabela, teto, m.fonteEscopo);
+  if (pool.length === 0) return { ids: [], justificativa: '' };
+
+  const sys = `Você é a Lume, curadora de kits de desenvolvimento. A partir de um OBJETIVO e de um catálogo de ${lado} `
+    + '(cada item com índice `i`, nome, tema, estrelas 0-5 e descrição), selecione os MELHORES pro objetivo. '
+    + `Alvo: ~${alvo} itens (pode variar um pouco). Priorize itens com mais estrelas e alta aderência ao objetivo; `
+    + 'evite redundância. Responda SOMENTE com um objeto JSON, sem texto extra, no formato '
+    + '{"selecao":[indices],"justificativa":"1-2 frases explicando a escolha"}.';
   const userMsg = JSON.stringify({
-    objetivo: `${opts.nome} — ${opts.objetivo}`,
-    skills: catSkills,
-    agents: catAgents,
+    objetivo: `${m.nome} — ${m.objetivo}`,
+    [lado]: pool.map(_kitCompacto),
   });
-  // v1.267.2 — teto de tokens com folga pra modelos com raciocínio (o JSON de
-  // saída é pequeno, mas o "pensamento" também consome max_tokens; com 1500 a
-  // resposta vinha truncada/vazia e a montagem falhava depois de longa espera).
-  // 2 tentativas antes de desistir.
-  let sel: { skills: number[]; agents: number[]; justificativa: string } = { skills: [], agents: [], justificativa: '' };
+
+  let sel: { indices: number[]; justificativa: string } = { indices: [], justificativa: '' };
   for (let tentativa = 1; tentativa <= 2; tentativa++) {
     try {
       const resp = forjaCallLLM(
         [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
-        tentativa === 1 ? 6000 : 9000, undefined, 'kit',
+        tentativa === 1 ? 4000 : 7000, undefined, 'kit',
       );
-      sel = _parseKitSelecao(resp);
-      if (sel.skills.length > 0 || sel.agents.length > 0) break;
+      sel = _parseSelecaoLado(resp, lado);
+      if (sel.indices.length > 0) break;
     } catch (e) {
-      // 1ª tentativa com erro de rede/timeout → tenta de novo; na 2ª, propaga.
       if (tentativa === 2) throw e;
     }
   }
-
-  const skillIds = sel.skills.map((i) => String(poolSkills[i]?.id || '')).filter(Boolean);
-  const agentIds = sel.agents.map((i) => String(poolAgents[i]?.id || '')).filter(Boolean);
-  if (skillIds.length === 0 && agentIds.length === 0) {
-    throw new Error('A Lume não retornou uma seleção válida (tentei 2 vezes). Se persistir, troque o modelo do serviço "Kits" no Roteamento de IA por um sem raciocínio longo.');
+  if (sel.indices.length === 0) {
+    throw new Error(`A Lume não retornou uma seleção válida de ${lado} (tentei 2 vezes). Se persistir, troque o modelo do serviço "Kits" no Roteamento de IA por um mais rápido/sem raciocínio longo.`);
   }
+  const ids = sel.indices.map((i) => String(pool[i]?.id || '')).filter(Boolean);
+  return { ids, justificativa: sel.justificativa };
+}
 
+// Upsert do kit por templateId (cada template/domínio tem no máximo 1 salvo).
+function _upsertKit(m: MontagemKit): { id: string; skills: number; agents: number; justificativa: string } {
+  const skillIds = m.skillIds || [];
+  const agentIds = m.agentIds || [];
+  const justificativa = [m.justSkills, m.justAgents].filter(Boolean).join(' ').slice(0, 1200);
   const agora = new Date().toISOString();
   const kits = dbGetAll('Kits') as Array<Record<string, unknown>>;
-  const existente = kits.find((k) => String(k.templateId || '') === opts.templateId);
+  const existente = kits.find((k) => String(k.templateId || '') === m.templateId);
   const dados = {
-    templateId: opts.templateId,
-    nome: opts.nome,
-    descricao: opts.descricao,
+    templateId: m.templateId,
+    nome: m.nome,
+    descricao: m.descricao,
     skillIds: skillIds.join(','),
     agentIds: agentIds.join(','),
-    justificativa: sel.justificativa,
+    justificativa,
     montadoPorLume: 'true',
     atualizadoEm: agora,
   };
@@ -25311,7 +25353,146 @@ function _montarKitCore(opts: {
     const novo = dbCreate('Kits', { ...dados, criadoEm: agora });
     kitId = String(novo.id || '');
   }
-  return { ok: true, data: { id: kitId, templateId: opts.templateId, skills: skillIds.length, agents: agentIds.length, justificativa: sel.justificativa } };
+  return { id: kitId, skills: skillIds.length, agents: agentIds.length, justificativa };
+}
+
+// Resolve os parâmetros da montagem a partir do tipo de entrada.
+function _resolverMontagem(payload: {
+  tipo: 'template' | 'dominio' | 'segmento';
+  templateId?: string; nome?: string; objetivo?: string; segKey?: string;
+  alvoSkills?: number; alvoAgents?: number;
+}): MontagemKit {
+  if (payload.tipo === 'template') {
+    const tpl = KIT_TEMPLATES.find((k) => k.id === String(payload.templateId || ''));
+    if (!tpl) throw new Error('Template de kit desconhecido.');
+    return {
+      templateId: tpl.id, nome: tpl.nome, descricao: tpl.descricao, objetivo: tpl.objetivo,
+      alvoSkills: tpl.alvoSkills, alvoAgents: tpl.alvoAgents,
+    };
+  }
+  if (payload.tipo === 'dominio') {
+    const nomeLimpo = String(payload.nome || '').trim().slice(0, 80);
+    const objLimpo = String(payload.objetivo || '').trim().slice(0, 1200);
+    if (!nomeLimpo) throw new Error('Dê um nome ao domínio/projeto da coleção.');
+    if (objLimpo.length < 8) throw new Error('Descreva um pouco melhor o domínio/projeto pra Lume curar bem.');
+    const slug = _slugFonte(nomeLimpo) || `col-${Date.now()}`;
+    return {
+      templateId: `dominio:${slug}`,
+      nome: nomeLimpo,
+      descricao: objLimpo.slice(0, 200),
+      objetivo: `Coleção por domínio de negócio "${nomeLimpo}". ${objLimpo} `
+        + 'Selecione as skills e agents da base mais úteis pra construir um produto desse domínio, '
+        + 'combinando fundação técnica com o que for específico da vertical. '
+        + 'Inclua também a melhor skill de design/UI (premium, com identidade própria, anti "cara de IA").',
+      alvoSkills: Math.max(4, Math.min(40, Number(payload.alvoSkills) || 16)),
+      alvoAgents: Math.max(2, Math.min(20, Number(payload.alvoAgents) || 6)),
+    };
+  }
+  // segmento
+  const key = _slugFonte(String(payload.segKey || ''));
+  if (!key) throw new Error('Segmento inválido.');
+  const nomeSeg = String(payload.nome || '').trim() || key;
+  return {
+    templateId: `segmento:${key}`,
+    nome: `Segmento — ${nomeSeg}`,
+    descricao: `Kit dos sonhos do segmento "${nomeSeg}" (apenas skills + agents desse segmento).`,
+    objetivo: `Monte o kit dos sonhos usando SOMENTE as skills e agents do segmento "${nomeSeg}". `
+      + 'Selecione os melhores, mais completos e mais bem avaliados que, juntos, formam um conjunto '
+      + 'coeso e de alto nível pra desenvolver nessa área/vertical. Se houver uma boa skill de design/UI, '
+      + 'inclua (interface premium, com identidade própria, anti "cara de IA"). Evite redundância.',
+    alvoSkills: 24, alvoAgents: 10,
+    fonteEscopo: key,
+  };
+}
+
+// ETAPA 1 — resolve os parâmetros, valida a base e guarda o estado no cache.
+function kitMontarIniciar(payload: {
+  tipo: 'template' | 'dominio' | 'segmento';
+  templateId?: string; nome?: string; objetivo?: string; segKey?: string;
+  alvoSkills?: number; alvoAgents?: number;
+}): ServerResult {
+  try {
+    const m = _resolverMontagem(payload || ({} as never));
+    const poolSkills = _poolCandidatos('Skills', 120, m.fonteEscopo).length;
+    const poolAgents = _poolCandidatos('Agents', 60, m.fonteEscopo).length;
+    if (poolSkills === 0 && poolAgents === 0) {
+      throw new Error(m.fonteEscopo
+        ? 'Esse segmento não tem skills nem agents ainda — importe um pack pra ele antes.'
+        : 'Sua base de skills/agents está vazia — importe antes de montar kits.');
+    }
+    _montagemSalvar(m.templateId, m);
+    return { ok: true, data: { chave: m.templateId, nome: m.nome, poolSkills, poolAgents } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao preparar a montagem' };
+  }
+}
+
+// ETAPA 2/3 — a Lume seleciona UM lado (skills OU agents) por chamada.
+function kitMontarSelecionar(chave: string, lado: 'skills' | 'agents'): ServerResult {
+  try {
+    const m = _montagemLer(String(chave || ''));
+    if (!m) return { ok: false, error: 'A montagem expirou (30 min) — comece de novo.' };
+    const ladoOk = lado === 'agents' ? 'agents' : 'skills';
+    const sel = _selecionarLadoKit(m, ladoOk);
+    if (ladoOk === 'skills') { m.skillIds = sel.ids; m.justSkills = sel.justificativa; }
+    else { m.agentIds = sel.ids; m.justAgents = sel.justificativa; }
+    _montagemSalvar(String(chave), m);
+    return { ok: true, data: { quantidade: sel.ids.length, justificativa: sel.justificativa } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro na seleção da Lume' };
+  }
+}
+
+// ETAPA 4 — grava o kit (upsert) e limpa o estado.
+function kitMontarFinalizar(chave: string): ServerResult {
+  try {
+    const m = _montagemLer(String(chave || ''));
+    if (!m) return { ok: false, error: 'A montagem expirou (30 min) — comece de novo.' };
+    if ((m.skillIds || []).length === 0 && (m.agentIds || []).length === 0) {
+      return { ok: false, error: 'Nenhuma seleção feita ainda — rode as etapas de seleção antes.' };
+    }
+    const r = _upsertKit(m);
+    try { CacheService.getScriptCache().remove('FORJA_KIT_MONT_' + chave); } catch { /* best-effort */ }
+    return { ok: true, data: { ...r, templateId: m.templateId } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar o kit' };
+  }
+}
+
+// Núcleo de montagem em chamada única — mantido pros chamadores de fora da
+// estação Kits (kit de segmento nos hubs de Skills/Agents). Usa as mesmas
+// etapas internamente (2 chamadas de LLM menores em vez de 1 gigante).
+function _montarKitCore(opts: {
+  templateId: string; nome: string; descricao: string; objetivo: string;
+  alvoSkills: number; alvoAgents: number; fonteEscopo?: string;
+}): ServerResult {
+  const m: MontagemKit = { ...opts };
+  const poolSkills = _poolCandidatos('Skills', 120, m.fonteEscopo).length;
+  const poolAgents = _poolCandidatos('Agents', 60, m.fonteEscopo).length;
+  if (poolSkills === 0 && poolAgents === 0) {
+    throw new Error(m.fonteEscopo
+      ? 'Esse segmento não tem skills nem agents ainda — importe um pack pra ele antes.'
+      : 'Sua base de skills/agents está vazia — importe antes de montar kits.');
+  }
+  // Um lado pode falhar sem derrubar o outro; exige pelo menos um com itens.
+  let erroLado = '';
+  if (poolSkills > 0) {
+    try {
+      const s = _selecionarLadoKit(m, 'skills');
+      m.skillIds = s.ids; m.justSkills = s.justificativa;
+    } catch (e) { erroLado = e instanceof Error ? e.message : String(e); }
+  }
+  if (poolAgents > 0) {
+    try {
+      const a = _selecionarLadoKit(m, 'agents');
+      m.agentIds = a.ids; m.justAgents = a.justificativa;
+    } catch (e) { erroLado = e instanceof Error ? e.message : String(e); }
+  }
+  if ((m.skillIds || []).length === 0 && (m.agentIds || []).length === 0) {
+    throw new Error(erroLado || 'A Lume não retornou uma seleção válida. Tente novamente.');
+  }
+  const r = _upsertKit(m);
+  return { ok: true, data: { ...r, templateId: m.templateId } };
 }
 
 function kitMontarComLume(templateId: string): ServerResult {

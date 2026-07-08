@@ -36,6 +36,33 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.268.0] — 2026-07-08
+
+### Corrigido/Adicionado — Montagem de kit em etapas + modal de acompanhamento
+
+- **CAUSA-RAIZ do "monta, demora e volta como se nada tivesse acontecido"**:
+  a montagem era UMA chamada de LLM gigante (catálogo de 120 skills + 60
+  agents, escolhendo os dois lados de uma vez). Com modelo de raciocínio
+  (Fable 5), essa chamada passa dos ~60 segundos — teto FIXO do UrlFetchApp
+  no Apps Script — e morre em timeout; o retry da v1.267.2 repetia a mesma
+  chamada gigante e morria igual. O erro aparecia num toast de 3s fácil de
+  perder, e o card voltava pro estado "Montar com a Lume".
+- **Montagem agora é em 4 etapas curtas** comandadas pelo frontend
+  (`kitMontarIniciar` → `kitMontarSelecionar('skills')` →
+  `kitMontarSelecionar('agents')` → `kitMontarFinalizar`), com estado entre
+  etapas no CacheService (30 min). Cada seleção é 1 chamada de LLM com METADE
+  do catálogo e metade da saída — bem abaixo do timeout — e tem retry próprio.
+- **Modal premium de acompanhamento** (`KitMontagemModal`, pedido do usuário):
+  trilha de fases com estado real (feito ✓ / ativa / pendente / pulada),
+  detalhe por fase ("118 skills candidatas", "18 skills escolhidas"), duração
+  de cada fase, cronômetro total, badge do modelo do serviço Kits. Erro fica
+  FIXO no modal (não some como toast) com botão "Tentar essa etapa de novo" —
+  re-tenta só a etapa que falhou, preservando as anteriores. No fim, resumo
+  com a justificativa da Lume e botão "Ver o kit".
+- Os fluxos de kit dos hubs de Skills/Agents (kit de segmento) continuam em
+  chamada única, mas agora usam as mesmas 2 seleções menores por baixo —
+  também ficaram mais confiáveis.
+
 ## [1.267.2] — 2026-07-08
 
 ### Corrigido — Revisão profunda truncada + montagem de kit com Lume falhando
