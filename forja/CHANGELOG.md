@@ -36,6 +36,17 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.268.5] — 2026-07-08
+
+### Corrigido — Reavaliação de pasta não entra mais em loop nas mesmas 40 skills
+
+Bug latente no escopo 'todas' da avaliação (usado pelo botão ⭐ da pasta): como
+itens reavaliados continuavam elegíveis, o `slice(0,40)` devolvia SEMPRE as
+mesmas 40 primeiras skills — em pastas com >40 itens o loop reprocessaria as
+mesmas até o teto de 200 iterações, queimando tokens em círculo. Agora o
+frontend manda um cursor `desde` (início do run) e o servidor só seleciona quem
+foi avaliado antes dele. Toast final também indica o escopo ("nesta pasta").
+
 ## [1.268.4] — 2026-07-08
 
 ### Adicionado — Reavaliar pasta com a Lume + avaliação que lê o conteúdo

@@ -839,7 +839,14 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
     let totalFeitas = 0;
     let totalGeral = 0;
     try {
-      const base = { escopo: opcoes?.escopo || 'pendentes', fonte: opcoes?.fonte };
+      // `desde` = cursor do run: no escopo 'todas' (reavaliação), o servidor só
+      // pega quem foi avaliado ANTES deste instante — sem isso os chunks
+      // repetiriam as mesmas 40 primeiras skills pra sempre.
+      const base = {
+        escopo: opcoes?.escopo || 'pendentes',
+        fonte: opcoes?.fonte,
+        desde: opcoes?.escopo === 'todas' ? new Date().toISOString() : undefined,
+      };
       // Primeira chamada descobre o total.
       let r = await callServer<ServerResult>('skillsAvaliar', base);
       if (!r.ok) { message.error(r.error || 'Não consegui avaliar'); return; }
@@ -860,7 +867,7 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
         restantes = d.restantes;
         setAvalProg({ feitas: Math.min(totalFeitas, totalGeral), total: totalGeral });
       }
-      message.success(`${totalFeitas} skill(s) avaliada(s) pela Lume.`);
+      message.success(`${totalFeitas} skill(s) avaliada(s) pela Lume${opcoes?.fonte ? ' nesta pasta' : ''}.`);
       carregar();
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Erro ao avaliar');

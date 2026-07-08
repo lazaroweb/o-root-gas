@@ -24526,6 +24526,10 @@ interface OpcoesAvaliar {
   categoria?: string;   // casa contra tipoIA || categoria
   escopo?: 'pendentes' | 'todas';
   forcar?: boolean;     // re-avalia mesmo quem já tem estrelas
+  // v1.268.5 — cursor do run: só entra quem foi avaliado ANTES deste ISO.
+  // Sem isso, escopo 'todas' num alvo > 1 chunk reavaliava as MESMAS 40
+  // primeiras pra sempre (o slice(0,40) devolvia sempre as mesmas linhas).
+  desde?: string;
 }
 
 function _selecionarParaAvaliar(
@@ -24547,6 +24551,12 @@ function _selecionarParaAvaliar(
   }
   const querTodas = op.escopo === 'todas' || op.forcar;
   if (!querTodas) alvo = alvo.filter((l) => !(Number(l.estrelas || 0) > 0));
+  else if (op.desde) {
+    // Reavaliação: só quem ainda não passou NESTE run (avaliadaEm anterior ao
+    // início). ISO compara lexicograficamente, então `<` funciona direto.
+    const corte = String(op.desde);
+    alvo = alvo.filter((l) => !String(l.avaliadaEm || '') || String(l.avaliadaEm) < corte);
+  }
   // Só itens com texto avaliável.
   alvo = alvo.filter((l) => String(l.nome || '').trim() || String(l.descricao || '').trim());
   return alvo;
