@@ -24583,24 +24583,34 @@ function _avaliarGenerico(tabela: 'Skills' | 'Agents', op: OpcoesAvaliar): Serve
     if (total === 0) return { ok: true, data: { avaliadas: 0, restantes: 0, total: 0 } };
 
     const chunk = candidatos.slice(0, CHUNK_AVALIACAO);
+    // v1.268.4 — a avaliação passa a ver também um TRECHO do conteúdo. Só
+    // nome+descrição punia skills com corpo excelente e descrição modesta
+    // (caso real: GAS App Kit refinado não mudava de nota).
     const itens = chunk.map((s, i) => ({
       i,
       id: String(s.id || ''),
       nome: String(s.nome || ''),
       desc: String(s.descricaoPt || s.descricao || s.diretrizFinal || '').slice(0, 320),
       tipo: String(s.tipoIA || s.categoria || ''),
+      trecho: String(s.conteudo || '').slice(0, 500),
+      kb: Math.round(Number(s.tamanhoBytes || 0) / 1024),
     }));
     const oque = tabela === 'Agents' ? 'agents de IA' : 'skills de desenvolvimento';
     const sys = `Você avalia a QUALIDADE de ${oque}. Para cada item dê uma nota inteira de 0 a 5 `
       + 'considerando: clareza, completude, utilidade prática e maturidade. '
+      + 'Além de nome/descrição, você recebe o INÍCIO do conteúdo (`trecho`) e o tamanho total em KB (`kb`) — '
+      + 'use-os como evidência de profundidade: conteúdo estruturado, com exemplos de código, casos de erro '
+      + 'e limites práticos vale mais que descrição bonita. '
       + '5 = excelente/pronto pra produção; 3 = ok mas genérico; 0-1 = vago/incompleto. '
       + 'Responda SOMENTE com um array JSON, sem texto extra, no formato '
       + '[{"i":0,"estrelas":4,"motivo":"frase curta"}] cobrindo TODOS os itens. '
       + 'O motivo deve ter no máximo 12 palavras, em português.';
-    const userMsg = JSON.stringify(itens.map((x) => ({ i: x.i, nome: x.nome, tipo: x.tipo, descricao: x.desc })));
+    const userMsg = JSON.stringify(itens.map((x) => ({ i: x.i, nome: x.nome, tipo: x.tipo, descricao: x.desc, trecho: x.trecho, kb: x.kb })));
+    // 4000 tokens: 40 notas custam ~800, o resto é folga pra modelos de
+    // raciocínio "pensarem" sem truncar o array (mesma lição da v1.268.x).
     const resp = forjaCallLLM(
       [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
-      1800, undefined, 'avaliacao',
+      4000, undefined, 'avaliacao',
     );
     const mapa = _parseAvaliacao(resp);
     const agora = new Date().toISOString();

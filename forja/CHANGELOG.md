@@ -36,6 +36,25 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.268.4] — 2026-07-08
+
+### Adicionado — Reavaliar pasta com a Lume + avaliação que lê o conteúdo
+
+Caso real: o usuário reimportou o GAS App Kit refinado, clicou "Avaliar com a
+Lume" e **nada mudou**. Dois motivos: (1) o botão global só avalia PENDENTES
+(sem nota) — quem já tinha nota era pulado, por design, pra não re-gastar
+tokens; (2) a avaliação lia só nome+descrição, então melhorar o corpo da skill
+não movia a nota.
+
+- **Botão ⭐ na linha da pasta** (Skills Hub): reavalia TODAS as skills daquela
+  pasta, inclusive as que já têm nota. É o caminho oficial pós-atualização de
+  conteúdo de um pack.
+- **Avaliação agora vê evidência de profundidade**: além de nome/descrição, a
+  Lume recebe o início do conteúdo (500 chars) e o tamanho em KB de cada item,
+  com instrução de valorizar exemplos de código, casos de erro e limites
+  práticos.
+- Teto de tokens da avaliação: 1800 → 4000 (folga pra modelos de raciocínio).
+
 ## [1.268.3] — 2026-07-08
 
 ### Mudado — GAS App Kit refinado com lições de produção da Forja (rumo às 4-5 estrelas)

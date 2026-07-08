@@ -1326,6 +1326,19 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                                 }}
                               />
                             </Tooltip>
+                            <Tooltip title="Reavaliar TODAS as skills desta pasta com a Lume (re-dá as notas, inclusive de quem já tem). Use depois de atualizar o conteúdo da pasta.">
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<Star size={13} />}
+                                loading={avaliando}
+                                style={{ color: t.accents.clay }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void avaliarSkills({ escopo: 'todas', fonte: g.key });
+                                }}
+                              />
+                            </Tooltip>
                             <Tooltip title="Exportar pasta como .zip (skills/<nome>/SKILL.md) pra levar pro projeto">
                               <Button
                                 type="text"
