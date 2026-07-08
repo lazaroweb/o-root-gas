@@ -36,6 +36,24 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.268.7] — 2026-07-08
+
+### Mudado — "Google Apps Script — Completo" vira o kit AUTOSSUFICIENTE do dia a dia
+
+Observação certeira do usuário: o kit GAS não tinha os pilares nº 1 e nº 2 do
+Fundação Vibe Code (IA/Prompts e Revisão de código anti-alucinação) — usando
+só ele, perdia-se justamente o MÉTODO do vibe coding; usando só o Fundação,
+perdia-se a stack. Pra quem vive 100% em GAS, isso obrigava a carregar dois
+kits.
+
+- Template `gas` reescrito com 8 pilares: (A) IA & Prompts [prioritário nº 1],
+  (B) Revisão de código, (C) Fundação, (D) Segurança, (E) Frontend & Design
+  [prioritário], (F) Dados & API, (G) Específico de GAS (incl. skills do GAS
+  App Kit: deploy automatizado, planilha auto-criada), (H) Docs & Produtividade.
+- `alvoSkills` 28 → 34 (pilares novos precisam de espaço sem roubar dos outros).
+- Papel do Fundação Vibe Code segue: fundação portátil pros ~20% de projetos
+  fora do GAS.
+
 ## [1.268.6] — 2026-07-08
 
 ### Corrigido — Atelier carregando MUITO mais rápido (leitura seletiva de colunas)

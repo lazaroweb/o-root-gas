@@ -25157,26 +25157,36 @@ const KIT_TEMPLATES: KitTemplate[] = [
       + '(Kubernetes, cloud) — fundação é o que se usa TODO dia, em TODO projeto.',
   },
   {
-    id: 'gas', nome: 'Google Apps Script — Completo', accent: 'sage', alvoSkills: 28, alvoAgents: 10,
-    descricao: 'O kit dos sonhos da SUA stack: fundação + segurança + front + dados + o específico de GAS, tudo junto.',
-    objetivo: 'Montar o kit COMPLETO e definitivo pra desenvolver na stack Google Apps Script (GAS) — '
-      + 'exatamente como a Forja é feita. Este é o "kit dos sonhos" da stack: deve cobrir, de forma BALANCEADA, '
+    // v1.268.7 — absorve a essência do Fundação Vibe Code (pilar IA/Prompts +
+    // revisão anti-alucinação como pilares próprios). Motivo: este é o kit de
+    // USO DIÁRIO do usuário (100% dos projetos GAS); sem esses pilares, usar
+    // só ele perdia justamente o método vibe-code — caso real apontado por ele.
+    id: 'gas', nome: 'Google Apps Script — Completo', accent: 'sage', alvoSkills: 34, alvoAgents: 10,
+    descricao: 'O kit de uso diário da SUA stack: fundação vibe code (IA/prompts + revisão) + segurança + design + dados + o específico de GAS, tudo junto.',
+    objetivo: 'Montar o kit COMPLETO e definitivo pro DIA A DIA de desenvolvimento assistido por IA (vibe coding '
+      + 'com Cursor/Claude/ChatGPT) na stack Google Apps Script (GAS) — exatamente como a Forja é feita. '
+      + 'Este kit é AUTOSSUFICIENTE: quem o carrega não precisa de nenhum outro. Deve cobrir, de forma BALANCEADA, '
       + 'TODOS os pilares abaixo (não concentre tudo num só pilar; garanta pelo menos alguns itens de cada). '
       + 'PILARES A COBRIR: '
-      + '(A) Fundação — planejamento, arquitetura, versionamento (git), qualidade de código, testes, '
-      + 'revisão de código, documentação e boas práticas; '
-      + '(B) Segurança — revisão de código segura, AppSec, gestão de segredos, validação de input, '
+      + '(A) IA & Prompts — pilar PRIORITÁRIO nº 1, a meta-skill do vibe coding: engenharia de prompt, '
+      + 'especificação de tarefas pra agentes, gestão de contexto/memória (AGENTS.md, rules), decomposição '
+      + 'de trabalho pra IA executar. Garanta 2-3 itens fortes; '
+      + '(B) Revisão de código — o ponto cego nº 1 de quem desenvolve com IA é aceitar código sem auditar: '
+      + 'code review sistemático, detecção de alucinação/overengineering, qualidade e legibilidade; '
+      + '(C) Fundação — planejamento, arquitetura, versionamento (git), testes e boas práticas; '
+      + '(D) Segurança — revisão de código segura, AppSec, gestão de segredos, validação de input, '
       + 'escopos OAuth e hardening aplicável; '
-      + '(C) Frontend & DESIGN (pilar PRIORITÁRIO) — React/TypeScript, componentes, acessibilidade, e '
+      + '(E) Frontend & DESIGN (pilar PRIORITÁRIO) — React/TypeScript, componentes, acessibilidade, e '
       + 'sobretudo DESIGN/UI/UX de altíssimo nível: interface premium, minimalista, com identidade própria, '
       + 'tipografia, espaçamento, hierarquia visual e microinterações que pareçam feitas por um designer '
       + 'humano sênior — NÃO com a cara genérica de app gerado por IA (evite layouts template, gradientes '
       + 'clichê, tudo centralizado, espaçamentos default). ESCOLHA OBRIGATORIAMENTE a MELHOR skill de '
       + 'design/UI da base (a de mais estrelas e mais focada em craft visual); se houver mais de uma boa, inclua; '
-      + '(D) Dados & API — design de dados e de API adaptado a Sheets como banco e a google.script.run (RPC); '
-      + '(E) Específico de GAS — clasp, SpreadsheetApp, PropertiesService/CacheService, UrlFetchApp, '
-      + 'V8, cotas e limites de execução; '
-      + '(F) Produtividade — automação, refatoração, escrita técnica e fluxos que economizam tempo. '
+      + '(F) Dados & API — design de dados e de API adaptado a Sheets como banco e a google.script.run (RPC); '
+      + '(G) Específico de GAS — clasp, SpreadsheetApp, PropertiesService/CacheService, UrlFetchApp, '
+      + 'V8, cotas e limites de execução, deploy automatizado e planilha auto-criada (skills do GAS App Kit); '
+      + '(H) Documentação & Produtividade — specs/ADRs curtas que viram contexto pra IA, automação, '
+      + 'refatoração e fluxos que economizam tempo. '
       + 'RESTRIÇÕES da plataforma que TODO item escolhido deve respeitar: runtime V8 do Apps Script SEM '
       + 'ecossistema npm/node (nada de instalar pacote arbitrário); LIMITE de ~6 minutos por execução, '
       + 'sem servidor sempre ligado nem websockets; persistência em Google Sheets (SheetDB: full-scan, '
