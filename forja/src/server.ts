@@ -25273,19 +25273,42 @@ function _kitCompacto(l: Record<string, unknown>, i: number): Record<string, unk
 }
 
 function _parseSelecaoLado(resp: string, lado: 'skills' | 'agents'): { indices: number[]; justificativa: string } {
-  let txt = String(resp || '').trim();
+  // v1.268.1 — parse endurecido pra modelos de raciocínio: remove blocos de
+  // "pensamento" e cercas de código, e se o JSON veio TRUNCADO (teto de tokens
+  // estourado no meio da justificativa), recupera os índices via regex — no
+  // nosso formato {"selecao":[...],"justificativa":"..."} o array vem primeiro,
+  // então quase sempre está completo mesmo em resposta cortada.
+  const bruto = String(resp || '')
+    .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '')
+    .replace(/```(?:json)?/gi, '')
+    .trim();
+  const toNums = (v: unknown): number[] => Array.isArray(v)
+    ? v.map((x) => Number(x)).filter((n) => !Number.isNaN(n)) : [];
+
+  // Caminho 1: JSON completo.
+  let txt = bruto;
   const ini = txt.indexOf('{');
   const fim = txt.lastIndexOf('}');
   if (ini >= 0 && fim > ini) txt = txt.slice(ini, fim + 1);
   try {
     const o = JSON.parse(txt) as Record<string, unknown>;
-    const toNums = (v: unknown): number[] => Array.isArray(v)
-      ? v.map((x) => Number(x)).filter((n) => !Number.isNaN(n)) : [];
     // Aceita "selecao" (formato pedido) ou a chave do lado ("skills"/"agents")
     // — modelos às vezes respondem no formato antigo.
     const indices = toNums(o.selecao).length > 0 ? toNums(o.selecao) : toNums(o[lado]);
-    return { indices, justificativa: String(o.justificativa || o.motivo || '').slice(0, 800) };
-  } catch { return { indices: [], justificativa: '' }; }
+    if (indices.length > 0) {
+      return { indices, justificativa: String(o.justificativa || o.motivo || '').slice(0, 800) };
+    }
+  } catch { /* cai pro caminho 2 */ }
+
+  // Caminho 2 (resposta truncada): pesca o array de índices direto do texto.
+  const chave = lado === 'skills' ? '(?:selecao|skills)' : '(?:selecao|agents)';
+  const m = bruto.match(new RegExp(`"${chave}"\\s*:\\s*\\[([^\\]]*)`));
+  if (m) {
+    const indices = m[1].split(',').map((x) => Number(x.trim())).filter((n) => !Number.isNaN(n) && Number.isFinite(n));
+    const j = bruto.match(/"justificativa"\s*:\s*"([^"]*)/);
+    return { indices, justificativa: (j ? j[1] : '').slice(0, 800) };
+  }
+  return { indices: [], justificativa: '' };
 }
 
 // Uma chamada de LLM selecionando SÓ skills ou SÓ agents. Catálogo e saída
@@ -25307,13 +25330,19 @@ function _selecionarLadoKit(m: MontagemKit, lado: 'skills' | 'agents'): { ids: s
     [lado]: pool.map(_kitCompacto),
   });
 
+  // v1.268.1 — teto maior (modelos de raciocínio gastam o budget "pensando"
+  // sobre o catálogo de 120 itens antes de escrever o JSON; com 4000 a
+  // resposta vinha cortada ANTES do array de índices). 8000/9500 fica dentro
+  // do que dá pra gerar nos ~60s de timeout do UrlFetchApp.
   let sel: { indices: number[]; justificativa: string } = { indices: [], justificativa: '' };
+  let ultimaResposta = '';
   for (let tentativa = 1; tentativa <= 2; tentativa++) {
     try {
       const resp = forjaCallLLM(
         [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
-        tentativa === 1 ? 4000 : 7000, undefined, 'kit',
+        tentativa === 1 ? 8000 : 9500, undefined, 'kit',
       );
+      ultimaResposta = String(resp || '');
       sel = _parseSelecaoLado(resp, lado);
       if (sel.indices.length > 0) break;
     } catch (e) {
@@ -25321,7 +25350,10 @@ function _selecionarLadoKit(m: MontagemKit, lado: 'skills' | 'agents'): { ids: s
     }
   }
   if (sel.indices.length === 0) {
-    throw new Error(`A Lume não retornou uma seleção válida de ${lado} (tentei 2 vezes). Se persistir, troque o modelo do serviço "Kits" no Roteamento de IA por um mais rápido/sem raciocínio longo.`);
+    const trecho = ultimaResposta.trim().slice(0, 160).replace(/\s+/g, ' ');
+    throw new Error(`A Lume não retornou uma seleção válida de ${lado} (tentei 2 vezes). `
+      + (trecho ? `A resposta do modelo começou assim: "${trecho}…". ` : 'O modelo devolveu resposta vazia. ')
+      + 'Se persistir, troque o modelo do serviço "Montagem de kits (Lume)" no Roteamento de IA por um mais rápido/sem raciocínio longo (ex.: Sonnet).');
   }
   const ids = sel.indices.map((i) => String(pool[i]?.id || '')).filter(Boolean);
   return { ids, justificativa: sel.justificativa };

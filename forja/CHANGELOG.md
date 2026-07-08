@@ -36,6 +36,25 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.268.1] — 2026-07-08
+
+### Corrigido — Seleção de kit ainda falhava com Fable 5 ("tentei 2 vezes")
+
+Caso real (print do usuário): a fase "Lume selecionando as skills" falhou nas
+2 tentativas mesmo com o modal novo. O modelo respondia (HTTP 200), mas com
+teto de 4.000/7.000 tokens o Fable 5 gastava tudo "pensando" sobre o catálogo
+de 120 itens e a resposta chegava cortada antes (ou no meio) do JSON.
+
+- **Teto de saída**: 4.000/7.000 → 8.000/9.500 tokens (dentro do que dá pra
+  gerar nos ~60s de timeout do UrlFetchApp).
+- **Parse endurecido** (`_parseSelecaoLado`): remove blocos de pensamento
+  (`<think>…</think>`) e cercas de código; se o JSON veio truncado, recupera
+  os índices via regex — no formato pedido o array `selecao` vem ANTES da
+  justificativa, então costuma estar completo mesmo em resposta cortada.
+- **Erro com diagnóstico**: se ainda assim falhar, a mensagem agora mostra o
+  começo da resposta do modelo (160 chars) — dá pra VER o que ele devolveu em
+  vez de adivinhar — e aponta o serviço certo ("Montagem de kits (Lume)").
+
 ## [1.268.0] — 2026-07-08
 
 ### Corrigido/Adicionado — Montagem de kit em etapas + modal de acompanhamento
