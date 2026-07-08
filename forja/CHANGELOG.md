@@ -36,6 +36,23 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.267.1] — 2026-07-07
+
+### Mudado — Kit "Fundação Vibe Code" curado por especialista
+
+- **Pilares do kit redefinidos por especialista** (pedido do usuário: "não siga
+  à risca o que eu disse — você é o especialista"): em vez de ecoar as dicas
+  originais, o objetivo agora define 8 pilares em ordem de prioridade pro
+  desenvolvimento assistido por IA, ancorados no MESMO vocabulário de temas que
+  o "Classificar por tema" usa na base (`SKILL_TEMAS`): (1) IA/Prompts — a
+  meta-skill do vibe coding, (2) Revisão de código — o ponto cego nº1 de quem
+  aceita código de IA sem auditar, (3) Segurança, (4) Design premium anti "cara
+  de IA", (5) Testes, (6) Frontend + Backend/Dados, (7) Documentação como
+  contexto pra IA, (8) Automação/Produtividade. A Lume localiza os candidatos
+  pelo campo `tema` do catálogo (que é exatamente o tipoIA/categoria da
+  classificação) e escolhe os de mais estrelas de cada pilar. Alvo subiu pra
+  20 skills. Re-montar o kit na estação Kits substitui a versão anterior.
+
 ## [1.267.0] — 2026-07-07
 
 ### Adicionado — Kit "Fundação Vibe Code" + revisão profunda em fila

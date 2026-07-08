@@ -25035,23 +25035,37 @@ const KIT_TEMPLATES: KitTemplate[] = [
       + 'de altíssimo impacto e reuso, que todo dev deveria ter desde o primeiro dia.',
   },
   {
-    // v1.267.0 — pedido do usuário: grupo-fundação com as skills MAIS BEM
-    // AVALIADAS pra ancorar qualquer vibe coding; depois roda revisão profunda
-    // em fila por cima desse kit.
-    id: 'fundacao-vibe', nome: 'Fundação Vibe Code', accent: 'clay', alvoSkills: 18, alvoAgents: 6,
-    descricao: 'As skills mais bem avaliadas que ancoram QUALQUER vibe coding: design, segurança, código limpo.',
-    objetivo: 'Montar a FUNDAÇÃO pra desenvolvimento assistido por IA (vibe coding com Cursor/Claude/ChatGPT): '
-      + 'o conjunto de skills e agents essenciais que deve estar presente em TODO projeto, independente da stack. '
-      + 'PILARES OBRIGATÓRIOS (garanta pelo menos 1-2 itens de cada, escolhendo SEMPRE os de MAIS estrelas): '
-      + '(1) DESIGN/UI/UX premium — interface minimalista com identidade própria, que pareça feita por designer '
-      + 'humano sênior, NÃO com cara genérica de app gerado por IA; '
-      + '(2) SEGURANÇA — revisão de código segura, AppSec, gestão de segredos, validação de input; '
-      + '(3) BOAS PRÁTICAS & CÓDIGO LIMPO — qualidade, legibilidade, refatoração, convenções; '
-      + '(4) REAPROVEITAMENTO — componentização, DRY, bibliotecas internas, patterns reutilizáveis; '
-      + '(5) ARQUITETURA & PLANEJAMENTO — decidir estrutura antes de codar, decomposição de tarefas; '
-      + '(6) TESTES & REVISÃO — cobertura pragmática e code review. '
-      + 'CRITÉRIO DE DESEMPATE: estrelas primeiro (priorize 4★-5★), depois generalidade (serve em qualquer '
-      + 'projeto). EVITE itens hiper-específicos de uma vertical de negócio — isso vai em coleções por domínio.',
+    // v1.267.0 — grupo-fundação pra vibe coding; alvo da revisão profunda em fila.
+    // v1.267.1 — pilares redefinidos POR ESPECIALISTA (não pelas dicas do usuário)
+    // e ancorados no vocabulário SKILL_TEMAS que a classificação da base já usa —
+    // o campo `tema` que a Lume recebe no pool é exatamente tipoIA/categoria.
+    id: 'fundacao-vibe', nome: 'Fundação Vibe Code', accent: 'clay', alvoSkills: 20, alvoAgents: 6,
+    descricao: 'A fundação de elite pro desenvolvimento assistido por IA: os 8 pilares que TODO projeto precisa, com as melhores skills da base.',
+    objetivo: 'Você é ESPECIALISTA em desenvolvimento assistido por IA (vibe coding com Cursor/Claude/ChatGPT). '
+      + 'Monte a FUNDAÇÃO definitiva: o conjunto de skills e agents que deve estar carregado em TODO projeto, '
+      + 'independente de stack ou vertical. Os pilares abaixo estão em ORDEM DE PRIORIDADE e usam os MESMOS '
+      + 'temas do campo `tema` do catálogo — use esse campo pra localizar os candidatos de cada pilar, '
+      + 'e dentro de cada pilar escolha SEMPRE os de mais estrelas (priorize 4-5). '
+      + 'PILAR 1 · IA/Prompts — a META-SKILL do vibe coding: engenharia de prompt, especificação de tarefas '
+      + 'pra agentes, gestão de contexto/memória (AGENTS.md, rules), decomposição de trabalho pra IA executar. '
+      + 'Sem isso os outros pilares rendem menos; garanta 2-3 itens fortes. '
+      + 'PILAR 2 · Revisão de código — o ponto cego nº1 de quem desenvolve com IA é aceitar código sem auditar: '
+      + 'code review sistemático, detecção de alucinação/overengineering, qualidade e legibilidade. '
+      + 'PILAR 3 · Segurança — código gerado por IA vaza segredo, esquece validação e abre OWASP Top 10 com '
+      + 'frequência: AppSec, revisão segura, gestão de segredos, validação de input, authz. '
+      + 'PILAR 4 · Design — o diferencial visível: UI/UX premium, minimalista, com identidade própria, que '
+      + 'pareça feita por designer humano sênior e NÃO com a cara genérica de app gerado por IA. '
+      + 'PILAR 5 · Testes — rede de segurança pra iterar rápido sem regressão: testes pragmáticos, '
+      + 'cobertura do que importa, testes como especificação executável. '
+      + 'PILAR 6 · Frontend + Backend/Dados — fundamentos estruturais que a IA erra sozinha: componentização '
+      + 'e reuso no front; modelagem de dados, design de API e arquitetura no back (1-2 de cada). '
+      + 'PILAR 7 · Documentação — specs, ADRs e docs curtas que viram CONTEXTO pra IA nas próximas sessões. '
+      + 'PILAR 8 · Automação/Produtividade — git workflow, refatoração assistida, debugging sistemático. '
+      + 'AGENTS: selecione papéis complementares cobrindo orquestração/tech-lead, revisão de código, '
+      + 'segurança e design — sem redundância. '
+      + 'REGRAS FINAIS: estrelas primeiro; em empate, prefira o mais GENÉRICO (serve em qualquer projeto). '
+      + 'EXCLUA itens hiper-específicos de vertical de negócio (contabilidade, CRM…) e de infra pesada '
+      + '(Kubernetes, cloud) — fundação é o que se usa TODO dia, em TODO projeto.',
   },
   {
     id: 'gas', nome: 'Google Apps Script — Completo', accent: 'sage', alvoSkills: 28, alvoAgents: 10,
