@@ -16,6 +16,7 @@ import callServer from '../gas-client';
 import type { ServerResult } from '../types';
 import ImportarLoteModal from './ImportarLoteModal';
 import OtimizadorIAModal, { RevisaoProfundaModal } from './OtimizadorIAModal';
+import RevisaoFilaModal from './RevisaoFilaModal';
 import TriagemImportacaoModal, { type ItemTriagem } from './TriagemImportacaoModal';
 import EstrelasQualidade from './EstrelasQualidade';
 import { FiltroChip, ChipGroup, GrupoAcoes, GrupoDivisor, CommandBar } from './HubToolbar';
@@ -113,6 +114,8 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
   // v1.265.0 — Otimizador IA (metadados em massa) + revisão profunda (conteúdo).
   const [otimizadorAberto, setOtimizadorAberto] = useState(false);
   const [revisaoProfundaAberta, setRevisaoProfundaAberta] = useState(false);
+  // v1.267.0 — revisão profunda em fila (grupo-fundação/kit ou filtro por estrelas).
+  const [revisaoFilaAberta, setRevisaoFilaAberta] = useState(false);
   // v1.152.0 — estrelas: filtro top, ordenação e avaliação Lume.
   const [soTop, setSoTop] = useState(false);
   const [ordenarPorEstrelas, setOrdenarPorEstrelas] = useState(false);
@@ -444,6 +447,15 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
                 Otimizar com IA
               </Button>
             </Tooltip>
+            <Tooltip title="A IA reescreve o CONTEÚDO completo de um grupo de agents (um kit da Lume ou filtro por estrelas + categorias), um por um. Você aprova os antes/depois antes de gravar.">
+              <Button
+                icon={<ListChecks size={14} />}
+                onClick={() => setRevisaoFilaAberta(true)}
+                style={{ borderColor: `${t.accents.clay}66`, color: t.accents.clay, background: `${t.accents.clay}0d` }}
+              >
+                Revisão profunda em fila
+              </Button>
+            </Tooltip>
           </GrupoAcoes>
         )}
 
@@ -508,6 +520,16 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
         aberto={otimizadorAberto}
         onClose={() => setOtimizadorAberto(false)}
         tipo="agents"
+        categoriasExistentes={categoriasExistentes}
+        onAplicado={() => { void carregar(); }}
+      />
+
+      {/* v1.267.0 — Revisão profunda em fila (grupo-fundação/kit ou filtro). */}
+      <RevisaoFilaModal
+        aberto={revisaoFilaAberta}
+        onClose={() => setRevisaoFilaAberta(false)}
+        tipo="agents"
+        itens={agents}
         categoriasExistentes={categoriasExistentes}
         onAplicado={() => { void carregar(); }}
       />

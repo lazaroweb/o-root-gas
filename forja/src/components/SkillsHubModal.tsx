@@ -19,6 +19,7 @@ import { GAS_APP_KIT_SKILLS } from '../data/gasAppKitSkills';
 import ComoUsarSkill from './ComoUsarSkill';
 import ImportarLoteModal from './ImportarLoteModal';
 import OtimizadorIAModal, { RevisaoProfundaModal } from './OtimizadorIAModal';
+import RevisaoFilaModal from './RevisaoFilaModal';
 import TriagemImportacaoModal, { type ItemTriagem } from './TriagemImportacaoModal';
 import EstrelasQualidade from './EstrelasQualidade';
 import { FiltroChip, ChipGroup, GrupoAcoes, GrupoDivisor, CommandBar } from './HubToolbar';
@@ -284,6 +285,8 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
   // v1.265.0 — Otimizador IA (metadados em massa) + revisão profunda (conteúdo).
   const [otimizadorAberto, setOtimizadorAberto] = useState(false);
   const [revisaoProfundaAberta, setRevisaoProfundaAberta] = useState(false);
+  // v1.267.0 — revisão profunda em fila (grupo-fundação/kit ou filtro por estrelas).
+  const [revisaoFilaAberta, setRevisaoFilaAberta] = useState(false);
   const [openSources, setOpenSources] = useState<string[]>([]);
   // Categorias abertas por pasta: { [chaveDaPasta]: string[] }. Tudo recolhido
   // por padrão; o usuário expande só o tema que quer ver.
@@ -1090,6 +1093,15 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                             Otimizar com IA
                           </Button>
                         </Tooltip>
+                        <Tooltip title="A IA reescreve o CONTEÚDO completo de um grupo de skills (um kit da Lume ou filtro por estrelas + categorias), uma por uma. Você aprova os antes/depois antes de gravar.">
+                          <Button
+                            icon={<ListChecks size={14} />}
+                            onClick={() => setRevisaoFilaAberta(true)}
+                            style={{ borderColor: `${t.accents.clay}66`, color: t.accents.clay, background: `${t.accents.clay}0d` }}
+                          >
+                            Revisão profunda em fila
+                          </Button>
+                        </Tooltip>
                       </GrupoAcoes>
                     )}
 
@@ -1545,6 +1557,16 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
         aberto={otimizadorAberto}
         onClose={() => setOtimizadorAberto(false)}
         tipo="skills"
+        categoriasExistentes={categoriasExistentes}
+        onAplicado={() => { void carregar(); }}
+      />
+
+      {/* v1.267.0 — Revisão profunda em fila (grupo-fundação/kit ou filtro). */}
+      <RevisaoFilaModal
+        aberto={revisaoFilaAberta}
+        onClose={() => setRevisaoFilaAberta(false)}
+        tipo="skills"
+        itens={skills}
         categoriasExistentes={categoriasExistentes}
         onAplicado={() => { void carregar(); }}
       />

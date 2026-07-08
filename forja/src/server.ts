@@ -25035,6 +25035,25 @@ const KIT_TEMPLATES: KitTemplate[] = [
       + 'de altíssimo impacto e reuso, que todo dev deveria ter desde o primeiro dia.',
   },
   {
+    // v1.267.0 — pedido do usuário: grupo-fundação com as skills MAIS BEM
+    // AVALIADAS pra ancorar qualquer vibe coding; depois roda revisão profunda
+    // em fila por cima desse kit.
+    id: 'fundacao-vibe', nome: 'Fundação Vibe Code', accent: 'clay', alvoSkills: 18, alvoAgents: 6,
+    descricao: 'As skills mais bem avaliadas que ancoram QUALQUER vibe coding: design, segurança, código limpo.',
+    objetivo: 'Montar a FUNDAÇÃO pra desenvolvimento assistido por IA (vibe coding com Cursor/Claude/ChatGPT): '
+      + 'o conjunto de skills e agents essenciais que deve estar presente em TODO projeto, independente da stack. '
+      + 'PILARES OBRIGATÓRIOS (garanta pelo menos 1-2 itens de cada, escolhendo SEMPRE os de MAIS estrelas): '
+      + '(1) DESIGN/UI/UX premium — interface minimalista com identidade própria, que pareça feita por designer '
+      + 'humano sênior, NÃO com cara genérica de app gerado por IA; '
+      + '(2) SEGURANÇA — revisão de código segura, AppSec, gestão de segredos, validação de input; '
+      + '(3) BOAS PRÁTICAS & CÓDIGO LIMPO — qualidade, legibilidade, refatoração, convenções; '
+      + '(4) REAPROVEITAMENTO — componentização, DRY, bibliotecas internas, patterns reutilizáveis; '
+      + '(5) ARQUITETURA & PLANEJAMENTO — decidir estrutura antes de codar, decomposição de tarefas; '
+      + '(6) TESTES & REVISÃO — cobertura pragmática e code review. '
+      + 'CRITÉRIO DE DESEMPATE: estrelas primeiro (priorize 4★-5★), depois generalidade (serve em qualquer '
+      + 'projeto). EVITE itens hiper-específicos de uma vertical de negócio — isso vai em coleções por domínio.',
+  },
+  {
     id: 'gas', nome: 'Google Apps Script — Completo', accent: 'sage', alvoSkills: 28, alvoAgents: 10,
     descricao: 'O kit dos sonhos da SUA stack: fundação + segurança + front + dados + o específico de GAS, tudo junto.',
     objetivo: 'Montar o kit COMPLETO e definitivo pra desenvolver na stack Google Apps Script (GAS) — '

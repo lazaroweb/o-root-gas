@@ -36,6 +36,28 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.267.0] — 2026-07-07
+
+### Adicionado — Kit "Fundação Vibe Code" + revisão profunda em fila
+
+- **Kit "Fundação Vibe Code"** (novo template na estação Kits): a Lume monta o
+  grupo de skills/agents essenciais pra QUALQUER desenvolvimento assistido por
+  IA, priorizando os de mais estrelas em 6 pilares obrigatórios — design/UI
+  premium, segurança, boas práticas & código limpo, reaproveitamento,
+  arquitetura/planejamento e testes/revisão. Pedido do usuário: "pegar as com
+  mais estrelas que montam uma fundação pra vibe code".
+- **Revisão profunda em fila** (botão novo na Curadoria dos hubs de Skills e
+  Agents): em vez de revisar o conteúdo item por item pelo drawer, você escolhe
+  um GRUPO — um kit montado pela Lume (ex.: o Fundação Vibe Code) ou um filtro
+  por estrelas mínimas + categorias — e a IA reescreve o conteúdo completo de
+  cada item, um por um (1 chamada por item, sem esbarrar no limite de 6 min do
+  GAS). A fila anda categoria por categoria, com progresso, botão de parar no
+  meio, e itens que falharem são pulados com o motivo. No fim, uma lista de
+  antes/depois expansível: você aprova/reprova cada um e só o aprovado é
+  gravado. Itens acima de 28KB são marcados e ficam de fora (limite do server).
+- Na pré-visualização do grupo dá pra desmarcar itens manualmente, e quem já
+  tem selo "Revisada · IA" aparece marcado (pode revisar de novo se quiser).
+
 ## [1.266.0] — 2026-07-07
 
 ### Adicionado — Otimizador IA resiliente + selo "Revisada" + filtro por categorias
