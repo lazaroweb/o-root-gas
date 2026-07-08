@@ -74,6 +74,10 @@ interface AgentFull extends AgentSummary {
   meta?: Record<string, unknown> | null;
 }
 
+// v1.268.6 — cache de sessão da lista (module-level). Evita refetch de todos
+// os agents a cada troca de estação do Atelier.
+let _cacheAgentsHub: { agents: AgentSummary[]; fontes: FonteMeta[] } | null = null;
+
 function bytesHumano(b: number): string {
   if (!b) return '0 B';
   if (b < 1024) return `${b} B`;
@@ -128,14 +132,24 @@ export default function AgentsHubModal({ embedded: _embedded }: Props): React.Re
   const [montandoSeg, setMontandoSeg] = useState<string | null>(null);
 
   const carregar = async () => {
-    setLoading(true);
+    // v1.268.6 — cache de sessão: troca de estação reusa a última lista na
+    // hora e atualiza em background (mesmo padrão do SkillsHubModal).
+    if (_cacheAgentsHub) {
+      setAgents(_cacheAgentsHub.agents);
+      setFontes(_cacheAgentsHub.fontes);
+    } else {
+      setLoading(true);
+    }
     try {
       const [r, rf] = await Promise.all([
         callServer<ServerResult>('agentsList'),
         callServer<ServerResult>('skillFontesList'),
       ]);
-      if (r.ok && r.data) setAgents(r.data as AgentSummary[]);
-      if (rf.ok && rf.data) setFontes(rf.data as FonteMeta[]);
+      const ag = r.ok && r.data ? (r.data as AgentSummary[]) : null;
+      const fs = rf.ok && rf.data ? (rf.data as FonteMeta[]) : null;
+      if (ag) setAgents(ag);
+      if (fs) setFontes(fs);
+      if (ag && fs) _cacheAgentsHub = { agents: ag, fontes: fs };
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Erro ao carregar agents');
     } finally {

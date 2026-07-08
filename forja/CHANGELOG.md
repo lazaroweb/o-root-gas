@@ -36,6 +36,29 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.268.6] — 2026-07-08
+
+### Corrigido — Atelier carregando MUITO mais rápido (leitura seletiva de colunas)
+
+Relato do usuário: "quando eu recarrego a página do Atelier fica demorando
+muito... tá osso demais". Causa-raiz: com ~1000 skills na base, as listagens
+liam a tabela INTEIRA do Sheets — incluindo a coluna `conteudo` (o markdown
+completo de cada skill, megabytes) que a lista nunca exibe.
+
+- **`dbGetAllCols` (engine)**: leitura seletiva de colunas do SheetDB — agrupa
+  as colunas pedidas em faixas contíguas e lê só elas, pulando as gigantes
+  (`conteudo`, `traducaoPt`, `secoesJson`).
+- **`skillsList` / `agentsList`**: passam a ler só as ~22 colunas de metadados.
+- **`getAtelierStats`** (Visão geral, aba padrão do Atelier): contava linhas
+  lendo TODAS as tabelas inteiras (CodexCards 2x!). Agora conta via
+  `getLastRow()`, lê só colunas de data pra recência e guarda o resultado em
+  cache de 5 min.
+- **`skillFontesList`**: lia a tabela Skills inteira só pra extrair prefixos
+  de pasta — agora lê só a coluna `fonte`.
+- **Cache de sessão no frontend** (Skills e Agents Hub): trocar de estação no
+  Atelier mostra a última lista NA HORA e atualiza em background, em vez de
+  tela de loading a cada ida-e-volta.
+
 ## [1.268.5] — 2026-07-08
 
 ### Corrigido — Reavaliação de pasta não entra mais em loop nas mesmas 40 skills

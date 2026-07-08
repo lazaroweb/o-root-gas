@@ -1268,6 +1268,47 @@ function dbGetAll(sheetName: string): Record<string, unknown>[] {
   return sheetToObjects(sheetName);
 }
 
+// v1.268.6 — leitura SELETIVA de colunas. Em tabelas com colunas gigantes
+// (Skills/Agents guardam o markdown inteiro em `conteudo`, além de
+// `traducaoPt`/`secoesJson`), o getValues() da faixa completa arrasta
+// megabytes que a listagem descarta — era o principal motivo do Atelier
+// demorar. Agrupa as colunas pedidas em faixas contíguas (1 getRange por
+// faixa) pra minimizar chamadas ao Sheets.
+function dbGetAllCols(sheetName: string, cols: string[]): Record<string, unknown>[] {
+  const schema = SCHEMA.find(s => s.name === sheetName);
+  if (!schema) return [];
+  const sheet = getSpreadsheet().getSheetByName(sheetName);
+  if (!sheet) return [];
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return [];
+  const n = lastRow - 1;
+
+  // Índices (1-based) das colunas pedidas que existem no schema, ordenados.
+  const idx = cols
+    .map((c) => ({ col: c, i: schema.columns.indexOf(c) + 1 }))
+    .filter((x) => x.i > 0)
+    .sort((a, b) => a.i - b.i);
+  if (idx.length === 0) return [];
+
+  // Agrupa em faixas contíguas: [{start, cols: [...]}]
+  const faixas: Array<{ start: number; cols: string[] }> = [];
+  for (const x of idx) {
+    const ult = faixas[faixas.length - 1];
+    if (ult && x.i === ult.start + ult.cols.length) ult.cols.push(x.col);
+    else faixas.push({ start: x.i, cols: [x.col] });
+  }
+
+  const out: Record<string, unknown>[] = [];
+  for (let r = 0; r < n; r++) out.push({});
+  for (const f of faixas) {
+    const values = sheet.getRange(2, f.start, n, f.cols.length).getValues();
+    for (let r = 0; r < n; r++) {
+      for (let c = 0; c < f.cols.length; c++) out[r][f.cols[c]] = values[r][c];
+    }
+  }
+  return out;
+}
+
 function dbGetById(sheetName: string, id: string): Record<string, unknown> | null {
   const all = sheetToObjects(sheetName);
   return all.find(row => row['id'] === id) || null;
@@ -25870,9 +25911,16 @@ function kitExportar(id: string): ServerResult {
 }
 
 // Lista todas as skills com metadados (sem o conteúdo completo, pra ser leve).
+// v1.268.6 — leitura seletiva de colunas: pula `conteudo`/`traducaoPt`/
+// `secoesJson` (megabytes que a lista nunca usa). Com 990 skills, era o
+// gargalo nº 1 do carregamento do Atelier.
+const SKILLS_LIST_COLS = ['id', 'nome', 'descricao', 'descricaoPt', 'tipoIA', 'categoria', 'tags',
+  'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'favorita', 'favoritadaEm', 'slug',
+  'idExterno', 'usos', 'relacionadas', 'quandoUsar', 'estrelas', 'estrelasMotivo', 'avaliadaEm', 'revisadaIAEm'];
+
 function skillsList(): ServerResult {
   try {
-    const todas = (dbGetAll('Skills') as Array<Record<string, unknown>>)
+    const todas = (dbGetAllCols('Skills', SKILLS_LIST_COLS) as Array<Record<string, unknown>>)
       .map((s) => ({
         id: String(s.id || ''),
         nome: String(s.nome || ''),
@@ -25996,9 +26044,16 @@ function skillsDelete(id: string): ServerResult {
 // Quando o user mandar o prompt com a ESTRUTURA específica dos agents, vamos
 // estender essas funções com campos detalhados (modelo, ferramentas, etc).
 
+// v1.268.6 — mesma leitura seletiva do skillsList (pula conteudo/traducaoPt/
+// secoesJson/adaptacoes/metaJson, que a listagem não usa).
+const AGENTS_LIST_COLS = ['id', 'nome', 'descricao', 'descricaoPt', 'tipoIA', 'categoria', 'tags',
+  'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm', 'favorita', 'favoritadaEm', 'slug',
+  'idExterno', 'usos', 'relacionadas', 'quandoUsar', 'modelo', 'ferramentas', 'tipo',
+  'diretrizFinal', 'dominios', 'estrelas', 'estrelasMotivo', 'avaliadaEm', 'revisadaIAEm'];
+
 function agentsList(): ServerResult {
   try {
-    const todos = (dbGetAll('Agents') as Array<Record<string, unknown>>)
+    const todos = (dbGetAllCols('Agents', AGENTS_LIST_COLS) as Array<Record<string, unknown>>)
       .map((a) => ({
         id: String(a.id || ''),
         nome: String(a.nome || ''),
@@ -26273,7 +26328,9 @@ function skillFontesList(): ServerResult {
   try {
     const fontes = dbGetAll('SkillFontes') as Array<Record<string, unknown>>;
     const porChave = new Map(fontes.map((f) => [String(f.chave || ''), f]));
-    const skills = dbGetAll('Skills') as Array<Record<string, unknown>>;
+    // v1.268.6 — só precisamos da coluna `fonte`; ler a tabela inteira
+    // arrastava o conteúdo de ~1000 skills só pra montar prefixos de pasta.
+    const skills = dbGetAllCols('Skills', ['fonte']) as Array<Record<string, unknown>>;
     const prefixos = new Set<string>();
     for (const s of skills) {
       const k = _chaveDaFonte(String(s.fonte || ''));
@@ -28607,24 +28664,35 @@ function testarWebhook(url: string): ServerResult {
 //
 // Cada try/catch isolado: se uma tabela ainda não foi inicializada, retorna 0
 // pra essa estação sem derrubar a chamada inteira.
+// v1.268.6 — reescrito pra velocidade. Antes: dbGetAll (TODAS as colunas,
+// incluindo `conteudo` de 990 skills) em ~10 tabelas, CodexCards lido 2x —
+// vários segundos e megabytes só pra contar linhas. Agora: contagem via
+// getLastRow(), recência lendo SÓ as colunas de data, e cache de 5 min
+// (indicador de landing não precisa ser tempo-real).
 function getAtelierStats(): ServerResult {
   try {
+    const cache = CacheService.getScriptCache();
+    const cacheado = cache.get('ATELIER_STATS_V1');
+    if (cacheado) return { ok: true, data: JSON.parse(cacheado) };
+
     initDatabase();
-    const safeCount = (tabela: string): number => {
-      try { return (dbGetAll(tabela) as unknown[]).length; } catch { return 0; }
+    const ss = getSpreadsheet();
+    const contar = (tabela: string): number => {
+      try {
+        const sheet = ss.getSheetByName(tabela);
+        return sheet ? Math.max(0, sheet.getLastRow() - 1) : 0;
+      } catch { return 0; }
     };
-    const codexCards = safeCount('CodexCards');
     const codexIa = (() => {
       try {
-        return (dbGetAll('CodexCards') as Array<Record<string, unknown>>)
+        return (dbGetAllCols('CodexCards', ['incluirEmIa']) as Array<Record<string, unknown>>)
           .filter((c) => c['incluirEmIa'] === 'sim').length;
       } catch { return 0; }
     })();
 
     // ─── Recência / atividade ──────────────────────────────────────────────
-    // Varre as tabelas das estações procurando o timestamp mais recente e
-    // conta quantos itens entraram nos últimos 7 dias. Defensivo: campos de
-    // data variam por tabela, então tentamos um conjunto e ignoramos inválidos.
+    // Timestamp mais recente + itens dos últimos 7 dias, lendo apenas as
+    // colunas de data de cada tabela (leitura seletiva).
     const TABELAS_ESTACAO = ['Skills', 'Snippets', 'Templates', 'Bookmarks', 'CodexCards', 'Receituario', 'Provedores', 'Cofre'];
     const CAMPOS_DATA = ['atualizadoEm', 'criadoEm', 'data', 'createdAt', 'updatedAt'];
     const agoraMs = Date.now();
@@ -28633,7 +28701,7 @@ function getAtelierStats(): ServerResult {
     let novosNaSemana = 0;
     for (const tab of TABELAS_ESTACAO) {
       let linhas: Array<Record<string, unknown>> = [];
-      try { linhas = dbGetAll(tab) as Array<Record<string, unknown>>; } catch { continue; }
+      try { linhas = dbGetAllCols(tab, CAMPOS_DATA) as Array<Record<string, unknown>>; } catch { continue; }
       for (const row of linhas) {
         let melhorMs = 0;
         for (const campo of CAMPOS_DATA) {
@@ -28649,18 +28717,19 @@ function getAtelierStats(): ServerResult {
     }
 
     const stats = {
-      skills: safeCount('Skills'),
-      snippets: safeCount('Snippets'),
-      templates: safeCount('Templates'),
-      bookmarks: safeCount('Bookmarks'),
-      codex: codexCards,
+      skills: contar('Skills'),
+      snippets: contar('Snippets'),
+      templates: contar('Templates'),
+      bookmarks: contar('Bookmarks'),
+      codex: contar('CodexCards'),
       codexNaIa: codexIa,
-      receituario: safeCount('Receituario'),
-      hospedagem: safeCount('Provedores'),
-      cofre: safeCount('Cofre'),
+      receituario: contar('Receituario'),
+      hospedagem: contar('Provedores'),
+      cofre: contar('Cofre'),
       ultimaAtividade: ultimaMs > 0 ? new Date(ultimaMs).toISOString() : '',
       novosNaSemana,
     };
+    try { cache.put('ATELIER_STATS_V1', JSON.stringify(stats), 300); } catch { /* cache é otimização */ }
     return { ok: true, data: stats };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro ao buscar stats' };

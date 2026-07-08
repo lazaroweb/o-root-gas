@@ -80,6 +80,10 @@ interface SkillFonte {
 
 interface Traducao { conteudo: string; descricao: string; idioma?: string; em?: string }
 
+// v1.268.6 — cache de sessão da lista (module-level: vive enquanto a página
+// está aberta). Evita refetch de ~1000 skills a cada troca de estação.
+let _cacheSkillsHub: { skills: SkillSummary[]; fontes: SkillFonte[] } | null = null;
+
 // v1.149.0 — Bloco estruturado extraído do markdown (uma seção H2 do conteúdo).
 // `chave` é canonical (quando_usar, identidade, pre_execucao, principios, regras,
 // boas_praticas, framework, checklist, metadados, exemplos, antipadroes, outra).
@@ -454,14 +458,26 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
   const [previewing, setPreviewing] = useState(false);
 
   const carregar = useCallback(() => {
-    setLoading(true);
+    // v1.268.6 — cache de sessão: ao voltar pra estação Skills, mostra a
+    // última lista NA HORA e atualiza em background (sem tela de loading).
+    // Com ~1000 skills a resposta do servidor leva segundos; sem isso toda
+    // troca de aba do Atelier "recomeçava do zero".
+    if (_cacheSkillsHub) {
+      setSkills(_cacheSkillsHub.skills);
+      setFontes(_cacheSkillsHub.fontes);
+    } else {
+      setLoading(true);
+    }
     Promise.all([
       callServer<ServerResult>('skillsList'),
       callServer<ServerResult>('skillFontesList'),
     ])
       .then(([rs, rf]) => {
-        if (rs.ok && rs.data) setSkills(rs.data as SkillSummary[]);
-        if (rf.ok && rf.data) setFontes(rf.data as SkillFonte[]);
+        const sk = rs.ok && rs.data ? (rs.data as SkillSummary[]) : null;
+        const fs = rf.ok && rf.data ? (rf.data as SkillFonte[]) : null;
+        if (sk) setSkills(sk);
+        if (fs) setFontes(fs);
+        if (sk && fs) _cacheSkillsHub = { skills: sk, fontes: fs };
       })
       .catch(() => { /* preview */ })
       .finally(() => setLoading(false));
