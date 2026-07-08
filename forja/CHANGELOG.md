@@ -36,6 +36,25 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.268.2] — 2026-07-08
+
+### Corrigido — Kit com Fable 5: seleção agora peneira o catálogo em blocos
+
+O diagnóstico da v1.268.1 revelou a causa exata (print do usuário): a resposta
+começava com `<think>` e o modelo gastava TODO o teto de tokens raciocinando
+sobre o catálogo de 120 skills, sendo cortado antes de emitir o JSON. Dar mais
+tokens não resolve — cada chamada já beira os ~60s do UrlFetchApp.
+
+- **Peneira em blocos (map-reduce)**: catálogo grande é dividido em blocos de
+  40; a Lume pré-seleciona os melhores de cada bloco (raciocínio pequeno por
+  chamada) e uma RODADA FINAL decide só entre os classificados. Bloco que
+  falhar não derruba a montagem — classifica os top-estrelas dele e segue.
+- **Decisão de produto**: o usuário quer manter o Fable 5 na curadoria (modelo
+  forte). Com a peneira, dá — cada chamada pensa sobre 40 itens em vez de 120.
+  A fase de seleção pode levar 2-4 min com modelo de raciocínio (o modal
+  avisa); com um Sonnet fica ~30s.
+- Prompt reforçado com "Seja DIRETO — não é preciso analisar item por item".
+
 ## [1.268.1] — 2026-07-08
 
 ### Corrigido — Seleção de kit ainda falhava com Fable 5 ("tentei 2 vezes")

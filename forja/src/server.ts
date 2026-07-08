@@ -25311,36 +25311,34 @@ function _parseSelecaoLado(resp: string, lado: 'skills' | 'agents'): { indices: 
   return { indices: [], justificativa: '' };
 }
 
-// Uma chamada de LLM selecionando SÓ skills ou SÓ agents. Catálogo e saída
-// pela metade = latência bem abaixo do timeout de 60s do UrlFetchApp.
-function _selecionarLadoKit(m: MontagemKit, lado: 'skills' | 'agents'): { ids: string[]; justificativa: string } {
-  const tabela = lado === 'skills' ? 'Skills' : 'Agents';
-  const teto = lado === 'skills' ? 120 : 60;
-  const alvo = lado === 'skills' ? m.alvoSkills : m.alvoAgents;
-  const pool = _poolCandidatos(tabela, teto, m.fonteEscopo);
-  if (pool.length === 0) return { ids: [], justificativa: '' };
-
+// Uma chamada de LLM de seleção sobre um conjunto de itens. Retry embutido;
+// se falhar nas 2 tentativas, lança erro com o começo da resposta (diagnóstico).
+function _chamadaSelecaoKit(
+  m: MontagemKit, lado: 'skills' | 'agents',
+  itens: Array<Record<string, unknown>>, alvo: number,
+  modo: 'peneira' | 'final',
+): { indices: number[]; justificativa: string } {
+  const instrucao = modo === 'peneira'
+    ? `Este é um BLOCO de um catálogo maior (pré-filtro): selecione os até ~${alvo} itens deste bloco que mais merecem ir pra seleção final. Se o bloco tiver poucos itens bons, selecione menos.`
+    : `Selecione os ~${alvo} MELHORES itens pro objetivo (pode variar um pouco).`;
   const sys = `Você é a Lume, curadora de kits de desenvolvimento. A partir de um OBJETIVO e de um catálogo de ${lado} `
-    + '(cada item com índice `i`, nome, tema, estrelas 0-5 e descrição), selecione os MELHORES pro objetivo. '
-    + `Alvo: ~${alvo} itens (pode variar um pouco). Priorize itens com mais estrelas e alta aderência ao objetivo; `
-    + 'evite redundância. Responda SOMENTE com um objeto JSON, sem texto extra, no formato '
-    + '{"selecao":[indices],"justificativa":"1-2 frases explicando a escolha"}.';
+    + '(cada item com índice `i`, nome, tema, estrelas 0-5 e descrição), '
+    + instrucao + ' Priorize itens com mais estrelas e alta aderência ao objetivo; evite redundância. '
+    + 'Seja DIRETO — não é preciso analisar item por item. Responda SOMENTE com um objeto JSON, sem texto extra, '
+    + 'no formato {"selecao":[indices],"justificativa":"1-2 frases explicando a escolha"}.';
   const userMsg = JSON.stringify({
     objetivo: `${m.nome} — ${m.objetivo}`,
-    [lado]: pool.map(_kitCompacto),
+    [lado]: itens.map(_kitCompacto),
   });
+  const maxT: [number, number] = modo === 'peneira' ? [5000, 6500] : [8000, 9500];
 
-  // v1.268.1 — teto maior (modelos de raciocínio gastam o budget "pensando"
-  // sobre o catálogo de 120 itens antes de escrever o JSON; com 4000 a
-  // resposta vinha cortada ANTES do array de índices). 8000/9500 fica dentro
-  // do que dá pra gerar nos ~60s de timeout do UrlFetchApp.
   let sel: { indices: number[]; justificativa: string } = { indices: [], justificativa: '' };
   let ultimaResposta = '';
   for (let tentativa = 1; tentativa <= 2; tentativa++) {
     try {
       const resp = forjaCallLLM(
         [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
-        tentativa === 1 ? 8000 : 9500, undefined, 'kit',
+        maxT[tentativa - 1], undefined, 'kit',
       );
       ultimaResposta = String(resp || '');
       sel = _parseSelecaoLado(resp, lado);
@@ -25355,8 +25353,56 @@ function _selecionarLadoKit(m: MontagemKit, lado: 'skills' | 'agents'): { ids: s
       + (trecho ? `A resposta do modelo começou assim: "${trecho}…". ` : 'O modelo devolveu resposta vazia. ')
       + 'Se persistir, troque o modelo do serviço "Montagem de kits (Lume)" no Roteamento de IA por um mais rápido/sem raciocínio longo (ex.: Sonnet).');
   }
-  const ids = sel.indices.map((i) => String(pool[i]?.id || '')).filter(Boolean);
-  return { ids, justificativa: sel.justificativa };
+  return sel;
+}
+
+// Seleciona SÓ skills ou SÓ agents pro kit.
+// v1.268.2 — peneira em blocos (map-reduce): modelos de raciocínio (Fable 5)
+// "pensavam" tanto sobre o catálogo de 120 itens que estouravam o teto de
+// tokens ainda DENTRO do <think>, sem nunca emitir o JSON (caso real, print do
+// usuário). Dividir em blocos de 40 reduz o raciocínio por chamada pra uma
+// fração; a rodada final decide só entre os classificados. Mantém o modelo
+// bom que o usuário quer usar, sem estourar os ~60s do UrlFetchApp por chamada.
+const _BLOCO_PENEIRA_KIT = 40;
+
+function _selecionarLadoKit(m: MontagemKit, lado: 'skills' | 'agents'): { ids: string[]; justificativa: string } {
+  const tabela = lado === 'skills' ? 'Skills' : 'Agents';
+  const teto = lado === 'skills' ? 120 : 60;
+  const alvo = lado === 'skills' ? m.alvoSkills : m.alvoAgents;
+  const pool = _poolCandidatos(tabela, teto, m.fonteEscopo);
+  if (pool.length === 0) return { ids: [], justificativa: '' };
+
+  // Catálogo grande → peneira por blocos primeiro.
+  let candidatos = pool;
+  if (pool.length > _BLOCO_PENEIRA_KIT + 10) {
+    const finalistas: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < pool.length; i += _BLOCO_PENEIRA_KIT) {
+      const bloco = pool.slice(i, i + _BLOCO_PENEIRA_KIT);
+      // Alvo proporcional ao tamanho do bloco, com folga pra final ter opções.
+      const alvoBloco = Math.max(5, Math.ceil(alvo * (bloco.length / pool.length)) + 3);
+      try {
+        const sel = _chamadaSelecaoKit(m, lado, bloco, alvoBloco, 'peneira');
+        for (const ix of sel.indices) { if (bloco[ix]) finalistas.push(bloco[ix]); }
+      } catch {
+        // Bloco que falhar não derruba a montagem: classifica os top-estrelas
+        // dele (o pool já vem ordenado por estrelas → usos).
+        finalistas.push(...bloco.slice(0, alvoBloco));
+      }
+    }
+    if (finalistas.length > 0) candidatos = finalistas;
+  }
+
+  // Rodada final: decide entre os classificados. Se a peneira já devolveu
+  // quantidade ≤ alvo, não há o que decidir — aceita direto.
+  if (candidatos.length <= alvo) {
+    return {
+      ids: candidatos.map((c) => String(c.id || '')).filter(Boolean),
+      justificativa: 'Seleção peneirada por blocos, priorizando estrelas e aderência ao objetivo.',
+    };
+  }
+  const selFinal = _chamadaSelecaoKit(m, lado, candidatos, alvo, 'final');
+  const ids = selFinal.indices.map((i) => String(candidatos[i]?.id || '')).filter(Boolean);
+  return { ids, justificativa: selFinal.justificativa };
 }
 
 // Upsert do kit por templateId (cada template/domínio tem no máximo 1 salvo).

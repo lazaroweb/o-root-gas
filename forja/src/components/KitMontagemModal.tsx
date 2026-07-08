@@ -262,7 +262,7 @@ export default function KitMontagemModal({ params, onClose, onConcluido }: Props
               {e.status === 'ativa' && (
                 <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textSecondary, marginTop: 2 }}>
                   {e.id === 'skills' || e.id === 'agents'
-                    ? 'a Lume está lendo o catálogo e escolhendo… (~30-60s com modelo de raciocínio)'
+                    ? 'a Lume peneira o catálogo em blocos e faz uma final com os classificados — com modelo de raciocínio pode levar 2-4 min'
                     : 'um instante…'}
                 </div>
               )}
