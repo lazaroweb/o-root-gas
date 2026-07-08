@@ -124,6 +124,13 @@
 
 #### Backlog geral
 
+- **Aviso de limite de versões no deploy**: o Apps Script trava em 200 versões
+  por projeto e o Google NÃO tem API pra apagar (só manual, no editor →
+  Histórico do projeto → lixeira → exclusão em massa). Em 08/07/2026 o deploy
+  da v1.267.2 falhou por isso e travou o fluxo até limpeza manual. Proposta:
+  `scripts/deploy.cjs` roda `clasp versions` antes do deploy e, se contar
+  ≥180, imprime aviso com o passo a passo da limpeza (com a URL do projeto).
+  Estimativa: 15 min. Trigger: caso real de 08/07/2026.
 - **Dunning automático**: alerta/e-mail de inadimplência quando uma cobrança
   vence sem recebimento (integrar ao motor de automações existente)
 - **Anexar PDF ao e-mail**: recibo/fatura/relatório como anexo no digest
