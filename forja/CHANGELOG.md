@@ -36,6 +36,38 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.268.3] — 2026-07-08
+
+### Mudado — GAS App Kit refinado com lições de produção da Forja (rumo às 4-5 estrelas)
+
+O usuário quer o GAS App Kit como coluna vertebral dos ~80% de projetos GAS
+dele, mas as skills estavam avaliadas abaixo de 4 estrelas. Em vez de "dar"
+estrelas, o conteúdo foi refinado de verdade (fonte: `gas-app-kit/` no repo;
+as skills embarcadas no build foram atualizadas junto — reimportar no Skills
+Hub faz upsert por `fonte`, sem duplicar):
+
+- **NOVA skill `gas-sheet-db`**: banco de dados em planilha com ZERO setup —
+  o servidor cria a planilha sozinho na primeira execução, guarda o ID em
+  Script Properties e mantém o schema em dia (padrão SheetDB da Forja, com
+  CRUD, LockService e limites práticos). Mata o "não quero ficar criando
+  planilha" na raiz.
+- **`gas-push`**: regra da URL estável (1 deployment reutilizado via
+  `--deploy-id`), rollback versionado, e os dois tombos reais: limite de 200
+  versões do GAS e clasp logado na conta errada.
+- **`gas-setup-environment`**: passo 2b — verificar se o clasp está na conta
+  Google CERTA (caso real "The caller does not have permission").
+- **`gas-frontend-patterns`**: envelope `ServerResult`, persistência via
+  SheetDB (sem ID hardcoded) e os tetos de tempo (6 min execução / 60s
+  UrlFetchApp) com estratégia de chunking.
+- **`gas-ant-design`**: seção de craft anti "cara de app gerado por IA".
+- **`gas-start`**: nunca pede pro usuário criar planilha — dados são
+  automáticos por padrão.
+- **`gas-pull`**, **`gas-run-project`**, guardrails (regras 8-9: zero setup
+  manual, deployment único) e roteamento atualizado com as skills novas.
+
+Próximo passo do fluxo: reimportar no Skills Hub → reavaliar com a Lume →
+remontar o kit "Google Apps Script — Completo".
+
 ## [1.268.2] — 2026-07-08
 
 ### Corrigido — Kit com Fable 5: seleção agora peneira o catálogo em blocos
