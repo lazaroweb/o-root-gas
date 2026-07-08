@@ -37,6 +37,9 @@ If there is even a 1% chance a skill applies, invoke it first. Skills tell you H
 | **gas-frontend-patterns** | React, hooks, state, forms, API calls |
 | **gas-ant-design** | UI components, layout, design, Ant Design |
 | **gas-typescript-pro** | TypeScript, types, interfaces, strict mode |
+| **gas-sheet-db** | Saving data, spreadsheet as database, tables, records |
+| **gas-readme-standard** | Creating or normalizing the project README before git |
+| **forja-debt-tracking** | Marking technical debt / TODO / FIXME / HACK in code |
 
 ## Skill Priority
 

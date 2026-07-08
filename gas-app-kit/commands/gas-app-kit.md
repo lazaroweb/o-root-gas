@@ -19,6 +19,8 @@ Routes the user's request to the right skill. Always invoke the relevant skill â
 | Questions about UI / components / design | **gas-ant-design** |
 | Questions about React / state / hooks | **gas-frontend-patterns** |
 | Questions about TypeScript / types | **gas-typescript-pro** |
+| Saving data / spreadsheet / database / records | **gas-sheet-db** |
+| README / preparing the repo for git | **gas-readme-standard** |
 
 ## Rules
 

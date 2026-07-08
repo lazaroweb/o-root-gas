@@ -217,6 +217,24 @@ notification.error({
 </ConfigProvider>
 ```
 
+## Craft: don't ship the "AI-generated look"
+
+Ant Design defaults scream "template". Small, cheap moves that make the app
+look designed by a senior human:
+
+- **Pick a real palette** (one primary + neutral grays), set it once in
+  `ConfigProvider` tokens — never leave the default blue on everything.
+- **Typography hierarchy**: one display size for page titles, one for section
+  titles, 13-14px body. Consistent spacing scale (8/12/16/24/32) — no random
+  margins.
+- **Density**: generous padding inside cards (16-20px), max content width with
+  `margin: '0 auto'` — content glued to the viewport edges looks broken.
+- **Hover states** on anything clickable (`transition` + subtle shadow lift).
+- **Empty states that instruct** ("Nothing here yet — add your first record
+  with the button above"), never a bare "No data".
+- **Every alert needs a way out**: a primary action, a "learn more", or a
+  dismiss. An alert the user can't act on is a bug.
+
 ## Loading / Empty states
 
 ```tsx

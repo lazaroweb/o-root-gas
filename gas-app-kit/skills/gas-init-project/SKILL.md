@@ -152,12 +152,13 @@ Access levels:
 
 `executeAs` must always be `"USER_ACCESSING"`.
 
-**Add OAuth scopes** based on spreadsheet usage:
+**Add OAuth scopes** based on data usage:
 
-| Spreadsheet usage | Scope |
+| Data usage | Scope |
 |---|---|
-| No spreadsheet | `https://www.googleapis.com/auth/script.container.ui` |
-| Spreadsheet by ID (`openById`) | `https://www.googleapis.com/auth/spreadsheets` |
+| App saves no data | `https://www.googleapis.com/auth/script.container.ui` |
+| App saves data (auto-created spreadsheet via **gas-sheet-db** — the default) | `https://www.googleapis.com/auth/spreadsheets` |
+| User's existing spreadsheet by ID (`openById`) | `https://www.googleapis.com/auth/spreadsheets` |
 | Container-bound (attached to spreadsheet) | `https://www.googleapis.com/auth/spreadsheets.currentonly` |
 
 ---

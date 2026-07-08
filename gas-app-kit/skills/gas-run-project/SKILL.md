@@ -64,6 +64,21 @@ npx serve dist -p 3000
 >
 > Note: the data you see here is sample/placeholder data. Your real data from Google Sheets will only appear after you deploy the app."
 
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Port 3000 already in use | Another preview is running — reuse that terminal, or serve on another port: `npx serve dist -p 3001` |
+| Blank page locally | Open the browser console: usually an unhandled `google is not defined` — wrap `callServer` calls in the try/catch mock fallback (see gas-frontend-patterns) |
+| Changes not showing | Watch mode may have crashed on a TypeScript error — check the terminal output and fix the error |
+
+## Make the preview useful: realistic mocks
+
+The preview only shines if the mock data looks real. When building components,
+give the mock fallback 5-10 plausible records (names, dates, statuses) — not
+`"test"`/`"foo"`. The user validates layout and flows locally and only deploys
+when it looks right, saving deploy round-trips.
+
 ## Stopping the server
 
 When the user is done previewing: "Press Ctrl+C in the terminal to stop the server."

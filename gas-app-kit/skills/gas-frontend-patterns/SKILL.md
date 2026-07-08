@@ -149,21 +149,22 @@ export type Status = 'pending' | 'done' | 'error';
 
 ## GAS server function patterns (`src/server.ts`)
 
+Persistence goes through the **gas-sheet-db** skill (the server creates and
+manages its own spreadsheet — never hardcode a spreadsheet ID, never ask the
+user to create one). Server functions stay thin:
+
 ```typescript
-// Always annotate return types
+// Always annotate return types. dbGetAll/dbCreate come from gas-sheet-db.
 function getRows(): Row[] {
-  const sheet = SpreadsheetApp.openById(SHEET_ID).getActiveSheet();
-  const [header, ...rows] = sheet.getDataRange().getValues() as string[][];
-  return rows.map(row => ({
-    id: row[0],
-    name: row[1],
-    value: Number(row[2]),
+  return dbGetAll('Registros').map((r) => ({
+    id: r.id,
+    name: r.nome,
+    value: Number(r.valor),
   }));
 }
 
 function saveRow(data: Row): void {
-  const sheet = SpreadsheetApp.openById(SHEET_ID).getActiveSheet();
-  sheet.appendRow([data.id, data.name, data.value]);
+  dbCreate('Registros', { nome: data.name, valor: String(data.value) });
 }
 
 function doGet(): GoogleAppsScript.HTML.HtmlOutput {
@@ -172,6 +173,33 @@ function doGet(): GoogleAppsScript.HTML.HtmlOutput {
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 ```
+
+### Server result envelope (recommended for anything that can fail)
+
+Throwing inside a server function surfaces a cryptic error to the client.
+Return a uniform envelope instead and keep the friendly message server-side:
+
+```typescript
+interface ServerResult<T = unknown> { ok: boolean; data?: T; error?: string }
+
+function salvarRegistro(input: CreateRowInput): ServerResult<Row> {
+  try {
+    if (!input?.name?.trim()) return { ok: false, error: 'Informe um nome.' };
+    return { ok: true, data: dbCreate('Registros', { nome: input.name }) as unknown as Row };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro ao salvar' };
+  }
+}
+```
+
+### Timing constraints that WILL bite you
+
+- **Each execution has ~6 minutes max.** Long jobs must be chunked and resumed
+  (store a cursor in `PropertiesService` or `CacheService`, let the frontend
+  call the next step).
+- **`UrlFetchApp` has a hard ~60-second timeout per request.** Calling slow
+  external APIs (e.g. LLMs with long prompts)? Split the work into smaller
+  calls — retrying the same oversized call just fails again.
 
 **GAS types** — add to `tsconfig.json`:
 ```json

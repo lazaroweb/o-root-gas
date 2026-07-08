@@ -28,8 +28,16 @@ Ask one question at a time:
 1. **What is the app for?**
    > "Tell me what you want to build. A dashboard? A form? A tool that reads from a spreadsheet? Just describe it in your own words — no technical details needed."
 
-2. **Spreadsheet?**
-   > "Does your app need to read or write data from a Google Sheets spreadsheet? If yes, do you already have one, or should we create a new one? (If you're not sure, we can skip this and add it later.)"
+2. **Data?** (never ask the user to create a spreadsheet)
+   > "Does your app need to save data — like records, entries, or lists?"
+
+   - **If yes and the user has NO existing spreadsheet (the common case):** say
+     "Great — the app will create and manage its own storage automatically,
+     you don't need to do anything." Then build persistence with the
+     **gas-sheet-db** skill (the server creates the spreadsheet on first run
+     and remembers it via Script Properties — zero manual setup).
+   - **Only if the user already has a spreadsheet with data** they want the
+     app to use, ask for the link.
 
    If the user provides a spreadsheet link or ID:
    - Extract the spreadsheet ID from the URL

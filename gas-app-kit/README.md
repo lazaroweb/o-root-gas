@@ -7,7 +7,8 @@ Works on **Windows**, **Mac**, and **Linux**. No coding experience required.
 
 - React 18 + TypeScript starter template
 - Ant Design 5 UI components (buttons, tables, forms, modals)
-- One-command deploy to Google Apps Script
+- One-command deploy to Google Apps Script — stable URL that never changes
+- Spreadsheet database created and managed automatically (zero manual setup)
 - Local development preview
 - Cross-platform scripts (PowerShell for Windows, bash for Mac/Linux)
 
@@ -101,7 +102,8 @@ Funciona no **Windows**, **Mac** e **Linux**. Nenhum conhecimento técnico neces
 
 - Template pronto com React 18 + TypeScript
 - Componentes visuais com Ant Design 5 (botões, tabelas, formulários, modais)
-- Deploy com um comando para o Google Apps Script
+- Deploy com um comando para o Google Apps Script — URL estável que nunca muda
+- Banco de dados em planilha criado e gerenciado automaticamente (zero setup manual)
 - Preview local no navegador durante o desenvolvimento
 - Scripts multiplataforma (PowerShell para Windows, bash para Mac/Linux)
 

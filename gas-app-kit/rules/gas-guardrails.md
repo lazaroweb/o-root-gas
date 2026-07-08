@@ -52,7 +52,23 @@ Google Apps Script runs inside an iframe. These APIs are not available:
 - Update incrementally: read → merge → write
 - Never expose state contents to the user unless debugging
 
-## 8. `appsscript.json` must have the `webapp` block
+## 8. Zero manual setup for the user
+
+- **Never hardcode a spreadsheet ID** in source code, and **never ask the user
+  to create a spreadsheet**. The server creates its own database on first run
+  and stores the ID in Script Properties (see the **gas-sheet-db** skill).
+- Secrets and API keys go in `PropertiesService.getScriptProperties()` — never
+  in source code, never in git.
+
+## 9. One deployment, stable URL
+
+Create ONE deployment on the first push, save its `deploymentId` in
+`.gas-app/state.json`, and always redeploy with `--deploy-id` afterwards.
+Creating a new deployment per push generates a new URL every time and breaks
+every link the user has shared. Apps Script also caps projects at **200 saved
+versions** (no API to delete) — warn the user before they hit it.
+
+## 10. `appsscript.json` must have the `webapp` block
 
 After `clasp create`, verify `appsscript.json` has:
 ```json

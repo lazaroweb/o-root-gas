@@ -144,6 +144,26 @@ If it works, store the full path in `.gas-app/state.json` → `claspPath`. **Use
 
   **Do not run `clasp login` yourself** — it is interactive. Wait for the user to confirm. Then verify with `clasp list 2>&1` (success if it returns without auth errors).
 
+### Step 2b — Verify it is the RIGHT Google account (real production trap)
+
+Many users have **two or more Google accounts** on the same machine (work +
+personal). clasp being "logged in" is NOT enough — it must be logged into the
+account that **owns the Apps Script project**, or every push fails with:
+
+```
+The caller does not have permission
+```
+
+When you see that error, do NOT retry blindly:
+
+1. Ask in plain language: "Which Google account did you use to create this
+   app — your personal or your work one?"
+2. Have the user re-login with the right one: `clasp login` (the browser
+   picker lets them choose the account).
+3. clasp 3.x supports named profiles: `clasp login --user personal` and then
+   `--user personal` on commands, which lets both accounts coexist. Store the
+   chosen profile name in `.gas-app/state.json` → `claspProfile` and reuse it.
+
 ---
 
 ## Step 3 — Apps Script API
