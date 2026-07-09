@@ -85,6 +85,24 @@ function slugify(s: string): string {
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'item';
 }
 
+// v1.272.0 — settings.json com permissões pré-aprovadas pro Claude Code:
+// mata os pedidos de autorização a cada edição/comando do fluxo GAS (git, npm,
+// clasp, node). Vai no zip só quando a IDE alvo é o Claude Code; o instalador
+// NUNCA sobrescreve um settings.json existente (salva como sugestão ao lado).
+function gerarSettingsClaude(): string {
+  return JSON.stringify({
+    permissions: {
+      allow: [
+        'Edit', 'Write', 'Read',
+        'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git push:*)',
+        'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git checkout:*)',
+        'Bash(npm run:*)', 'Bash(npm install:*)', 'Bash(npm test:*)', 'Bash(npx clasp:*)',
+        'Bash(node:*)', 'Bash(mkdir:*)', 'Bash(ls:*)', 'Bash(cat:*)',
+      ],
+    },
+  }, null, 2) + '\n';
+}
+
 // install.sh interativo do kit MISTO (skills em pastas + agents como .md soltos).
 // Pergunta global (~/<dir>) vs projeto (./<dir>) e copia ambos. `dir`/`ide` vêm
 // da ferramenta escolhida (.claude / .cursor / .agents).
@@ -139,6 +157,17 @@ if [ -d "\$SCRIPT_DIR/agents" ]; then
     echo "  agent  - \$(basename "\$f")"
     agents_count=\$((agents_count + 1))
   done
+fi
+
+# settings.json (permissoes pre-aprovadas pro Claude Code) - nunca sobrescreve.
+if [ -f "\$SCRIPT_DIR/settings.json" ]; then
+  if [ -f "\$BASE/settings.json" ]; then
+    cp "\$SCRIPT_DIR/settings.json" "\$BASE/settings.forja-sugerido.json"
+    echo "  aviso  - settings.json ja existia; sugestao salva como settings.forja-sugerido.json"
+  else
+    cp "\$SCRIPT_DIR/settings.json" "\$BASE/settings.json"
+    echo "  config - settings.json (permissoes pre-aprovadas, menos interrupcoes)"
+  fi
 fi
 
 echo
@@ -202,6 +231,19 @@ if (Test-Path \$agentsSrc) {
     Copy-Item -Path \$_.FullName -Destination (Join-Path \$dest \$_.Name) -Force
     Write-Host "  agent  - \$(\$_.Name)"
     \$agentsCount++
+  }
+}
+
+# settings.json (permissoes pre-aprovadas pro Claude Code) - nunca sobrescreve.
+\$settingsSrc = Join-Path \$scriptDir 'settings.json'
+if (Test-Path \$settingsSrc) {
+  \$settingsDest = Join-Path \$base 'settings.json'
+  if (Test-Path \$settingsDest) {
+    Copy-Item -Path \$settingsSrc -Destination (Join-Path \$base 'settings.forja-sugerido.json') -Force
+    Write-Host '  aviso  - settings.json ja existia; sugestao salva como settings.forja-sugerido.json'
+  } else {
+    Copy-Item -Path \$settingsSrc -Destination \$settingsDest
+    Write-Host '  config - settings.json (permissoes pre-aprovadas, menos interrupcoes)'
   }
 }
 
@@ -395,6 +437,26 @@ export default function KitsHubPanel(): React.ReactElement {
         `O instalador pergunta se você quer instalar global (\`~/${dir}/\`) ou só`,
         `neste projeto (\`./${dir}/\`). Skills vão pra \`skills/\` e agents pra \`agents/\`.`,
       );
+      // v1.272.0 — kit pro Claude Code leva settings.json com permissões
+      // pré-aprovadas + doc do modo sem interrupções.
+      if (ide === 'claude') {
+        linhasInstalar.push(
+          '',
+          '## Modo sem interrupções (Claude Code)',
+          '',
+          'O instalador também coloca um `settings.json` com permissões pré-aprovadas',
+          '(editar/criar arquivos, `git`, `npm`, `npx clasp`, `node`) — o Claude Code para de',
+          'pedir autorização a cada passo do fluxo, mas AINDA pergunta em ações fora da lista.',
+          'Se já existir um `settings.json` seu, nada é sobrescrito: a sugestão fica ao lado',
+          'como `settings.forja-sugerido.json` pra você mesclar.',
+          '',
+          'Outros dois níveis, se precisar:',
+          '',
+          '- `Shift+Tab` na sessão — cicla pro modo *auto-accept edits* (aceita edições sozinho).',
+          '- `claude --dangerously-skip-permissions` — zero perguntas (modo total). Use só em',
+          '  projeto versionado no git e sem segredos/produção na pasta.',
+        );
+      }
       const entries: ZipEntry[] = [];
       const linhasReadme: string[] = [
         `# ${d.nome}`, '',
@@ -425,6 +487,7 @@ export default function KitsHubPanel(): React.ReactElement {
         const slug = nomeUnico(slugify(a.nome), usadosA);
         entries.push({ path: `agents/${slug}.md`, content: a.conteudo });
       }
+      if (ide === 'claude') entries.push({ path: 'settings.json', content: gerarSettingsClaude() });
       if (incluiSh) entries.push({ path: 'install.sh', content: gerarInstallShKit(d.skills.length, d.agents.length, dir, label) });
       if (incluiPs1) entries.push({ path: 'install.ps1', content: gerarInstallPs1Kit(d.skills.length, d.agents.length, dir, label) });
       const blob = criarZipBlob(entries);
@@ -816,7 +879,7 @@ export default function KitsHubPanel(): React.ReactElement {
             ? 'Pasta padrão aberta — Cursor e Claude Code leem dela.'
             : ideSel === 'cursor'
               ? 'O Cursor também lê .claude/ e .agents/ por compatibilidade.'
-              : 'Formato nativo do Claude Code (também lido pelo Cursor).'}
+              : 'Formato nativo do Claude Code (também lido pelo Cursor). Bônus: o zip leva um settings.json com permissões pré-aprovadas — o Claude para de pedir autorização a cada passo do fluxo (git, npm, clasp).'}
         </div>
 
         <div style={{ fontFamily: FONTS.ui, fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: t.textTertiary, marginBottom: 8 }}>

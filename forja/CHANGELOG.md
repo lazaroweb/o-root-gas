@@ -36,6 +36,26 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.272.0] — 2026-07-09
+
+### Adicionado — Kit pro Claude Code sai com permissões pré-aprovadas (menos interrupções)
+
+Dor real do usuário: no vibe code com Claude Code, o agente para toda hora
+pedindo "Permitir uma vez / Sempre autorizar", travando sessões longas.
+
+- **`settings.json` no zip** (só quando a IDE alvo é Claude Code): allowlist
+  do fluxo GAS — Edit/Write/Read, `git` (add/commit/push/status/diff/log/
+  checkout), `npm` (run/install/test), `npx clasp`, `node`, `mkdir`, `ls`,
+  `cat`. O Claude trabalha sem pedir autorização nesses passos e AINDA
+  pergunta em qualquer coisa fora da lista (equilíbrio seguro).
+- **Instalador nunca sobrescreve**: se já existir `settings.json` no destino,
+  a sugestão é salva ao lado como `settings.forja-sugerido.json` (install.sh
+  e install.ps1).
+- **README do zip** ganha a seção "Modo sem interrupções": explica o
+  settings.json, o `Shift+Tab` (auto-accept edits) e o
+  `claude --dangerously-skip-permissions` (modo total, com as ressalvas).
+- Widget "Como usar na IDE" e modal de exportação mencionam o bônus.
+
 ## [1.271.0] — 2026-07-08
 
 ### Adicionado — Widget "Como usar na sua IDE" nas estações Skills, Agents e Kits

@@ -25,7 +25,9 @@ const IDE_INFO: Record<IDE, { dir: string; nome: string; ondeColar: string }> = 
   },
   claude: {
     dir: '.claude', nome: 'Claude Code',
-    ondeColar: 'Cole no início da sessão — ou adicione ao CLAUDE.md do projeto pra valer sempre.',
+    ondeColar: 'Cole no início da sessão — ou adicione ao CLAUDE.md do projeto pra valer sempre. '
+      + 'Dica: o .zip exportado pro Claude Code já leva um settings.json com permissões pré-aprovadas '
+      + '(menos pedidos de autorização durante o vibe code).',
   },
   generico: {
     dir: '.agents', nome: 'outra IDE / genérico',
