@@ -25116,6 +25116,8 @@ interface KitTemplate {
   alvoAgents: number;     // qtd-alvo de agents
 }
 
+// v1.273.0 — 4 kits: os 3 essenciais + "Firebase — Completo" (nova stack padrão
+// pra apps multiusuário, espelho do kit GAS).
 // v1.270.0 — grid enxuto: 3 kits. Removidos 7 templates redundantes ("Fundação
 // Essencial" era a versão antiga do Fundação Vibe Code; os 2 Squads foram
 // FUNDIDOS nos essenciais como seção AGENTS do objetivo; Full-stack Web, Dados,
@@ -25212,6 +25214,60 @@ const KIT_TEMPLATES: KitTemplate[] = [
       + 'deploy versionado via clasp. Dentro de cada pilar, priorize os itens de MAIS estrelas e mais '
       + 'aderentes ao GAS. EVITE itens que dependam de npm, containers, Kubernetes, bancos relacionais '
       + 'ou servidores de longa duração.',
+  },
+  {
+    // v1.273.0 — a NOVA stack padrão do usuário pra apps multiusuário (validada
+    // em produção pelo Lastro v2: React + Vite + Firebase Auth/Firestore/Hosting,
+    // lógica no navegador). Espelho do kit GAS: autossuficiente, pilares
+    // balanceados + squad de agents. As skills específicas vêm do pacote
+    // firebase-app-kit (importável no Skills Hub, fonte "firebase-app-kit/*").
+    id: 'firebase', nome: 'Firebase — Completo', accent: 'blue', alvoSkills: 34, alvoAgents: 10,
+    descricao: 'O pack de uso diário da nova stack: fundação vibe code + segurança + design + a stack Firebase serverless (Auth, Firestore, Hosting) + o squad dos sonhos de agents.',
+    objetivo: 'Montar o kit COMPLETO e definitivo pro DIA A DIA de desenvolvimento assistido por IA (vibe coding '
+      + 'com Cursor/Claude/ChatGPT) na stack Firebase serverless — React 18 + TypeScript + Vite no frontend, '
+      + 'Firebase Auth (login Google sem aviso de "app não verificado"), Cloud Firestore como banco com security '
+      + 'rules de isolamento por usuário, Firebase Hosting no deploy, e TODA a lógica de negócio rodando no '
+      + 'NAVEGADOR (sem Cloud Functions, sem servidor). Este kit é AUTOSSUFICIENTE: quem o carrega não precisa '
+      + 'de nenhum outro. Deve cobrir, de forma BALANCEADA, TODOS os pilares abaixo (não concentre tudo num só '
+      + 'pilar; garanta pelo menos alguns itens de cada). '
+      + 'PILARES A COBRIR: '
+      + '(A) IA & Prompts — pilar PRIORITÁRIO nº 1, a meta-skill do vibe coding: engenharia de prompt, '
+      + 'especificação de tarefas pra agentes, gestão de contexto/memória (AGENTS.md, rules), decomposição '
+      + 'de trabalho pra IA executar. Garanta 2-3 itens fortes; '
+      + '(B) Revisão de código — o ponto cego nº 1 de quem desenvolve com IA é aceitar código sem auditar: '
+      + 'code review sistemático, detecção de alucinação/overengineering, qualidade e legibilidade; '
+      + '(C) Fundação — planejamento, arquitetura, versionamento (git), testes e boas práticas; '
+      + '(D) Segurança — pilar CRÍTICO nesta stack porque o código roda no cliente: Firestore security rules '
+      + 'como ÚNICA camada real de autorização, isolamento por usuário, App Check, gestão de segredos '
+      + '(nada de chave mestra no bundle), validação de input e AppSec em geral; '
+      + '(E) Frontend & DESIGN (pilar PRIORITÁRIO) — React/TypeScript, componentes, acessibilidade, e '
+      + 'sobretudo DESIGN/UI/UX de altíssimo nível: interface premium, minimalista, com identidade própria, '
+      + 'tipografia, espaçamento, hierarquia visual e microinterações que pareçam feitas por um designer '
+      + 'humano sênior — NÃO com a cara genérica de app gerado por IA. ESCOLHA OBRIGATORIAMENTE a MELHOR '
+      + 'skill de design/UI da base (a de mais estrelas e mais focada em craft visual); '
+      + '(F) Dados & API — modelagem de documentos/coleções no Firestore (não relacional), padrão de store '
+      + 'em memória com write-through, limites de batch, custos por leitura; '
+      + '(G) Específico de Firebase — TODAS as skills da pasta "firebase-app-kit" que existirem na base são '
+      + 'FORTES candidatas (auth Google, rules multiusuário, deploy no Hosting, App Check, migração de GAS, '
+      + 'Gemini com chave por usuário, custos/operação, PWA/Play Store via TWA); '
+      + '(H) Documentação & Produtividade — specs/ADRs curtas que viram contexto pra IA, automação, '
+      + 'refatoração e fluxos que economizam tempo. '
+      + 'AGENTS — monte junto o SQUAD DOS SONHOS da stack Firebase: um TIME de agents com papéis DISTINTOS e '
+      + 'complementares (evite redundância — nada de 2 agents que fazem a mesma coisa): um orquestrador/'
+      + 'tech-lead, um arquiteto, um revisor de código, um de QA/testes, um de segurança/AppSec (com atenção '
+      + 'a security rules e superfície client-side), um especialista em frontend React/TypeScript, um de '
+      + 'backend/dados adaptado a Firestore + lógica no navegador, um de depuração, um de documentação e '
+      + 'OBRIGATORIAMENTE um especialista em DESIGN/UI/UX de alto nível (interface premium, minimalista, '
+      + 'com identidade própria — que pareça feita por designer humano sênior, não com cara genérica de app '
+      + 'gerado por IA). '
+      + 'RESTRIÇÕES da plataforma que TODO item escolhido deve respeitar: SEM servidor próprio — a lógica '
+      + 'roda no navegador do usuário logado e a única autorização real são as Firestore security rules; '
+      + 'segredos compartilhados NÃO podem ir pro bundle (modelo BYO-key: cada usuário traz a própria chave '
+      + 'de IA); persistência em Firestore (documentos, sem JOINs, batches de até 500 ops, custo por '
+      + 'leitura); deploy de estáticos via Firebase Hosting com cache headers corretos; build com Vite/npm '
+      + '(ecossistema npm DISPONÍVEL, diferente do GAS). Dentro de cada pilar, priorize os itens de MAIS '
+      + 'estrelas e mais aderentes à stack. EVITE itens que dependam de servidor de longa duração, '
+      + 'Kubernetes, bancos relacionais ou infra pesada.',
   },
   {
     id: 'ai-dev', nome: 'AI Dev / Agentes', accent: 'peach', alvoSkills: 14, alvoAgents: 8,
@@ -26328,6 +26384,7 @@ function _chaveDaFonte(fonte: string): string {
 
 function _prettifyChave(chave: string): string {
   if (chave === 'gas-app-kit') return 'GAS App Kit';
+  if (chave === 'firebase-app-kit') return 'Firebase App Kit';
   if (chave === 'avulsas') return 'Avulsas / Importadas';
   return chave.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -26351,7 +26408,9 @@ function skillFontesList(): ServerResult {
     for (const k of prefixos) {
       if (!porChave.has(k)) {
         const descPadrao = k === 'gas-app-kit'
-          ? 'Pacote de skills do GAS App Kit (Google Apps Script).' : '';
+          ? 'Pacote de skills do GAS App Kit (Google Apps Script).'
+          : k === 'firebase-app-kit'
+          ? 'Pacote de skills do Firebase App Kit (React + Firebase serverless).' : '';
         try {
           const novo = dbCreate('SkillFontes', {
             chave: k, nome: _prettifyChave(k), descricao: descPadrao, cor: '',

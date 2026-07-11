@@ -12,23 +12,25 @@ const isDev = process.argv.includes('--dev');
 const PACKAGE = JSON.parse(readFileSync('package.json', 'utf8'));
 const FORJA_VERSION = PACKAGE.version;
 
-// Embarca as skills do gas-app-kit (../gas-app-kit/skills/<nome>/SKILL.md) no
-// bundle, expostas via __GAS_APP_KIT_SKILLS__. Permite o botão "Importar GAS
-// App Kit" do Skills Hub semear a biblioteca sem depender de upload manual.
-// `fonte` é estável (gas-app-kit/<nome>) pra o import ser idempotente (upsert).
-function lerGasAppKitSkills() {
-  const base = '../gas-app-kit/skills';
+// Embarca as skills dos pacotes locais (../<pacote>/skills/<nome>/SKILL.md) no
+// bundle, expostas via __GAS_APP_KIT_SKILLS__ / __FIREBASE_APP_KIT_SKILLS__.
+// Permite os botões "Importar <pacote>" do Skills Hub semearem a biblioteca sem
+// depender de upload manual. `fonte` é estável (<pacote>/<nome>) pra o import
+// ser idempotente (upsert).
+function lerKitSkills(pacote) {
+  const base = `../${pacote}/skills`;
   try {
     return readdirSync(base, { withFileTypes: true })
       .filter((d) => d.isDirectory())
       .map((d) => ({ dir: d.name, path: `${base}/${d.name}/SKILL.md` }))
       .filter((s) => existsSync(s.path))
-      .map((s) => ({ fonte: `gas-app-kit/${s.dir}`, conteudo: readFileSync(s.path, 'utf8') }));
+      .map((s) => ({ fonte: `${pacote}/${s.dir}`, conteudo: readFileSync(s.path, 'utf8') }));
   } catch {
     return [];
   }
 }
-const GAS_APP_KIT_SKILLS = lerGasAppKitSkills();
+const GAS_APP_KIT_SKILLS = lerKitSkills('gas-app-kit');
+const FIREBASE_APP_KIT_SKILLS = lerKitSkills('firebase-app-kit');
 
 await esbuild.initialize({ worker: false });
 
@@ -48,8 +50,9 @@ const clientResult = await esbuild.build({
     'process.env.NODE_ENV': isDev ? '"development"' : '"production"',
     // Versão do app injetada em build-time. Frontend acessa via __FORJA_VERSION__.
     __FORJA_VERSION__: JSON.stringify(FORJA_VERSION),
-    // Skills do gas-app-kit embarcadas pra o botão "Importar GAS App Kit".
+    // Skills dos pacotes locais embarcadas pros botões "Importar <pacote>".
     __GAS_APP_KIT_SKILLS__: JSON.stringify(GAS_APP_KIT_SKILLS),
+    __FIREBASE_APP_KIT_SKILLS__: JSON.stringify(FIREBASE_APP_KIT_SKILLS),
   },
   loader: { '.tsx': 'tsx', '.ts': 'ts' },
 });

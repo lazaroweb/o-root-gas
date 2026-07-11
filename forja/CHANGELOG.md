@@ -36,6 +36,31 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.273.0] — 2026-07-11
+
+### Adicionado — Firebase App Kit + kit dos sonhos "Firebase — Completo"
+
+O usuário adotou a stack Firebase (validada em produção pelo Lastro v2) como
+novo padrão pra apps multiusuário — e o Atelier precisava cobrir isso no mesmo
+nível do GAS.
+
+- **Pacote `firebase-app-kit/` no repositório**: 13 skills destiladas da
+  migração real do Lastro (GAS → Firebase), cobrindo start/decisão de stack,
+  setup do console, scaffold Vite+React, login Google sem aviso de "app não
+  verificado" (com as 3 armadilhas reais: authDomain cruzado, redirect_uri,
+  multi-conta), security rules multiusuário com beta por convite, store em
+  memória sobre Firestore, lógica no navegador com registry de RPCs, deploy
+  no Hosting, App Check, migração de dados via ponte JSON, Gemini com chave
+  por usuário, custos/operação e PWA → Play Store (TWA).
+- **Botão "Importar Firebase App Kit (13)"** no Skills Hub (Importar ▾) —
+  mesmo mecanismo do GAS App Kit: skills embarcadas no build, upsert
+  idempotente por `fonte`, pasta própria "Firebase App Kit" no catálogo.
+- **Novo template de kit "Firebase — Completo"** (4º kit): espelho do
+  "Google Apps Script — Completo" pra nova stack — autossuficiente, 34 skills
+  + squad de 10 agents, com pilar de segurança reforçado (rules como única
+  autorização real, nada de chave mestra no bundle) e restrições da
+  plataforma explícitas no objetivo da Lume.
+
 ## [1.272.0] — 2026-07-09
 
 ### Adicionado — Kit pro Claude Code sai com permissões pré-aprovadas (menos interrupções)

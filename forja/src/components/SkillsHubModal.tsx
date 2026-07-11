@@ -15,7 +15,7 @@ import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import type { ServerResult } from '../types';
-import { GAS_APP_KIT_SKILLS } from '../data/gasAppKitSkills';
+import { GAS_APP_KIT_SKILLS, FIREBASE_APP_KIT_SKILLS, KitSkill } from '../data/gasAppKitSkills';
 import ComoUsarSkill from './ComoUsarSkill';
 import ImportarLoteModal from './ImportarLoteModal';
 import OtimizadorIAModal, { RevisaoProfundaModal } from './OtimizadorIAModal';
@@ -59,6 +59,7 @@ interface SkillSummary {
 // packs no futuro, cada um vira sua própria pasta automaticamente.
 const FONTE_META: Record<string, { label: string }> = {
   'gas-app-kit': { label: 'GAS App Kit' },
+  'firebase-app-kit': { label: 'Firebase App Kit' },
   avulsas: { label: 'Avulsas / Importadas' },
 };
 function fonteKey(fonte: string): string {
@@ -581,19 +582,20 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
     } finally { setSalvando(false); }
   };
 
-  // Semeia a biblioteca com as skills do GAS App Kit embarcadas no build.
-  // Idempotente: faz upsert por `fonte` (atualiza a existente em vez de duplicar).
-  const importarKit = async () => {
-    if (GAS_APP_KIT_SKILLS.length === 0) {
-      message.warning('Nenhuma skill do GAS App Kit foi embarcada neste build.');
+  // Semeia a biblioteca com as skills de um pacote embarcado no build (GAS App
+  // Kit ou Firebase App Kit). Idempotente: faz upsert por `fonte` (atualiza a
+  // existente em vez de duplicar).
+  const importarPack = async (pack: KitSkill[], label: string) => {
+    if (pack.length === 0) {
+      message.warning(`Nenhuma skill do ${label} foi embarcada neste build.`);
       return;
     }
     setImportandoKit(true);
-    const hide = message.loading(`Importando ${GAS_APP_KIT_SKILLS.length} skills do GAS App Kit…`, 0);
+    const hide = message.loading(`Importando ${pack.length} skills do ${label}…`, 0);
     let novas = 0; let atualizadas = 0; let erros = 0;
     try {
       const idPorFonte = new Map(skills.map((s) => [s.fonte, s.id]));
-      for (const ks of GAS_APP_KIT_SKILLS) {
+      for (const ks of pack) {
         const id = idPorFonte.get(ks.fonte);
         // eslint-disable-next-line no-await-in-loop
         const r = await callServer<ServerResult>('skillsSave', { id, conteudo: ks.conteudo, fonte: ks.fonte });
@@ -607,11 +609,13 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
       carregar();
     }
     if (erros && !novas && !atualizadas) {
-      message.error('Não foi possível importar as skills do GAS App Kit.');
+      message.error(`Não foi possível importar as skills do ${label}.`);
     } else {
-      message.success(`GAS App Kit importado — ${novas} nova(s), ${atualizadas} atualizada(s)${erros ? `, ${erros} com erro` : ''}.`);
+      message.success(`${label} importado — ${novas} nova(s), ${atualizadas} atualizada(s)${erros ? `, ${erros} com erro` : ''}.`);
     }
   };
+  const importarKit = () => importarPack(GAS_APP_KIT_SKILLS, 'GAS App Kit');
+  const importarKitFirebase = () => importarPack(FIREBASE_APP_KIT_SKILLS, 'Firebase App Kit');
 
   // v1.148.6 — exporta TODAS as skills do hub em 1 clique no formato Claude Code.
   // v1.148.7 — refatorado pra delegar ao `baixarKitZip` (que agora inclui install.sh
@@ -764,8 +768,8 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
     const porFonte: Record<string, SkillSummary[]> = {};
     for (const s of filtradas) (porFonte[fonteKey(s.fonte)] = porFonte[fonteKey(s.fonte)] || []).push(s);
     const chaves = Object.keys(porFonte).sort((a, b) => {
-      // gas-app-kit primeiro, avulsas por último, resto alfabético
-      const peso = (k: string) => (k === 'gas-app-kit' ? 0 : k === 'avulsas' ? 2 : 1);
+      // packs oficiais primeiro (gas, depois firebase), avulsas por último, resto alfabético
+      const peso = (k: string) => (k === 'gas-app-kit' ? 0 : k === 'firebase-app-kit' ? 0.5 : k === 'avulsas' ? 2 : 1);
       return peso(a) - peso(b) || nomeDe(a).localeCompare(nomeDe(b));
     });
     return chaves.map((k) => {
@@ -1140,11 +1144,13 @@ export default function SkillsHubModal({ open, onClose, embedded = false }: Prop
                             { key: 'lote', icon: <Boxes size={14} />, label: 'Importar lote (.json / .md)' },
                             { key: 'pacote', icon: <FolderPlus size={14} />, label: 'Importar pacote (vários .md)' },
                             ...(GAS_APP_KIT_SKILLS.length > 0 ? [{ key: 'gas', icon: <Download size={14} />, label: `Importar GAS App Kit (${GAS_APP_KIT_SKILLS.length})` }] : []),
+                            ...(FIREBASE_APP_KIT_SKILLS.length > 0 ? [{ key: 'firebase', icon: <Download size={14} />, label: `Importar Firebase App Kit (${FIREBASE_APP_KIT_SKILLS.length})` }] : []),
                           ],
                           onClick: ({ key }) => {
                             if (key === 'lote') setImportLoteAberto(true);
                             else if (key === 'pacote') setImportOpen(true);
                             else if (key === 'gas') void importarKit();
+                            else if (key === 'firebase') void importarKitFirebase();
                           },
                         }}
                       >
