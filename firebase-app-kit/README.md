@@ -24,6 +24,19 @@ caminho pra Play Store, a stack é esta.
 | `fb-custos-operacao` | Modelo de custo, monitoramento, backup, runbook de incidentes |
 | `fb-pwa-android` | PWA instalável e Play Store via TWA (bubblewrap) |
 
+## Template (`template/`)
+
+Fundação pronta pra "copiar e renomear" ao iniciar projeto novo — extraída do
+Lastro v2: login Google, beta fechado por convite, security rules, store em
+memória com write-through no Firestore, registry de RPCs, deploy configurado
+com cache headers e versão injetada na UI. Vem com um CRUD de notas de
+demonstração pra substituir pelo seu app. Passo a passo em
+[`template/README.md`](template/README.md).
+
+```bash
+cp -R firebase-app-kit/template ~/Documents/GitHub/meu-novo-app
+```
+
 ## Como usar
 
 - **Na Forja**: Atelier → Skills → Importar ▾ → "Importar Firebase App Kit" —
@@ -31,6 +44,8 @@ caminho pra Play Store, a stack é esta.
   "Firebase — Completo".
 - **Direto num projeto**: copie as pastas de `skills/` pro diretório de skills
   do seu agente (`.claude/skills/`, `.cursor/rules/`, etc.).
+- **Projeto novo**: comece pelo `template/` (acima) — economiza a geração do
+  zero e herda a fundação já validada em produção.
 
 ## Origem
 

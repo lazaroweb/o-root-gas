@@ -1,0 +1,32 @@
+{
+  "name": "meu-app-firebase",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "App Firebase serverless (React + Vite + Auth/Firestore/Hosting) — nascido do Firebase App Kit",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "deploy": "npm run build && firebase deploy --only hosting",
+    "deploy:rules": "firebase deploy --only firestore:rules"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "antd": "^5.29.3",
+    "firebase": "^12.16.0",
+    "lucide-react": "^1.24.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^6.0.3",
+    "firebase-tools": "^15.23.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.4"
+  }
+}

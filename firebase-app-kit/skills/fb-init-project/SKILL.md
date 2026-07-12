@@ -5,7 +5,24 @@ description: Scaffold the Firebase web app — Vite + React + TypeScript, Fireba
 
 # Initialize project — scaffold that matches the production layout
 
-## 1. Scaffold
+## 0. Prefer the ready-made template (fastest, battle-tested)
+
+If the `firebase-app-kit/template/` folder is available (it ships alongside
+these skills in the same repo), START THERE instead of scaffolding from
+scratch — it already contains Google login, invite-gated beta, security
+rules, the in-memory store, the RPC registry, deploy config with correct
+cache headers and a demo Notes CRUD, all verified building:
+
+```bash
+cp -R firebase-app-kit/template ~/path/to/my-app
+cd ~/path/to/my-app && git init
+# then follow template/README.md: rename, create the Firebase project,
+# fill .env, deploy rules, deploy hosting.
+```
+
+Only scaffold manually (sections below) when the template is NOT available.
+
+## 1. Scaffold (manual route)
 
 ```bash
 npm create vite@latest my-app -- --template react-ts

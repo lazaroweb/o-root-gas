@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ── Beta fechado por convite ──────────────────────────────────────────
+    function logado() { return request.auth != null; }
+
+    // Dono = quem reivindicou config/dono (o primeiro a abrir o app; o doc
+    // nunca muda depois de criado). Comparação por UID — nada hardcoded.
+    function ehDono() {
+      return logado()
+        && exists(/databases/$(database)/documents/config/dono)
+        && get(/databases/$(database)/documents/config/dono).data.uid == request.auth.uid;
+    }
+
+    // Convidado = existe doc convites/{email} (criado pelo dono nas configs).
+    function temConvite() {
+      return logado() && (
+        ehDono()
+        || exists(/databases/$(database)/documents/convites/$(request.auth.token.email))
+      );
+    }
+
+    // Isolamento total por usuário: cada um só lê/escreve o próprio espaço —
+    // e só se estiver na lista do beta. Toda entidade do app vive em
+    // usuarios/{uid}/<colecao>/<doc>.
+    match /usuarios/{uid}/{documento=**} {
+      allow read, write: if logado()
+        && request.auth.uid == uid
+        && temConvite();
+    }
+
+    // Posse do app: qualquer logado lê (a tela "Beta fechado" mostra a quem
+    // pedir convite); criar só vale pra si mesmo e só enquanto o doc não
+    // existe; nunca atualiza nem apaga.
+    match /config/dono {
+      allow read: if logado();
+      allow create: if logado() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // Lista de convites: só o dono enxerga e edita.
+    match /convites/{email} {
+      allow read, write: if ehDono();
+    }
+
+    // Qualquer outro caminho: negado.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

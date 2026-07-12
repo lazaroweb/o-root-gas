@@ -36,6 +36,26 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.273.1] — 2026-07-12
+
+### Adicionado — Template "copiar e renomear" no Firebase App Kit
+
+Fecha o ciclo do kit: além das 13 skills, o pacote agora traz a fundação
+pronta pra iniciar projeto novo sem gerar nada do zero.
+
+- **`firebase-app-kit/template/`**: app mínimo funcional extraído do Lastro
+  v2 — login Google (splash → login → app, erro visível), beta fechado por
+  convite (dono via `config/dono`, sem e-mail hardcoded), security rules,
+  store em memória com write-through no Firestore, registry de RPCs com
+  `callServer`, `firebase.json` com cache headers corretos, versão do
+  `package.json` injetada na UI e um CRUD de Notas de demonstração.
+  Build validado (`tsc --noEmit` + Vite). Passo a passo no
+  `template/README.md`.
+- **Skill `fb-init-project` atualizada**: novo passo 0 — se o template
+  estiver disponível, começar por ele (copiar e renomear) em vez de
+  scaffoldar manualmente; economiza tempo de agente, tokens e herda a
+  fundação já validada em produção.
+
 ## [1.273.0] — 2026-07-11
 
 ### Adicionado — Firebase App Kit + kit dos sonhos "Firebase — Completo"
