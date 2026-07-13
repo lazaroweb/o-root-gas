@@ -21,7 +21,7 @@
     "@types/google-apps-script": "^1.0.83",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
-    "esbuild": "^0.24.0",
+    "esbuild": "^0.28.1",
     "esbuild-wasm": "^0.24.0",
     "serve": "^14.2.0",
     "typescript": "^5.6.0",
