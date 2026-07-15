@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   App as AntApp, Button, Input, InputNumber, Select, AutoComplete, Skeleton, Empty, Form, Modal,
   Popconfirm, Tooltip, Segmented, Progress, Slider, DatePicker,
@@ -66,6 +66,20 @@ function addSemanas(base: Date, semanas: number): Date {
 function fmtData(d: Date): string {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
 }
+function dominioDe(url: string): string {
+  if (!url) return '';
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; }
+}
+function faviconDe(url: string): string {
+  const d = dominioDe(url);
+  return d ? `https://www.google.com/s2/favicons?domain=${d}&sz=128` : '';
+}
+// Hue estável derivado do domínio (mesmo site → mesma cor sempre).
+function hueDe(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+  return h;
+}
 
 interface EstudosCursosProps { onVirarTrilhas?: () => void }
 
@@ -89,6 +103,8 @@ export default function EstudosCursos(_props: EstudosCursosProps): React.ReactEl
   const [salvandoCap, setSalvandoCap] = useState(false);
 
   const [iniciarAlvo, setIniciarAlvo] = useState<Curso | null>(null);
+  // Só escolhe a aba inicial uma vez, pra não brigar com o toggle manual do usuário.
+  const escolheuAba = useRef(false);
 
   const carregar = useCallback(() => {
     setLoading(true);
@@ -97,7 +113,18 @@ export default function EstudosCursos(_props: EstudosCursosProps): React.ReactEl
       callServer<ServerResult>('estudoCursosCapacidade'),
     ])
       .then(([rc, rcap]) => {
-        if (rc.ok && rc.data) setCursos(rc.data as Curso[]);
+        if (rc.ok && rc.data) {
+          const listaC = rc.data as Curso[];
+          setCursos(listaC);
+          // Se não há nada em "Tenho" mas há em "Quero fazer", abre já no Quero
+          // pra não mostrar um vazio bobo com itens escondidos na outra aba.
+          if (!escolheuAba.current) {
+            escolheuAba.current = true;
+            const temTenho = listaC.some((c) => (c.posse === 'quero' ? 'quero' : 'tenho') === 'tenho');
+            const temQuero = listaC.some((c) => c.posse === 'quero');
+            if (!temTenho && temQuero) setPosse('quero');
+          }
+        }
         if (rcap.ok && rcap.data) setCap(rcap.data as Capacidade);
       })
       .catch(() => { /* preview */ })
@@ -124,6 +151,11 @@ export default function EstudosCursos(_props: EstudosCursosProps): React.ReactEl
     const set = new Set<string>([...CATEGORIAS_PADRAO, ...categorias]);
     return Array.from(set).map((v) => ({ value: v }));
   }, [categorias]);
+  const plataformasSugeridas = useMemo(() => {
+    const usadas = cursos.map((c) => c.plataforma).filter(Boolean);
+    const set = new Set<string>([...PLATAFORMAS_PADRAO, ...usadas]);
+    return Array.from(set).map((v) => ({ value: v }));
+  }, [cursos]);
 
   const listaPosse = useMemo(() => cursos.filter((c) => (c.posse === 'quero' ? 'quero' : 'tenho') === posse), [cursos, posse]);
   const lista = useMemo(() => {
@@ -324,8 +356,8 @@ export default function EstudosCursos(_props: EstudosCursosProps): React.ReactEl
             <Input placeholder="ex.: Domine Agentes de IA com LangGraph" autoFocus />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <Form.Item name="plataforma" label="Plataforma">
-              <AutoComplete options={PLATAFORMAS_PADRAO.map((p) => ({ value: p }))} placeholder="Udemy, Alura…" filterOption={(i, o) => (o?.value as string).toLowerCase().includes(i.toLowerCase())} />
+            <Form.Item name="plataforma" label="Plataforma (digite ou escolha)">
+              <AutoComplete options={plataformasSugeridas} placeholder="Udemy, Alura, um site…" filterOption={(i, o) => (o?.value as string).toLowerCase().includes(i.toLowerCase())} allowClear />
             </Form.Item>
             <Form.Item name="categoria" label="Categoria (digite ou escolha)">
               <AutoComplete options={catSugeridas} placeholder="IA, Frontend…" filterOption={(i, o) => (o?.value as string).toLowerCase().includes(i.toLowerCase())} />
@@ -450,21 +482,46 @@ function CursoCard({ c, t, accent, onEditar, onDeletar, onIniciar, onStatus, onP
   const stCor = t.accents[st.accent];
   const isQuero = (c.posse === 'quero');
   const prioCor = c.prioridade === 'alta' ? t.accents.rose : c.prioridade === 'baixa' ? t.textTertiary : t.accents.clay;
+  const dom = dominioDe(c.url);
+  const hue = hueDe(dom || c.titulo);
+  const temBanner = !!c.url;
 
   return (
-    <div style={{ position: 'relative', border: `1px solid ${t.border}`, borderLeft: `3px solid ${accent}`, borderRadius: 12, background: t.surface, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10, boxShadow: t.shadowSoft }}>
+    <div style={{ position: 'relative', border: `1px solid ${t.border}`, borderRadius: 12, background: t.surface, overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: t.shadowSoft }}>
+      {temBanner && (
+        <a
+          href={c.url}
+          target="_blank"
+          rel="noreferrer"
+          title={`Abrir ${dom}`}
+          style={{ display: 'block', height: 56, position: 'relative', textDecoration: 'none', background: `linear-gradient(135deg, hsl(${hue} 58% 50%), hsl(${(hue + 42) % 360} 58% 40%))` }}
+        >
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '0 14px' }}>
+            <span style={{ width: 34, height: 34, borderRadius: 9, background: 'rgba(255,255,255,0.94)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.2)', overflow: 'hidden' }}>
+              <img
+                src={faviconDe(c.url)}
+                alt=""
+                width={18}
+                height={18}
+                style={{ display: 'block' }}
+                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+              />
+            </span>
+            <span style={{ fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: 600, color: '#fff', textShadow: '0 1px 2px rgba(0,0,0,0.3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dom}</span>
+            <span style={{ flex: 1 }} />
+            <ExternalLink size={14} color="rgba(255,255,255,0.92)" />
+          </div>
+        </a>
+      )}
+
+      <div style={{ borderLeft: temBanner ? 'none' : `3px solid ${accent}`, padding: temBanner ? '13px 15px' : '14px 16px', display: 'flex', flexDirection: 'column', gap: 10, flex: 1 }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-        <span style={{ width: 30, height: 30, borderRadius: 9, background: `${accent}22`, color: accent, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><GraduationCap size={16} /></span>
+        {!temBanner && <span style={{ width: 30, height: 30, borderRadius: 9, background: `${accent}22`, color: accent, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><GraduationCap size={16} /></span>}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: FONTS.ui, fontSize: 14.5, fontWeight: 600, color: t.text, lineHeight: 1.3 }}>{c.titulo}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
             {c.plataforma && <span style={{ fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary }}>{c.plataforma}</span>}
             {c.categoria && <span style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textSecondary, background: t.surfaceMuted, padding: '1px 8px', borderRadius: 999 }}>{c.categoria}</span>}
-            {c.url && (
-              <Tooltip title="Abrir curso">
-                <a href={c.url} target="_blank" rel="noreferrer" style={{ color: t.textTertiary, display: 'inline-flex' }}><ExternalLink size={12} /></a>
-              </Tooltip>
-            )}
           </div>
         </div>
       </div>
@@ -521,6 +578,7 @@ function CursoCard({ c, t, accent, onEditar, onDeletar, onIniciar, onStatus, onP
         <Popconfirm title="Remover este curso?" onConfirm={onDeletar} okText="Remover" cancelText="Cancelar" okButtonProps={{ danger: true }}>
           <Tooltip title="Remover"><Button type="text" size="small" danger icon={<Trash2 size={14} />} /></Tooltip>
         </Popconfirm>
+      </div>
       </div>
     </div>
   );

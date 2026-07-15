@@ -36,6 +36,19 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.277.3] — 2026-07-15
+
+### Mudado — Cursos: aba inteligente, card com preview e plataforma livre
+
+- **Aba inicial esperta**: se não há nada em "Tenho" mas há em "Quero fazer", a
+  seção já abre no **Quero fazer** (some o vazio confuso com itens escondidos).
+- **Card colorido com preview**: quando o curso tem link, o card ganha uma faixa
+  em degradê (cor estável derivada do domínio) com o **favicon** e o domínio do
+  site — clica e abre o curso. Sem link, mantém o ícone padrão.
+- **Plataforma com digitação livre**: virou autocomplete igual à categoria — dá
+  pra **digitar uma plataforma nova** (ou site) além das sugestões; as que você
+  já usou entram na lista.
+
 ## [1.277.2] — 2026-07-15
 
 ### Corrigido — Cursos: botão duplicado "Novo curso" / "Adicionar curso"
