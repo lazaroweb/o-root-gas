@@ -28796,6 +28796,34 @@ function _parseArquitetoPayload(resposta: string): { texto: string; payload: Arq
   }
 }
 
+// Lista COMPLETA de arquivos do repo (paths + tamanho), mesmo os que não couberam
+// na amostra de conteúdo. Dá ao Arquiteto a "planta" inteira do projeto pra
+// raciocinar sobre arquitetura sem depender do que foi truncado. Barato: 2 calls.
+function _ghManifest(repoUrl: string): string {
+  const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+  if (!token) return '';
+  const full = _ghFullName(repoUrl);
+  if (!/^[^/]+\/[^/]+$/.test(full)) return '';
+  const headers = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'User-Agent': 'FORJA' };
+  try {
+    const repoRes = UrlFetchApp.fetch(`https://api.github.com/repos/${full}`, { headers, muteHttpExceptions: true });
+    if (repoRes.getResponseCode() !== 200) return '';
+    const branch = String((JSON.parse(repoRes.getContentText()) as { default_branch?: string }).default_branch || 'main');
+    const treeRes = UrlFetchApp.fetch(`https://api.github.com/repos/${full}/git/trees/${encodeURIComponent(branch)}?recursive=1`, { headers, muteHttpExceptions: true });
+    if (treeRes.getResponseCode() !== 200) return '';
+    const treeJson = JSON.parse(treeRes.getContentText()) as { tree?: Array<{ path: string; type: string; size?: number }> };
+    const blobs = (treeJson.tree || []).filter((n) => n.type === 'blob');
+    const ignore = /(^|\/)(node_modules|dist|build|\.git)\//i;
+    const bin = /\.(png|jpe?g|gif|svg|ico|webp|woff2?|ttf|eot|map|lock|pdf|zip)$/i;
+    const linhas = blobs
+      .filter((n) => !ignore.test(n.path) && !bin.test(n.path))
+      .sort((a, b) => a.path.localeCompare(b.path))
+      .slice(0, 500)
+      .map((n) => `${n.path} (${Math.max(1, Math.round((n.size || 0) / 1024))}KB)`);
+    return linhas.join('\n');
+  } catch { return ''; }
+}
+
 function empreitadaDiagnosticarIA(empreitadaId: string): ServerResult {
   try {
     const e = (dbGetAll('Empreitadas') as Array<Record<string, unknown>>).find((x) => String(x.id || '') === String(empreitadaId || ''));
@@ -28819,6 +28847,10 @@ function empreitadaDiagnosticarIA(empreitadaId: string): ServerResult {
     if (codigo && codigo.erro) avisoCodigo = `\n\n[ATENÇÃO: não consegui ler o código — ${codigo.erro}. Faça o diagnóstico com base no objetivo e em boas práticas, e diga explicitamente que a leitura do repositório falhou.]`;
     else if (!codigo) avisoCodigo = '\n\n[Sem repositório/scriptId vinculado. Baseie-se no objetivo declarado e recomende vincular o repo pra um diagnóstico mais fundo.]';
 
+    // Manifesto = a "planta" completa do repo. Mesmo com a amostra truncada, o
+    // Arquiteto enxerga TODOS os arquivos e não fica cego pro que não coube.
+    const manifest = (repoUrl && codigo && codigo.fonte === 'github' && !codigo.erro) ? _ghManifest(repoUrl) : '';
+
     const persona = 'Você é um Arquiteto de Software Sênior e Especialista Full Stack. Você recebe o código (ou o contexto) de um app que nasceu de forma experimental ("vibe coding") e precisa virar produto profissional. Seu trabalho é diagnosticar o estado atual, planejar a transformação em fases seguras (SEM quebrar o que já roda em produção) e produzir atividades acionáveis, cada uma com um prompt pronto pra colar num assistente de código (Cursor/Claude). Seja pragmático, específico e honesto sobre riscos.'
       + _SYS_AUDITORIA_SEM_THINK;
 
@@ -28826,17 +28858,18 @@ function empreitadaDiagnosticarIA(empreitadaId: string): ServerResult {
       + `TIPO: ${String(e.tipo || 'outro')}\n`
       + `OBJETIVO DO USUÁRIO: ${String(e.objetivo || '(não informado)')}\n`
       + (repoUrl ? `REPOSITÓRIO: ${repoUrl}\n` : '')
-      + `\nCÓDIGO / CONTEXTO DO PROJETO:\n${contextoCodigo || '(indisponível)'}${avisoCodigo}\n\n`
+      + (manifest ? `\nESTRUTURA COMPLETA DO REPOSITÓRIO (todos os arquivos — use pra raciocinar sobre a arquitetura inteira, inclusive os que não estão na amostra de código abaixo):\n${manifest}\n` : '')
+      + `\nCÓDIGO LIDO (amostra priorizada${codigo && codigo.truncado ? ', TRUNCADA pelo orçamento — nem tudo coube' : ''}):\n${contextoCodigo || '(indisponível)'}${avisoCodigo}\n\n`
       + 'Entregue APENAS um bloco no formato:\n'
       + '<PLANO>\n{\n'
-      + '  "diagnostico": "análise do estado atual: arquitetura, acoplamentos, o que trava a transformação, dívidas relevantes",\n'
+      + '  "diagnostico": "estado atual em 3-6 parágrafos CURTOS separados por linha em branco (\\n\\n) — NÃO faça um bloco único gigante. Cubra: arquitetura e como as partes se falam; o que trava a transformação; e dívidas relevantes. Seja específico ao projeto (cite arquivos/módulos reais). Se a amostra foi truncada, diga o que não deu pra confirmar.",\n'
       + '  "stackDetectada": ["ex: React", "Google Apps Script", "Google Sheets"],\n'
-      + '  "riscosMigracao": ["o que pode quebrar produção durante a mudança"],\n'
+      + '  "riscosMigracao": ["o que pode quebrar produção durante a mudança — concreto, não genérico"],\n'
       + '  "estrategiaSemQuebrar": "como conduzir sem derrubar o app rodando: ex. clonar repo, criar v2 em paralelo, feature flags, migração incremental de dados, backfill, cutover e rollback",\n'
       + '  "fases": [{"ordem":1,"nome":"","objetivo":"","risco":"baixo|medio|alto"}],\n'
       + '  "atividades": [{"titulo":"","descricao":"","tipo":"migracao|refatoracao|infra|feature|teste|doc|bug|outro","impacto":1-5,"esforco":1-5,"fase":"nome da fase","mesRelativo":0,"prompt":"prompt estruturado e completo pra colar no Cursor/Claude e executar esta atividade"}]\n'
       + '}\n</PLANO>\n'
-      + 'Regras: 5 a 12 atividades, ordenadas por fase. "mesRelativo" é o mês a partir de agora (0 = este mês). O "prompt" deve ser autossuficiente (contexto + o que fazer + critério de pronto). Não invente arquivos que não viu.';
+      + 'Regras: 5 a 12 atividades, ordenadas por fase. "mesRelativo" é o mês a partir de agora (0 = este mês). O "prompt" deve ser autossuficiente (contexto + o que fazer + critério de pronto). Você tem a estrutura COMPLETA de arquivos acima — use-a; o código é só uma amostra. Pode inferir o papel de um arquivo pelo nome/caminho, mas NÃO invente conteúdo interno de arquivo que não viu.';
 
     const messages: LlmMessage[] = [
       { role: 'system', content: persona },
@@ -28870,6 +28903,7 @@ function empreitadaDiagnosticarIA(empreitadaId: string): ServerResult {
           commitSha: codigo ? codigo.commitSha : '',
           truncado: codigo ? codigo.truncado : false,
           erroLeitura: codigo && codigo.erro ? codigo.erro : '',
+          manifestArquivos: manifest ? manifest.split('\n').filter((l) => l.trim()).length : 0,
         },
       },
     };

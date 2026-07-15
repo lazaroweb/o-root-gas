@@ -39,7 +39,7 @@ interface ArquitetoPlano {
 }
 interface ArquitetoResposta {
   plano: ArquitetoPlano; resumo: string; modelo: string;
-  fonte: { repoUrl: string; arquivos: number; bytes: number; commitSha: string; truncado: boolean; erroLeitura: string };
+  fonte: { repoUrl: string; arquivos: number; bytes: number; commitSha: string; truncado: boolean; erroLeitura: string; manifestArquivos?: number };
 }
 
 type Vista = 'foco' | 'todas' | 'empreitadas' | 'roadmap';
@@ -1056,17 +1056,28 @@ function ArquitetoModal({ t, open, loading, empr, data, importando, onClose, onI
             {data.modelo && <span>· modelo: {data.modelo}</span>}
             {data.fonte.truncado && <span style={{ color: t.accents.peach }}>· amostra truncada</span>}
           </div>
-          {data.fonte.erroLeitura && (
+          {data.fonte.erroLeitura ? (
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', background: `${t.accents.peach}1f`, border: `1px solid ${t.accents.peach}55`, borderRadius: 10, padding: '10px 12px' }}>
               <AlertTriangle size={15} color={t.accents.peach} style={{ flexShrink: 0, marginTop: 1 }} />
               <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, lineHeight: 1.5 }}>Não consegui ler o código: {data.fonte.erroLeitura}. O plano foi montado a partir do objetivo — vincule o repositório pra um diagnóstico mais fundo.</span>
+            </div>
+          ) : data.fonte.truncado && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', background: `${t.accents.blue}1f`, border: `1px solid ${t.accents.blue}55`, borderRadius: 10, padding: '10px 12px' }}>
+              <AlertTriangle size={15} color={t.accents.blue} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, lineHeight: 1.55 }}>
+                Repo grande: a IA leu uma <b style={{ color: t.text }}>amostra priorizada</b> de {data.fonte.arquivos} arquivos (~{Math.round(data.fonte.bytes / 1024)}KB){data.fonte.manifestArquivos ? <>, mas recebeu a <b style={{ color: t.text }}>estrutura completa</b> dos {data.fonte.manifestArquivos} arquivos</> : ''}. O diagnóstico de arquitetura é confiável; detalhes de arquivos não lidos podem faltar.
+              </span>
             </div>
           )}
 
           {/* Diagnóstico */}
           {data.plano.diagnostico && (
             <ArqSecao t={t} titulo="Diagnóstico" accent={t.accents.blue}>
-              <p style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary, lineHeight: 1.65, margin: 0, whiteSpace: 'pre-wrap' }}>{data.plano.diagnostico}</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {data.plano.diagnostico.split(/\n{2,}/).map((par, i) => par.trim() && (
+                  <p key={i} style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary, lineHeight: 1.65, margin: 0, whiteSpace: 'pre-wrap' }}>{par.trim()}</p>
+                ))}
+              </div>
             </ArqSecao>
           )}
 

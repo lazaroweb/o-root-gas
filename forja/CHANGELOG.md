@@ -36,6 +36,23 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.279.2] — 2026-07-15
+
+### Mudado — Arquiteto IA: enxerga o repo inteiro + diagnóstico legível
+
+- **Manifesto completo do repositório**: além da amostra de código (que é limitada
+  pelo orçamento de tokens), o Arquiteto agora recebe a **lista de TODOS os arquivos**
+  do repo (paths + tamanho, até 500, sem `node_modules`/binários). Resolve o ponto
+  cego do "amostra truncada": mesmo sem ler cada arquivo, a IA entende a arquitetura
+  inteira e pode inferir o papel de cada módulo pela estrutura.
+- **Diagnóstico escaneável**: o prompt agora exige 3-6 parágrafos curtos (nada de
+  bloco único gigante) e a UI renderiza cada parágrafo separado — muito mais legível.
+- **Truncamento com tratativa** (princípio #6): quando o repo é grande, em vez de um
+  discreto "amostra truncada", aparece um aviso claro dizendo quantos arquivos foram
+  lidos, que a estrutura completa foi vista, e que o diagnóstico de arquitetura é
+  confiável (detalhes de arquivos não lidos podem faltar).
+- Riscos: o prompt pede itens **concretos** (não genéricos).
+
 ## [1.279.1] — 2026-07-15
 
 ### Mudado — Arquiteto IA: tela de espera "viva" (fases + cronômetro)
