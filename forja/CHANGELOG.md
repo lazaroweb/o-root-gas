@@ -36,6 +36,49 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.277.2] — 2026-07-15
+
+### Corrigido — Cursos: botão duplicado "Novo curso" / "Adicionar curso"
+
+- O topo e o empty state mostravam dois botões com a mesma ação. Agora só um
+  aparece por vez: **empty state** (quando não há nenhum curso) OU **botão do topo**
+  (quando já existem cursos). Nomes unificados como "Novo curso".
+
+## [1.277.1] — 2026-07-15
+
+### Adicionado — Favoritos com categoria
+
+- Ao salvar um vídeo nos **Favoritos** dá pra definir uma **categoria** (autocomplete:
+  digita uma nova — ex.: IA, Frontend — ou escolhe uma já usada). A categoria aparece
+  como pill no card, entra na busca e ganhou um **filtro por categoria** no topo.
+- O backend já tinha a coluna `categoria` em `EstudoVideos`; agora ela está exposta na UI.
+
+## [1.277.0] — 2026-07-15
+
+### Adicionado — Estudos → Cursos: catálogo com controle de carga
+
+- **Nova aba "Cursos"** dentro de Estudos pra cadastrar cursos online. Duas listas:
+  **Tenho** (já tem acesso) e **Quero fazer** (wishlist), com um botão pra mover da
+  wishlist pra biblioteca ("Já tenho").
+- **Jornada de cada curso**: não iniciado → em andamento → concluído (+ pausado),
+  com carimbo automático de datas e slider de progresso no card ativo.
+- **Motor de carga (WIP + horas/semana)** — o pedido central. O usuário define sua
+  capacidade (quantos cursos ao mesmo tempo topa + horas de estudo por semana). Um
+  painel no topo mostra: **ativos N/limite**, **horas na fila** e **previsão de
+  término** (fila ÷ ritmo semanal). Ao tentar **iniciar** um curso acima do limite,
+  aparece um alerta que **não bloqueia** — calcula o impacto (nova fila, nova
+  previsão) e sugere terminar antes o curso ativo mais próximo do fim. Abaixo do
+  limite, inicia direto com um toast.
+- Cadastro rico: plataforma e categoria com autocomplete (digita ou escolhe),
+  link, carga horária, custo, prioridade, início programado e notas.
+
+#### Backend
+- Nova tabela `EstudoCursos` (`SCHEMA_VERSION` → `v1.277-estudo-cursos`). Capacidade
+  guardada em Script Property `FORJA_ESTUDO_CURSOS_CAP`. RPCs: `estudoCursosList`,
+  `estudoCursoSave`, `estudoCursoDelete`, `estudoCursoStatus`, `estudoCursoPosse`,
+  `estudoCursosCapacidade`, `estudoCursosCapacidadeSet`. O alerta de carga é do
+  cliente (o usuário decide iniciar mesmo sobrecarregado); o servidor só persiste.
+
 ## [1.276.2] — 2026-07-15
 
 ### Mudado — Bookmarks: lista principal + IA/IDEs, com opção de digitar

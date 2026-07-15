@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Clapperboard, Star, BookOpen, FolderOpen, Route } from 'lucide-react';
+import { Clapperboard, Star, BookOpen, FolderOpen, Route, GraduationCap } from 'lucide-react';
 import { PageHeader } from '../components/ui';
 import SubNav, { type SubNavItem } from '../components/SubNav';
 import { useTokens } from '../themeContext';
@@ -10,6 +10,7 @@ import EstudosFavoritos from '../components/EstudosFavoritos';
 import EstudosCaderno from '../components/EstudosCaderno';
 import EstudosYoutube from '../components/EstudosYoutube';
 import EstudosTrilhas from '../components/EstudosTrilhas';
+import EstudosCursos from '../components/EstudosCursos';
 
 // Vídeo favoritado (espelha a tabela EstudoVideos no servidor). Compartilhado
 // entre o player e a lista de favoritos.
@@ -37,7 +38,7 @@ export interface VideoParaTocar {
   thumb?: string;
 }
 
-type EstTab = 'estudio' | 'youtube' | 'favoritos' | 'trilhas' | 'caderno';
+type EstTab = 'estudio' | 'youtube' | 'favoritos' | 'trilhas' | 'cursos' | 'caderno';
 
 export default function Estudos(): React.ReactElement {
   const t = useTokens();
@@ -97,6 +98,7 @@ export default function Estudos(): React.ReactElement {
     { key: 'youtube', icon: FolderOpen, label: 'Pastas', accent: 'peach', desc: 'Suas playlists do YouTube como pastas de estudo — escolha o vídeo e leve pro Estúdio.' },
     { key: 'favoritos', icon: Star, label: 'Favoritos', accent: 'blue', desc: 'Gaveta rápida de vídeos soltos salvos por link — capa e título automáticos.' },
     { key: 'trilhas', icon: Route, label: 'Trilhas', accent: 'lavender', desc: 'Tópicos de estudo (Agents, Skills, Tools…) com vídeos e tarefas — monte seu plano e marque o progresso.' },
+    { key: 'cursos', icon: GraduationCap, label: 'Cursos', accent: 'clay', desc: 'Seus cursos online (os que tem e os que quer) com controle de carga — evita pegar curso demais de uma vez.' },
     { key: 'caderno', icon: BookOpen, label: 'Caderno', accent: 'sage', desc: 'Assuntos, ferramentas e dicas pra revisar e aprofundar na sua jornada.' },
   ];
 
@@ -130,6 +132,7 @@ export default function Estudos(): React.ReactElement {
         {tab === 'favoritos' && card(<EstudosFavoritos onTocar={tocar} refreshKey={favRefresh} />)}
         {tab === 'youtube' && card(<EstudosYoutube onTocar={tocar} onImportou={() => setFavRefresh((k) => k + 1)} />)}
         {tab === 'trilhas' && card(<EstudosTrilhas onTocar={tocar} />)}
+        {tab === 'cursos' && card(<EstudosCursos onVirarTrilhas={() => setTab('trilhas')} />)}
         {tab === 'caderno' && card(<EstudosCaderno onVirarTrilha={() => setTab('trilhas')} />)}
       </SubNav>
     </div>

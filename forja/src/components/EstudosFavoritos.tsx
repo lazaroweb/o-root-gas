@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  App as AntApp, Button, Input, Skeleton, Empty, Form, Modal, Popconfirm, Tooltip,
+  App as AntApp, Button, Input, Skeleton, Empty, Form, Modal, Popconfirm, Tooltip, AutoComplete, Select,
 } from 'antd';
 import {
   Plus, Search, PlayCircle, Edit3, Trash2, ExternalLink, X, Save,
@@ -17,6 +17,8 @@ interface EstudosFavoritosProps {
   refreshKey: number;
 }
 
+const CATEGORIAS_PADRAO = ['IA', 'Frontend', 'Backend', 'DevOps', 'Design', 'Dados', 'Produto', 'Carreira', 'Geral'];
+
 // Lista plana de vídeos salvos avulsos (links/garimpo). A organização por tema
 // vive nas "Pastas" (playlists do YouTube) — fonte única. Aqui é só uma gaveta
 // rápida pra guardar um vídeo solto que não está em nenhuma playlist.
@@ -26,6 +28,7 @@ export default function EstudosFavoritos({ onTocar, refreshKey }: EstudosFavorit
   const [videos, setVideos] = useState<EstudoVideo[]>([]);
   const [loading, setLoading] = useState(true);
   const [busca, setBusca] = useState('');
+  const [filtroCat, setFiltroCat] = useState<string>('todas');
   const [formOpen, setFormOpen] = useState(false);
   const [editando, setEditando] = useState<EstudoVideo | null>(null);
   const [salvando, setSalvando] = useState(false);
@@ -50,7 +53,7 @@ export default function EstudosFavoritos({ onTocar, refreshKey }: EstudosFavorit
 
   const abrirEditar = (v: EstudoVideo) => {
     setEditando(v);
-    form.setFieldsValue({ url: v.url, tags: v.tags.join(', '), nota: v.nota });
+    form.setFieldsValue({ url: v.url, categoria: v.categoria, tags: v.tags.join(', '), nota: v.nota });
     setFormOpen(true);
   };
 
@@ -76,15 +79,27 @@ export default function EstudosFavoritos({ onTocar, refreshKey }: EstudosFavorit
     if (r.ok) { message.success('Removido'); carregar(); }
   };
 
+  const categorias = useMemo(() => {
+    const set = new Set<string>();
+    videos.forEach((v) => { if (v.categoria) set.add(v.categoria); });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [videos]);
+  const catSugeridas = useMemo(() => {
+    const set = new Set<string>([...CATEGORIAS_PADRAO, ...categorias]);
+    return Array.from(set).map((v) => ({ value: v }));
+  }, [categorias]);
+
   const filtrados = useMemo(() => {
-    if (!busca.trim()) return videos;
+    const porCat = filtroCat === 'todas' ? videos : videos.filter((v) => v.categoria === filtroCat);
+    if (!busca.trim()) return porCat;
     const q = busca.toLowerCase();
-    return videos.filter((v) =>
+    return porCat.filter((v) =>
       v.titulo.toLowerCase().indexOf(q) >= 0 ||
       v.canal.toLowerCase().indexOf(q) >= 0 ||
+      v.categoria.toLowerCase().indexOf(q) >= 0 ||
       v.nota.toLowerCase().indexOf(q) >= 0 ||
       v.tags.some((tg) => tg.toLowerCase().indexOf(q) >= 0));
-  }, [videos, busca]);
+  }, [videos, busca, filtroCat]);
 
   return (
     <div style={{ padding: '16px 20px 22px' }}>
@@ -95,14 +110,23 @@ export default function EstudosFavoritos({ onTocar, refreshKey }: EstudosFavorit
         <Button type="primary" icon={<Plus size={14} />} onClick={abrirNovo}>Salvar vídeo</Button>
       </div>
 
-      <div style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
         <Input
           prefix={<Search size={13} color={t.textTertiary} />}
-          placeholder="Buscar por título, canal, tag, nota…"
+          placeholder="Buscar por título, canal, categoria, tag, nota…"
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
           allowClear
+          style={{ flex: 1, minWidth: 220 }}
         />
+        {categorias.length > 0 && (
+          <Select
+            value={filtroCat}
+            onChange={setFiltroCat}
+            style={{ minWidth: 170 }}
+            options={[{ value: 'todas', label: 'Todas as categorias' }, ...categorias.map((c) => ({ value: c, label: c }))]}
+          />
+        )}
       </div>
 
       {loading && videos.length === 0 ? (
@@ -146,6 +170,14 @@ export default function EstudosFavoritos({ onTocar, refreshKey }: EstudosFavorit
           <Form.Item name="url" label="Link do YouTube" rules={[{ required: true, message: 'Cole o link do vídeo' }]} extra="Título, canal e capa são preenchidos automaticamente.">
             <Input placeholder="https://www.youtube.com/watch?v=…" autoFocus disabled={!!editando} />
           </Form.Item>
+          <Form.Item name="categoria" label="Categoria (digite uma nova ou escolha)">
+            <AutoComplete
+              options={catSugeridas}
+              placeholder="ex.: IA, Frontend, DevOps…"
+              filterOption={(i, o) => (o?.value as string).toLowerCase().includes(i.toLowerCase())}
+              allowClear
+            />
+          </Form.Item>
           <Form.Item name="tags" label="Tags (vírgula)">
             <Input placeholder="ex.: react, supabase" />
           </Form.Item>
@@ -182,7 +214,12 @@ function VideoCard({ v, t, onTocar, onEditar, onDeletar }: {
         <div style={{ fontFamily: FONTS.ui, fontSize: 13.5, fontWeight: 600, color: t.text, lineHeight: 1.35, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
           {v.titulo}
         </div>
-        {v.canal && <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary }}>{v.canal}</div>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {v.canal && <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary }}>{v.canal}</span>}
+          {v.categoria && (
+            <span style={{ fontFamily: FONTS.ui, fontSize: 10.5, fontWeight: 600, color: t.accents.clay, background: `${t.accents.clay}1f`, border: `1px solid ${t.accents.clay}55`, padding: '1px 8px', borderRadius: 999 }}>{v.categoria}</span>
+          )}
+        </div>
         {v.nota && <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, lineHeight: 1.5, borderLeft: `2px solid ${t.accents.blue}66`, paddingLeft: 8 }}>{v.nota}</div>}
         {v.tags.length > 0 && (
           <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>

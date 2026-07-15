@@ -242,6 +242,11 @@ const SCHEMA: SheetSchema[] = [
   // Itens de uma trilha (o "plano"): vídeos (do YouTube) ou tarefas/notas, com
   // checkbox de concluído pra alimentar o progresso.
   { name: 'EstudoTrilhaItens', columns: ['id', 'trilhaId', 'tipo', 'titulo', 'descricao', 'videoId', 'url', 'canal', 'thumb', 'feito', 'ordem', 'criadoEm', 'atualizadoEm'] },
+  // Cursos (Estudos → Cursos): catálogo de cursos online. `posse` separa as duas
+  // listas: 'tenho' (já adquiri/acesso) x 'quero' (wishlist). `status` é a jornada:
+  // nao-iniciado|em-andamento|pausado|concluido. `cargaHoraria` (horas) + `progresso`
+  // (0-100) alimentam o motor de carga (WIP + horas/semana) que alerta ao iniciar.
+  { name: 'EstudoCursos', columns: ['id', 'titulo', 'plataforma', 'url', 'categoria', 'cargaHoraria', 'custo', 'prioridade', 'posse', 'status', 'progresso', 'dataInicioProgramada', 'dataInicioReal', 'dataConclusao', 'notas', 'ordem', 'criadoEm', 'atualizadoEm'] },
   // DriveConnectors (Atelier → Driver): registro das contas/nuvens do usuário.
   // Guarda APENAS metadados (provedor, email/rótulo, status) — NUNCA senha. A
   // conexão real (OAuth) é por provedor e os tokens, quando houver, ficam no
@@ -464,7 +469,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.276-cofre-docs';
+const SCHEMA_VERSION = 'v1.277-estudo-cursos';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -28317,6 +28322,163 @@ function estudoTrilhaItemDelete(id: string): ServerResult {
   try {
     dbDelete('EstudoTrilhaItens', String(id));
     return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ── Cursos: catálogo de cursos online com controle de carga ───────────────────
+const ESTUDO_CURSOS_CAP_KEY = 'FORJA_ESTUDO_CURSOS_CAP';
+
+function _estudoCursoMap(c: Record<string, unknown>) {
+  return {
+    id: String(c.id || ''),
+    titulo: String(c.titulo || ''),
+    plataforma: String(c.plataforma || ''),
+    url: String(c.url || ''),
+    categoria: String(c.categoria || ''),
+    cargaHoraria: Number(c.cargaHoraria || 0),
+    custo: Number(c.custo || 0),
+    prioridade: String(c.prioridade || 'media'),
+    posse: String(c.posse || 'tenho'),
+    status: String(c.status || 'nao-iniciado'),
+    progresso: Number(c.progresso || 0),
+    dataInicioProgramada: String(c.dataInicioProgramada || ''),
+    dataInicioReal: String(c.dataInicioReal || ''),
+    dataConclusao: String(c.dataConclusao || ''),
+    notas: String(c.notas || ''),
+    ordem: Number(c.ordem || 0),
+    criadoEm: String(c.criadoEm || ''),
+    atualizadoEm: String(c.atualizadoEm || ''),
+  };
+}
+
+function estudoCursosList(): ServerResult {
+  try {
+    const cursos = (dbGetAll('EstudoCursos') as Array<Record<string, unknown>>)
+      .map(_estudoCursoMap)
+      .sort((a, b) => (a.ordem - b.ordem) || a.criadoEm.localeCompare(b.criadoEm));
+    return { ok: true, data: cursos };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoCursoSave(payload: {
+  id?: string; titulo: string; plataforma?: string; url?: string; categoria?: string;
+  cargaHoraria?: number; custo?: number; prioridade?: string; posse?: string; status?: string;
+  progresso?: number; dataInicioProgramada?: string; notas?: string;
+}): ServerResult {
+  try {
+    const titulo = String(payload.titulo || '').trim();
+    if (!titulo) throw new Error('Dê um nome pro curso.');
+    const agora = new Date().toISOString();
+    const progresso = Math.max(0, Math.min(100, Math.round(Number(payload.progresso || 0))));
+    const dados = {
+      titulo,
+      plataforma: String(payload.plataforma || '').trim(),
+      url: String(payload.url || '').trim(),
+      categoria: String(payload.categoria || '').trim(),
+      cargaHoraria: Math.max(0, Number(payload.cargaHoraria || 0)),
+      custo: Math.max(0, Number(payload.custo || 0)),
+      prioridade: String(payload.prioridade || 'media').trim(),
+      posse: String(payload.posse || 'tenho').trim(),
+      status: String(payload.status || 'nao-iniciado').trim(),
+      progresso,
+      dataInicioProgramada: String(payload.dataInicioProgramada || '').trim(),
+      notas: String(payload.notas || '').trim(),
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('EstudoCursos', payload.id, dados);
+      return { ok: true, data: { id: payload.id, ...dados } };
+    }
+    const existentes = dbGetAll('EstudoCursos') as Array<Record<string, unknown>>;
+    const novo = dbCreate('EstudoCursos', { ...dados, ordem: existentes.length, criadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoCursoDelete(id: string): ServerResult {
+  try {
+    dbDelete('EstudoCursos', String(id));
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Transições rápidas de jornada, carimbando datas: iniciar/pausar/retomar/
+// concluir/reabrir. Não valida carga aqui — o alerta é do cliente (o usuário
+// decide iniciar mesmo sobrecarregado). Aqui só persiste com os carimbos.
+function estudoCursoStatus(id: string, status: string): ServerResult {
+  try {
+    const cid = String(id || '');
+    const st = String(status || '').trim();
+    const alvo = (dbGetAll('EstudoCursos') as Array<Record<string, unknown>>).find((c) => String(c.id || '') === cid);
+    if (!alvo) throw new Error('Curso não encontrado.');
+    const agora = new Date().toISOString();
+    const dados: Record<string, unknown> = { status: st, posse: 'tenho', atualizadoEm: agora };
+    if (st === 'em-andamento') {
+      if (!String(alvo.dataInicioReal || '')) dados.dataInicioReal = agora;
+      dados.dataConclusao = '';
+      if (Number(alvo.progresso || 0) >= 100) dados.progresso = 90;
+    } else if (st === 'concluido') {
+      dados.progresso = 100;
+      dados.dataConclusao = agora;
+    } else if (st === 'nao-iniciado') {
+      dados.dataInicioReal = '';
+      dados.dataConclusao = '';
+    } else if (st === 'pausado') {
+      dados.dataConclusao = '';
+    }
+    dbUpdate('EstudoCursos', cid, dados);
+    return { ok: true, data: { id: cid, ...dados } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Move um curso da wishlist ('quero') pra biblioteca ('tenho') sem iniciar.
+function estudoCursoPosse(id: string, posse: string): ServerResult {
+  try {
+    const p = String(posse || '') === 'quero' ? 'quero' : 'tenho';
+    dbUpdate('EstudoCursos', String(id), { posse: p, atualizadoEm: new Date().toISOString() });
+    return { ok: true, data: { id, posse: p } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoCursosCapacidade(): ServerResult {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty(ESTUDO_CURSOS_CAP_KEY);
+    let cap = { maxSimultaneos: 2, horasSemana: 5 };
+    if (raw) {
+      try {
+        const p = JSON.parse(raw) as { maxSimultaneos?: number; horasSemana?: number };
+        cap = {
+          maxSimultaneos: Math.max(1, Number(p.maxSimultaneos) || 2),
+          horasSemana: Math.max(1, Number(p.horasSemana) || 5),
+        };
+      } catch { /* usa padrão */ }
+    }
+    return { ok: true, data: cap };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function estudoCursosCapacidadeSet(payload: { maxSimultaneos?: number; horasSemana?: number }): ServerResult {
+  try {
+    const cap = {
+      maxSimultaneos: Math.max(1, Math.round(Number(payload.maxSimultaneos) || 2)),
+      horasSemana: Math.max(1, Number(payload.horasSemana) || 5),
+    };
+    PropertiesService.getScriptProperties().setProperty(ESTUDO_CURSOS_CAP_KEY, JSON.stringify(cap));
+    return { ok: true, data: cap };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
   }
