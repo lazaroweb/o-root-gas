@@ -36,6 +36,20 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.280.0] — 2026-07-15
+
+### Adicionado — Arquiteto IA: roteamento próprio + auto-upgrade de modelo
+
+- **Serviço "Arquiteto IA (Backlog)"** no roteamento de IA (Configurações → IA):
+  agora você pode fixar um modelo dedicado pro Arquiteto (`LLM_MODEL_ARQUITETO`).
+- **Auto-upgrade seguro**: sem override, o Arquiteto parte do modelo da Auditoria/
+  global e, se ele for de tier "rápido" (Haiku/mini/Flash), **sobe automaticamente
+  pro irmão mais forte** (ex.: Haiku → Sonnet) — mas só se esse modelo **existir de
+  fato no proxy** (checado via `/models`). Sem lista disponível ou sem candidato,
+  mantém o modelo atual: a chamada nunca quebra por causa de um ID inexistente.
+- Diagnóstico de arquitetura profundo pede raciocínio; por isso o Arquiteto passou
+  a preferir modelo premium por padrão, sem forçar custo em quem já usa um forte.
+
 ## [1.279.2] — 2026-07-15
 
 ### Mudado — Arquiteto IA: enxerga o repo inteiro + diagnóstico legível

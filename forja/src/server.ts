@@ -14476,6 +14476,7 @@ const SERVICOS_IA: ServicoIA[] = [
   { id: 'blueprint', label: 'Blueprint',           descricao: 'Gera blueprint técnico + prompts (saída longa em JSON).', stack: 'proxy',  complexidade: 'pesada',  propKey: 'LLM_MODEL_BLUEPRINT', roteavel: true },
   { id: 'diagrama',  label: 'Diagrama',            descricao: 'Gera diagramas Mermaid.',                                 stack: 'proxy',  complexidade: 'media',   propKey: 'LLM_MODEL_DIAGRAMA',  roteavel: true },
   { id: 'auditoria', label: 'Auditoria',           descricao: 'Auditoria técnica de sistemas (override dedicado).',      stack: 'proxy',  complexidade: 'pesada',  propKey: 'LLM_MODEL_AUDITORIA', roteavel: true },
+  { id: 'arquiteto', label: 'Arquiteto IA (Backlog)', descricao: 'Diagnóstico de arquitetura + plano de transformação faseado. Sem override, sobe pro modelo mais forte disponível.', stack: 'proxy', complexidade: 'pesada', propKey: 'LLM_MODEL_ARQUITETO', roteavel: true },
   { id: 'conselho',  label: 'Conselho de especialistas', descricao: 'Pareceres multi-persona de produto.',               stack: 'proxy',  complexidade: 'media',   propKey: 'LLM_MODEL_CONSELHO',  roteavel: true },
   { id: 'entrevista', label: 'Entrevistas & discovery', descricao: 'Análise de entrevista + roteiro de discovery.',       stack: 'proxy',  complexidade: 'media',   propKey: 'LLM_MODEL_ENTREVISTA', roteavel: true },
   { id: 'acoes',     label: 'Ações rápidas da IA', descricao: 'Resumo executivo, preço, release notes, ideias, risco, refinar prompt.', stack: 'proxy', complexidade: 'media', propKey: 'LLM_MODEL_ACOES', roteavel: true },
@@ -28824,6 +28825,43 @@ function _ghManifest(repoUrl: string): string {
   } catch { return ''; }
 }
 
+function _idsModelosDisponiveis(): string[] {
+  try {
+    const r = listModelosDisponiveis();
+    if (r.ok && r.data) {
+      const d = r.data as { modelos?: Array<{ id?: string }> };
+      return (d.modelos || []).map((m) => String(m.id || '')).filter(Boolean);
+    }
+  } catch { /* proxy pode não expor /models */ }
+  return [];
+}
+
+// Modelo do Arquiteto: override dedicado manda; senão parte do modelo da
+// Auditoria (ou global) e, se for tier "rápido" (Haiku/mini/Flash), tenta SUBIR
+// pra um irmão mais forte — mas só se ele existir de fato no proxy. Sem lista de
+// modelos ou sem candidato disponível, mantém o atual (nunca quebra a chamada).
+function _modeloArquiteto(): string {
+  try {
+    const ov = PropertiesService.getScriptProperties().getProperty('LLM_MODEL_ARQUITETO');
+    if (ov && ov.trim()) return ov.trim();
+  } catch { /* segue */ }
+  const base = getModeloParaUso('auditoria');
+  const meta = _classificarModelo(base);
+  if (meta.tier !== 'rapido' && meta.tier !== 'economico') return base;
+  const candidatos: string[] = meta.familia === 'anthropic'
+    ? ['claude-sonnet-4-5-20250929', 'claude-sonnet-4-5', 'claude-3-7-sonnet-latest', 'claude-3-5-sonnet-latest']
+    : meta.familia === 'openai'
+      ? ['gpt-4.1', 'gpt-4o', 'o3', 'o4-mini']
+      : meta.familia === 'google'
+        ? ['gemini-2.5-pro', 'gemini-1.5-pro-latest', 'gemini-1.5-pro']
+        : [];
+  if (candidatos.length === 0) return base;
+  const disp = _idsModelosDisponiveis();
+  if (disp.length === 0) return base;
+  const achado = candidatos.find((c) => disp.some((d) => d === c || d.indexOf(c) >= 0 || c.indexOf(d) >= 0));
+  return achado || base;
+}
+
 function empreitadaDiagnosticarIA(empreitadaId: string): ServerResult {
   try {
     const e = (dbGetAll('Empreitadas') as Array<Record<string, unknown>>).find((x) => String(x.id || '') === String(empreitadaId || ''));
@@ -28876,14 +28914,15 @@ function empreitadaDiagnosticarIA(empreitadaId: string): ServerResult {
       { role: 'user', content: instru },
     ];
 
-    const det = forjaCallLLMDetalhado(messages, 16000, undefined, 'auditoria');
+    const modeloArq = _modeloArquiteto();
+    const det = forjaCallLLMDetalhado(messages, 16000, modeloArq, 'arquiteto');
     let parsed = _parseArquitetoPayload(det.texto);
     let modelo = det.modelo;
     // Retry único exigindo só o JSON, se o 1º veio sem <PLANO> parseável.
     if (!parsed.payload) {
       const det2 = forjaCallLLMDetalhado(
         [{ role: 'system', content: persona }, { role: 'user', content: instru + '\n\nResponda SOMENTE com o bloco <PLANO>{...}</PLANO> em JSON válido e compacto. Nada de texto fora dele.' }],
-        16000, undefined, 'auditoria',
+        16000, modeloArq, 'arquiteto',
       );
       const parsed2 = _parseArquitetoPayload(det2.texto);
       if (parsed2.payload) { parsed = parsed2; modelo = det2.modelo; }
