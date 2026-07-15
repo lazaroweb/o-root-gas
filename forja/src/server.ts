@@ -206,8 +206,20 @@ const SCHEMA: SheetSchema[] = [
   // v1.269.0 — `estrelas` (0-5, nota manual do usuário), `favorito` + `favoritadoEm`
   // (kits favoritos sobem pro topo). Colunas novas SEMPRE no fim (migração append-only).
   { name: 'Kits', columns: ['id', 'templateId', 'nome', 'descricao', 'skillIds', 'agentIds', 'justificativa', 'montadoPorLume', 'criadoEm', 'atualizadoEm', 'estrelas', 'favorito', 'favoritadoEm'] },
-  { name: 'Provedores', columns: ['id', 'nome', 'categoria', 'urlSite', 'freeTier', 'precoBase', 'beneficios', 'limitacoes', 'idealPara', 'notas', 'status', 'tags', 'criadoEm', 'atualizadoEm'] },
-  { name: 'Cofre', columns: ['id', 'label', 'categoria', 'urlRef', 'usuario', 'iv', 'cipher', 'notas', 'criadoEm', 'atualizadoEm'] },
+  // v1.274.0: `origem` ('template'|'custom') + `templateId` (slug do PROVEDORES_SEED
+  // quando ativado da biblioteca). Antes o catálogo era auto-semeado como dados
+  // reais; agora vira biblioteca ativável — só entra em "meus" o que o user ativa.
+  { name: 'Provedores', columns: ['id', 'nome', 'categoria', 'urlSite', 'freeTier', 'precoBase', 'beneficios', 'limitacoes', 'idealPara', 'notas', 'status', 'tags', 'criadoEm', 'atualizadoEm', 'origem', 'templateId'] },
+  // v1.274.0: Hospedagem → VPS & Serviços (topologia). VpsHosts = uma máquina/plano
+  // do provedor (ex.: VPS Hostinger). VpsServicos = o que roda DENTRO dela
+  // (containers/apps: Caddy, LiteLLM, Postgres…). VpsPendencias = débitos/erros
+  // conhecidos/próximos passos por host ou serviço. `cofreLabel` referencia o
+  // Cofre (SSH, chaves) sem guardar segredo aqui.
+  { name: 'VpsHosts', columns: ['id', 'provedor', 'nome', 'ip', 'ipv6', 'hostname', 'plano', 'regiao', 'so', 'painelUrl', 'dominioRaiz', 'dominioExpira', 'sshUsuario', 'sshHost', 'sshPorta', 'cofreLabel', 'status', 'custoMensal', 'moeda', 'notas', 'tags', 'ordem', 'criadoEm', 'atualizadoEm'] },
+  { name: 'VpsServicos', columns: ['id', 'vpsHostId', 'nome', 'imagem', 'funcao', 'portaInterna', 'portaExposta', 'dominioPublico', 'status', 'volume', 'dependeDe', 'cofreLabel', 'notas', 'ordem', 'criadoEm', 'atualizadoEm'] },
+  { name: 'VpsPendencias', columns: ['id', 'vpsHostId', 'servicoId', 'tipo', 'titulo', 'descricao', 'severidade', 'status', 'criadoEm', 'atualizadoEm'] },
+  { name: 'Cofre', columns: ['id', 'label', 'categoria', 'urlRef', 'usuario', 'iv', 'cipher', 'notas', 'criadoEm', 'atualizadoEm', 'grupo'] },
+  { name: 'CofreDocs', columns: ['id', 'label', 'grupo', 'categoria', 'nomeArquivo', 'mimeType', 'tamanho', 'driveFileId', 'iv', 'notas', 'criadoEm', 'atualizadoEm'] },
   { name: 'Snippets', columns: ['id', 'titulo', 'descricao', 'linguagem', 'codigo', 'tags', 'fonte', 'tamanhoBytes', 'criadoEm', 'atualizadoEm'] },
   { name: 'Templates', columns: ['id', 'nome', 'descricao', 'categoria', 'conteudo', 'variaveis', 'tags', 'criadoEm', 'atualizadoEm'] },
   { name: 'Bookmarks', columns: ['id', 'titulo', 'url', 'descricao', 'categoria', 'tags', 'destacado', 'criadoEm', 'atualizadoEm'] },
@@ -452,7 +464,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.269-kits-estrelas-favorito';
+const SCHEMA_VERSION = 'v1.276-cofre-docs';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -26716,6 +26728,15 @@ const PROVEDORES_SEED: ProvedorSeed[] = [
     tags: 'frontend, edge, workers, kv, r2',
   },
   {
+    nome: 'Hostinger', categoria: 'hospedagem',
+    urlSite: 'https://www.hostinger.com.br/vps', freeTier: 'Não — planos pagos (com promoções fortes no plano longo)',
+    precoBase: 'VPS KVM a partir de ~USD 5/mês; hospedagem web a partir de ~USD 3/mês',
+    beneficios: 'VPS com root/SSH e IP dedicado; painel hPanel simples; bom custo-benefício em contratos longos; boa pra rodar Docker (Caddy, bancos, gateways) 24/7.',
+    limitacoes: 'Preço promocional só na renovação longa; suporte a container é "faça você mesmo" (sem PaaS); recursos limitados nos planos de entrada.',
+    idealPara: 'VPS always-on pra self-hosting (Docker, proxies LLM, automações), hospedagem web e domínios.',
+    tags: 'vps, hospedagem, docker, ssh, self-hosted',
+  },
+  {
     nome: 'Supabase', categoria: 'banco',
     urlSite: 'https://supabase.com', freeTier: '2 projetos, 500MB DB, 1GB storage, 50k MAU auth',
     precoBase: 'Pro: USD 25/mês',
@@ -26825,24 +26846,41 @@ const PROVEDORES_SEED: ProvedorSeed[] = [
   },
 ];
 
-function _seedProvedoresSeNecessario(): void {
-  try {
-    const existentes = dbGetAll('Provedores') as Array<Record<string, unknown>>;
-    if (existentes.length > 0) return; // já tem dados; não duplica
-    const agora = new Date().toISOString();
-    for (const p of PROVEDORES_SEED) {
-      dbCreate('Provedores', {
-        ...p,
-        notas: '', status: 'curado',
-        criadoEm: agora, atualizadoEm: agora,
-      });
-    }
-  } catch { /* sheet pode não existir ainda — initDatabase cria */ }
+// Slug estável do template a partir do nome (usado como templateId).
+function _slugProvedor(nome: string): string {
+  return String(nome || '')
+    .toLowerCase()
+    .replace(/[àáâãä]/g, 'a').replace(/[éêë]/g, 'e').replace(/[íï]/g, 'i')
+    .replace(/[óôõö]/g, 'o').replace(/[úü]/g, 'u').replace(/ç/g, 'c')
+    .replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
+// Migração one-time (v1.274.0): o catálogo deixou de ser auto-semeado como dados
+// reais. Apaga as linhas antigas com status 'curado' (que o user nunca ativou —
+// elas voltam como biblioteca a partir do PROVEDORES_SEED) e marca o resto como
+// 'custom' (provedor que o user cadastrou/editou de fato). Guardada por flag em
+// Properties pra rodar só uma vez — não mata ativações futuras.
+function _migrarProvedoresBiblioteca(): void {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    if (props.getProperty('PROVEDORES_BIBLIOTECA_MIGRADO') === '1') return;
+    const linhas = dbGetAll('Provedores') as Array<Record<string, unknown>>;
+    for (const p of linhas) {
+      const status = String(p.status || '');
+      if (status === 'curado' && !String(p.origem || '')) {
+        dbDelete('Provedores', String(p.id));
+      } else if (!String(p.origem || '')) {
+        dbUpdate('Provedores', String(p.id), { origem: 'custom' });
+      }
+    }
+    props.setProperty('PROVEDORES_BIBLIOTECA_MIGRADO', '1');
+  } catch { /* sheet pode não existir ainda — segue */ }
+}
+
+// "Meus provedores": só o que o usuário ativou da biblioteca ou cadastrou.
 function provedoresList(): ServerResult {
   try {
-    _seedProvedoresSeNecessario();
+    _migrarProvedoresBiblioteca();
     const todos = (dbGetAll('Provedores') as Array<Record<string, unknown>>)
       .map((p) => ({
         id: String(p.id || ''),
@@ -26855,13 +26893,74 @@ function provedoresList(): ServerResult {
         limitacoes: String(p.limitacoes || ''),
         idealPara: String(p.idealPara || ''),
         notas: String(p.notas || ''),
-        status: String(p.status || 'curado'),
+        status: String(p.status || 'ativo'),
         tags: String(p.tags || '').split(',').map((x) => x.trim()).filter(Boolean),
+        origem: String(p.origem || 'custom'),
+        templateId: String(p.templateId || ''),
         criadoEm: String(p.criadoEm || ''),
         atualizadoEm: String(p.atualizadoEm || ''),
       }))
       .sort((a, b) => (a.categoria + a.nome).localeCompare(b.categoria + b.nome));
     return { ok: true, data: todos };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Biblioteca de templates: o catálogo curado (PROVEDORES_SEED), cada um com um
+// flag `ativado` calculado pelo que já existe em "Provedores". Read-only.
+function provedorTemplatesList(): ServerResult {
+  try {
+    _migrarProvedoresBiblioteca();
+    const ativos = dbGetAll('Provedores') as Array<Record<string, unknown>>;
+    const idsAtivos: Record<string, boolean> = {};
+    const nomesAtivos: Record<string, boolean> = {};
+    for (const a of ativos) {
+      const tid = String(a.templateId || '');
+      if (tid) idsAtivos[tid] = true;
+      nomesAtivos[String(a.nome || '').toLowerCase()] = true;
+    }
+    const templates = PROVEDORES_SEED.map((p) => {
+      const templateId = _slugProvedor(p.nome);
+      const ativado = !!idsAtivos[templateId] || !!nomesAtivos[p.nome.toLowerCase()];
+      return {
+        templateId,
+        nome: p.nome,
+        categoria: p.categoria,
+        urlSite: p.urlSite,
+        freeTier: p.freeTier,
+        precoBase: p.precoBase,
+        beneficios: p.beneficios,
+        limitacoes: p.limitacoes,
+        idealPara: p.idealPara,
+        tags: p.tags.split(',').map((x) => x.trim()).filter(Boolean),
+        ativado,
+      };
+    }).sort((a, b) => (a.categoria + a.nome).localeCompare(b.categoria + b.nome));
+    return { ok: true, data: templates };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Ativa um template da biblioteca: cria uma linha real em "Provedores".
+function provedorAtivarTemplate(templateId: string): ServerResult {
+  try {
+    const tpl = PROVEDORES_SEED.find((p) => _slugProvedor(p.nome) === templateId);
+    if (!tpl) throw new Error('Template não encontrado.');
+    const jaExiste = (dbGetAll('Provedores') as Array<Record<string, unknown>>)
+      .some((p) => String(p.templateId || '') === templateId
+        || String(p.nome || '').toLowerCase() === tpl.nome.toLowerCase());
+    if (jaExiste) return { ok: true, data: { jaAtivo: true } };
+    const agora = new Date().toISOString();
+    const novo = dbCreate('Provedores', {
+      nome: tpl.nome, categoria: tpl.categoria, urlSite: tpl.urlSite,
+      freeTier: tpl.freeTier, precoBase: tpl.precoBase, beneficios: tpl.beneficios,
+      limitacoes: tpl.limitacoes, idealPara: tpl.idealPara, notas: '',
+      status: 'ativo', tags: tpl.tags, origem: 'template', templateId,
+      criadoEm: agora, atualizadoEm: agora,
+    });
+    return { ok: true, data: novo };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
   }
@@ -26895,7 +26994,7 @@ function provedoresSave(payload: {
       limitacoes: payload.limitacoes || '',
       idealPara: payload.idealPara || '',
       notas: payload.notas || '',
-      status: payload.status || 'curado',
+      status: payload.status || 'ativo',
       tags: payload.tags || '',
       atualizadoEm: agora,
     };
@@ -26903,7 +27002,7 @@ function provedoresSave(payload: {
       dbUpdate('Provedores', payload.id, dados);
       return { ok: true, data: { id: payload.id, ...dados } };
     }
-    const novo = dbCreate('Provedores', { ...dados, criadoEm: agora });
+    const novo = dbCreate('Provedores', { ...dados, origem: 'custom', templateId: '', criadoEm: agora });
     return { ok: true, data: novo };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
@@ -26914,6 +27013,411 @@ function provedoresDelete(id: string): ServerResult {
   try {
     dbDelete('Provedores', id);
     return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ─── Hospedagem → VPS & Serviços (topologia) ─────────────────────────────────
+// Um VpsHost é uma máquina/plano do provedor (ex.: VPS Hostinger). Dentro dele
+// rodam VpsServicos (containers/apps: Caddy, LiteLLM, Postgres…). VpsPendencias
+// são débitos/erros conhecidos/próximos passos, por host ou por serviço. Segredos
+// (SSH, chaves) NUNCA moram aqui — o campo `cofreLabel` referencia o Cofre.
+
+function _numOrEmpty(v: unknown): string {
+  const s = String(v == null ? '' : v).trim();
+  return s;
+}
+
+// Seed one-time (v1.274.0) da VPS "Central LLM" do usuário, a partir da topologia
+// que ele forneceu (TOPOLOGIA.md — arquivo público, sem chaves). Popula o host,
+// os 5 containers e as pendências/erros conhecidos. Guardado por flag em
+// Properties + checagem por hostname pra não duplicar. Segredos NUNCA entram aqui
+// (o SSH/chaves vão pro Cofre via "Importar"). Pode ser removido no futuro.
+function _seedVpsCentralLLMSeNecessario(): void {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    if (props.getProperty('VPS_SEED_CENTRAL_LLM') === '1') return;
+    const jaExiste = (dbGetAll('VpsHosts') as Array<Record<string, unknown>>)
+      .some((h) => String(h.hostname || '') === 'srv1827177.hstgr.cloud'
+        || String(h.nome || '').toLowerCase().indexOf('central llm') >= 0);
+    if (jaExiste) { props.setProperty('VPS_SEED_CENTRAL_LLM', '1'); return; }
+
+    const agora = new Date().toISOString();
+    const host = dbCreate('VpsHosts', {
+      provedor: 'Hostinger',
+      nome: 'Central LLM (pulse8.cloud)',
+      ip: '179.197.71.187',
+      ipv6: '2a02:4780:6e:8056::1',
+      hostname: 'srv1827177.hstgr.cloud',
+      plano: 'VPS Ubuntu 24.04',
+      regiao: '',
+      so: 'Ubuntu 24.04',
+      painelUrl: 'https://hpanel.hostinger.com',
+      dominioRaiz: 'pulse8.cloud',
+      dominioExpira: '13/07/2027',
+      sshUsuario: 'root',
+      sshHost: 'srv1827177.hstgr.cloud',
+      sshPorta: '22',
+      cofreLabel: 'SSH root VPS Hostinger',
+      status: 'ativo',
+      custoMensal: '',
+      moeda: 'USD',
+      notas: 'Docker Engine 29.x · rede bridge "central" com 5 containers. '
+        + 'Princípio: só o Caddy fala com o mundo (porta 80/443); os outros 4 ficam '
+        + 'isolados na rede Docker. Projeto na VPS: /home/lazar/central-llm/. '
+        + 'Volumes nomeados: postgres_data, portainer_data, open_webui_data, caddy_data, caddy_config. '
+        + 'Reiniciar tudo: cd /home/lazar/central-llm && docker compose up -d.',
+      tags: 'docker, gateway, sempre-ligado, llm',
+      ordem: 0,
+      criadoEm: agora, atualizadoEm: agora,
+    }) as Record<string, unknown>;
+    const hostId = String(host.id);
+
+    const servicos = [
+      {
+        nome: 'central-llm-caddy', imagem: 'caddy:2-alpine', funcao: 'Reverse proxy HTTPS',
+        portaInterna: '80, 443', portaExposta: '80, 443', dominioPublico: '', status: 'rodando',
+        volume: 'caddy_data, caddy_config', dependeDe: '', cofreLabel: '',
+        notas: 'Única porta de entrada; roteia por Host. TLS automático via Let\'s Encrypt.',
+      },
+      {
+        nome: 'central-llm-gateway', imagem: 'ghcr.io/berriai/litellm:main-stable', funcao: 'Gateway LLM',
+        portaInterna: '4000', portaExposta: '—', dominioPublico: 'litellm.pulse8.cloud', status: 'rodando',
+        volume: 'config.yaml', dependeDe: 'central-llm-db', cofreLabel: 'LITELLM_MASTER_KEY',
+        notas: 'Valida chave virtual no Postgres; mapeia apelidos (central-*/claude-*) → modelo real do proxy.',
+      },
+      {
+        nome: 'central-llm-db', imagem: 'postgres:17-alpine', funcao: 'Banco do LiteLLM (chaves hash + logs)',
+        portaInterna: '5432', portaExposta: '—', dominioPublico: '', status: 'rodando',
+        volume: 'postgres_data', dependeDe: '', cofreLabel: 'POSTGRES (interno)',
+        notas: 'Sem porta exposta — só a rede "central" acessa. Guarda hashes das chaves virtuais + SpendLogs.',
+      },
+      {
+        nome: 'central-llm-webui', imagem: 'ghcr.io/open-webui/open-webui:main', funcao: 'Chat estilo ChatGPT',
+        portaInterna: '8080', portaExposta: '—', dominioPublico: 'chat.pulse8.cloud', status: 'rodando',
+        volume: 'open_webui_data', dependeDe: 'central-llm-gateway', cofreLabel: '',
+        notas: 'Cria conta no primeiro acesso.',
+      },
+      {
+        nome: 'central-llm-portainer', imagem: 'portainer/portainer-ce:latest', funcao: 'Painel visual Docker',
+        portaInterna: '9443', portaExposta: '—', dominioPublico: 'portainer.pulse8.cloud', status: 'rodando',
+        volume: 'portainer_data', dependeDe: '', cofreLabel: '',
+        notas: 'v2.33.5 LTS. Live Connect via /var/run/docker.sock.',
+      },
+    ];
+    servicos.forEach((s, i) => {
+      dbCreate('VpsServicos', { vpsHostId: hostId, ...s, ordem: i, criadoEm: agora, atualizadoEm: agora });
+    });
+
+    const pendencias = [
+      // Próximos passos
+      { tipo: 'proximo', severidade: 'media', titulo: 'Rotação trimestral da LITELLM_VIRTUAL_KEY', descricao: 'A cada 3 meses: gerar nova chave virtual (key/generate) e atualizar o .env na VPS + local, recriar o gateway.' },
+      { tipo: 'proximo', severidade: 'baixa', titulo: 'Mover Documentos do OneDrive de volta pro C:\\Users\\lazar', descricao: 'Desativar "Pasta Backup" do OneDrive pra Documentos (sync corrompia o PowerShell profile).' },
+      { tipo: 'proximo', severidade: 'baixa', titulo: 'Adicionar n8n / Nextcloud ou outro container', descricao: 'Adicionar novo service no docker-compose.yml da mesma stack.' },
+      { tipo: 'proximo', severidade: 'baixa', titulo: 'Configurar Portainer Live Connect', descricao: 'Clicar o botão pra ver containers em tempo real.' },
+      { tipo: 'proximo', severidade: 'media', titulo: 'Migrar Postgres major só com dump/restore', descricao: 'Regra do CLAUDE.md #7 — nunca subir imagem major direto no volume antigo.' },
+      // Erros conhecidos
+      { tipo: 'erro', severidade: 'media', titulo: 'Claude Code "Not logged in"', descricao: 'Estava com ANTHROPIC_API_KEY (pede aprovação). Trocar pra ANTHROPIC_AUTH_TOKEN. settings.json em UTF-8 SEM BOM.' },
+      { tipo: 'erro', severidade: 'baixa', titulo: 'Cursor ignora modelos claude-*', descricao: 'Regra interna do Cursor. Usar os apelidos central-* (têm bypass).' },
+      { tipo: 'erro', severidade: 'baixa', titulo: 'Portainer timeout 3min na inicialização', descricao: 'Bug do v2.21.5+. Usar portainer-ce:latest (já está).' },
+      { tipo: 'erro', severidade: 'baixa', titulo: 'Usage View zerado no LiteLLM', descricao: 'Bug visual da 1.92.x. Usar a aba Logs.' },
+      { tipo: 'erro', severidade: 'media', titulo: 'Caddy entra em restart loop', descricao: 'Placeholder não substituído no Caddyfile. Hardcodar o valor.' },
+      { tipo: 'erro', severidade: 'alta', titulo: 'PostgreSQL crash após upgrade major', descricao: 'Volume incompatível. Resolver com dump/restore (CLAUDE.md #7).' },
+      { tipo: 'erro', severidade: 'baixa', titulo: '"Authentication token manipulation error" no passwd', descricao: 'Senha atual incorreta. Reset via painel Hostinger → Console.' },
+    ];
+    pendencias.forEach((p) => {
+      dbCreate('VpsPendencias', { vpsHostId: hostId, servicoId: '', status: 'aberto', ...p, criadoEm: agora, atualizadoEm: agora });
+    });
+
+    props.setProperty('VPS_SEED_CENTRAL_LLM', '1');
+  } catch { /* tabelas podem não existir ainda — initDatabase cria; roda no próximo list */ }
+}
+
+function vpsHostsList(): ServerResult {
+  try {
+    _seedVpsCentralLLMSeNecessario();
+    const servicos = dbGetAll('VpsServicos') as Array<Record<string, unknown>>;
+    const pend = dbGetAll('VpsPendencias') as Array<Record<string, unknown>>;
+    const hosts = (dbGetAll('VpsHosts') as Array<Record<string, unknown>>)
+      .map((h) => {
+        const id = String(h.id || '');
+        return {
+          id,
+          provedor: String(h.provedor || ''),
+          nome: String(h.nome || ''),
+          ip: String(h.ip || ''),
+          ipv6: String(h.ipv6 || ''),
+          hostname: String(h.hostname || ''),
+          plano: String(h.plano || ''),
+          regiao: String(h.regiao || ''),
+          so: String(h.so || ''),
+          painelUrl: String(h.painelUrl || ''),
+          dominioRaiz: String(h.dominioRaiz || ''),
+          dominioExpira: String(h.dominioExpira || ''),
+          sshUsuario: String(h.sshUsuario || ''),
+          sshHost: String(h.sshHost || ''),
+          sshPorta: String(h.sshPorta || ''),
+          cofreLabel: String(h.cofreLabel || ''),
+          status: String(h.status || 'ativo'),
+          custoMensal: _numOrEmpty(h.custoMensal),
+          moeda: String(h.moeda || 'USD'),
+          notas: String(h.notas || ''),
+          tags: String(h.tags || '').split(',').map((x) => x.trim()).filter(Boolean),
+          ordem: Number(h.ordem || 0),
+          criadoEm: String(h.criadoEm || ''),
+          atualizadoEm: String(h.atualizadoEm || ''),
+          numServicos: servicos.filter((s) => String(s.vpsHostId) === id).length,
+          numPendencias: pend.filter((p) => String(p.vpsHostId) === id && String(p.status || 'aberto') !== 'resolvido').length,
+        };
+      })
+      .sort((a, b) => (a.ordem - b.ordem) || a.nome.localeCompare(b.nome));
+    return { ok: true, data: hosts };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function vpsHostDetalhe(id: string): ServerResult {
+  try {
+    const host = (dbGetAll('VpsHosts') as Array<Record<string, unknown>>).find((h) => String(h.id) === String(id));
+    if (!host) throw new Error('VPS não encontrada.');
+    const servicos = (dbGetAll('VpsServicos') as Array<Record<string, unknown>>)
+      .filter((s) => String(s.vpsHostId) === String(id))
+      .map((s) => ({
+        id: String(s.id || ''),
+        vpsHostId: String(s.vpsHostId || ''),
+        nome: String(s.nome || ''),
+        imagem: String(s.imagem || ''),
+        funcao: String(s.funcao || ''),
+        portaInterna: String(s.portaInterna || ''),
+        portaExposta: String(s.portaExposta || ''),
+        dominioPublico: String(s.dominioPublico || ''),
+        status: String(s.status || 'rodando'),
+        volume: String(s.volume || ''),
+        dependeDe: String(s.dependeDe || ''),
+        cofreLabel: String(s.cofreLabel || ''),
+        notas: String(s.notas || ''),
+        ordem: Number(s.ordem || 0),
+        criadoEm: String(s.criadoEm || ''),
+        atualizadoEm: String(s.atualizadoEm || ''),
+      }))
+      .sort((a, b) => (a.ordem - b.ordem) || a.nome.localeCompare(b.nome));
+    const pendencias = (dbGetAll('VpsPendencias') as Array<Record<string, unknown>>)
+      .filter((p) => String(p.vpsHostId) === String(id))
+      .map((p) => ({
+        id: String(p.id || ''),
+        vpsHostId: String(p.vpsHostId || ''),
+        servicoId: String(p.servicoId || ''),
+        tipo: String(p.tipo || 'debito'),
+        titulo: String(p.titulo || ''),
+        descricao: String(p.descricao || ''),
+        severidade: String(p.severidade || 'media'),
+        status: String(p.status || 'aberto'),
+        criadoEm: String(p.criadoEm || ''),
+        atualizadoEm: String(p.atualizadoEm || ''),
+      }))
+      .sort((a, b) => b.criadoEm.localeCompare(a.criadoEm));
+    return { ok: true, data: { servicos, pendencias } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function vpsHostSave(payload: Record<string, unknown>): ServerResult {
+  try {
+    const nome = String(payload.nome || '').trim();
+    if (!nome) throw new Error('Dê um nome pra VPS.');
+    const agora = new Date().toISOString();
+    const dados = {
+      provedor: String(payload.provedor || 'Hostinger'),
+      nome,
+      ip: String(payload.ip || ''),
+      ipv6: String(payload.ipv6 || ''),
+      hostname: String(payload.hostname || ''),
+      plano: String(payload.plano || ''),
+      regiao: String(payload.regiao || ''),
+      so: String(payload.so || ''),
+      painelUrl: String(payload.painelUrl || ''),
+      dominioRaiz: String(payload.dominioRaiz || ''),
+      dominioExpira: String(payload.dominioExpira || ''),
+      sshUsuario: String(payload.sshUsuario || ''),
+      sshHost: String(payload.sshHost || ''),
+      sshPorta: String(payload.sshPorta || ''),
+      cofreLabel: String(payload.cofreLabel || ''),
+      status: String(payload.status || 'ativo'),
+      custoMensal: _numOrEmpty(payload.custoMensal),
+      moeda: String(payload.moeda || 'USD'),
+      notas: String(payload.notas || ''),
+      tags: String(payload.tags || ''),
+      ordem: Number(payload.ordem || 0),
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('VpsHosts', String(payload.id), dados);
+      return { ok: true, data: { id: String(payload.id), ...dados } };
+    }
+    const novo = dbCreate('VpsHosts', { ...dados, criadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Apagar a VPS leva junto seus serviços e pendências (cascade) — não deixa órfão.
+function vpsHostDelete(id: string): ServerResult {
+  try {
+    (dbGetAll('VpsServicos') as Array<Record<string, unknown>>)
+      .filter((s) => String(s.vpsHostId) === String(id))
+      .forEach((s) => dbDelete('VpsServicos', String(s.id)));
+    (dbGetAll('VpsPendencias') as Array<Record<string, unknown>>)
+      .filter((p) => String(p.vpsHostId) === String(id))
+      .forEach((p) => dbDelete('VpsPendencias', String(p.id)));
+    dbDelete('VpsHosts', String(id));
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function vpsServicoSave(payload: Record<string, unknown>): ServerResult {
+  try {
+    const vpsHostId = String(payload.vpsHostId || '').trim();
+    const nome = String(payload.nome || '').trim();
+    if (!vpsHostId) throw new Error('Serviço precisa pertencer a uma VPS.');
+    if (!nome) throw new Error('Dê um nome/rótulo ao serviço.');
+    const agora = new Date().toISOString();
+    const dados = {
+      vpsHostId,
+      nome,
+      imagem: String(payload.imagem || ''),
+      funcao: String(payload.funcao || ''),
+      portaInterna: String(payload.portaInterna || ''),
+      portaExposta: String(payload.portaExposta || ''),
+      dominioPublico: String(payload.dominioPublico || ''),
+      status: String(payload.status || 'rodando'),
+      volume: String(payload.volume || ''),
+      dependeDe: String(payload.dependeDe || ''),
+      cofreLabel: String(payload.cofreLabel || ''),
+      notas: String(payload.notas || ''),
+      ordem: Number(payload.ordem || 0),
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('VpsServicos', String(payload.id), dados);
+      return { ok: true, data: { id: String(payload.id), ...dados } };
+    }
+    const novo = dbCreate('VpsServicos', { ...dados, criadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function vpsServicoDelete(id: string): ServerResult {
+  try {
+    (dbGetAll('VpsPendencias') as Array<Record<string, unknown>>)
+      .filter((p) => String(p.servicoId) === String(id))
+      .forEach((p) => dbDelete('VpsPendencias', String(p.id)));
+    dbDelete('VpsServicos', String(id));
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function vpsPendenciaSave(payload: Record<string, unknown>): ServerResult {
+  try {
+    const vpsHostId = String(payload.vpsHostId || '').trim();
+    const titulo = String(payload.titulo || '').trim();
+    if (!vpsHostId) throw new Error('Pendência precisa pertencer a uma VPS.');
+    if (!titulo) throw new Error('Descreva a pendência num título.');
+    const agora = new Date().toISOString();
+    const dados = {
+      vpsHostId,
+      servicoId: String(payload.servicoId || ''),
+      tipo: String(payload.tipo || 'debito'),
+      titulo,
+      descricao: String(payload.descricao || ''),
+      severidade: String(payload.severidade || 'media'),
+      status: String(payload.status || 'aberto'),
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('VpsPendencias', String(payload.id), dados);
+      return { ok: true, data: { id: String(payload.id), ...dados } };
+    }
+    const novo = dbCreate('VpsPendencias', { ...dados, criadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function vpsPendenciaDelete(id: string): ServerResult {
+  try {
+    dbDelete('VpsPendencias', String(id));
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Health-check HTTP dos serviços que têm domínio público. Não é um ICMP ping
+// (impossível no GAS/browser) — é um GET real via UrlFetchApp: se o servidor
+// responde (2xx/3xx, ou até 401/403 quando tem login), consideramos "no ar".
+// Faz uma requisição por serviço, com try/catch individual pra um serviço fora
+// não derrubar os outros, e mede a latência.
+function vpsPingServicos(): ServerResult {
+  try {
+    const hosts = dbGetAll('VpsHosts') as Array<Record<string, unknown>>;
+    const hostNome: Record<string, string> = {};
+    hosts.forEach((h) => { hostNome[String(h.id)] = String(h.nome || ''); });
+
+    const alvos = (dbGetAll('VpsServicos') as Array<Record<string, unknown>>)
+      .map((s) => ({
+        id: String(s.id || ''),
+        vpsHostId: String(s.vpsHostId || ''),
+        hostNome: hostNome[String(s.vpsHostId)] || '',
+        nome: String(s.nome || ''),
+        funcao: String(s.funcao || ''),
+        dominioPublico: String(s.dominioPublico || '').trim(),
+        ordem: Number(s.ordem || 0),
+      }))
+      .filter((s) => s.dominioPublico);
+
+    const resultados = alvos.map((s) => {
+      let url = s.dominioPublico;
+      if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+      const t0 = Date.now();
+      let statusCode = 0;
+      let online = false;
+      let erro = '';
+      try {
+        const resp = UrlFetchApp.fetch(url, {
+          method: 'get',
+          muteHttpExceptions: true,
+          followRedirects: true,
+          validateHttpsCertificates: true,
+        });
+        statusCode = resp.getResponseCode();
+        // Servidor respondeu algo → está de pé. 5xx conta como "instável" (up mas com erro).
+        online = statusCode >= 200 && statusCode < 500;
+      } catch (e: unknown) {
+        erro = e instanceof Error ? e.message : 'sem resposta';
+      }
+      return {
+        ...s,
+        online,
+        instavel: statusCode >= 500,
+        statusCode,
+        ms: Date.now() - t0,
+        erro,
+        checadoEm: new Date().toISOString(),
+      };
+    });
+
+    return { ok: true, data: resultados };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
   }
@@ -26969,13 +27473,49 @@ function cofreSetConfig(payload: { salt: string; wrappedKey: string; wrapIv: str
 
 // Lista entradas com metadados não-sensíveis (label, categoria) — o cipher
 // continua cifrado e só é decodificado no browser.
+// Migração única: carimba a seção "VPS Pulse8 · Hostinger" nos segredos que o
+// usuário importou da VPS (Central LLM). Só mexe no campo `grupo` (texto plano,
+// metadado) — nunca toca no ciphertext, então o modelo zero-knowledge continua
+// intacto. Só age em itens SEM seção; roda de novo até achar os itens (caso o
+// usuário abra o Cofre antes de importar) e então trava via Property.
+function _seedGrupoCofrePulse8SeNecessario(): void {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    if (props.getProperty('COFRE_SEED_GRUPO_PULSE8') === '1') return;
+    const GRUPO = 'VPS Pulse8 · Hostinger';
+    const exatos: Record<string, boolean> = {
+      'ssh root vps hostinger': true,
+      'litellm_master_key': true,
+      'litellm_virtual_key': true,
+      'proxy_trabalho_api_key': true,
+      'postgres interno (litellm)': true,
+      'ngrok_authtoken (legado)': true,
+    };
+    const tokens = ['litellm', 'proxy_trabalho', 'ngrok_authtoken', 'ssh root vps'];
+    const rows = dbGetAll('Cofre') as Array<Record<string, unknown>>;
+    let n = 0;
+    rows.forEach((r) => {
+      if (String(r.grupo || '').trim()) return; // respeita quem já tem seção
+      const label = String(r.label || '').trim().toLowerCase();
+      if (!label) return;
+      if (exatos[label] || tokens.some((tk) => label.indexOf(tk) >= 0)) {
+        dbUpdate('Cofre', String(r.id), { grupo: GRUPO });
+        n += 1;
+      }
+    });
+    if (n > 0) props.setProperty('COFRE_SEED_GRUPO_PULSE8', '1');
+  } catch (e) { /* silencioso — não pode travar a listagem do Cofre */ }
+}
+
 function cofreList(): ServerResult {
   try {
+    _seedGrupoCofrePulse8SeNecessario();
     const todos = (dbGetAll('Cofre') as Array<Record<string, unknown>>)
       .map((c) => ({
         id: String(c.id || ''),
         label: String(c.label || ''),
         categoria: String(c.categoria || ''),
+        grupo: String(c.grupo || ''),
         urlRef: String(c.urlRef || ''),
         usuario: String(c.usuario || ''),
         iv: String(c.iv || ''),
@@ -26984,7 +27524,7 @@ function cofreList(): ServerResult {
         criadoEm: String(c.criadoEm || ''),
         atualizadoEm: String(c.atualizadoEm || ''),
       }))
-      .sort((a, b) => (a.categoria + a.label).localeCompare(b.categoria + b.label));
+      .sort((a, b) => (a.grupo + a.categoria + a.label).localeCompare(b.grupo + b.categoria + b.label));
     return { ok: true, data: todos };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
@@ -26995,6 +27535,7 @@ function cofreSave(payload: {
   id?: string;
   label: string;
   categoria: string;
+  grupo?: string;
   urlRef?: string;
   usuario?: string;
   iv: string;
@@ -27009,6 +27550,7 @@ function cofreSave(payload: {
     const dados = {
       label: payload.label,
       categoria: payload.categoria || '',
+      grupo: payload.grupo || '',
       urlRef: payload.urlRef || '',
       usuario: payload.usuario || '',
       iv: payload.iv,
@@ -27030,6 +27572,132 @@ function cofreSave(payload: {
 function cofreDelete(id: string): ServerResult {
   try {
     dbDelete('Cofre', id);
+    return { ok: true, data: { id } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ─── Cofre — Documentos cifrados (blob no Drive) ─────────────────────────────
+// O arquivo é cifrado no navegador (AES-GCM com a vaultKey) e só o CIPHERTEXT
+// sobe pro Drive do próprio usuário, numa pasta dedicada. O servidor guarda só
+// metadados + o fileId + o iv. Resultado: mesmo quem tiver acesso ao Drive vê
+// bytes embaralhados — pra abrir precisa TAMBÉM da senha-mestra do Cofre.
+function _cofreDocsFolder(): GoogleAppsScript.Drive.Folder {
+  const sp = PropertiesService.getScriptProperties();
+  const id = sp.getProperty('COFRE_DOCS_FOLDER');
+  if (id) { try { return DriveApp.getFolderById(id); } catch { /* recria abaixo */ } }
+  const f = DriveApp.createFolder('Forja — Cofre (arquivos cifrados)');
+  sp.setProperty('COFRE_DOCS_FOLDER', f.getId());
+  return f;
+}
+
+function cofreDocList(): ServerResult {
+  try {
+    const todos = (dbGetAll('CofreDocs') as Array<Record<string, unknown>>)
+      .map((d) => ({
+        id: String(d.id || ''),
+        label: String(d.label || ''),
+        grupo: String(d.grupo || ''),
+        categoria: String(d.categoria || ''),
+        nomeArquivo: String(d.nomeArquivo || ''),
+        mimeType: String(d.mimeType || ''),
+        tamanho: Number(d.tamanho || 0),
+        driveFileId: String(d.driveFileId || ''),
+        notas: String(d.notas || ''),
+        criadoEm: String(d.criadoEm || ''),
+        atualizadoEm: String(d.atualizadoEm || ''),
+      }))
+      .sort((a, b) => (a.grupo + a.label).localeCompare(b.grupo + b.label));
+    return { ok: true, data: todos };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function cofreDocSave(payload: {
+  id?: string;
+  label: string;
+  grupo?: string;
+  categoria?: string;
+  nomeArquivo: string;
+  mimeType?: string;
+  tamanho?: number;
+  iv: string;
+  cipherB64?: string; // ciphertext do arquivo (só quando cria/substitui o conteúdo)
+  notas?: string;
+}): ServerResult {
+  try {
+    if (!payload.label) throw new Error('Dê um nome/rótulo pro documento.');
+    const agora = new Date().toISOString();
+    const existente = payload.id ? dbGetById('CofreDocs', payload.id) : null;
+
+    let driveFileId = existente ? String(existente['driveFileId'] || '') : '';
+    // Novo conteúdo enviado → cria arquivo cifrado no Drive (e descarta o antigo).
+    if (payload.cipherB64) {
+      const bytes = Utilities.base64Decode(payload.cipherB64);
+      const nomeEnc = (payload.nomeArquivo || 'arquivo') + '.forjaenc';
+      const blob = Utilities.newBlob(bytes, 'application/octet-stream', nomeEnc);
+      const file = _cofreDocsFolder().createFile(blob);
+      // Se estava substituindo, manda o antigo pra lixeira.
+      if (driveFileId) { try { DriveApp.getFileById(driveFileId).setTrashed(true); } catch { /* já sumiu */ } }
+      driveFileId = file.getId();
+    }
+    if (!driveFileId) throw new Error('Faltou o conteúdo do arquivo.');
+
+    const dados = {
+      label: payload.label,
+      grupo: payload.grupo || '',
+      categoria: payload.categoria || 'documento',
+      nomeArquivo: payload.nomeArquivo || 'arquivo',
+      mimeType: payload.mimeType || 'application/octet-stream',
+      tamanho: Number(payload.tamanho || 0),
+      driveFileId,
+      iv: payload.iv,
+      notas: payload.notas || '',
+      atualizadoEm: agora,
+    };
+    if (payload.id) {
+      dbUpdate('CofreDocs', payload.id, dados);
+      return { ok: true, data: { id: payload.id, ...dados } };
+    }
+    const novo = dbCreate('CofreDocs', { ...dados, criadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Devolve o ciphertext (base64) pro navegador decifrar com a vaultKey.
+function cofreDocGet(id: string): ServerResult {
+  try {
+    const row = dbGetById('CofreDocs', id);
+    if (!row) throw new Error('Documento não encontrado.');
+    const fileId = String(row['driveFileId'] || '');
+    if (!fileId) throw new Error('Arquivo sem referência no Drive.');
+    const bytes = DriveApp.getFileById(fileId).getBlob().getBytes();
+    return {
+      ok: true,
+      data: {
+        iv: String(row['iv'] || ''),
+        cipher: Utilities.base64Encode(bytes),
+        nomeArquivo: String(row['nomeArquivo'] || 'arquivo'),
+        mimeType: String(row['mimeType'] || 'application/octet-stream'),
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function cofreDocDelete(id: string): ServerResult {
+  try {
+    const row = dbGetById('CofreDocs', id);
+    if (row) {
+      const fileId = String(row['driveFileId'] || '');
+      if (fileId) { try { DriveApp.getFileById(fileId).setTrashed(true); } catch { /* já sumiu */ } }
+    }
+    dbDelete('CofreDocs', id);
     return { ok: true, data: { id } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
@@ -28013,7 +28681,14 @@ function cofreReset(): ServerResult {
     for (const c of todos) {
       if (c.id) dbDelete('Cofre', String(c.id));
     }
-    return { ok: true, data: { apagados: todos.length } };
+    // Também apaga os documentos cifrados (metadados + blob no Drive).
+    const docs = dbGetAll('CofreDocs') as Array<Record<string, unknown>>;
+    for (const d of docs) {
+      const fileId = String(d.driveFileId || '');
+      if (fileId) { try { DriveApp.getFileById(fileId).setTrashed(true); } catch { /* já sumiu */ } }
+      if (d.id) dbDelete('CofreDocs', String(d.id));
+    }
+    return { ok: true, data: { apagados: todos.length + docs.length } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
   }

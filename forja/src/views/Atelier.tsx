@@ -153,8 +153,9 @@ export default function Atelier({ initialTab = 'guia', onGerenciarConexoes }: At
       icon: <Server size={17} strokeWidth={1.6} />,
       iconActive: <Server size={17} strokeWidth={1.8} />,
       label: 'Hospedagem',
-      descricao: 'Provedores, free tiers, benefícios e custos pra escolher onde rodar.',
+      descricao: 'Suas VPS e a topologia do que roda dentro delas, mais a biblioteca de provedores pra ativar só o que você usa.',
       accent: 'sage',
+      novo: true,
     },
     {
       key: 'servidores',
@@ -207,7 +208,7 @@ export default function Atelier({ initialTab = 'guia', onGerenciarConexoes }: At
       case 'receituario':
         return wrapCard(<ReceituarioPanel />);
       case 'hospedagem':
-        return wrapCard(<HospedagemPanel />);
+        return wrapCard(<HospedagemPanel onAbrirCofre={abrirCofre} />);
       case 'servidores':
         return wrapCard(<ServidoresPanel onAbrirCofre={abrirCofre} mode="monitor" onGerenciar={onGerenciarConexoes ? () => onGerenciarConexoes('infra') : undefined} />);
       case 'cofre':

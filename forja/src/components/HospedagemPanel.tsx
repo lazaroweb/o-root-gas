@@ -1,15 +1,34 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Input, Button, App as AntApp, Tag, Skeleton, Empty, Drawer, Form, Modal, Popconfirm, Tooltip, Select,
+  Input, Button, App as AntApp, Tag, Skeleton, Empty, Drawer, Form, Modal, Popconfirm, Tooltip, Select, Segmented,
 } from 'antd';
 import {
   Server, Plus, Search, ExternalLink, Sparkles, Tag as TagIcon, Edit3, Trash2, X, Save, Layers, Info,
-  CheckCircle2, AlertTriangle, DollarSign, Gift, Target, FileText,
+  CheckCircle2, AlertTriangle, DollarSign, Gift, Target, FileText, Network, Library, Check,
 } from 'lucide-react';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
 import type { ServerResult } from '../types';
+import TopologiaPanel from './TopologiaPanel';
+
+interface ProvedorTemplate {
+  templateId: string;
+  nome: string;
+  categoria: string;
+  urlSite: string;
+  freeTier: string;
+  precoBase: string;
+  beneficios: string;
+  limitacoes: string;
+  idealPara: string;
+  tags: string[];
+  ativado: boolean;
+}
+
+interface Props {
+  onAbrirCofre?: (label?: string) => void;
+}
 
 interface Provedor {
   id: string;
@@ -58,13 +77,19 @@ const CATEGORIAS = [
   'hospedagem', 'banco', 'auth', 'ia', 'email', 'dominio', 'monitoring', 'pagamento', 'storage', 'outros',
 ];
 
-export default function HospedagemPanel(): React.ReactElement {
+export default function HospedagemPanel({ onAbrirCofre }: Props): React.ReactElement {
   const t = useTokens();
   const { message } = AntApp.useApp();
+  const [vista, setVista] = useState<'vps' | 'meus' | 'biblioteca'>('vps');
   const [provedores, setProvedores] = useState<Provedor[]>([]);
   const [loading, setLoading] = useState(true);
   const [filtro, setFiltro] = useState('');
   const [categoriaFiltro, setCategoriaFiltro] = useState<string>('');
+
+  // Biblioteca de templates (catálogo curado, ativável)
+  const [templates, setTemplates] = useState<ProvedorTemplate[]>([]);
+  const [loadingTpl, setLoadingTpl] = useState(false);
+  const [ativandoId, setAtivandoId] = useState<string>('');
 
   // Drawer de detalhe
   const [aberto, setAberto] = useState<Provedor | null>(null);
@@ -83,12 +108,33 @@ export default function HospedagemPanel(): React.ReactElement {
       .finally(() => setLoading(false));
   };
 
+  const carregarTemplates = () => {
+    setLoadingTpl(true);
+    callServer<ServerResult>('provedorTemplatesList')
+      .then((r) => { if (r.ok && r.data) setTemplates(r.data as ProvedorTemplate[]); })
+      .catch(() => { /* preview */ })
+      .finally(() => setLoadingTpl(false));
+  };
+
   useEffect(() => { carregar(); }, []);
+  useEffect(() => { if (vista === 'biblioteca' && templates.length === 0) carregarTemplates(); }, [vista]);
+
+  const ativarTemplate = async (tpl: ProvedorTemplate) => {
+    setAtivandoId(tpl.templateId);
+    try {
+      const r = await callServer<ServerResult>('provedorAtivarTemplate', tpl.templateId);
+      if (r.ok) {
+        message.success(`${tpl.nome} ativado — agora está em "Meus provedores".`);
+        setTemplates((prev) => prev.map((x) => (x.templateId === tpl.templateId ? { ...x, ativado: true } : x)));
+        carregar();
+      } else message.error(r.error || 'Erro');
+    } finally { setAtivandoId(''); }
+  };
 
   const abrirNovo = () => {
     setEditando(null);
     form.resetFields();
-    form.setFieldsValue({ status: 'curado', categoria: 'hospedagem' });
+    form.setFieldsValue({ status: 'ativo', categoria: 'hospedagem' });
     setFormOpen(true);
   };
 
@@ -151,67 +197,87 @@ export default function HospedagemPanel(): React.ReactElement {
 
   return (
     <div style={{ padding: '14px 24px 24px' }}>
-      {/* Header da seção */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Server size={18} strokeWidth={1.6} color={t.accents.sage} />
-            <span style={{ fontFamily: FONTS.display, fontSize: 16, fontWeight: 600, color: t.text }}>Hospedagem & Provedores</span>
-            <Tooltip title="Catálogo curado de provedores pra você consultar na hora de publicar um app — hospedagem, banco, auth, IA, email, domínio, pagamento. Tem 18 provedores iniciais; adicione os seus.">
-              <Info size={13} color={t.textTertiary} style={{ cursor: 'help' }} />
-            </Tooltip>
+      {/* Seletor de visão */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+        <Segmented
+          value={vista}
+          onChange={(v) => setVista(v as 'vps' | 'meus' | 'biblioteca')}
+          options={[
+            { value: 'vps', label: <SegLabel icon={<Network size={13} />} texto="VPS & Serviços" /> },
+            { value: 'meus', label: <SegLabel icon={<Server size={13} />} texto="Meus provedores" n={provedores.length} /> },
+            { value: 'biblioteca', label: <SegLabel icon={<Library size={13} />} texto="Biblioteca" /> },
+          ]}
+        />
+        {vista === 'meus' && (
+          <Button type="primary" icon={<Plus size={14} />} onClick={abrirNovo}>Adicionar provedor</Button>
+        )}
+      </div>
+
+      {vista === 'vps' && (
+        <div style={{ margin: '-14px -24px -24px' }}>
+          <TopologiaPanel onAbrirCofre={onAbrirCofre} />
+        </div>
+      )}
+
+      {vista === 'meus' && (
+        <>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+            <Input
+              prefix={<Search size={13} color={t.textTertiary} />}
+              placeholder="Buscar por nome, benefícios, tags…"
+              value={filtro}
+              onChange={(e) => setFiltro(e.target.value)}
+              allowClear
+              style={{ flex: 1, minWidth: 240 }}
+            />
+            <Select
+              placeholder="Categoria"
+              allowClear
+              value={categoriaFiltro || undefined}
+              onChange={(v) => setCategoriaFiltro(v || '')}
+              style={{ minWidth: 160 }}
+              options={CATEGORIAS.map((c) => ({ value: c, label: c }))}
+            />
           </div>
-          <p style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textTertiary, margin: '4px 0 0', lineHeight: 1.5 }}>
-            {provedores.length > 0 && (
-              <>
-                <strong>{provedores.length}</strong> opções catalogadas em <strong>{Object.keys(agrupados).length}</strong> categorias.
-              </>
-            )}
-          </p>
-        </div>
-        <Button type="primary" icon={<Plus size={14} />} onClick={abrirNovo}>Adicionar provedor</Button>
-      </div>
 
-      {/* Filtros */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        <Input
-          prefix={<Search size={13} color={t.textTertiary} />}
-          placeholder="Buscar por nome, benefícios, tags…"
-          value={filtro}
-          onChange={(e) => setFiltro(e.target.value)}
-          allowClear
-          style={{ flex: 1, minWidth: 240 }}
-        />
-        <Select
-          placeholder="Categoria"
-          allowClear
-          value={categoriaFiltro || undefined}
-          onChange={(v) => setCategoriaFiltro(v || '')}
-          style={{ minWidth: 160 }}
-          options={CATEGORIAS.map((c) => ({ value: c, label: c }))}
-        />
-      </div>
-
-      {loading && provedores.length === 0 ? (
-        <Skeleton active paragraph={{ rows: 6 }} />
-      ) : filtrados.length === 0 ? (
-        <Empty description="Nenhum provedor encontrado com esses filtros." />
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-          {categoriasComResultado.map((cat) => (
-            <div key={cat}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <span style={{ width: 8, height: 8, borderRadius: 999, background: CORES_CATEGORIA[cat] || CORES_CATEGORIA.outros }} />
-                <span style={{ fontFamily: FONTS.ui, fontSize: 13, fontWeight: 600, color: t.textSecondary, textTransform: 'capitalize' }}>
-                  {cat} <span style={{ color: t.textTertiary, fontWeight: 400 }}>({agrupados[cat].length})</span>
-                </span>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
-                {agrupados[cat].map((p) => <ProvedorCard key={p.id} provedor={p} onOpen={() => setAberto(p)} />)}
-              </div>
+          {loading && provedores.length === 0 ? (
+            <Skeleton active paragraph={{ rows: 6 }} />
+          ) : provedores.length === 0 ? (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={<span style={{ color: t.textTertiary }}>Você ainda não ativou nenhum provedor. Vá na <strong>Biblioteca</strong> pra ativar os que usa, ou <strong>adicione</strong> um do seu jeito.</span>}
+            >
+              <Button icon={<Library size={14} />} onClick={() => setVista('biblioteca')}>Abrir biblioteca</Button>
+            </Empty>
+          ) : filtrados.length === 0 ? (
+            <Empty description="Nenhum provedor encontrado com esses filtros." />
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+              {categoriasComResultado.map((cat) => (
+                <div key={cat}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 999, background: CORES_CATEGORIA[cat] || CORES_CATEGORIA.outros }} />
+                    <span style={{ fontFamily: FONTS.ui, fontSize: 13, fontWeight: 600, color: t.textSecondary, textTransform: 'capitalize' }}>
+                      {cat} <span style={{ color: t.textTertiary, fontWeight: 400 }}>({agrupados[cat].length})</span>
+                    </span>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+                    {agrupados[cat].map((p) => <ProvedorCard key={p.id} provedor={p} onOpen={() => setAberto(p)} />)}
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+        </>
+      )}
+
+      {vista === 'biblioteca' && (
+        <BibliotecaProvedores
+          templates={templates}
+          loading={loadingTpl}
+          ativandoId={ativandoId}
+          onAtivar={ativarTemplate}
+        />
       )}
 
       {/* Drawer de detalhe */}
@@ -332,7 +398,7 @@ export default function HospedagemPanel(): React.ReactElement {
             <Form.Item name="status" label="Status">
               <Select
                 options={[
-                  { value: 'curado', label: 'Curado (lista padrão)' },
+                  { value: 'ativo', label: 'Ativo' },
                   { value: 'usando', label: 'Usando' },
                   { value: 'usei', label: 'Já usei' },
                   { value: 'avaliando', label: 'Avaliando' },
@@ -343,6 +409,130 @@ export default function HospedagemPanel(): React.ReactElement {
           </div>
         </Form>
       </Modal>
+    </div>
+  );
+}
+
+// ─── Sub: label do seletor de visão ─────────────────────────────────────────
+function SegLabel({ icon, texto, n }: { icon: React.ReactNode; texto: string; n?: number }): React.ReactElement {
+  const t = useTokens();
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      {icon}{texto}
+      {typeof n === 'number' && n > 0 && (
+        <span style={{ fontFamily: FONTS.mono, fontSize: 10, color: t.textTertiary, background: t.surfaceMuted, borderRadius: 999, padding: '0 6px' }}>{n}</span>
+      )}
+    </span>
+  );
+}
+
+// ─── Sub: biblioteca de templates de provedores ──────────────────────────────
+function BibliotecaProvedores({ templates, loading, ativandoId, onAtivar }: {
+  templates: ProvedorTemplate[]; loading: boolean; ativandoId: string; onAtivar: (tpl: ProvedorTemplate) => void;
+}): React.ReactElement {
+  const t = useTokens();
+  const [busca, setBusca] = useState('');
+  const filtrados = useMemo(() => {
+    if (!busca.trim()) return templates;
+    const q = busca.toLowerCase();
+    return templates.filter((p) =>
+      p.nome.toLowerCase().indexOf(q) >= 0
+      || p.categoria.toLowerCase().indexOf(q) >= 0
+      || p.beneficios.toLowerCase().indexOf(q) >= 0
+      || p.tags.some((tg) => tg.toLowerCase().indexOf(q) >= 0),
+    );
+  }, [templates, busca]);
+  const agrupados = useMemo(() => {
+    const out: Record<string, ProvedorTemplate[]> = {};
+    for (const p of filtrados) { (out[p.categoria] = out[p.categoria] || []).push(p); }
+    return out;
+  }, [filtrados]);
+  const cats = Object.keys(agrupados).sort();
+
+  return (
+    <div>
+      <div style={{
+        fontFamily: FONTS.ui, fontSize: 12.5, color: t.textTertiary, lineHeight: 1.5, marginBottom: 14,
+        display: 'flex', alignItems: 'center', gap: 7,
+      }}>
+        <Library size={14} color={t.textTertiary} />
+        Catálogo curado por seção. Ative só os que você usa — eles vão pra <strong style={{ color: t.textSecondary }}>Meus provedores</strong>.
+      </div>
+      <Input
+        prefix={<Search size={13} color={t.textTertiary} />}
+        placeholder="Buscar na biblioteca…"
+        value={busca}
+        onChange={(e) => setBusca(e.target.value)}
+        allowClear
+        style={{ marginBottom: 16, maxWidth: 360 }}
+      />
+      {loading && templates.length === 0 ? (
+        <Skeleton active paragraph={{ rows: 6 }} />
+      ) : cats.length === 0 ? (
+        <Empty description="Nada encontrado na biblioteca." />
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {cats.map((cat) => (
+            <div key={cat}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 999, background: CORES_CATEGORIA[cat] || CORES_CATEGORIA.outros }} />
+                <span style={{ fontFamily: FONTS.ui, fontSize: 13, fontWeight: 600, color: t.textSecondary, textTransform: 'capitalize' }}>
+                  {cat} <span style={{ color: t.textTertiary, fontWeight: 400 }}>({agrupados[cat].length})</span>
+                </span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }}>
+                {agrupados[cat].map((tpl) => (
+                  <TemplateCard key={tpl.templateId} tpl={tpl} ativando={ativandoId === tpl.templateId} onAtivar={() => onAtivar(tpl)} />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TemplateCard({ tpl, ativando, onAtivar }: { tpl: ProvedorTemplate; ativando: boolean; onAtivar: () => void }): React.ReactElement {
+  const t = useTokens();
+  const cor = CORES_CATEGORIA[tpl.categoria] || CORES_CATEGORIA.outros;
+  return (
+    <div style={{
+      background: t.surface, border: `1px solid ${tpl.ativado ? `${t.accents.sage}66` : t.border}`, borderRadius: 12, padding: 13,
+      display: 'flex', flexDirection: 'column', gap: 8, minHeight: 150,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ width: 26, height: 26, borderRadius: 7, background: `${cor}1f`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: cor }}>
+          {ICONES_CATEGORIA[tpl.categoria] || <Server size={13} />}
+        </div>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontFamily: FONTS.display, fontSize: 14, fontWeight: 600, color: t.text, lineHeight: 1.3 }}>{tpl.nome}</div>
+          {tpl.precoBase && <div style={{ fontFamily: FONTS.mono, fontSize: 10, color: t.textTertiary, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tpl.precoBase}</div>}
+        </div>
+        {tpl.urlSite && (
+          <Tooltip title="Abrir site">
+            <Button type="text" size="small" icon={<ExternalLink size={13} />} href={tpl.urlSite} target="_blank" rel="noopener noreferrer" />
+          </Tooltip>
+        )}
+      </div>
+      {tpl.beneficios && (
+        <p style={{ margin: 0, fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const }}>
+          {tpl.beneficios}
+        </p>
+      )}
+      {tpl.freeTier && (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: FONTS.ui, fontSize: 11, color: t.accents.sage }}>
+          <Gift size={11} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tpl.freeTier}</span>
+        </div>
+      )}
+      <div style={{ marginTop: 'auto', paddingTop: 4 }}>
+        {tpl.ativado ? (
+          <Button size="small" block disabled icon={<Check size={13} />} style={{ color: t.accents.sage, borderColor: `${t.accents.sage}55` }}>Ativado</Button>
+        ) : (
+          <Button size="small" block type="dashed" icon={<Plus size={13} />} loading={ativando} onClick={onAtivar}>Ativar</Button>
+        )}
+      </div>
     </div>
   );
 }
@@ -389,7 +579,7 @@ function ProvedorCard({ provedor, onOpen }: { provedor: Provedor; onOpen: () => 
             </div>
           )}
         </div>
-        {provedor.status && provedor.status !== 'curado' && (
+        {provedor.status && provedor.status !== 'curado' && provedor.status !== 'ativo' && (
           <Tag color={provedor.status === 'usando' ? 'green' : provedor.status === 'descartado' ? 'red' : 'default'} style={{ marginInlineEnd: 0, fontSize: 10 }}>
             {provedor.status}
           </Tag>

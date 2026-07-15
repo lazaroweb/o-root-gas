@@ -202,6 +202,17 @@ export interface SegredoCifrado {
  * @param plaintext Texto puro do segredo (chave de API, senha, etc.)
  * @returns Objeto com `iv` (base64) e `cipher` (base64) — pronto pra persistir.
  */
+// Prefixo "à prova de planilha": o Google Sheets interpreta células que começam
+// com `=`, `+`, `-`, `@` como fórmula, e strings que parecem número/notação
+// científica como número — corrompendo o base64 (que começa com char aleatório)
+// na gravação, o que fazia o item NÃO decifrar. O `~` não é fórmula, não é dígito
+// e não pertence ao alfabeto base64, então força texto e é removível sem
+// ambiguidade. Itens antigos (base64 puro) continuam lendo normal (strip condicional).
+const SHEET_SAFE = '~';
+
+function marcarSafe(b64: string): string { return SHEET_SAFE + b64; }
+function tirarSafe(s: string): string { return s.charAt(0) === SHEET_SAFE ? s.slice(1) : s; }
+
 export async function cifrarSegredo(vaultKey: CryptoKey, plaintext: string): Promise<SegredoCifrado> {
   const ivBytes = crypto.getRandomValues(new Uint8Array(12));
   const cipherBuf = await crypto.subtle.encrypt(
@@ -209,7 +220,7 @@ export async function cifrarSegredo(vaultKey: CryptoKey, plaintext: string): Pro
     vaultKey,
     new TextEncoder().encode(plaintext),
   );
-  return { iv: bufToB64(ivBytes), cipher: bufToB64(cipherBuf) };
+  return { iv: marcarSafe(bufToB64(ivBytes)), cipher: marcarSafe(bufToB64(cipherBuf)) };
 }
 
 /**
@@ -220,9 +231,35 @@ export async function cifrarSegredo(vaultKey: CryptoKey, plaintext: string): Pro
  */
 export async function decifrarSegredo(vaultKey: CryptoKey, dados: { iv: string; cipher: string }): Promise<string> {
   const buf = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: b64ToBuf(dados.iv) },
+    { name: 'AES-GCM', iv: b64ToBuf(tirarSafe(dados.iv)) },
+    vaultKey,
+    b64ToBuf(tirarSafe(dados.cipher)),
+  );
+  return new TextDecoder().decode(buf);
+}
+
+/**
+ * Cifra bytes de um arquivo com a vaultKey (AES-GCM). O `cipher` (base64) é
+ * pensado pra ir pro Drive como conteúdo do arquivo (não passa por planilha,
+ * então não leva o prefixo à prova de planilha). O `iv` (base64), sim, é
+ * guardado numa célula → leva o prefixo seguro.
+ */
+export async function cifrarArquivo(vaultKey: CryptoKey, bytes: Uint8Array): Promise<{ iv: string; cipher: string }> {
+  const ivBytes = crypto.getRandomValues(new Uint8Array(12));
+  const cipherBuf = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: ivBytes },
+    vaultKey,
+    bytes,
+  );
+  return { iv: marcarSafe(bufToB64(ivBytes)), cipher: bufToB64(cipherBuf) };
+}
+
+/** Decifra o que `cifrarArquivo` produziu, devolvendo os bytes originais. */
+export async function decifrarArquivo(vaultKey: CryptoKey, dados: { iv: string; cipher: string }): Promise<Uint8Array> {
+  const buf = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: b64ToBuf(tirarSafe(dados.iv)) },
     vaultKey,
     b64ToBuf(dados.cipher),
   );
-  return new TextDecoder().decode(buf);
+  return new Uint8Array(buf);
 }

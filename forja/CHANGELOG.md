@@ -36,6 +36,182 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.276.2] — 2026-07-15
+
+### Mudado — Bookmarks: lista principal + IA/IDEs, com opção de digitar
+
+- Mantidas as categorias principais na lista (docs, tutorial, video, ferramenta,
+  biblioteca, artigo, curso, inspiracao, outros) e adicionadas **IA** e **IDEs**.
+  No cadastro dá pra escolher uma da lista OU digitar uma nova (autocomplete).
+
+## [1.276.1] — 2026-07-15
+
+### Mudado — VPS: serviços separados por checagem + "no ar" mais vívido
+
+- O drawer da VPS agora separa **"Serviços online"** (os com domínio, que entram
+  na conta `X/Y no ar`) dos **"Serviços internos"** (sem domínio, status manual —
+  ex.: Caddy, Postgres). Assim, se o resumo diz `3/3`, a seção mostra exatamente 3.
+- O indicador **"no ar"** ganhou halo pulsante mais vivo (anel que expande) e um
+  dot ao vivo ao lado do título da seção.
+
+### Mudado — Bookmarks: categorias livres + AI e IDEs
+
+- O campo de categoria virou autocomplete: dá pra **digitar uma categoria nova**
+  e ela entra na lista (o filtro também sugere as já usadas). Adicionadas as
+  sugestões **AI** e **IDEs**.
+
+## [1.276.0] — 2026-07-15
+
+### Adicionado — Documentos cifrados no Cofre (com dupla camada de segurança)
+
+- **Anexar doc** no Cofre: o arquivo é **cifrado no navegador** (AES-GCM com a
+  vault key) e só o **ciphertext** sobe pro Google Drive do próprio usuário, numa
+  pasta dedicada (*Forja — Cofre (arquivos cifrados)*). O servidor guarda só
+  metadados + `fileId` + `iv`.
+- **Dupla camada**: mesmo quem tiver acesso ao Drive vê bytes embaralhados — pra
+  abrir precisa **também** da senha-mestra do Cofre. Conta Google + senha =
+  zero-knowledge real, não depende só das credenciais do Drive.
+- Documentos entram nas **mesmas seções** dos segredos (ex.: anexar direto na
+  seção "VPS Pulse8 · Hostinger"), aparecem agrupados e são buscáveis. Baixar
+  decifra no browser e faz download; remover manda o blob pra lixeira do Drive.
+- Limite de 10 MB por arquivo (trafega via `google.script.run`).
+- **Técnico**: nova tabela `CofreDocs`, `SCHEMA_VERSION` → `v1.276-cofre-docs`,
+  novas primitivas `cifrarArquivo`/`decifrarArquivo`, RPCs `cofreDoc{List,Save,Get,Delete}`.
+  Reaproveita o escopo Drive já existente. O reset do Cofre também limpa os docs.
+
+## [1.275.3] — 2026-07-15
+
+### Corrigido — Serviços sem domínio agora mostram status claro (não parecem "off")
+
+- Serviços sem domínio público (reverse proxy como o Caddy, ou bancos internos
+  como o Postgres) não têm health-check HTTP — antes mostravam só o farol pelado,
+  o que dava a impressão de que poderiam estar fora. Agora exibem um selo
+  `rodando · manual` (na cor do status cadastrado) com tooltip explicando que é o
+  status informado no cadastro, por não haver URL pública pra checar.
+
+## [1.275.2] — 2026-07-15
+
+### Adicionado — Migração: segredos da VPS na seção "VPS Pulse8 · Hostinger"
+
+- Ao abrir o Cofre, uma migração única carimba a seção **VPS Pulse8 · Hostinger**
+  nos segredos importados da Central LLM (LITELLM_*, PROXY_TRABALHO_API_KEY,
+  NGROK_AUTHTOKEN, SSH root, Postgres interno). Só mexe no campo `grupo` (texto
+  plano) — **nunca toca no ciphertext**, então o zero-knowledge segue intacto.
+  Só age em itens sem seção e trava via Property depois de rodar.
+
+## [1.275.1] — 2026-07-15
+
+### Mudado — Status dos serviços agora vive dentro de cada VPS
+
+- **Motivação (UX)**: o painel "Serviços online" solto no topo não deixava claro
+  que os serviços pertenciam a uma VPS específica — com mais de uma máquina,
+  virava confusão. Agora o status é **relacionado à VPS de origem**.
+- **No card** da VPS: chip discreto `X/Y no ar` (verde = todos, âmbar = parcial,
+  vermelho = nenhum) pra bater o olho sem abrir.
+- **No drawer** da VPS (o mesmo que abre ao clicar no card): cada serviço com
+  domínio público ganha o **farol ao vivo** + latência + rótulo (no ar / instável
+  / fora), e a seção "Serviços rodando" mostra resumo `X de Y no ar` + botão
+  **Verificar**. Serviços internos (ex.: Postgres) seguem com o status manual.
+
+## [1.275.0] — 2026-07-14
+
+### Adicionado — Status ao vivo dos serviços (VPS & Serviços)
+
+- **Painel "Serviços online"** no topo de *Hospedagem → VPS & Serviços*: lista
+  todos os serviços com domínio público, um embaixo do outro, com **status ao
+  vivo** (dot pulsante verde = no ar, âmbar = instável/5xx, vermelho = fora),
+  latência em ms e link pro domínio. Verifica ao entrar e tem botão "Verificar".
+- **Não é ICMP ping** (impossível no GAS/browser): é um `GET` real via
+  `UrlFetchApp` no servidor (`vpsPingServicos`), resiliente (um serviço fora não
+  derruba a checagem dos outros). 2xx/3xx/401/403 = de pé; 5xx = instável;
+  sem resposta = fora.
+
+### Adicionado — Seções no Cofre
+
+- Cada segredo agora pode ter uma **Seção** (ex.: "VPS Pulse8 · Hostinger"), pra
+  saber de onde a chave veio quando a lista crescer. Os itens aparecem
+  **agrupados e recolhíveis** por seção; sem seção caem em "Avulsos".
+- Campo de seção com autocomplete (sugere seções já usadas) no formulário de
+  adicionar/editar e também na **importação em massa** (aplica a seção a todo o
+  lote). A busca também considera a seção.
+- **Técnico**: coluna `grupo` adicionada ao fim da tabela `Cofre` (append-only),
+  `SCHEMA_VERSION` → `v1.275-cofre-grupo`. Itens antigos ficam em "Avulsos" até
+  receberem uma seção.
+
+## [1.274.2] — 2026-07-14
+
+### Corrigido — Cofre: segredos que não decifravam (nem exibir, nem editar)
+
+- **Causa**: o `dbCreate` grava com `appendRow`, e o Google Sheets interpretava
+  células cujo base64 (`iv`/`cipher`) começava com `=`/`+`/`-`/`@` ou parecia
+  número/notação científica como fórmula/número — corrompendo o valor na gravação.
+  O item existia mas o AES-GCM falhava ao decifrar ("Falha ao decifrar").
+- **Solução**: o base64 do cofre agora é gravado com um prefixo à prova de planilha
+  (`~`), removido de forma retrocompatível na leitura (itens antigos íntegros
+  continuam funcionando). Vale para itens novos, edições e importações.
+- **Importar** virou **upsert por rótulo**: reimportar atualiza o item existente
+  em vez de duplicar — então basta reimportar o mesmo bloco pra consertar os itens
+  que ficaram corrompidos.
+
+## [1.274.1] — 2026-07-14
+
+### Adicionado — VPS "Central LLM" pré-populada
+
+- **Seed one-time** da VPS Hostinger do usuário (Central LLM / pulse8.cloud) a
+  partir da topologia fornecida: host completo (IP/IPv6, hostname, plano, domínio,
+  SSH, painel), os **5 containers** (Caddy, LiteLLM gateway, Postgres, Open WebUI,
+  Portainer) com imagem/porta/domínio/volume/dependência, e **12 pendências**
+  (5 próximos passos + 7 erros conhecidos). Sem segredos — as chaves vão pro Cofre.
+  Guardado por flag em Properties (não duplica; roda uma vez).
+
+## [1.274.0] — 2026-07-14
+
+### Adicionado — Hospedagem vira central de infra: VPS, topologia e biblioteca de provedores
+
+- **Nova visão "VPS & Serviços" (topologia)** na estação **Hospedagem** do Atelier.
+  Cadastre suas máquinas (VPS/servidores) com IP/IPv6, hostname, plano, sistema,
+  domínio raiz + expiração, painel do provedor, custo/mês e referência de SSH.
+  **Hostinger** entra como provedor de primeira classe.
+  - **Serviços rodando dentro da VPS**: mapeie a topologia (containers/apps) com
+    imagem, função, porta interna → exposta, domínio público (clicável), volume,
+    "depende de" e status (rodando/parado/erro). Pensado pra **alimentar conforme
+    novos apps entram** — é só "Adicionar serviço".
+  - **Débitos, erros & próximos passos por VPS/serviço**: registre dívida técnica,
+    erros conhecidos e o que falta fazer, com severidade e marcação de resolvido.
+  - **Chaves no Cofre**: cada VPS/serviço aponta pra um rótulo do Cofre (SSH, API
+    key) sem nunca guardar o segredo em texto — botão leva direto pro item.
+- **Biblioteca de provedores (ativável)**: o catálogo curado (Vercel, Stripe,
+  Sentry, Hostinger…) deixou de aparecer como se você já usasse. Agora vive na
+  aba **Biblioteca** por seção (IA, Monitoring, Pagamento, Hospedagem, etc.) e só
+  entra em **Meus provedores** quando você clica **Ativar**. Adicionar um provedor
+  próprio continua igual.
+- **Importar segredos no Cofre**: botão **Importar** aceita colar em massa (JSON,
+  linhas `rótulo | valor | categoria` ou `CHAVE=valor`). Cada valor é **cifrado no
+  navegador** antes de sair — ideal pra levar as chaves de um arquivo de anotações
+  pro Cofre e apagar o arquivo depois.
+
+#### Técnico
+
+- Novas tabelas SheetDB: `VpsHosts`, `VpsServicos`, `VpsPendencias`. Coluna
+  `origem`/`templateId` em `Provedores`. `SCHEMA_VERSION` → `v1.274-hospedagem-vps-topologia`.
+- **Migração one-time**: os provedores antigos auto-semeados (status `curado`,
+  nunca editados) saem de "Meus" e voltam como biblioteca; provedores que você
+  editou são preservados como `custom`. Guardada por flag em Properties.
+- Novas RPCs: `provedorTemplatesList`, `provedorAtivarTemplate`, `vpsHostsList`,
+  `vpsHostDetalhe`, `vpsHostSave`, `vpsHostDelete`, `vpsServicoSave`,
+  `vpsServicoDelete`, `vpsPendenciaSave`, `vpsPendenciaDelete`.
+
+## [1.273.2] — 2026-07-13
+
+### Adicionado — Cofre do Atelier pronto para credenciais de infraestrutura
+
+- **Categoria `ssh-key`** no Cofre criptografado, para guardar chaves SSH
+  usadas em servidores e projetos.
+- **Categorias futuras já disponíveis**: `database`, `certificate`, `oauth`,
+  `webhook`, `signing-key`, `recovery-code` e `wallet-seed`. Só o campo
+  secreto continua cifrado no navegador; a categoria é metadado e não exige
+  migração nem altera itens existentes.
+
 ## [1.273.1] — 2026-07-12
 
 ### Adicionado — Template "copiar e renomear" no Firebase App Kit

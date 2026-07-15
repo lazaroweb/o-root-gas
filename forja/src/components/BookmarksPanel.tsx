@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Input, Button, App as AntApp, Tag, Skeleton, Empty, Form, Modal, Popconfirm, Tooltip, Select, Switch,
+  Input, Button, App as AntApp, Tag, Skeleton, Empty, Form, Modal, Popconfirm, Tooltip, Select, Switch, AutoComplete,
 } from 'antd';
 import {
   Bookmark, Plus, Search, ExternalLink, Trash2, Edit3, X, Save, Star, Info, Globe,
@@ -22,8 +22,10 @@ interface BookmarkItem {
   atualizadoEm: string;
 }
 
+// Sugestões-base. `categoria` é texto livre no servidor: dá pra escolher uma
+// destas na lista OU digitar uma nova, que passa a valer normalmente.
 const CATEGORIAS = [
-  'docs', 'tutorial', 'video', 'ferramenta', 'inspiracao', 'biblioteca', 'artigo', 'curso', 'outros',
+  'IA', 'IDEs', 'docs', 'tutorial', 'video', 'ferramenta', 'biblioteca', 'artigo', 'curso', 'inspiracao', 'outros',
 ];
 
 // Pequena heurística pra "favicon" via Google's favicon service (sem API).
@@ -131,6 +133,13 @@ export default function BookmarksPanel(): React.ReactElement {
   const categorias = Object.keys(agrupados).sort();
   const destacados = bookmarks.filter((b) => b.destacado).length;
 
+  // União das sugestões-base com as categorias já usadas (pra atalho no form/filtro).
+  const categoriasSugeridas = useMemo(() => {
+    const s = new Set<string>(CATEGORIAS);
+    bookmarks.forEach((b) => { const c = (b.categoria || '').trim(); if (c) s.add(c); });
+    return [...s].map((c) => ({ value: c, label: c }));
+  }, [bookmarks]);
+
   return (
     <div style={{ padding: '14px 24px 24px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
@@ -164,10 +173,11 @@ export default function BookmarksPanel(): React.ReactElement {
         <Select
           placeholder="Categoria"
           allowClear
+          showSearch
           value={categoriaFiltro || undefined}
           onChange={(v) => setCategoriaFiltro(v || '')}
           style={{ minWidth: 140 }}
-          options={CATEGORIAS.map((c) => ({ value: c, label: c }))}
+          options={categoriasSugeridas}
         />
         <Tooltip title="Mostrar só destacados">
           <Button
@@ -232,8 +242,13 @@ export default function BookmarksPanel(): React.ReactElement {
             <Input.TextArea rows={2} placeholder="Pra que serve / o que tem de bom" />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10 }}>
-            <Form.Item name="categoria" label="Categoria">
-              <Select options={CATEGORIAS.map((c) => ({ value: c, label: c }))} />
+            <Form.Item name="categoria" label="Categoria (escolha da lista ou digite uma nova)">
+              <AutoComplete
+                options={categoriasSugeridas}
+                placeholder="ex.: IA, IDEs, docs…"
+                allowClear
+                filterOption={(input, option) => String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
+              />
             </Form.Item>
             <Form.Item name="tags" label="Tags (vírgula)">
               <Input placeholder="ex.: react, ui, docs" />
