@@ -1723,6 +1723,7 @@ export type ViewName =
   | 'dashboard'
   | 'clientes'
   | 'ideias'
+  | 'backlog'
   | 'sistemas'
   | 'operacoes'
   | 'financeiro'

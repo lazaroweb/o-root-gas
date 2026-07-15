@@ -25,6 +25,7 @@ import SistemaForm from './views/SistemaForm';
 import SistemaDetail from './views/SistemaDetail';
 import IdeiasView from './views/IdeiasView';
 import IdeiaCapturaQuick from './components/IdeiaCapturaQuick';
+import Backlog from './views/Backlog';
 import OportunidadesView from './views/OportunidadesView';
 import Clientes from './views/Clientes';
 import GeneseWizard from './views/GeneseWizard';
@@ -38,6 +39,7 @@ const { Content } = Layout;
 // Rótulo amigável de cada seção — passado pra Lume saber "onde" o usuário está.
 const VIEW_LABELS: Record<ViewName, string> = {
   dashboard: 'Dashboard', clientes: 'Clientes', ideias: 'Ideias',
+  backlog: 'Backlog',
   sistemas: 'Sistemas (Bancada)',
   operacoes: 'Ao vivo', financeiro: 'Financeiro', 'forja-ia': 'Forja IA', relatorios: 'Relatórios',
   atelier: 'Atelier', estudos: 'Estudos', configuracoes: 'Configurações', 'sistema-form': 'Criar/editar sistema',
@@ -137,7 +139,7 @@ export default function App(): React.ReactElement {
     };
 
     const navMap: Record<string, ViewName> = {
-      d: 'dashboard', c: 'clientes', i: 'ideias', s: 'sistemas',
+      d: 'dashboard', c: 'clientes', i: 'ideias', b: 'backlog', s: 'sistemas',
       o: 'operacoes', f: 'financeiro', a: 'forja-ia', r: 'relatorios',
       v: 'atelier', e: 'estudos', ',': 'configuracoes',
     };
@@ -275,6 +277,8 @@ export default function App(): React.ReactElement {
         return <Clientes />;
       case 'ideias':
         return <IdeiasView onGenese={handleGenese} />;
+      case 'backlog':
+        return <Backlog onAbrirSistema={handleSelectSistema} />;
       case 'sistemas':
         return <Bancada onSelectSistema={handleSelectSistema} onNewSistema={() => setCurrentView('sistema-form')} onImportGAS={() => setImportGASOpen(true)} refreshKey={sistemasRefresh} />;
       case 'operacoes':

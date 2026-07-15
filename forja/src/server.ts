@@ -247,6 +247,16 @@ const SCHEMA: SheetSchema[] = [
   // nao-iniciado|em-andamento|pausado|concluido. `cargaHoraria` (horas) + `progresso`
   // (0-100) alimentam o motor de carga (WIP + horas/semana) que alerta ao iniciar.
   { name: 'EstudoCursos', columns: ['id', 'titulo', 'plataforma', 'url', 'categoria', 'cargaHoraria', 'custo', 'prioridade', 'posse', 'status', 'progresso', 'dataInicioProgramada', 'dataInicioReal', 'dataConclusao', 'notas', 'ordem', 'criadoEm', 'atualizadoEm'] },
+  // Backlog (seção de topo): Empreitadas são projetos de transformação ("levar um
+  // app vibe-coded a produto profissional" — ex.: migrar do Sheets pro Firebase).
+  // Cada empreitada pode apontar pra um Sistema (herda repoUrl/stack) ou ter repo
+  // avulso. `tipo`: migracao|refatoracao|hardening|feature|infra|outro.
+  { name: 'Empreitadas', columns: ['id', 'nome', 'objetivo', 'sistemaId', 'repoUrl', 'tipo', 'status', 'prioridade', 'accent', 'inicioAlvo', 'entregaAlvo', 'ordem', 'criadoEm', 'atualizadoEm', 'concluidaEm'] },
+  // Atividades: as tarefas ricas do backlog. `empreitadaId` opcional (atividade
+  // solta é permitida — o "jogar tudo lá"). `notaImpacto`/`notaEsforco` (1-5)
+  // alimentam a ordenação da visão Foco. `mesAlvo` (YYYY-MM) prepara o roadmap
+  // (Fase 2). `promptSugerido` guarda o prompt estruturado (Arquiteto IA, Fase 3).
+  { name: 'Atividades', columns: ['id', 'empreitadaId', 'sistemaId', 'titulo', 'descricao', 'tipo', 'notaImpacto', 'notaEsforco', 'prioridade', 'status', 'mesAlvo', 'estimativaHoras', 'dependeDe', 'promptSugerido', 'origem', 'ordem', 'criadoEm', 'atualizadoEm', 'concluidaEm'] },
   // DriveConnectors (Atelier → Driver): registro das contas/nuvens do usuário.
   // Guarda APENAS metadados (provedor, email/rótulo, status) — NUNCA senha. A
   // conexão real (OAuth) é por provedor e os tokens, quando houver, ficam no
@@ -469,7 +479,7 @@ function getOrCreateSheet(sheetName: string, columns: string[]): GoogleAppsScrip
 // Bump SCHEMA_VERSION sempre que adicionar/reordenar colunas em SCHEMA.
 // Isso força um re-init em cada client após o deploy — sem isso, o cache
 // pula a verificação e usuários ficam com sheets desatualizadas.
-const SCHEMA_VERSION = 'v1.277-estudo-cursos';
+const SCHEMA_VERSION = 'v1.278-backlog';
 
 // Cache de sessão: evita re-rodar init dentro da mesma execução do GAS.
 // (GAS re-instancia o módulo a cada request, então isso só ajuda quando
@@ -28479,6 +28489,217 @@ function estudoCursosCapacidadeSet(payload: { maxSimultaneos?: number; horasSema
     };
     PropertiesService.getScriptProperties().setProperty(ESTUDO_CURSOS_CAP_KEY, JSON.stringify(cap));
     return { ok: true, data: cap };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// ═══ Backlog: Empreitadas + Atividades ════════════════════════════════════════
+function _empreitadaMap(e: Record<string, unknown>) {
+  return {
+    id: String(e.id || ''),
+    nome: String(e.nome || ''),
+    objetivo: String(e.objetivo || ''),
+    sistemaId: String(e.sistemaId || ''),
+    repoUrl: String(e.repoUrl || ''),
+    tipo: String(e.tipo || 'outro'),
+    status: String(e.status || 'planejando'),
+    prioridade: String(e.prioridade || 'media'),
+    accent: String(e.accent || 'blue'),
+    inicioAlvo: String(e.inicioAlvo || ''),
+    entregaAlvo: String(e.entregaAlvo || ''),
+    ordem: Number(e.ordem || 0),
+    criadoEm: String(e.criadoEm || ''),
+    atualizadoEm: String(e.atualizadoEm || ''),
+    concluidaEm: String(e.concluidaEm || ''),
+  };
+}
+
+function _atividadeMap(a: Record<string, unknown>) {
+  return {
+    id: String(a.id || ''),
+    empreitadaId: String(a.empreitadaId || ''),
+    sistemaId: String(a.sistemaId || ''),
+    titulo: String(a.titulo || ''),
+    descricao: String(a.descricao || ''),
+    tipo: String(a.tipo || 'outro'),
+    notaImpacto: Number(a.notaImpacto || 3),
+    notaEsforco: Number(a.notaEsforco || 3),
+    prioridade: String(a.prioridade || 'media'),
+    status: String(a.status || 'backlog'),
+    mesAlvo: String(a.mesAlvo || ''),
+    estimativaHoras: Number(a.estimativaHoras || 0),
+    dependeDe: String(a.dependeDe || ''),
+    promptSugerido: String(a.promptSugerido || ''),
+    origem: String(a.origem || 'manual'),
+    ordem: Number(a.ordem || 0),
+    criadoEm: String(a.criadoEm || ''),
+    atualizadoEm: String(a.atualizadoEm || ''),
+    concluidaEm: String(a.concluidaEm || ''),
+  };
+}
+
+function empreitadasList(): ServerResult {
+  try {
+    const ativs = (dbGetAll('Atividades') as Array<Record<string, unknown>>);
+    const sistemas = (dbGetAll('Sistemas') as Array<Record<string, unknown>>);
+    const lista = (dbGetAll('Empreitadas') as Array<Record<string, unknown>>)
+      .map((e) => {
+        const base = _empreitadaMap(e);
+        const minhas = ativs.filter((a) => String(a.empreitadaId || '') === base.id);
+        const feitas = minhas.filter((a) => String(a.status || '') === 'feito').length;
+        const sis = sistemas.find((s) => String(s.id || '') === base.sistemaId);
+        return {
+          ...base,
+          sistemaNome: sis ? String(sis.nome || '') : '',
+          totalAtividades: minhas.length,
+          atividadesFeitas: feitas,
+        };
+      })
+      .sort((a, b) => (a.ordem - b.ordem) || a.criadoEm.localeCompare(b.criadoEm));
+    return { ok: true, data: lista };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function empreitadaSave(payload: {
+  id?: string; nome: string; objetivo?: string; sistemaId?: string; repoUrl?: string;
+  tipo?: string; status?: string; prioridade?: string; accent?: string;
+  inicioAlvo?: string; entregaAlvo?: string;
+}): ServerResult {
+  try {
+    const nome = String(payload.nome || '').trim();
+    if (!nome) throw new Error('Dê um nome pra empreitada.');
+    const agora = new Date().toISOString();
+    const status = String(payload.status || 'planejando').trim();
+    // Se veio sistemaId e não veio repoUrl, herda o repo do Sistema.
+    let repoUrl = String(payload.repoUrl || '').trim();
+    const sistemaId = String(payload.sistemaId || '').trim();
+    if (!repoUrl && sistemaId) {
+      const sis = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => String(s.id || '') === sistemaId);
+      if (sis) repoUrl = String(sis.repoUrl || '').trim();
+    }
+    const dados: Record<string, unknown> = {
+      nome,
+      objetivo: String(payload.objetivo || '').trim(),
+      sistemaId,
+      repoUrl,
+      tipo: String(payload.tipo || 'outro').trim(),
+      status,
+      prioridade: String(payload.prioridade || 'media').trim(),
+      accent: String(payload.accent || 'blue').trim(),
+      inicioAlvo: String(payload.inicioAlvo || '').trim(),
+      entregaAlvo: String(payload.entregaAlvo || '').trim(),
+      atualizadoEm: agora,
+    };
+    if (status === 'concluida') dados.concluidaEm = agora;
+    if (payload.id) {
+      dbUpdate('Empreitadas', payload.id, dados);
+      return { ok: true, data: { id: payload.id, ...dados } };
+    }
+    const existentes = dbGetAll('Empreitadas') as Array<Record<string, unknown>>;
+    const novo = dbCreate('Empreitadas', { ...dados, ordem: existentes.length, criadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function empreitadaStatus(id: string, status: string): ServerResult {
+  try {
+    const st = String(status || '').trim();
+    const dados: Record<string, unknown> = { status: st, atualizadoEm: new Date().toISOString() };
+    dados.concluidaEm = st === 'concluida' ? new Date().toISOString() : '';
+    dbUpdate('Empreitadas', String(id), dados);
+    return { ok: true, data: { id, status: st } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+// Ao apagar uma empreitada, as atividades dela viram soltas (não some trabalho).
+function empreitadaDelete(id: string): ServerResult {
+  try {
+    const eid = String(id || '');
+    const orfas = (dbGetAll('Atividades') as Array<Record<string, unknown>>)
+      .filter((a) => String(a.empreitadaId || '') === eid);
+    for (const a of orfas) dbUpdate('Atividades', String(a.id), { empreitadaId: '', atualizadoEm: new Date().toISOString() });
+    dbDelete('Empreitadas', eid);
+    return { ok: true, data: { id: eid, atividadesSoltas: orfas.length } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function atividadesList(): ServerResult {
+  try {
+    const lista = (dbGetAll('Atividades') as Array<Record<string, unknown>>)
+      .map(_atividadeMap)
+      .sort((a, b) => (a.ordem - b.ordem) || b.criadoEm.localeCompare(a.criadoEm));
+    return { ok: true, data: lista };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function atividadeSave(payload: {
+  id?: string; empreitadaId?: string; sistemaId?: string; titulo: string; descricao?: string;
+  tipo?: string; notaImpacto?: number; notaEsforco?: number; prioridade?: string; status?: string;
+  mesAlvo?: string; estimativaHoras?: number; dependeDe?: string; promptSugerido?: string; origem?: string;
+}): ServerResult {
+  try {
+    const titulo = String(payload.titulo || '').trim();
+    if (!titulo) throw new Error('Escreva o que precisa ser feito.');
+    const agora = new Date().toISOString();
+    const status = String(payload.status || 'backlog').trim();
+    const clamp = (n: unknown, def: number) => Math.max(1, Math.min(5, Math.round(Number(n) || def)));
+    const dados: Record<string, unknown> = {
+      empreitadaId: String(payload.empreitadaId || '').trim(),
+      sistemaId: String(payload.sistemaId || '').trim(),
+      titulo,
+      descricao: String(payload.descricao || '').trim(),
+      tipo: String(payload.tipo || 'outro').trim(),
+      notaImpacto: clamp(payload.notaImpacto, 3),
+      notaEsforco: clamp(payload.notaEsforco, 3),
+      prioridade: String(payload.prioridade || 'media').trim(),
+      status,
+      mesAlvo: String(payload.mesAlvo || '').trim(),
+      estimativaHoras: Math.max(0, Number(payload.estimativaHoras || 0)),
+      dependeDe: String(payload.dependeDe || '').trim(),
+      promptSugerido: String(payload.promptSugerido || ''),
+      origem: String(payload.origem || 'manual').trim(),
+      atualizadoEm: agora,
+    };
+    if (status === 'feito') dados.concluidaEm = agora;
+    if (payload.id) {
+      dbUpdate('Atividades', payload.id, dados);
+      return { ok: true, data: { id: payload.id, ...dados } };
+    }
+    const existentes = dbGetAll('Atividades') as Array<Record<string, unknown>>;
+    const novo = dbCreate('Atividades', { ...dados, ordem: existentes.length, criadoEm: agora });
+    return { ok: true, data: novo };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function atividadeStatus(id: string, status: string): ServerResult {
+  try {
+    const st = String(status || '').trim();
+    const dados: Record<string, unknown> = { status: st, atualizadoEm: new Date().toISOString() };
+    dados.concluidaEm = st === 'feito' ? new Date().toISOString() : '';
+    dbUpdate('Atividades', String(id), dados);
+    return { ok: true, data: { id, status: st } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function atividadeDelete(id: string): ServerResult {
+  try {
+    dbDelete('Atividades', String(id));
+    return { ok: true, data: { id } };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
   }

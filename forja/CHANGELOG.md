@@ -36,6 +36,35 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.278.0] — 2026-07-15
+
+### Adicionado — Backlog: empreitadas + atividades + Foco (Fase 1)
+
+- **Nova seção top-level "Backlog"** (sidebar, hotkey `g+b`) pra gerir a jornada de
+  transformar apps "vibe-coded" em produtos profissionais.
+- **Empreitadas**: projetos de transformação (ex.: "migrar Lastro pro Firebase").
+  Cada uma pode **apontar pra um Sistema** (herda o repoUrl) ou ter repo avulso.
+  Campos: objetivo, tipo (migração/refatoração/hardening/…), status, prioridade,
+  cor, início/entrega alvo. Card com progresso de atividades.
+- **Atividades ricas**: título, descrição, tipo, **impacto × esforço** (sliders),
+  prioridade, status (backlog/fazendo/bloqueada/feito), mês-alvo, estimativa em
+  horas e dependência. Podem ser soltas ("jogar tudo lá") ou de uma empreitada.
+- **Captura rápida** no topo (Enter cria no backlog) — o "não sei por onde começar,
+  joga tudo primeiro".
+- **3 visões**: **Foco** (Fazendo agora + "Comece por aqui" ranqueado por prioridade
+  e impacto ÷ esforço + Bloqueadas), **Todas** (agrupado por status, filtro por
+  empreitada) e **Empreitadas** (cards + drawer com as atividades do projeto).
+
+#### Backend
+- Tabelas `Empreitadas` e `Atividades` (`SCHEMA_VERSION` → `v1.278-backlog`). RPCs:
+  `empreitadasList/Save/Status/Delete`, `atividadesList/Save/Status/Delete`. Apagar
+  empreitada **não apaga** as atividades — elas viram soltas. O campo `promptSugerido`
+  já existe pra receber o Arquiteto IA (Fase 3).
+
+#### Próximas fases
+- **Fase 2**: Roadmap/gantt moderno por mês. **Fase 3**: Arquiteto IA Full Stack —
+  lê o repo, diagnostica, monta plano faseado e gera atividades com prompts prontos.
+
 ## [1.277.3] — 2026-07-15
 
 ### Mudado — Cursos: aba inteligente, card com preview e plataforma livre

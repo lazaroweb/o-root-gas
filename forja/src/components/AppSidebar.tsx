@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   Users,
   Lightbulb,
+  ListChecks,
   Boxes,
   Activity,
   Wallet,
@@ -52,6 +53,8 @@ const ITEMS: Array<{ key: ViewName; icon: React.ReactNode; label: string }> = [
   // Ideias (v1.143.0): caixa única — fundiu Centelha (inbox bruto) com banco
   // maduro. Captura zero-fricção, triagem rica, lifecycle completo, modo foco.
   { key: 'ideias', icon: <Lightbulb size={18} strokeWidth={1.6} />, label: 'Ideias' },
+  // Backlog: empreitadas (projetos de transformação) + atividades ricas + Foco.
+  { key: 'backlog', icon: <ListChecks size={18} strokeWidth={1.6} />, label: 'Backlog' },
   { key: 'sistemas', icon: <Boxes size={18} strokeWidth={1.6} />, label: 'Sistemas' },
   { key: 'operacoes', icon: <Activity size={18} strokeWidth={1.6} />, label: 'Ao vivo' },
   { key: 'financeiro', icon: <Wallet size={18} strokeWidth={1.6} />, label: 'Financeiro' },
