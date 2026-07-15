@@ -36,6 +36,36 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.279.0] — 2026-07-15
+
+### Adicionado — Backlog: Roadmap (Fase 2) + Arquiteto IA (Fase 3)
+
+- **Roadmap** (nova visão no Backlog): gantt leve por mês. Empreitadas viram
+  barras da linha do tempo (início → entrega, na cor da empreitada), atividades
+  aparecem como marcadores no mês-alvo (pendente/feita) e as soltas ganham uma
+  faixa própria. Header destaca o mês atual, scroll horizontal, janela de 6 a 24
+  meses ajustada aos dados. Clicar numa barra abre o drawer da empreitada.
+- **Arquiteto IA** (Full Stack Sênior): botão no drawer da empreitada. Lê o
+  repositório (herdado do Sistema ou avulso) reusando a engine da Auditoria e
+  entrega:
+  - **Diagnóstico** do estado atual (arquitetura, acoplamentos, dívidas que travam);
+  - **Stack detectada**;
+  - **Riscos de quebrar produção** + **estratégia sem quebrar** (clonar, v2 em
+    paralelo, migração incremental, cutover, rollback);
+  - **Plano em fases** (com nível de risco por fase);
+  - **Atividades sugeridas** com impacto × esforço, mês-alvo e **prompt pronto**
+    pra colar no Cursor/Claude. Você marca quais quer e **joga direto no backlog**.
+
+#### Backend
+- RPCs `empreitadaDiagnosticarIA(id)` (persona de arquiteto, saída `<PLANO>` em
+  JSON, retry tolerante, parser dedicado com reparo de JSON truncado) e
+  `empreitadaImportarAtividadesIA(id, atividades)` (cria as atividades com
+  `origem='ia'`, prioridade derivada do impacto e `mesAlvo` a partir do mês
+  relativo). Reusa `_lerCodigoGitHub`/`_lerCodigoGAS` + `forjaCallLLMDetalhado`.
+
+#### UX
+- Operação longa da IA usa `ProcessoCarregando` (feedback ativo, princípio v1.148.4).
+
 ## [1.278.0] — 2026-07-15
 
 ### Adicionado — Backlog: empreitadas + atividades + Foco (Fase 1)

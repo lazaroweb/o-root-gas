@@ -5,10 +5,12 @@ import {
 } from 'antd';
 import {
   Plus, Trash2, Edit3, X, Save, Play, Check, Ban, Hammer, Flame, Target,
-  ExternalLink, Layers, Boxes, CircleDot, Sparkles,
+  ExternalLink, Layers, Boxes, CircleDot, Sparkles, BrainCircuit, Copy,
+  AlertTriangle, Rocket, ListPlus, GitBranch,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { PageHeader } from '../components/ui';
+import ProcessoCarregando from '../components/ProcessoCarregando';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
@@ -27,7 +29,21 @@ interface Atividade {
 }
 interface SistemaLite { id: string; nome: string; repoUrl?: string }
 
-type Vista = 'foco' | 'todas' | 'empreitadas';
+interface ArquitetoFase { ordem: number; nome: string; objetivo: string; risco: string }
+interface ArquitetoAtividade {
+  titulo: string; descricao: string; tipo: string; impacto: number; esforco: number;
+  fase: string; mesRelativo: number; prompt: string;
+}
+interface ArquitetoPlano {
+  diagnostico: string; stackDetectada: string[]; riscosMigracao: string[];
+  estrategiaSemQuebrar: string; fases: ArquitetoFase[]; atividades: ArquitetoAtividade[];
+}
+interface ArquitetoResposta {
+  plano: ArquitetoPlano; resumo: string; modelo: string;
+  fonte: { repoUrl: string; arquivos: number; bytes: number; commitSha: string; truncado: boolean; erroLeitura: string };
+}
+
+type Vista = 'foco' | 'todas' | 'empreitadas' | 'roadmap';
 
 const ACCENTS: Array<keyof ReturnType<typeof useTokens>['accents']> = ['blue', 'peach', 'sage', 'lavender', 'clay', 'rose'];
 
@@ -226,6 +242,35 @@ export default function Backlog({ onAbrirSistema }: BacklogProps): React.ReactEl
     if (s?.repoUrl && !formE.getFieldValue('repoUrl')) formE.setFieldsValue({ repoUrl: s.repoUrl });
   };
 
+  // Arquiteto IA (Fase 3)
+  const [arqOpen, setArqOpen] = useState(false);
+  const [arqLoading, setArqLoading] = useState(false);
+  const [arqData, setArqData] = useState<ArquitetoResposta | null>(null);
+  const [arqEmpr, setArqEmpr] = useState<Empreitada | null>(null);
+  const [arqImportando, setArqImportando] = useState(false);
+
+  const analisarIA = (e: Empreitada) => {
+    setArqEmpr(e); setArqData(null); setArqOpen(true); setArqLoading(true); setDrawerId(null);
+    callServer<ServerResult>('empreitadaDiagnosticarIA', e.id)
+      .then((r) => {
+        if (r.ok && r.data) setArqData(r.data as ArquitetoResposta);
+        else { message.error(r.error || 'A IA não conseguiu montar o plano.'); setArqOpen(false); }
+      })
+      .catch((err) => { message.error(err instanceof Error ? err.message : 'Erro'); setArqOpen(false); })
+      .finally(() => setArqLoading(false));
+  };
+  const importarIA = async (sel: ArquitetoAtividade[]) => {
+    if (!arqEmpr || sel.length === 0) return;
+    setArqImportando(true);
+    const r = await callServer<ServerResult>('empreitadaImportarAtividadesIA', arqEmpr.id, sel);
+    setArqImportando(false);
+    if (r.ok) {
+      const n = (r.data as { criadas?: number })?.criadas || 0;
+      message.success(`${n} atividade${n === 1 ? '' : 's'} jogada${n === 1 ? '' : 's'} no backlog`);
+      setArqOpen(false); carregar();
+    } else message.error(r.error || 'Erro');
+  };
+
   const totalAbertas = abertas.length;
   const drawerEmpr = drawerId ? emprPorId[drawerId] : null;
   const drawerAtivs = useMemo(
@@ -275,6 +320,7 @@ export default function Backlog({ onAbrirSistema }: BacklogProps): React.ReactEl
           { value: 'foco', label: segLabel('Foco', fazendo.length + paraComecar.length) },
           { value: 'todas', label: segLabel('Todas', totalAbertas) },
           { value: 'empreitadas', label: segLabel('Empreitadas', empreitadas.length) },
+          { value: 'roadmap', label: 'Roadmap' },
         ]}
       />
 
@@ -303,7 +349,7 @@ export default function Backlog({ onAbrirSistema }: BacklogProps): React.ReactEl
           onDeletar={deletarAtiv}
           onNova={() => abrirNovaAtiv()}
         />
-      ) : (
+      ) : vista === 'empreitadas' ? (
         <EmpreitadasView
           t={t}
           empreitadas={empreitadas}
@@ -311,6 +357,8 @@ export default function Backlog({ onAbrirSistema }: BacklogProps): React.ReactEl
           onEditar={abrirEditarEmpr}
           onNova={abrirNovaEmpr}
         />
+      ) : (
+        <RoadmapView t={t} empreitadas={empreitadas} atividades={atividades} onAbrirEmpr={(id) => setDrawerId(id)} />
       )}
 
       {/* Drawer de empreitada */}
@@ -339,6 +387,7 @@ export default function Backlog({ onAbrirSistema }: BacklogProps): React.ReactEl
             onNovaAtiv={() => abrirNovaAtiv(drawerEmpr.id)}
             onMudarStatusEmpr={(st) => callServer<ServerResult>('empreitadaStatus', drawerEmpr.id, st).then(() => carregar())}
             onAbrirSistema={onAbrirSistema}
+            onAnalisarIA={() => analisarIA(drawerEmpr)}
           />
         )}
       </Drawer>
@@ -437,10 +486,22 @@ export default function Backlog({ onAbrirSistema }: BacklogProps): React.ReactEl
             <Form.Item name="entregaAlvo" label="Entrega alvo"><DatePicker picker="month" format="MM/YYYY" style={{ width: '100%' }} /></Form.Item>
           </div>
           <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, lineHeight: 1.5 }}>
-            O diagnóstico com IA (Arquiteto Full Stack) que lê o repo e monta o plano chega na próxima fase.
+            Depois de criar, abra a empreitada e rode o <strong>Arquiteto IA</strong>: ele lê o repositório, diagnostica e monta o plano em fases com prompts prontos.
           </div>
         </Form>
       </Modal>
+
+      {/* Arquiteto IA */}
+      <ArquitetoModal
+        t={t}
+        open={arqOpen}
+        loading={arqLoading}
+        empr={arqEmpr}
+        data={arqData}
+        importando={arqImportando}
+        onClose={() => setArqOpen(false)}
+        onImportar={importarIA}
+      />
     </div>
   );
 }
@@ -655,10 +716,152 @@ function EmpreitadasView({ t, empreitadas, onAbrir, onEditar, onNova }: {
   );
 }
 
-function EmpreitadaDetalhe({ t, e, ativs, onStatus, onEditarAtiv, onDeletarAtiv, onNovaAtiv, onMudarStatusEmpr, onAbrirSistema }: {
+// ── Roadmap (gantt leve por mês) ─────────────────────────────────────────────
+const MONTH_W = 74;
+const LABEL_W = 210;
+
+function monthsRange(empreitadas: Empreitada[], atividades: Atividade[]): string[] {
+  const ds: ReturnType<typeof dayjs>[] = [];
+  const add = (ym: string) => { if (ym && dayjs(ym + '-01').isValid()) ds.push(dayjs(ym + '-01')); };
+  empreitadas.forEach((e) => { add(e.inicioAlvo); add(e.entregaAlvo); });
+  atividades.forEach((a) => add(a.mesAlvo));
+  ds.push(dayjs().startOf('month'));
+  ds.sort((a, b) => a.valueOf() - b.valueOf());
+  let start = ds[0].startOf('month');
+  let end = ds[ds.length - 1].startOf('month');
+  if (end.diff(start, 'month') < 5) end = start.add(5, 'month');
+  if (end.diff(start, 'month') > 23) end = start.add(23, 'month');
+  const meses: string[] = [];
+  let cur = start;
+  while (cur.isBefore(end) || cur.isSame(end, 'month')) { meses.push(cur.format('YYYY-MM')); cur = cur.add(1, 'month'); }
+  return meses;
+}
+
+function RoadmapView({ t, empreitadas, atividades, onAbrirEmpr }: {
+  t: ReturnType<typeof useTokens>; empreitadas: Empreitada[]; atividades: Atividade[]; onAbrirEmpr: (id: string) => void;
+}): React.ReactElement {
+  const meses = useMemo(() => monthsRange(empreitadas, atividades), [empreitadas, atividades]);
+  const hoje = dayjs().format('YYYY-MM');
+  const idxDe = (ym: string) => meses.indexOf(ym);
+  const soltas = atividades.filter((a) => !a.empreitadaId && a.mesAlvo && a.status !== 'feito');
+  const semData = empreitadas.filter((e) => !e.inicioAlvo && !e.entregaAlvo).length;
+
+  if (empreitadas.length === 0 && soltas.length === 0) {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Roadmap vazio. Defina início/entrega nas empreitadas e mês-alvo nas atividades pra elas aparecerem aqui na linha do tempo." />;
+  }
+
+  const trackW = meses.length * MONTH_W;
+  const cellsFundo = (
+    <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
+      {meses.map((m) => (
+        <div key={m} style={{ width: MONTH_W, flexShrink: 0, borderRight: `1px solid ${t.borderSoft}`, background: m === hoje ? `${t.accents.blue}0f` : 'transparent' }} />
+      ))}
+    </div>
+  );
+
+  const linhaEmpr = (e: Empreitada) => {
+    const accent = t.accents[(e.accent as keyof typeof t.accents)] || t.accents.blue;
+    let ini = idxDe(e.inicioAlvo);
+    let fim = idxDe(e.entregaAlvo);
+    if (ini < 0 && fim >= 0) ini = fim;
+    if (fim < 0 && ini >= 0) fim = ini;
+    const temBarra = ini >= 0 && fim >= 0;
+    const ativsE = atividades.filter((a) => a.empreitadaId === e.id && a.mesAlvo);
+    return (
+      <div key={e.id} style={{ display: 'flex', alignItems: 'center', borderBottom: `1px solid ${t.borderSoft}` }}>
+        <button type="button" onClick={() => onAbrirEmpr(e.id)} title={e.nome}
+          style={{ width: LABEL_W, flexShrink: 0, textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: accent, flexShrink: 0 }} />
+          <span style={{ fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: 600, color: t.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.nome}</span>
+        </button>
+        <div style={{ position: 'relative', width: trackW, height: 44, flexShrink: 0 }}>
+          {cellsFundo}
+          {temBarra ? (
+            <Tooltip title={`${e.nome} · ${mesLabel(e.inicioAlvo) || '?'} → ${mesLabel(e.entregaAlvo) || '?'}`}>
+              <div
+                onClick={() => onAbrirEmpr(e.id)}
+                style={{ position: 'absolute', top: 9, height: 26, left: ini * MONTH_W + 6, width: (fim - ini + 1) * MONTH_W - 12, background: `linear-gradient(90deg, ${accent}, ${accent}cc)`, borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '0 10px', boxShadow: t.shadowSoft }}
+              >
+                <span style={{ fontFamily: FONTS.ui, fontSize: 10.5, fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {e.totalAtividades > 0 ? `${e.atividadesFeitas}/${e.totalAtividades}` : ''}
+                </span>
+              </div>
+            </Tooltip>
+          ) : (
+            <span style={{ position: 'absolute', top: 14, left: 10, fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary, fontStyle: 'italic' }}>defina início/entrega</span>
+          )}
+          {ativsE.map((a) => {
+            const mi = idxDe(a.mesAlvo);
+            if (mi < 0) return null;
+            const done = a.status === 'feito';
+            return (
+              <Tooltip key={a.id} title={`${a.titulo} · ${mesLabel(a.mesAlvo)}`}>
+                <span style={{ position: 'absolute', bottom: 4, left: mi * MONTH_W + MONTH_W / 2 - 3, width: 6, height: 6, borderRadius: '50%', background: done ? t.accents.sage : t.accents.peach }} />
+              </Tooltip>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      {semData > 0 && (
+        <div style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, marginBottom: 10 }}>
+          {semData} empreitada{semData === 1 ? '' : 's'} sem datas — defina início/entrega pra posicionar no tempo.
+        </div>
+      )}
+      <div style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 12, background: t.surface }}>
+        <div style={{ minWidth: LABEL_W + trackW }}>
+          {/* Header meses */}
+          <div style={{ display: 'flex', alignItems: 'stretch', borderBottom: `1px solid ${t.border}`, background: t.surfaceMuted }}>
+            <div style={{ width: LABEL_W, flexShrink: 0, padding: '8px 12px', fontFamily: FONTS.ui, fontSize: 11, fontWeight: 600, color: t.textTertiary }}>Empreitada</div>
+            <div style={{ display: 'flex', width: trackW, flexShrink: 0 }}>
+              {meses.map((m) => (
+                <div key={m} style={{ width: MONTH_W, flexShrink: 0, padding: '8px 0', textAlign: 'center', fontFamily: FONTS.ui, fontSize: 10.5, fontWeight: m === hoje ? 700 : 500, color: m === hoje ? t.accents.blue : t.textTertiary, borderRight: `1px solid ${t.borderSoft}` }}>
+                  {mesLabel(m)}
+                </div>
+              ))}
+            </div>
+          </div>
+          {empreitadas.map(linhaEmpr)}
+          {soltas.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <div style={{ width: LABEL_W, flexShrink: 0, padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: t.textTertiary, flexShrink: 0 }} />
+                <span style={{ fontFamily: FONTS.ui, fontSize: 12.5, fontWeight: 600, color: t.textSecondary }}>Atividades soltas</span>
+              </div>
+              <div style={{ position: 'relative', width: trackW, height: 44, flexShrink: 0 }}>
+                {cellsFundo}
+                {soltas.map((a) => {
+                  const mi = idxDe(a.mesAlvo);
+                  if (mi < 0) return null;
+                  return (
+                    <Tooltip key={a.id} title={`${a.titulo} · ${mesLabel(a.mesAlvo)}`}>
+                      <span style={{ position: 'absolute', top: 17, left: mi * MONTH_W + MONTH_W / 2 - 5, width: 10, height: 10, borderRadius: 3, background: t.accents.clay }} />
+                    </Tooltip>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 16, marginTop: 10, fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: t.accents.peach }} /> atividade pendente</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: t.accents.sage }} /> feita</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: t.accents.clay }} /> solta</span>
+      </div>
+    </div>
+  );
+}
+
+function EmpreitadaDetalhe({ t, e, ativs, onStatus, onEditarAtiv, onDeletarAtiv, onNovaAtiv, onMudarStatusEmpr, onAbrirSistema, onAnalisarIA }: {
   t: ReturnType<typeof useTokens>; e: Empreitada; ativs: Atividade[];
   onStatus: (id: string, s: string) => void; onEditarAtiv: (a: Atividade) => void; onDeletarAtiv: (id: string) => void;
   onNovaAtiv: () => void; onMudarStatusEmpr: (st: string) => void; onAbrirSistema?: (id: string) => void;
+  onAnalisarIA: () => void;
 }): React.ReactElement {
   const accent = t.accents[(e.accent as keyof typeof t.accents)] || t.accents.blue;
   const feitas = ativs.filter((a) => a.status === 'feito').length;
@@ -704,11 +907,218 @@ function EmpreitadaDetalhe({ t, e, ativs, onStatus, onEditarAtiv, onDeletarAtiv,
         </div>
       )}
 
-      <div style={{ marginTop: 18, display: 'flex', gap: 8, alignItems: 'flex-start', background: `${t.accents.lavender}1f`, border: `1px solid ${t.accents.lavender}55`, borderRadius: 10, padding: '10px 12px' }}>
-        <Sparkles size={15} color={t.accents.lavender} style={{ flexShrink: 0, marginTop: 1 }} />
-        <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, lineHeight: 1.55 }}>
-          Em breve: o <b style={{ color: t.text }}>Arquiteto IA</b> vai ler o repositório desta empreitada, montar o plano faseado e gerar as atividades com prompts prontos.
+      <div style={{ marginTop: 18, background: `${t.accents.lavender}1f`, border: `1px solid ${t.accents.lavender}55`, borderRadius: 10, padding: '12px 14px' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 10 }}>
+          <BrainCircuit size={16} color={t.accents.lavender} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, lineHeight: 1.55 }}>
+            O <b style={{ color: t.text }}>Arquiteto IA</b> lê {e.repoUrl || e.sistemaId ? 'o repositório desta empreitada' : 'o objetivo'} e monta um diagnóstico + plano em fases, com atividades e prompts prontos pra colar no Cursor/Claude.
+          </span>
+        </div>
+        <Button type="primary" icon={<Sparkles size={14} />} onClick={onAnalisarIA} block>
+          Analisar com Arquiteto IA
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ── Arquiteto IA — modal de diagnóstico + plano ──────────────────────────────
+function riscoTom(risco: string, t: ReturnType<typeof useTokens>): string {
+  const r = String(risco || '').toLowerCase();
+  if (r.startsWith('alt')) return t.accents.rose;
+  if (r.startsWith('bai')) return t.accents.sage;
+  return t.accents.clay;
+}
+
+function ArquitetoModal({ t, open, loading, empr, data, importando, onClose, onImportar }: {
+  t: ReturnType<typeof useTokens>; open: boolean; loading: boolean; empr: Empreitada | null;
+  data: ArquitetoResposta | null; importando: boolean; onClose: () => void; onImportar: (sel: ArquitetoAtividade[]) => void;
+}): React.ReactElement {
+  const { message } = AntApp.useApp();
+  const [sel, setSel] = useState<Record<number, boolean>>({});
+
+  useEffect(() => {
+    if (data) {
+      const inicial: Record<number, boolean> = {};
+      data.plano.atividades.forEach((_, i) => { inicial[i] = true; });
+      setSel(inicial);
+    } else setSel({});
+  }, [data]);
+
+  const selecionadas = data ? data.plano.atividades.filter((_, i) => sel[i]) : [];
+  const tipoLabel = (v: string) => TIPO_ATIV.find((x) => x.value === v)?.label || v;
+  const copiar = (txt: string) => {
+    if (!txt) return;
+    navigator.clipboard?.writeText(txt).then(() => message.success('Prompt copiado')).catch(() => message.error('Não consegui copiar'));
+  };
+
+  return (
+    <Modal
+      open={open}
+      onCancel={onClose}
+      width={760}
+      title={(
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <BrainCircuit size={18} color={t.accents.lavender} />
+          Arquiteto IA{empr ? ` · ${empr.nome}` : ''}
         </span>
+      )}
+      footer={data ? [
+        <Button key="c" icon={<X size={14} />} onClick={onClose}>Fechar</Button>,
+        <Button key="i" type="primary" icon={<ListPlus size={15} />} loading={importando} disabled={selecionadas.length === 0} onClick={() => onImportar(selecionadas)}>
+          Jogar {selecionadas.length} no backlog
+        </Button>,
+      ] : null}
+    >
+      {loading || !data ? (
+        <div style={{ padding: '24px 0' }}>
+          <ProcessoCarregando
+            mostrar
+            mensagem="Arquiteto analisando o projeto…"
+            etapa="lendo o repositório e raciocinando sobre a arquitetura"
+            subtexto="pode levar de 10s a 1min · o modelo lê o código e monta o plano em fases"
+          />
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18, maxHeight: '64vh', overflow: 'auto', paddingRight: 4 }}>
+          {/* Fonte */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, fontFamily: FONTS.ui, fontSize: 11, color: t.textTertiary }}>
+            {data.fonte.repoUrl && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><GitBranch size={12} /> {data.fonte.arquivos} arquivos · ~{Math.round(data.fonte.bytes / 1024)}KB{data.fonte.commitSha ? ` · ${data.fonte.commitSha}` : ''}</span>
+            )}
+            {data.modelo && <span>· modelo: {data.modelo}</span>}
+            {data.fonte.truncado && <span style={{ color: t.accents.peach }}>· amostra truncada</span>}
+          </div>
+          {data.fonte.erroLeitura && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', background: `${t.accents.peach}1f`, border: `1px solid ${t.accents.peach}55`, borderRadius: 10, padding: '10px 12px' }}>
+              <AlertTriangle size={15} color={t.accents.peach} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, lineHeight: 1.5 }}>Não consegui ler o código: {data.fonte.erroLeitura}. O plano foi montado a partir do objetivo — vincule o repositório pra um diagnóstico mais fundo.</span>
+            </div>
+          )}
+
+          {/* Diagnóstico */}
+          {data.plano.diagnostico && (
+            <ArqSecao t={t} titulo="Diagnóstico" accent={t.accents.blue}>
+              <p style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary, lineHeight: 1.65, margin: 0, whiteSpace: 'pre-wrap' }}>{data.plano.diagnostico}</p>
+            </ArqSecao>
+          )}
+
+          {/* Stack */}
+          {data.plano.stackDetectada.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {data.plano.stackDetectada.map((s, i) => (
+                <span key={i} style={{ background: t.surfaceMuted, color: t.textSecondary, fontFamily: FONTS.mono, fontSize: 11, padding: '3px 10px', borderRadius: 999 }}>{s}</span>
+              ))}
+            </div>
+          )}
+
+          {/* Riscos + estratégia */}
+          {data.plano.riscosMigracao.length > 0 && (
+            <ArqSecao t={t} titulo="Riscos de quebrar produção" accent={t.accents.rose}>
+              <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {data.plano.riscosMigracao.map((r, i) => (
+                  <li key={i} style={{ fontFamily: FONTS.ui, fontSize: 12.5, color: t.textSecondary, lineHeight: 1.55 }}>{r}</li>
+                ))}
+              </ul>
+            </ArqSecao>
+          )}
+          {data.plano.estrategiaSemQuebrar && (
+            <ArqSecao t={t} titulo="Estratégia sem quebrar o que roda" accent={t.accents.sage}>
+              <p style={{ fontFamily: FONTS.ui, fontSize: 13, color: t.textSecondary, lineHeight: 1.65, margin: 0, whiteSpace: 'pre-wrap' }}>{data.plano.estrategiaSemQuebrar}</p>
+            </ArqSecao>
+          )}
+
+          {/* Fases */}
+          {data.plano.fases.length > 0 && (
+            <ArqSecao t={t} titulo="Plano em fases" accent={t.accents.clay}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {data.plano.fases.slice().sort((a, b) => a.ordem - b.ordem).map((f, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                    <span style={{ width: 22, height: 22, borderRadius: '50%', flexShrink: 0, background: `${t.accents.clay}22`, color: t.accents.clay, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONTS.mono, fontSize: 11, fontWeight: 700 }}>{f.ordem}</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontFamily: FONTS.ui, fontSize: 13, fontWeight: 600, color: t.text }}>{f.nome}</span>
+                        {f.risco && <span style={{ fontFamily: FONTS.ui, fontSize: 10, color: riscoTom(f.risco, t), border: `1px solid ${riscoTom(f.risco, t)}66`, borderRadius: 999, padding: '0 7px' }}>risco {f.risco}</span>}
+                      </div>
+                      {f.objetivo && <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, lineHeight: 1.5, marginTop: 2 }}>{f.objetivo}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </ArqSecao>
+          )}
+
+          {/* Atividades sugeridas */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <Rocket size={15} color={t.accents.peach} />
+              <span style={{ fontFamily: FONTS.display, fontSize: 15, fontWeight: 600, color: t.text }}>Atividades sugeridas</span>
+              <span style={{ fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary }}>· marque as que quer jogar no backlog</span>
+            </div>
+            {data.plano.atividades.length === 0 ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="A IA não sugeriu atividades." />
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {data.plano.atividades.map((a, i) => (
+                  <ArqAtivCard key={i} t={t} a={a} checked={!!sel[i]} tipoLabel={tipoLabel(a.tipo)}
+                    onToggle={() => setSel((s) => ({ ...s, [i]: !s[i] }))} onCopiar={() => copiar(a.prompt)} />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function ArqSecao({ t, titulo, accent, children }: {
+  t: ReturnType<typeof useTokens>; titulo: string; accent: string; children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <span style={{ width: 6, height: 16, borderRadius: 3, background: accent }} />
+        <span style={{ fontFamily: FONTS.display, fontSize: 14, fontWeight: 600, color: t.text }}>{titulo}</span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function ArqAtivCard({ t, a, checked, tipoLabel, onToggle, onCopiar }: {
+  t: ReturnType<typeof useTokens>; a: ArquitetoAtividade; checked: boolean; tipoLabel: string;
+  onToggle: () => void; onCopiar: () => void;
+}): React.ReactElement {
+  const [aberto, setAberto] = useState(false);
+  return (
+    <div style={{ border: `1px solid ${checked ? `${t.accents.lavender}66` : t.borderSoft}`, borderRadius: 10, padding: '10px 12px', background: checked ? `${t.accents.lavender}10` : t.surface, transition: 'all 0.15s ease' }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+        <button type="button" onClick={onToggle} aria-label="selecionar"
+          style={{ width: 18, height: 18, flexShrink: 0, marginTop: 1, borderRadius: 5, cursor: 'pointer', border: `1.5px solid ${checked ? t.accents.lavender : t.border}`, background: checked ? t.accents.lavender : 'transparent', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+          {checked && <Check size={12} />}
+        </button>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: FONTS.ui, fontSize: 13, fontWeight: 600, color: t.text }}>{a.titulo}</div>
+          {a.descricao && <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textSecondary, lineHeight: 1.5, marginTop: 2 }}>{a.descricao}</div>}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, alignItems: 'center' }}>
+            <span style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary, background: t.surfaceMuted, borderRadius: 999, padding: '1px 8px' }}>{tipoLabel}</span>
+            <span style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.accents.sage }}>impacto {a.impacto}</span>
+            <span style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.accents.clay }}>esforço {a.esforco}</span>
+            {a.fase && <span style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary }}>· {a.fase}</span>}
+            <span style={{ fontFamily: FONTS.ui, fontSize: 10.5, color: t.textTertiary }}>· mês +{a.mesRelativo}</span>
+            <span style={{ flex: 1 }} />
+            {a.prompt && (
+              <>
+                <Button size="small" type="text" onClick={() => setAberto((v) => !v)} style={{ fontSize: 11 }}>{aberto ? 'ocultar prompt' : 'ver prompt'}</Button>
+                <Tooltip title="Copiar prompt"><Button size="small" type="text" icon={<Copy size={13} />} onClick={onCopiar} /></Tooltip>
+              </>
+            )}
+          </div>
+          {aberto && a.prompt && (
+            <div style={{ marginTop: 8, background: t.surfaceMuted, borderRadius: 8, padding: '10px 12px', fontFamily: FONTS.mono, fontSize: 11, color: t.textSecondary, whiteSpace: 'pre-wrap', maxHeight: 220, overflow: 'auto' }}>{a.prompt}</div>
+          )}
+        </div>
       </div>
     </div>
   );

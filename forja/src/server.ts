@@ -28705,6 +28705,216 @@ function atividadeDelete(id: string): ServerResult {
   }
 }
 
+// ── Arquiteto IA (Fase 3) ─────────────────────────────────────────────────────
+// Reaproveita a engine da Auditoria (_lerCodigoGitHub/_lerCodigoGAS + LLM), mas
+// com persona de Arquiteto de Software + Full Stack Sr. e saída de PLANO de
+// transformação (diagnóstico → fases → atividades com prompt pronto), em vez de
+// auditoria de estado. Não persiste nada sozinho — o usuário decide importar.
+interface ArquitetoFase { ordem: number; nome: string; objetivo: string; risco: string }
+interface ArquitetoAtividade {
+  titulo: string; descricao: string; tipo: string; impacto: number; esforco: number;
+  fase: string; mesRelativo: number; prompt: string;
+}
+interface ArquitetoPlano {
+  diagnostico: string;
+  stackDetectada: string[];
+  riscosMigracao: string[];
+  estrategiaSemQuebrar: string;
+  fases: ArquitetoFase[];
+  atividades: ArquitetoAtividade[];
+}
+
+function _parseArquitetoPayload(resposta: string): { texto: string; payload: ArquitetoPlano | null } {
+  let resp = String(resposta || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  const thinkAberto = resp.indexOf('<think>');
+  if (thinkAberto >= 0) {
+    const p = resp.indexOf('<PLANO>', thinkAberto);
+    resp = (p >= 0 ? resp.slice(0, thinkAberto) + resp.slice(p) : resp.slice(0, thinkAberto)).trim();
+  }
+  const open = resp.indexOf('<PLANO>');
+  const close = resp.indexOf('</PLANO>');
+  let textoAntes = resp;
+  let jsonStr = '';
+  if (open >= 0) {
+    textoAntes = resp.slice(0, open).trim();
+    jsonStr = (close > open ? resp.slice(open + '<PLANO>'.length, close) : resp.slice(open + '<PLANO>'.length))
+      .replace(/```json|```/g, '').trim();
+  } else {
+    const marca = resp.indexOf('"atividades"') >= 0 ? resp.indexOf('"atividades"') : resp.indexOf('"fases"');
+    if (marca < 0) return { texto: resp, payload: null };
+    const ini = resp.lastIndexOf('{', marca);
+    if (ini < 0) return { texto: resp, payload: null };
+    textoAntes = resp.slice(0, ini).trim();
+    jsonStr = resp.slice(ini).replace(/```json|```/g, '').trim();
+  }
+  try {
+    let parsed: unknown;
+    try { parsed = JSON.parse(jsonStr); }
+    catch {
+      try {
+        const m = jsonStr.match(/\{[\s\S]*\}/);
+        if (!m) throw new Error('sem objeto JSON');
+        parsed = JSON.parse(m[0]);
+      } catch {
+        parsed = _repararJsonTruncado(jsonStr);
+        if (!parsed) return { texto: textoAntes || resp, payload: null };
+      }
+    }
+    if (!parsed || typeof parsed !== 'object') return { texto: textoAntes || resp, payload: null };
+    const p = parsed as Record<string, unknown>;
+    const clamp = (n: unknown, d: number) => Math.max(1, Math.min(5, Math.round(Number(n) || d)));
+    const fasesRaw = Array.isArray(p.fases) ? p.fases : [];
+    const fases: ArquitetoFase[] = fasesRaw.map((f: unknown, i: number) => {
+      const it = (f || {}) as Record<string, unknown>;
+      return { ordem: Number(it.ordem || i + 1), nome: String(it.nome || `Fase ${i + 1}`), objetivo: String(it.objetivo || ''), risco: String(it.risco || '') };
+    });
+    const ativRaw = Array.isArray(p.atividades) ? p.atividades : [];
+    const atividades: ArquitetoAtividade[] = ativRaw.map((a: unknown) => {
+      const it = (a || {}) as Record<string, unknown>;
+      return {
+        titulo: String(it.titulo || ''),
+        descricao: String(it.descricao || ''),
+        tipo: String(it.tipo || 'outro'),
+        impacto: clamp(it.impacto, 3),
+        esforco: clamp(it.esforco, 3),
+        fase: String(it.fase || ''),
+        mesRelativo: Math.max(0, Math.round(Number(it.mesRelativo || 0))),
+        prompt: String(it.prompt || ''),
+      };
+    }).filter((a) => a.titulo);
+    const payload: ArquitetoPlano = {
+      diagnostico: String(p.diagnostico || ''),
+      stackDetectada: Array.isArray(p.stackDetectada) ? p.stackDetectada.map((x: unknown) => String(x)) : [],
+      riscosMigracao: Array.isArray(p.riscosMigracao) ? p.riscosMigracao.map((x: unknown) => String(x)) : [],
+      estrategiaSemQuebrar: String(p.estrategiaSemQuebrar || ''),
+      fases,
+      atividades,
+    };
+    return { texto: textoAntes, payload };
+  } catch {
+    return { texto: resp, payload: null };
+  }
+}
+
+function empreitadaDiagnosticarIA(empreitadaId: string): ServerResult {
+  try {
+    const e = (dbGetAll('Empreitadas') as Array<Record<string, unknown>>).find((x) => String(x.id || '') === String(empreitadaId || ''));
+    if (!e) throw new Error('Empreitada não encontrada.');
+
+    // Resolve fonte de código: repo da empreitada, ou herda do Sistema vinculado.
+    let repoUrl = String(e.repoUrl || '').trim();
+    let scriptId = '';
+    const sistemaId = String(e.sistemaId || '').trim();
+    if ((!repoUrl) && sistemaId) {
+      const sis = (dbGetAll('Sistemas') as Array<Record<string, unknown>>).find((s) => String(s.id || '') === sistemaId);
+      if (sis) { repoUrl = String(sis.repoUrl || '').trim(); scriptId = String(sis.scriptId || '').trim(); }
+    }
+
+    let codigo: CodigoContexto | null = null;
+    if (repoUrl) codigo = _lerCodigoGitHub(repoUrl);
+    else if (scriptId) codigo = _lerCodigoGAS(scriptId);
+
+    const contextoCodigo = (codigo && !codigo.erro) ? codigo.contexto : '';
+    let avisoCodigo = '';
+    if (codigo && codigo.erro) avisoCodigo = `\n\n[ATENÇÃO: não consegui ler o código — ${codigo.erro}. Faça o diagnóstico com base no objetivo e em boas práticas, e diga explicitamente que a leitura do repositório falhou.]`;
+    else if (!codigo) avisoCodigo = '\n\n[Sem repositório/scriptId vinculado. Baseie-se no objetivo declarado e recomende vincular o repo pra um diagnóstico mais fundo.]';
+
+    const persona = 'Você é um Arquiteto de Software Sênior e Especialista Full Stack. Você recebe o código (ou o contexto) de um app que nasceu de forma experimental ("vibe coding") e precisa virar produto profissional. Seu trabalho é diagnosticar o estado atual, planejar a transformação em fases seguras (SEM quebrar o que já roda em produção) e produzir atividades acionáveis, cada uma com um prompt pronto pra colar num assistente de código (Cursor/Claude). Seja pragmático, específico e honesto sobre riscos.'
+      + _SYS_AUDITORIA_SEM_THINK;
+
+    const instru = `EMPREITADA: ${String(e.nome || '')}\n`
+      + `TIPO: ${String(e.tipo || 'outro')}\n`
+      + `OBJETIVO DO USUÁRIO: ${String(e.objetivo || '(não informado)')}\n`
+      + (repoUrl ? `REPOSITÓRIO: ${repoUrl}\n` : '')
+      + `\nCÓDIGO / CONTEXTO DO PROJETO:\n${contextoCodigo || '(indisponível)'}${avisoCodigo}\n\n`
+      + 'Entregue APENAS um bloco no formato:\n'
+      + '<PLANO>\n{\n'
+      + '  "diagnostico": "análise do estado atual: arquitetura, acoplamentos, o que trava a transformação, dívidas relevantes",\n'
+      + '  "stackDetectada": ["ex: React", "Google Apps Script", "Google Sheets"],\n'
+      + '  "riscosMigracao": ["o que pode quebrar produção durante a mudança"],\n'
+      + '  "estrategiaSemQuebrar": "como conduzir sem derrubar o app rodando: ex. clonar repo, criar v2 em paralelo, feature flags, migração incremental de dados, backfill, cutover e rollback",\n'
+      + '  "fases": [{"ordem":1,"nome":"","objetivo":"","risco":"baixo|medio|alto"}],\n'
+      + '  "atividades": [{"titulo":"","descricao":"","tipo":"migracao|refatoracao|infra|feature|teste|doc|bug|outro","impacto":1-5,"esforco":1-5,"fase":"nome da fase","mesRelativo":0,"prompt":"prompt estruturado e completo pra colar no Cursor/Claude e executar esta atividade"}]\n'
+      + '}\n</PLANO>\n'
+      + 'Regras: 5 a 12 atividades, ordenadas por fase. "mesRelativo" é o mês a partir de agora (0 = este mês). O "prompt" deve ser autossuficiente (contexto + o que fazer + critério de pronto). Não invente arquivos que não viu.';
+
+    const messages: LlmMessage[] = [
+      { role: 'system', content: persona },
+      { role: 'user', content: instru },
+    ];
+
+    const det = forjaCallLLMDetalhado(messages, 16000, undefined, 'auditoria');
+    let parsed = _parseArquitetoPayload(det.texto);
+    let modelo = det.modelo;
+    // Retry único exigindo só o JSON, se o 1º veio sem <PLANO> parseável.
+    if (!parsed.payload) {
+      const det2 = forjaCallLLMDetalhado(
+        [{ role: 'system', content: persona }, { role: 'user', content: instru + '\n\nResponda SOMENTE com o bloco <PLANO>{...}</PLANO> em JSON válido e compacto. Nada de texto fora dele.' }],
+        16000, undefined, 'auditoria',
+      );
+      const parsed2 = _parseArquitetoPayload(det2.texto);
+      if (parsed2.payload) { parsed = parsed2; modelo = det2.modelo; }
+    }
+    if (!parsed.payload) return { ok: false, error: 'A IA respondeu, mas não consegui interpretar o plano. Tente rodar de novo.' };
+
+    return {
+      ok: true,
+      data: {
+        plano: parsed.payload,
+        resumo: parsed.texto,
+        modelo,
+        fonte: {
+          repoUrl,
+          arquivos: codigo ? codigo.arquivos : 0,
+          bytes: codigo ? codigo.bytes : 0,
+          commitSha: codigo ? codigo.commitSha : '',
+          truncado: codigo ? codigo.truncado : false,
+          erroLeitura: codigo && codigo.erro ? codigo.erro : '',
+        },
+      },
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
+function _mesRelativoYM(offset: number): string {
+  const d = new Date();
+  d.setMonth(d.getMonth() + Math.max(0, Math.round(Number(offset) || 0)));
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+function empreitadaImportarAtividadesIA(empreitadaId: string, atividades: Array<{
+  titulo: string; descricao?: string; tipo?: string; impacto?: number; esforco?: number; mesRelativo?: number; prompt?: string;
+}>): ServerResult {
+  try {
+    const eid = String(empreitadaId || '');
+    const empr = (dbGetAll('Empreitadas') as Array<Record<string, unknown>>).find((x) => String(x.id || '') === eid);
+    const sistemaId = empr ? String(empr.sistemaId || '') : '';
+    let ordem = (dbGetAll('Atividades') as Array<Record<string, unknown>>).length;
+    const agora = new Date().toISOString();
+    let criadas = 0;
+    for (const a of (atividades || [])) {
+      const titulo = String(a.titulo || '').trim();
+      if (!titulo) continue;
+      const imp = Math.max(1, Math.min(5, Math.round(Number(a.impacto) || 3)));
+      const esf = Math.max(1, Math.min(5, Math.round(Number(a.esforco) || 3)));
+      const prio = imp >= 4 ? 'alta' : imp <= 2 ? 'baixa' : 'media';
+      dbCreate('Atividades', {
+        empreitadaId: eid, sistemaId, titulo, descricao: String(a.descricao || ''),
+        tipo: String(a.tipo || 'outro'), notaImpacto: imp, notaEsforco: esf, prioridade: prio,
+        status: 'backlog', mesAlvo: _mesRelativoYM(Number(a.mesRelativo || 0)), estimativaHoras: 0,
+        dependeDe: '', promptSugerido: String(a.prompt || ''), origem: 'ia', ordem: ordem++,
+        criadoEm: agora, atualizadoEm: agora,
+      });
+      criadas++;
+    }
+    return { ok: true, data: { criadas } };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Erro' };
+  }
+}
+
 // ── Pastas: playlists do YouTube acompanhadas ─────────────────────────────────
 function estudoPlaylistsSeguidas(): ServerResult {
   try {
