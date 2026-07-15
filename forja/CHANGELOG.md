@@ -36,6 +36,18 @@ A URL do app sempre será a mesma — só o conteúdo volta no tempo.
 
 ---
 
+## [1.279.1] — 2026-07-15
+
+### Mudado — Arquiteto IA: tela de espera "viva" (fases + cronômetro)
+
+- A espera do diagnóstico deixou de ser um spinner pobre. Agora mostra um
+  **painel com cronômetro (mm:ss)**, **barra de progresso estimada** e um
+  **stepper das fases** do trabalho (Lendo o repositório → Mapeando arquitetura
+  → Identificando riscos → Montando o plano → Escrevendo prompts). Etapas
+  concluídas viram ✓ e a atual gira — dá pra sentir que está progredindo, não
+  travado. Passando do tempo estimado, avisa que "modelos de raciocínio às vezes
+  demoram" (sem parecer erro).
+
 ## [1.279.0] — 2026-07-15
 
 ### Adicionado — Backlog: Roadmap (Fase 2) + Arquiteto IA (Fase 3)

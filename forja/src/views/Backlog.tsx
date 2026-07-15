@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   App as AntApp, Button, Input, InputNumber, Select, Skeleton, Empty, Form, Modal, Drawer,
-  Popconfirm, Tooltip, Segmented, Slider, DatePicker, Progress, Dropdown,
+  Popconfirm, Tooltip, Segmented, Slider, DatePicker, Progress, Dropdown, Spin,
 } from 'antd';
 import {
   Plus, Trash2, Edit3, X, Save, Play, Check, Ban, Hammer, Flame, Target,
@@ -10,7 +10,6 @@ import {
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { PageHeader } from '../components/ui';
-import ProcessoCarregando from '../components/ProcessoCarregando';
 import { useTokens } from '../themeContext';
 import { FONTS } from '../theme';
 import callServer from '../gas-client';
@@ -930,6 +929,81 @@ function riscoTom(risco: string, t: ReturnType<typeof useTokens>): string {
   return t.accents.clay;
 }
 
+// Painel de espera "vivo": mostra as fases do trabalho da IA com cronômetro,
+// pra dar sensação de progresso (não sabemos o progresso real do LLM, então as
+// etapas avançam por tempo estimado — a última segura até a resposta chegar).
+const ARQ_STAGES: Array<{ label: string; icon: React.ComponentType<{ size?: number; color?: string }>; at: number }> = [
+  { label: 'Lendo o repositório', icon: GitBranch, at: 0 },
+  { label: 'Mapeando arquitetura e acoplamentos', icon: Boxes, at: 8 },
+  { label: 'Identificando riscos de quebrar produção', icon: AlertTriangle, at: 20 },
+  { label: 'Montando o plano em fases', icon: Layers, at: 34 },
+  { label: 'Escrevendo os prompts das atividades', icon: Rocket, at: 48 },
+];
+const ARQ_ETA = 55;
+
+function ArquitetoTrabalhando({ t, repoUrl }: { t: ReturnType<typeof useTokens>; repoUrl: string }): React.ReactElement {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const t0 = Date.now();
+    const id = window.setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 500);
+    return () => window.clearInterval(id);
+  }, []);
+  let atual = 0;
+  ARQ_STAGES.forEach((s, i) => { if (elapsed >= s.at) atual = i; });
+  const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+  const ss = String(elapsed % 60).padStart(2, '0');
+  const pct = Math.min(96, Math.round((elapsed / ARQ_ETA) * 100));
+  const demorou = elapsed >= ARQ_ETA + 15;
+
+  return (
+    <div style={{ padding: '8px 4px 4px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+        <span style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: `${t.accents.lavender}22`, color: t.accents.lavender, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+          <BrainCircuit size={22} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: FONTS.display, fontSize: 15, fontWeight: 600, color: t.text }}>Arquiteto trabalhando</div>
+          <div style={{ fontFamily: FONTS.ui, fontSize: 12, color: t.textTertiary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {repoUrl ? `analisando ${_ghShort(repoUrl)}` : 'analisando o objetivo da empreitada'}
+          </div>
+        </div>
+        <span style={{ fontFamily: FONTS.mono, fontSize: 15, fontWeight: 600, color: t.textSecondary, fontVariantNumeric: 'tabular-nums', background: t.surfaceMuted, borderRadius: 8, padding: '4px 10px' }}>{mm}:{ss}</span>
+      </div>
+
+      <Progress percent={pct} showInfo={false} strokeColor={t.accents.lavender} trailColor={t.surfaceMuted} style={{ marginBottom: 18 }} />
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {ARQ_STAGES.map((s, i) => {
+          const done = i < atual;
+          const cur = i === atual;
+          const Icon = s.icon;
+          const cor = done ? t.accents.sage : cur ? t.accents.lavender : t.textTertiary;
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px', borderRadius: 10, background: cur ? `${t.accents.lavender}12` : 'transparent', opacity: done || cur ? 1 : 0.5, transition: 'all 0.25s ease' }}>
+              <span style={{ width: 24, height: 24, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                {done ? <Check size={16} color={t.accents.sage} /> : cur ? <Spin size="small" /> : <Icon size={15} color={cor} />}
+              </span>
+              <span style={{ fontFamily: FONTS.ui, fontSize: 13, fontWeight: cur ? 600 : 500, color: done ? t.textSecondary : cur ? t.text : t.textTertiary }}>{s.label}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ marginTop: 16, fontFamily: FONTS.ui, fontSize: 11.5, color: t.textTertiary, lineHeight: 1.55 }}>
+        {demorou
+          ? 'Ainda trabalhando — modelos de raciocínio às vezes demoram mais em repos grandes. Seguimos esperando; não travou.'
+          : 'As etapas são uma estimativa visual — o modelo lê o código e raciocina de uma vez. Pode levar de 10s a ~1min.'}
+      </div>
+    </div>
+  );
+}
+
+// "owner/repo" curto a partir de uma URL do GitHub (só pra exibição).
+function _ghShort(repoUrl: string): string {
+  const m = String(repoUrl || '').match(/github\.com\/([^/]+\/[^/?#]+)/i);
+  return m ? m[1].replace(/\.git$/, '') : repoUrl;
+}
+
 function ArquitetoModal({ t, open, loading, empr, data, importando, onClose, onImportar }: {
   t: ReturnType<typeof useTokens>; open: boolean; loading: boolean; empr: Empreitada | null;
   data: ArquitetoResposta | null; importando: boolean; onClose: () => void; onImportar: (sel: ArquitetoAtividade[]) => void;
@@ -971,14 +1045,7 @@ function ArquitetoModal({ t, open, loading, empr, data, importando, onClose, onI
       ] : null}
     >
       {loading || !data ? (
-        <div style={{ padding: '24px 0' }}>
-          <ProcessoCarregando
-            mostrar
-            mensagem="Arquiteto analisando o projeto…"
-            etapa="lendo o repositório e raciocinando sobre a arquitetura"
-            subtexto="pode levar de 10s a 1min · o modelo lê o código e monta o plano em fases"
-          />
-        </div>
+        <ArquitetoTrabalhando t={t} repoUrl={empr?.repoUrl || ''} />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18, maxHeight: '64vh', overflow: 'auto', paddingRight: 4 }}>
           {/* Fonte */}
